@@ -75,6 +75,9 @@ _ARTIFACT_FORMAT_POLICY_KEYS = {
 _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY = (
     "beam.router.skim.activity-sim-skimmer.fileBaseName"
 )
+_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY = (
+    "beam.urbansim.backgroundODSkimsCreator.calculationTimeoutHours"
+)
 
 
 def _warmstart_destination_name(source: Path) -> str:
@@ -257,6 +260,7 @@ def _require_declared_non_policy_overrides(
     policy_keys = frozenset(
         (
             _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
+            _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
             *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
         )
     )
@@ -328,6 +332,14 @@ def build_beam_launch_config(
         )
     )
     overrides.update(skim_name_overrides)
+    full_skim_timeout_overrides, introduces_missing_full_skim_timeout_key = (
+        _full_skim_calculation_timeout_override(
+            settings=settings,
+            source_primary=source_primary,
+            env_overrides=env_overrides,
+        )
+    )
+    overrides.update(full_skim_timeout_overrides)
     population_stems = {
         BEAM_PLANS_IN: "plans",
         BEAM_HOUSEHOLDS_IN: "households",
@@ -420,7 +432,9 @@ def build_beam_launch_config(
         overrides=BeamLaunchConfigOverrides(values=overrides),
         staged_inputs=tuple(staged_inputs),
         allow_missing_override_keys=(
-            introduces_missing_format_key or introduces_missing_skim_name_key
+            introduces_missing_format_key
+            or introduces_missing_skim_name_key
+            or introduces_missing_full_skim_timeout_key
         ),
     )
     if overrides.get("beam.exchange.scenario.fileFormat") == "parquet":
@@ -642,6 +656,32 @@ def _activitysim_skims_file_base_name_override(
             expected,
         )
     return {_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY: expected}, source_value is None
+
+
+def _full_skim_calculation_timeout_override(
+    *,
+    settings: Any,
+    source_primary: Path,
+    env_overrides: Mapping[str, str],
+) -> tuple[dict[str, int], bool]:
+    """Return the configured BEAM BackgroundFullSkimsCreator timeout in hours."""
+
+    full_skim = getattr(settings.beam, "full_skim", None)
+    if (
+        full_skim is None
+        or getattr(full_skim, "run_schedule", "disabled") == "disabled"
+    ):
+        return {}, False
+    expected = int(getattr(full_skim, "calculation_timeout_hours", 72))
+    source_value = resolve_beam_config_value(
+        source_primary,
+        key=_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
+        env_overrides=dict(env_overrides),
+    )
+    return (
+        {_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY: expected},
+        source_value is None,
+    )
 
 
 def _artifact_format_overrides(

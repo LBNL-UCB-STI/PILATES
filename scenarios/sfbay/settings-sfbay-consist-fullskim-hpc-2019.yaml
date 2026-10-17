@@ -311,6 +311,7 @@ beam:
     bifurcate_tolls: true
     generate_return_trips: true
     toll_file_path: toll-prices.csv
+    calculation_timeout_hours: 72
   skims_shapefile: shape/block-groups-32048.shp
   skim_zone_source_id_col: sk_zone
   skim_zone_geoid_col: geoid10

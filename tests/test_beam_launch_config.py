@@ -982,3 +982,44 @@ def test_link_or_copy_static_file_falls_back_on_exdev(
     assert dst_fallback.is_file()
     assert os.stat(dst_fallback).st_ino != os.stat(src_file).st_ino
     assert dst_fallback.read_bytes() == b"payload_data"
+
+
+def test_build_beam_launch_config_injects_full_skim_calculation_timeout_hours(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.config_hocon import (
+        beam_config_env_overrides,
+        resolve_beam_config_value,
+    )
+    from pilates.beam.launch_config import build_beam_launch_config
+    from pilates.config.models import FullSkimsCreatorConfig
+
+    settings = _settings()
+    settings.beam.full_skim = FullSkimsCreatorConfig(
+        enabled=True,
+        calculation_timeout_hours=72,
+    )
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    _write_base_config(source_root)
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={},
+    )
+
+    env = beam_config_env_overrides(settings, config_root=launch_config.root)
+    assert (
+        resolve_beam_config_value(
+            launch_config.primary_config,
+            key="beam.urbansim.backgroundODSkimsCreator.calculationTimeoutHours",
+            env_overrides=env,
+        )
+        == 72
+    )

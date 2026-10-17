@@ -871,6 +871,14 @@ class FullSkimsCreatorConfig(BaseModel):
         None,
         description="Optional explicit path to congested linkstats.csv.gz or .parquet.",
     )
+    calculation_timeout_hours: int = Field(
+        72,
+        ge=1,
+        description=(
+            "Timeout in hours for BackgroundFullSkimsCreator "
+            "(beam.urbansim.backgroundODSkimsCreator.calculationTimeoutHours)."
+        ),
+    )
 
     def to_consist_facet(self) -> Dict[str, Any]:
         return {
