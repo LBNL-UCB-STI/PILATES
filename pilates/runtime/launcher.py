@@ -48,7 +48,6 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.atlas.inputs import (
     atlas_static_input_relpaths,
-    build_atlas_static_inputs_fallback,
 )
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.admission import (
@@ -91,7 +90,6 @@ from pilates.workflows.stages import (
     run_supply_demand_stage,
     run_vehicle_ownership_stage,
 )
-from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState  # noqa: E402
@@ -409,12 +407,9 @@ def _enforce_resume_rewind_guardrail(
 def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) -> bool:
     """Re-enter the provider chain when restart lacks a BEAM checkpoint.
 
-    A ``LandUseToSupplyDemandHandoff`` exists only within one launcher process.
-    Consequently, an ActivitySim rewind cannot begin inside supply-demand on a
-    fresh restart: the required UrbanSim/ATLAS roles have not been republished
-    into the new scenario coupler.  Rewind to the earliest enabled upstream
-    major stage instead, allowing ordinary native steps and Consist cache hits
-    to republish those roles.
+    When restart begins mid-ActivitySim before a committed BEAM checkpoint,
+    rewind to the earliest enabled upstream major stage so that ordinary
+    native steps and Consist cache hits republish required inputs.
     """
 
     if not getattr(state, "is_restart_run", False):
@@ -427,8 +422,15 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) 
     activity_demand = getattr(stage_enum, "activity_demand", None)
     supply_demand_loop = getattr(stage_enum, "supply_demand_loop", None)
     current_major_stage = getattr(state, "current_major_stage", None)
+    current_sub_stage = getattr(state, "current_sub_stage", None)
 
     if current_major_stage != supply_demand_loop:
+        return False
+
+    if (
+        current_sub_stage == getattr(stage_enum, "traffic_assignment", None)
+        and getattr(state, "sub_stage_progress", None) == "beam_run_completed"
+    ):
         return False
 
     is_enabled = getattr(state, "is_enabled", None)
@@ -957,6 +959,17 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
+            if not is_restart_run:
+                if callable(getattr(tagged_scenario, "capture_coupler_snapshot", None)):
+                    tagged_scenario.capture_coupler_snapshot(phase="init")
+            else:
+                restart_runtime.restore_restart_coupler_snapshot(
+                    scenario=tagged_scenario,
+                    tracker=tracker,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                )
             if bootstrap_result is not None and not state.data_initialized:
                 state.set_data_initialized(True)
             if is_restart_run and state.data_initialized:
@@ -965,7 +978,9 @@ def main(
                     "hydration and relying on scenario replay plus Consist cache hits."
                 )
 
-            _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
+            _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+                state=state,
+            )
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:
@@ -986,11 +1001,9 @@ def main(
                     year,
                     cr.current_run_id(),
                 )
-                land_use_handoff = LandUseToSupplyDemandHandoff()
                 if state.should_run(WorkflowState.Stage.land_use):
-                    land_use_handoff = run_land_use_stage(
+                    run_land_use_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        coupler=coupler,
                         year=year,
                         context=runtime_context,
                     )
@@ -1007,7 +1020,6 @@ def main(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         coupler=coupler,
                         year=year,
-                        build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
                         context=runtime_context,
                     )
                     state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
@@ -1018,9 +1030,7 @@ def main(
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        coupler=coupler,
                         year=year,
-                        handoff=land_use_handoff,
                         on_activity_demand_boundary=(
                             lambda iteration, y=year: _snapshot_activitysim_boundary(
                                 snapshot_manager,
@@ -1046,7 +1056,6 @@ def main(
                     formatted_print("POST-PROCESSING")
                     run_postprocessing_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        coupler=coupler,
                         year=year,
                         context=runtime_context,
                     )

@@ -11,12 +11,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.surface import (
     EnabledWorkflowSurface,
     StepRuntimeSurface,
-    RestartFrontierContract,
     RunMode,
     _validate_surface_invariants,
     build_enabled_workflow_surface,
@@ -95,7 +93,6 @@ def test_surface_construction_for_beam_only_shape():
     )
     assert "beam_preprocess" in surface.enabled_step_names
     assert "activitysim_preprocess" not in surface.enabled_step_names
-    assert surface.restart_frontier_contract is None
 
 
 def test_surface_construction_for_activitysim_beam_shape():
@@ -113,16 +110,6 @@ def test_surface_construction_for_activitysim_beam_shape():
     assert surface.enabled_model_names == frozenset({"activitysim", "beam"})
     assert "activitysim_preprocess" in surface.enabled_step_names
     assert "beam_preprocess" in surface.enabled_step_names
-    assert surface.restart_frontier_contract == RestartFrontierContract(
-        frontier_stage="traffic_assignment",
-        frontier_step="beam_preprocess",
-        required_keys=(
-            "beam_plans_asim_out",
-            "households_asim_out",
-            "persons_asim_out",
-            ZARR_SKIMS,
-        ),
-    )
 
 
 def test_surface_construction_for_full_shape():
@@ -229,26 +216,6 @@ def test_surface_bootstrap_owned_and_deferred_keys_follow_run_shape():
         key.startswith("activitysim_config_settings_yaml_")
         for key in surface.bootstrap_owned_artifact_keys
     )
-
-
-def test_surface_projects_activitysim_restart_role_policy():
-    surface = build_enabled_workflow_surface(
-        _settings(
-            land_use="urbansim",
-            vehicle_ownership=None,
-            activity_demand="activitysim",
-            traffic_assignment="beam",
-        ),
-        state=_restart_state(),
-    )
-
-    preprocess = surface.step_surface("activitysim_preprocess")
-    assert preprocess is not None
-    for key in (USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5):
-        policy = preprocess.input_role_policies[key]
-        assert policy.restart_requires_explicit_before_execution is True
-        assert policy.workspace_archive_fallback_allowed is False
-        assert policy.restart_may_restore_synthetically is False
 
 
 def test_surface_projects_activitysim_postprocess_required_keys_when_land_use_enabled():

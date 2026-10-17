@@ -7,8 +7,6 @@ from typing import (
     Any,
     Callable,
     Dict,
-    FrozenSet,
-    List,
     Mapping,
     Optional,
     Sequence,
@@ -134,23 +132,6 @@ class WorkflowStepKeyMatch:
         if not self.used_alias:
             return ""
         return f" (canonicalized to '{self.canonical_key}')"
-
-
-@dataclass(frozen=True)
-class RestartProducerCandidate:
-    key: str
-    step_name: str
-    stage_name: str
-    phase: Optional[str]
-
-
-@dataclass(frozen=True)
-class RestartProducerOverride:
-    key: str
-    producer_step: str
-    frontier_stages: FrozenSet[str] = frozenset()
-    required_models: FrozenSet[str] = frozenset()
-    priority: int = 0
 
 
 _URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
@@ -371,145 +352,6 @@ def workflow_step_declared_output_keys(step_name: str) -> Tuple[str, ...]:
     if spec is None:
         return ()
     return tuple(dict.fromkeys((*spec.output_keys, *spec.optional_output_keys)))
-
-
-def restart_query_scope_for_step(step_name: str) -> Mapping[str, Optional[str]]:
-    spec = workflow_step_spec_for_step_name(step_name)
-    if spec is None:
-        raise KeyError(f"Unknown restart query step name: {step_name}")
-
-    if spec.stage_name == "activity_demand":
-        return {
-            "model": spec.step_name,
-            "stage": f"activity_demand_{spec.phase}",
-            "phase": spec.phase,
-        }
-    if spec.stage_name == "land_use":
-        return {
-            "model": spec.step_name,
-            "stage": "land_use",
-            "phase": spec.phase,
-        }
-    if spec.stage_name == "vehicle_ownership_model":
-        return {
-            "model": spec.step_name,
-            "stage": "vehicle_ownership",
-            "phase": spec.phase,
-        }
-    if spec.stage_name == "traffic_assignment":
-        return {
-            "model": spec.step_name,
-            "stage": "beam",
-            "phase": spec.phase,
-        }
-    if spec.stage_name == "postprocessing":
-        return {
-            "model": spec.step_name,
-            "stage": "postprocessing",
-            "phase": None,
-        }
-    return {
-        "model": spec.step_name,
-        "stage": spec.stage_name,
-        "phase": spec.phase,
-    }
-
-
-def _restart_producer_candidates_by_key() -> Dict[
-    str, Tuple[RestartProducerCandidate, ...]
-]:
-    candidates_by_key: Dict[str, List[RestartProducerCandidate]] = {}
-    for spec in sorted(WORKFLOW_STEP_SPECS, key=lambda item: item.order):
-        for key in workflow_step_declared_output_keys(spec.step_name):
-            candidates_by_key.setdefault(key, []).append(
-                RestartProducerCandidate(
-                    key=key,
-                    step_name=spec.step_name,
-                    stage_name=spec.stage_name,
-                    phase=spec.phase,
-                )
-            )
-    return {key: tuple(candidates) for key, candidates in candidates_by_key.items()}
-
-
-_RESTART_PRODUCER_OVERRIDES: Tuple[RestartProducerOverride, ...] = (
-    RestartProducerOverride(
-        key="beam_plans_asim_out",
-        producer_step="activitysim_postprocess",
-        frontier_stages=frozenset({"traffic_assignment"}),
-        required_models=frozenset({"activitysim", "beam"}),
-        priority=100,
-    ),
-    RestartProducerOverride(
-        key="households_asim_out",
-        producer_step="activitysim_postprocess",
-        frontier_stages=frozenset({"traffic_assignment"}),
-        required_models=frozenset({"activitysim", "beam"}),
-        priority=100,
-    ),
-    RestartProducerOverride(
-        key="persons_asim_out",
-        producer_step="activitysim_postprocess",
-        frontier_stages=frozenset({"traffic_assignment"}),
-        required_models=frozenset({"activitysim", "beam"}),
-        priority=100,
-    ),
-)
-
-
-def restart_artifact_producers(
-    *,
-    frontier_stage: Optional[str] = None,
-    enabled_models: Optional[Sequence[str]] = None,
-) -> Dict[str, Tuple[RestartProducerCandidate, ...]]:
-    """Return static restart producer candidates for inspection tooling."""
-    enabled_model_set = frozenset(
-        str(model)
-        for model in (enabled_models or ())
-        if model is not None and str(model).strip()
-    )
-    producers = _restart_producer_candidates_by_key()
-    ordered: Dict[str, Tuple[RestartProducerCandidate, ...]] = {}
-
-    for key, candidates in producers.items():
-        priorities = {candidate.step_name: 0 for candidate in candidates}
-        for override in _RESTART_PRODUCER_OVERRIDES:
-            if override.key != key:
-                continue
-            if (
-                override.frontier_stages
-                and frontier_stage not in override.frontier_stages
-            ):
-                continue
-            if override.required_models and not override.required_models.issubset(
-                enabled_model_set
-            ):
-                continue
-            if override.producer_step not in priorities:
-                continue
-            priorities[override.producer_step] = max(
-                priorities[override.producer_step],
-                override.priority,
-            )
-
-        ordered[key] = tuple(
-            sorted(
-                candidates,
-                key=lambda candidate: (
-                    -priorities.get(candidate.step_name, 0),
-                    next(
-                        (
-                            spec.order
-                            for spec in WORKFLOW_STEP_SPECS
-                            if spec.step_name == candidate.step_name
-                        ),
-                        0,
-                    ),
-                    candidate.step_name,
-                ),
-            )
-        )
-    return ordered
 
 
 def _family_pattern_matches_key(family: str, key: str) -> bool:

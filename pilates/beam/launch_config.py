@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 from pathlib import Path
 import shutil
 from typing import Any, Mapping
@@ -17,8 +18,10 @@ from typing import Any, Mapping
 from consist.core.identity import IdentityManager
 from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
 
+from pilates.beam.admission import copy_linkstats_provenance_sidecar
 from pilates.beam.config_hocon import (
     beam_config_env_overrides,
+    missing_beam_config_keys,
     resolve_beam_config_value,
 )
 from pilates.workflows.artifact_keys import (
@@ -33,6 +36,37 @@ _BEAM_CONTAINER_OUTPUT_DIR = "/app/output"
 logger = logging.getLogger(__name__)
 
 
+def _link_or_copy_static_file(source: str | Path, dest: str | Path) -> str:
+    """Link static input files into the staged launch tree; copy mutable configs.
+
+    Files with extension ``.conf`` (case-insensitive) are copied to ensure that
+    any in-place modifications to HOCON configuration files never mutate the
+    underlying source repository or shared input tree. All other static files are
+    hardlinked where possible. If cross-device linking fails (e.g. ``EXDEV``
+    across filesystems), it falls back directly to copying rather than symlinking,
+    preventing broken container bind mounts and root-escape validation errors.
+    """
+
+    src = Path(source)
+    dst = Path(dest)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.unlink(missing_ok=True)
+
+    if src.suffix.lower() == ".conf":
+        shutil.copy2(src, dst)
+        return "copy"
+
+    try:
+        os.link(src, dst)
+        return "hardlink"
+    except OSError:
+        pass
+
+    dst.unlink(missing_ok=True)
+    shutil.copy2(src, dst)
+    return "copy"
+
+
 _ARTIFACT_FORMAT_POLICY_KEYS = {
     "activitysim_skims": "beam.router.skim.activity-sim-skimmer.fileOutputFormat",
     "exchange": "beam.exchange.scenario.fileFormat",
@@ -41,6 +75,9 @@ _ARTIFACT_FORMAT_POLICY_KEYS = {
 }
 _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY = (
     "beam.router.skim.activity-sim-skimmer.fileBaseName"
+)
+_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY = (
+    "beam.urbansim.backgroundODSkimsCreator.calculationTimeoutHours"
 )
 
 
@@ -158,13 +195,38 @@ def materialize_beam_launch_config(
         source_root=source_root,
         identity=identity,
     )
-    canonical_config = adapter.materialize(
-        list(source_roots),
-        BeamConfigOverrides(values=materialized_values),
-        output_dir=output_dir,
-        identity=identity,
-        strict=not allow_missing_override_keys,
-    )
+    orig_copytree = shutil.copytree
+
+    def _hardlink_copytree(
+        src: Any,
+        dst: Any,
+        symlinks: bool = False,
+        ignore: Any = None,
+        copy_function: Any = _link_or_copy_static_file,
+        ignore_dangling_symlinks: bool = False,
+        dirs_exist_ok: bool = True,
+    ) -> Any:
+        return orig_copytree(
+            src,
+            dst,
+            symlinks=symlinks,
+            ignore=ignore,
+            copy_function=_link_or_copy_static_file,
+            ignore_dangling_symlinks=ignore_dangling_symlinks,
+            dirs_exist_ok=dirs_exist_ok,
+        )
+
+    try:
+        shutil.copytree = _hardlink_copytree
+        canonical_config = adapter.materialize(
+            list(source_roots),
+            BeamConfigOverrides(values=materialized_values),
+            output_dir=output_dir,
+            identity=identity,
+            strict=not allow_missing_override_keys,
+        )
+    finally:
+        shutil.copytree = orig_copytree
 
     derived_primary_config = derived_root / settings.beam.config
     if canonical_config.primary_config != derived_primary_config:
@@ -180,7 +242,11 @@ def materialize_beam_launch_config(
             )
         destination = derived_root / staged_input.destination
         destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
         shutil.copy2(source, destination)
+        copy_linkstats_provenance_sidecar(
+            source, destination, fallback_source_path=staged_input.source
+        )
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
 
 
@@ -192,25 +258,22 @@ def _require_declared_non_policy_overrides(
 ) -> None:
     """Preserve strict validation when a legacy format key must be introduced."""
 
+    del settings
     policy_keys = frozenset(
         (
             _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
+            _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
             *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
         )
     )
-    environment = beam_config_env_overrides(settings, config_root=source_primary.parent)
-    for key in override_keys:
-        if key == "beam.inputDirectory" or key in policy_keys:
-            continue
-        if (
-            resolve_beam_config_value(
-                source_primary,
-                key=key,
-                env_overrides=environment,
-            )
-            is None
-        ):
-            raise KeyError(f"Override key not found: {key}")
+    non_policy_keys = tuple(
+        key
+        for key in override_keys
+        if key != "beam.inputDirectory" and key not in policy_keys
+    )
+    missing = missing_beam_config_keys(source_primary, keys=non_policy_keys)
+    if missing:
+        raise KeyError(f"Override key not found: {missing[0]}")
 
 
 def build_beam_launch_config(
@@ -266,6 +329,14 @@ def build_beam_launch_config(
         )
     )
     overrides.update(skim_name_overrides)
+    full_skim_timeout_overrides, introduces_missing_full_skim_timeout_key = (
+        _full_skim_calculation_timeout_override(
+            settings=settings,
+            source_primary=source_primary,
+            env_overrides=env_overrides,
+        )
+    )
+    overrides.update(full_skim_timeout_overrides)
     population_stems = {
         BEAM_PLANS_IN: "plans",
         BEAM_HOUSEHOLDS_IN: "households",
@@ -358,7 +429,9 @@ def build_beam_launch_config(
         overrides=BeamLaunchConfigOverrides(values=overrides),
         staged_inputs=tuple(staged_inputs),
         allow_missing_override_keys=(
-            introduces_missing_format_key or introduces_missing_skim_name_key
+            introduces_missing_format_key
+            or introduces_missing_skim_name_key
+            or introduces_missing_full_skim_timeout_key
         ),
     )
     if overrides.get("beam.exchange.scenario.fileFormat") == "parquet":
@@ -381,19 +454,20 @@ def _ensure_parquet_exchange_scenario_files(
     scenario_folder: str,
     has_population_inputs: bool,
 ) -> None:
-    """Ensure ``UrbansimReaderV2`` finds required Parquet files in the exchange folder.
+    """Ensure ``UrbansimReaderV2`` and ``ODRequester`` find valid Parquet scenario files.
 
     When ``beam.exchange.scenario.fileFormat`` is ``"parquet"``, BEAM's
     ``UrbansimReaderV2`` unconditionally requires ``persons.parquet``,
     ``plans.parquet``, ``households.parquet``, and ``blocks.parquet`` in
-    ``beam.exchange.scenario.folder``—even during standalone ``beam_full_skim``
-    where ``FullSkimsCreatorApp`` never uses the population or blocks.
-    Additionally, when ``beam.exchange.scenario.folder`` points to a nested
-    subdirectory (such as ``urbansim/2018``) while ``blocks.parquet`` lives in
-    the parent ``scenario_folder`` (``urbansim/blocks.parquet``), copy
-    ``blocks.parquet`` into ``exchange_dir`` if present, or write 0-row
-    schema-valid Parquet stubs for any missing files when no population inputs
-    were staged.
+    ``beam.exchange.scenario.folder``, and ``ODRequester.createDummyPersonAttribute``
+    requires at least one loaded household with a member and plan—even during
+    standalone ``beam_full_skim`` where ``FullSkimsCreatorApp`` never simulates
+    agents. Additionally, when ``beam.exchange.scenario.folder`` points to a
+    nested subdirectory (such as ``urbansim/2018``) while ``blocks.parquet``
+    lives in the parent ``scenario_folder`` (``urbansim/blocks.parquet``), copy
+    ``blocks.parquet`` into ``exchange_dir`` if present, and write 1-row
+    synthetic Parquet stubs referencing a valid ``block_id`` for any missing
+    files when no population inputs were staged.
     """
 
     exchange_dir = derived_root / exchange_relative
@@ -406,67 +480,147 @@ def _ensure_parquet_exchange_scenario_files(
             shutil.copy2(fallback_blocks, blocks_dest)
 
     if not has_population_inputs:
-        for stem in ("persons", "plans", "households", "blocks"):
+        if not blocks_dest.is_file():
+            _write_synthetic_parquet_stub(
+                blocks_dest,
+                stem="blocks",
+                block_id=1,
+                block_x=550000.0,
+                block_y=4180000.0,
+            )
+        block_id, block_x, block_y = _first_block_row(blocks_dest)
+        for stem in ("persons", "plans", "households"):
             target = exchange_dir / f"{stem}.parquet"
             if not target.is_file():
-                _write_empty_parquet_stub(target, stem=stem)
+                _write_synthetic_parquet_stub(
+                    target,
+                    stem=stem,
+                    block_id=block_id,
+                    block_x=block_x,
+                    block_y=block_y,
+                )
 
 
-def _write_empty_parquet_stub(path: Path, *, stem: str) -> None:
-    """Write a 0-row Parquet file matching ``ParquetReaders.scala`` expectations."""
+def _first_block_row(blocks_path: Path) -> tuple[int, float, float]:
+    """Read the first ``(block_id, x, y)`` row from ``blocks.parquet``."""
+
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(blocks_path, columns=["block_id", "x", "y"])
+    if table.num_rows == 0:
+        return 1, 550000.0, 4180000.0
+    row = table.slice(0, 1).to_pydict()
+    return (
+        int(row["block_id"][0]),
+        float(row["x"][0]),
+        float(row["y"][0]),
+    )
+
+
+def _write_synthetic_parquet_stub(
+    path: Path,
+    *,
+    stem: str,
+    block_id: int,
+    block_x: float,
+    block_y: float,
+) -> None:
+    """Write a minimal Parquet stub matching ``ParquetReaders.scala``, ``HOVModeTransformer``, and ``ODRequester``."""
 
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    schemas: dict[str, pa.Schema] = {
-        "persons": pa.schema(
-            [
-                ("person_id", pa.int64()),
-                ("household_id", pa.int64()),
-                ("age", pa.int64()),
-                ("sex", pa.int64()),
-                ("industry", pa.string()),
-                ("value_of_time", pa.float64()),
-            ]
+    tables: dict[str, pa.Table] = {
+        "persons": pa.Table.from_pydict(
+            {
+                "person_id": [1],
+                "household_id": [1],
+                "age": [35],
+                "sex": [1],
+                "industry": ["stub"],
+                "value_of_time": [18.0],
+            },
+            schema=pa.schema(
+                [
+                    ("person_id", pa.int64()),
+                    ("household_id", pa.int64()),
+                    ("age", pa.int64()),
+                    ("sex", pa.int64()),
+                    ("industry", pa.string()),
+                    ("value_of_time", pa.float64()),
+                ]
+            ),
         ),
-        "plans": pa.schema(
-            [
-                ("trip_id", pa.string()),
-                ("tour_id", pa.string()),
-                ("person_id", pa.int64()),
-                ("PlanElementIndex", pa.int64()),
-                ("ActivityElement", pa.string()),
-                ("trip_mode", pa.string()),
-                ("ActivityType", pa.string()),
-                ("x", pa.float64()),
-                ("y", pa.float64()),
-                ("departure_time", pa.float64()),
-                ("trip_dur_min", pa.float64()),
-                ("trip_cost_dollars", pa.float64()),
-            ]
+        "plans": pa.Table.from_pydict(
+            {
+                "trip_id": [None, None, None, None, None],
+                "tour_id": [None, None, None, None, None],
+                "person_id": [1, 1, 1, 1, 1],
+                "PlanElementIndex": [1, 2, 3, 4, 5],
+                "ActivityElement": [
+                    "activity",
+                    "leg",
+                    "activity",
+                    "leg",
+                    "activity",
+                ],
+                "trip_mode": [None, "WALK", None, "WALK", None],
+                "ActivityType": ["Home", None, "Work", None, "Home"],
+                "x": [block_x, None, block_x, None, block_x],
+                "y": [block_y, None, block_y, None, block_y],
+                "departure_time": [8.0, None, 17.0, None, None],
+                "trip_dur_min": [None, None, None, None, None],
+                "trip_cost_dollars": [None, None, None, None, None],
+            },
+            schema=pa.schema(
+                [
+                    ("trip_id", pa.string()),
+                    ("tour_id", pa.string()),
+                    ("person_id", pa.int64()),
+                    ("PlanElementIndex", pa.int64()),
+                    ("ActivityElement", pa.string()),
+                    ("trip_mode", pa.string()),
+                    ("ActivityType", pa.string()),
+                    ("x", pa.float64()),
+                    ("y", pa.float64()),
+                    ("departure_time", pa.float64()),
+                    ("trip_dur_min", pa.float64()),
+                    ("trip_cost_dollars", pa.float64()),
+                ]
+            ),
         ),
-        "households": pa.schema(
-            [
-                ("household_id", pa.int64()),
-                ("cars", pa.int64()),
-                ("income", pa.int64()),
-                ("block_id", pa.int64()),
-            ]
+        "households": pa.Table.from_pydict(
+            {
+                "household_id": [1],
+                "cars": [1],
+                "income": [50000],
+                "block_id": [block_id],
+            },
+            schema=pa.schema(
+                [
+                    ("household_id", pa.int64()),
+                    ("cars", pa.int64()),
+                    ("income", pa.int64()),
+                    ("block_id", pa.int64()),
+                ]
+            ),
         ),
-        "blocks": pa.schema(
-            [
-                ("block_id", pa.int64()),
-                ("x", pa.float64()),
-                ("y", pa.float64()),
-            ]
+        "blocks": pa.Table.from_pydict(
+            {
+                "block_id": [block_id],
+                "x": [block_x],
+                "y": [block_y],
+            },
+            schema=pa.schema(
+                [
+                    ("block_id", pa.int64()),
+                    ("x", pa.float64()),
+                    ("y", pa.float64()),
+                ]
+            ),
         ),
     }
-    schema = schemas[stem]
-    empty_table = pa.Table.from_pydict(
-        {field.name: [] for field in schema},
-        schema=schema,
-    )
-    pq.write_table(empty_table, path)
+    pq.write_table(tables[stem], path)
 
 
 def _activitysim_skims_file_base_name_override(
@@ -499,6 +653,32 @@ def _activitysim_skims_file_base_name_override(
             expected,
         )
     return {_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY: expected}, source_value is None
+
+
+def _full_skim_calculation_timeout_override(
+    *,
+    settings: Any,
+    source_primary: Path,
+    env_overrides: Mapping[str, str],
+) -> tuple[dict[str, int], bool]:
+    """Return the configured BEAM BackgroundFullSkimsCreator timeout in hours."""
+
+    full_skim = getattr(settings.beam, "full_skim", None)
+    if (
+        full_skim is None
+        or getattr(full_skim, "run_schedule", "disabled") == "disabled"
+    ):
+        return {}, False
+    expected = int(getattr(full_skim, "calculation_timeout_hours", 72))
+    source_value = resolve_beam_config_value(
+        source_primary,
+        key=_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
+        env_overrides=dict(env_overrides),
+    )
+    return (
+        {_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY: expected},
+        source_value is None,
+    )
 
 
 def _artifact_format_overrides(

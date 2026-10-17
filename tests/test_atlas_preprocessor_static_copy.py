@@ -129,13 +129,6 @@ def test_copy_data_to_mutable_location_raises_when_required_static_file_missing(
         )
 
 
-def test_restart_required_atlas_input_years_uses_previous_subyear_not_start_year_minus_two():
-    assert atlas_preprocessor_module._restart_required_atlas_input_years(
-        start_year=2017,
-        atlas_year=2023,
-    ) == [2017, 2021]
-
-
 def test_restart_local_artifact_policy_has_no_atlas_mirror_rule():
     assert all(
         rule.name != "atlas_restart_inputs"

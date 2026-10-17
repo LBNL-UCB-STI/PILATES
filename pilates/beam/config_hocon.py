@@ -100,9 +100,7 @@ def load_resolved_beam_config_tree(
     *,
     env_overrides: Mapping[str, str],
 ) -> dict[str, Any]:
-    config_factory, hocon_converter, config_parser, non_existent_key = (
-        _require_pyhocon()
-    )
+    config_factory, hocon_converter, config_parser, _ = _require_pyhocon()
 
     try:
         config = config_factory.parse_file(str(config_path), resolve=False)
@@ -112,6 +110,7 @@ def load_resolved_beam_config_tree(
         ) from exc
 
     injected_keys = _inject_resolution_overrides(config, env_overrides)
+    _rebind_config_values_parents(config)
     try:
         config_parser.resolve_substitutions(config, accept_unresolved=False)
     except Exception as exc:
@@ -121,6 +120,44 @@ def load_resolved_beam_config_tree(
     for key in injected_keys:
         _remove_dotted_key(config, key)
     return json.loads(hocon_converter.to_json(config))
+
+
+def has_beam_config_key(
+    config_path: Path,
+    *,
+    key: str,
+) -> bool:
+    """Return True if ``key`` is declared in ``config_path`` (or its includes)."""
+
+    config_factory, _, _, non_existent_key = _require_pyhocon()
+    try:
+        config = config_factory.parse_file(str(config_path), resolve=False)
+    except Exception as exc:
+        raise BeamConfigHoconError(
+            f"Failed to parse staged BEAM config {config_path}: {exc}"
+        ) from exc
+    return config.get(key, non_existent_key) is not non_existent_key
+
+
+def missing_beam_config_keys(
+    config_path: Path,
+    *,
+    keys: tuple[str, ...],
+) -> list[str]:
+    """Return any keys from ``keys`` that are not declared in ``config_path``."""
+
+    if not keys:
+        return []
+    config_factory, _, _, non_existent_key = _require_pyhocon()
+    try:
+        config = config_factory.parse_file(str(config_path), resolve=False)
+    except Exception as exc:
+        raise BeamConfigHoconError(
+            f"Failed to parse staged BEAM config {config_path}: {exc}"
+        ) from exc
+    return [
+        key for key in keys if config.get(key, non_existent_key) is non_existent_key
+    ]
 
 
 def resolve_beam_config_value(
@@ -183,6 +220,32 @@ def _require_pyhocon():
             "pyhocon is required for staged BEAM config mutation and resolution."
         ) from exc
     return ConfigFactory, HOCONConverter, ConfigParser, NonExistentKey
+
+
+def _rebind_config_values_parents(node: Any) -> None:
+    """Repair ``ConfigValues.parent`` pointers after ``pyhocon`` tree merges."""
+
+    from pyhocon.config_parser import ConfigValues
+
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, ConfigValues):
+                value.parent = node
+                value.key = key
+                overridden = value.overridden_value
+                while isinstance(overridden, ConfigValues):
+                    overridden.parent = node
+                    overridden.key = key
+                    overridden = overridden.overridden_value
+            elif isinstance(value, (dict, list)):
+                _rebind_config_values_parents(value)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            if isinstance(item, ConfigValues):
+                item.parent = node
+                item.key = index
+            elif isinstance(item, (dict, list)):
+                _rebind_config_values_parents(item)
 
 
 def _lookup_dotted_key(mapping: Mapping[str, Any], key: str) -> Any:

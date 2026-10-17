@@ -182,7 +182,8 @@ def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(
                 Path(source).read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
-            prepared[key] = destination
+            output_key = "vehicles_beam_in" if key == ATLAS_VEHICLES2_OUTPUT else key
+            prepared[output_key] = destination
         return BeamPreprocessOutputs(
             beam_mutable_data_dir=mutable,
             prepared_inputs=prepared,

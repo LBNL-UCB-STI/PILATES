@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
 
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import ScenarioWithCoupler
@@ -26,13 +25,6 @@ class ActivityDemandPhaseInputs:
     iteration: int
 
 
-@dataclass(frozen=True)
-class ActivityDemandPhaseOutputs:
-    """Typed ActivitySim projection expressed as the next stage's path policy."""
-
-    activity_demand_outputs: Optional[Dict[str, Any]]
-
-
 def _activitysim_population_year(state: WorkflowState) -> int:
     forecast_year = getattr(state, "forecast_year", None)
     if forecast_year is None:
@@ -45,18 +37,12 @@ def _activitysim_population_year(state: WorkflowState) -> int:
     return int(forecast_year)
 
 
-def _typed_output_paths(outputs: Any) -> Dict[str, Any]:
-    """Expose a typed projection to stage policy without mutating the coupler."""
-
-    return {key: path for key, path, _description in outputs._iter_record_items()}
-
-
 def _run_activity_demand_phase(
     *,
     scenario: ScenarioWithCoupler,
     inputs: ActivityDemandPhaseInputs,
     context: WorkflowRuntimeContext,
-) -> ActivityDemandPhaseOutputs:
+) -> None:
     """Run the three native ActivitySim definitions for one iteration.
 
     Semantic input selection, binding, output materialization and cache admission
@@ -106,11 +92,10 @@ def _run_activity_demand_phase(
         iteration=inputs.iteration,
         phase="postprocess",
     )
+    del postprocess_outputs
     state.complete_step(
         state.Stage.supply_demand_loop,
         inputs.iteration,
         state.Stage.activity_demand,
     )
-    return ActivityDemandPhaseOutputs(
-        activity_demand_outputs=_typed_output_paths(postprocess_outputs)
-    )
+    return None

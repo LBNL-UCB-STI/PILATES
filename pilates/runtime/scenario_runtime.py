@@ -330,6 +330,18 @@ class ScenarioParentLinkProxy:
         )
         return result
 
+    def capture_coupler_snapshot(self, *args: Any, **kwargs: Any) -> Any:
+        fn = getattr(self._scenario, "capture_coupler_snapshot", None)
+        if callable(fn):
+            return fn(*args, **kwargs)
+        return None
+
+    def restore_coupler_snapshot(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        fn = getattr(self._scenario, "restore_coupler_snapshot", None)
+        if callable(fn):
+            return fn(*args, **kwargs)
+        return {}
+
 
 DEFAULT_CACHE_EPOCH = 2
 

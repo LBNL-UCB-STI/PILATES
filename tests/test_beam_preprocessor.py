@@ -446,6 +446,46 @@ def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_con
     assert "would reorder canonical zones" in caplog.text
 
 
+def test_prepare_beam_zone_shapefile_reprojects_wgs84_zones_to_local_crs(
+    mock_settings, mock_workspace, monkeypatch
+):
+    mock_state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
+    object.__setattr__(mock_settings.shared.geography, "local_crs", "EPSG:26910")
+
+    wgs84_poly = Polygon(
+        [
+            (-122.683629315, 38.205521908),
+            (-122.680000000, 38.205521908),
+            (-122.680000000, 38.210000000),
+            (-122.683629315, 38.210000000),
+        ]
+    )
+    canonical_gdf = gpd.GeoDataFrame(
+        {"geometry": [wgs84_poly for _ in CANONICAL_GEOID_ORDER]},
+        index=pd.Index(CANONICAL_GEOID_ORDER, name="TAZ"),
+        crs="EPSG:4326",
+    )
+    monkeypatch.setattr(
+        "pilates.utils.zone_utils.load_canonical_zones",
+        lambda settings, workspace: canonical_gdf,
+    )
+
+    output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(mock_workspace)
+    assert output_shapefile_path is not None
+
+    with open(output_shapefile_path, "r") as handle:
+        exported_json = json.load(handle)
+    first_vertex = exported_json["features"][0]["geometry"]["coordinates"][0][0]
+    assert first_vertex[0] > 400000.0
+    assert first_vertex[1] > 4000000.0
+
+
 def test_preprocess_ignores_workspace_beam_output_cache(
     monkeypatch, mock_settings, mock_workspace
 ):

@@ -84,27 +84,24 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
 
     _initialize(golden_stub_env)
 
-    usim_inputs = _run_land_use_stage(
+    _run_land_use_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=golden_stub_env["context"],
     )
     land_use_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert land_use_datastore is not None
-    assert (
-        Path(land_use_datastore).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_CURRENT_H5]).resolve()
+    current_usim_datastore = artifact_to_path(
+        coupler.get(USIM_DATASTORE_CURRENT_H5),
+        workspace,
     )
+    assert current_usim_datastore is not None
+    assert Path(land_use_datastore).resolve() == Path(current_usim_datastore).resolve()
     base_usim_datastore = artifact_to_path(
         coupler.get(USIM_DATASTORE_BASE_H5),
         workspace,
     )
     assert base_usim_datastore is not None
-    assert (
-        Path(base_usim_datastore).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
-    )
 
     runs = tracker.find_runs(tags=["golden_stub_workflow"])
     assert runs

@@ -12,7 +12,6 @@ from consist.types import CacheOptions, OutputArtifactSpec
 
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import launcher as run_module
-from pilates.atlas.inputs import build_atlas_static_inputs_fallback
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -2283,28 +2282,6 @@ def test_restart_preflight_consumes_shared_policy_hook(tmp_path, monkeypatch):
             "reason": "Restart policy 'custom_restart_artifact' requires custom_restart_artifact (test policy)",
         }
     ]
-
-
-def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_path):
-    settings = _restart_settings()
-    workspace = DummyWorkspace(str(tmp_path / "local-run"), settings=settings)
-    atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
-    (atlas_input_dir / "psid_names.Rdat").parent.mkdir(parents=True, exist_ok=True)
-    (atlas_input_dir / "psid_names.Rdat").write_text("psid", encoding="utf-8")
-    (atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv").parent.mkdir(
-        parents=True, exist_ok=True
-    )
-    (atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv").write_text(
-        "used", encoding="utf-8"
-    )
-
-    fallback = build_atlas_static_inputs_fallback(workspace)
-
-    assert fallback["psid_names"] == str(atlas_input_dir / "psid_names.Rdat")
-    assert fallback["adopt/baseline/used_vehicles_2017"] == str(
-        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
-    )
-    assert "atlas_static_psid_names.Rdat" not in fallback
 
 
 def test_resume_rewind_guardrail_blocks_by_default_and_allows_override(tmp_path):

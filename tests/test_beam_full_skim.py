@@ -610,6 +610,106 @@ class TestBeamFullSkimMode:
         assert resolved.required_roles == ()
         assert resolved.binding.inputs == {}
 
+    def test_resolve_beam_full_skim_inputs_standalone_bypasses_coupler_population_inputs(
+        self, tmp_path
+    ):
+        """_resolve_beam_full_skim_inputs skips coupler population inputs in standalone mode."""
+        from pilates.workflows.artifact_keys import (
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            BEAM_PLANS_IN,
+            LINKSTATS_WARMSTART,
+        )
+        from pilates.workflows.steps.beam import _resolve_beam_full_skim_inputs
+
+        settings = self._make_settings(
+            full_skim_cfg=self._make_skim_config(run_schedule="standalone")
+        )
+        state = SimpleNamespace(current_year=2020, current_inner_iter=0)
+        workspace = MagicMock()
+        workspace.full_path = str(tmp_path)
+        workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam_input")
+        workspace.get_beam_output_dir.return_value = str(tmp_path / "beam_output")
+
+        plans_path = tmp_path / "plans.csv.gz"
+        plans_path.write_bytes(b"plans")
+        hh_path = tmp_path / "households.csv.gz"
+        hh_path.write_bytes(b"hh")
+        persons_path = tmp_path / "persons.csv.gz"
+        persons_path.write_bytes(b"persons")
+        warmstart_path = tmp_path / "warmstart.parquet"
+        warmstart_path.write_bytes(b"warmstart")
+
+        coupler = {
+            BEAM_PLANS_IN: str(plans_path),
+            BEAM_HOUSEHOLDS_IN: str(hh_path),
+            BEAM_PERSONS_IN: str(persons_path),
+            LINKSTATS_WARMSTART: str(warmstart_path),
+        }
+
+        resolved = _resolve_beam_full_skim_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=coupler,
+        )
+        assert resolved.step_name == "beam_full_skim"
+        assert resolved.required_roles == ()
+        assert LINKSTATS_WARMSTART in resolved.binding.inputs
+        assert BEAM_PLANS_IN not in resolved.binding.inputs
+        assert BEAM_HOUSEHOLDS_IN not in resolved.binding.inputs
+        assert BEAM_PERSONS_IN not in resolved.binding.inputs
+
+    def test_resolve_beam_full_skim_inputs_final_iter_binds_coupler_population_inputs(
+        self, tmp_path
+    ):
+        """_resolve_beam_full_skim_inputs binds coupler population inputs when not standalone."""
+        from pilates.workflows.artifact_keys import (
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            BEAM_PLANS_IN,
+            LINKSTATS_WARMSTART,
+        )
+        from pilates.workflows.steps.beam import _resolve_beam_full_skim_inputs
+
+        settings = self._make_settings(
+            full_skim_cfg=self._make_skim_config(run_schedule="after_final_iteration")
+        )
+        state = SimpleNamespace(current_year=2020, current_inner_iter=0)
+        workspace = MagicMock()
+        workspace.full_path = str(tmp_path)
+        workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam_input")
+        workspace.get_beam_output_dir.return_value = str(tmp_path / "beam_output")
+
+        plans_path = tmp_path / "plans.csv.gz"
+        plans_path.write_bytes(b"plans")
+        hh_path = tmp_path / "households.csv.gz"
+        hh_path.write_bytes(b"hh")
+        persons_path = tmp_path / "persons.csv.gz"
+        persons_path.write_bytes(b"persons")
+        warmstart_path = tmp_path / "warmstart.parquet"
+        warmstart_path.write_bytes(b"warmstart")
+
+        coupler = {
+            BEAM_PLANS_IN: str(plans_path),
+            BEAM_HOUSEHOLDS_IN: str(hh_path),
+            BEAM_PERSONS_IN: str(persons_path),
+            LINKSTATS_WARMSTART: str(warmstart_path),
+        }
+
+        resolved = _resolve_beam_full_skim_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=coupler,
+        )
+        assert resolved.step_name == "beam_full_skim"
+        assert resolved.required_roles == ()
+        assert LINKSTATS_WARMSTART in resolved.binding.inputs
+        assert BEAM_PLANS_IN in resolved.binding.inputs
+        assert BEAM_HOUSEHOLDS_IN in resolved.binding.inputs
+        assert BEAM_PERSONS_IN in resolved.binding.inputs
+
     def test_prepare_r5_raw_rebuild_removes_tolls_dat_and_directory2_caches(
         self, tmp_path
     ):
@@ -852,6 +952,121 @@ class TestBeamFullSkimMode:
         assert outputs.prepared_inputs[LINKSTATS_WARMSTART] == warmstart_file
         assert scenario.coupler[LINKSTATS_WARMSTART] == warmstart_file
         mock_prepare_zones.assert_called_once_with(workspace, settings)
+
+    def test_standalone_full_skim_bypasses_beam_preprocess_even_when_population_in_coupler(
+        self, tmp_path
+    ):
+        """In standalone mode, _standalone_full_skim_preprocess_outputs and _run_traffic_assignment_phase ignore population inputs in coupler."""
+        from pilates.workflows.artifact_keys import (
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            BEAM_PLANS_IN,
+            LINKSTATS_WARMSTART,
+        )
+        from pilates.workflows.stages.supply_demand_beam import (
+            TrafficAssignmentPhaseInputs,
+            _run_traffic_assignment_phase,
+            _standalone_full_skim_preprocess_outputs,
+        )
+
+        beam_input_dir = tmp_path / "beam" / "input"
+        warmstart_file = beam_input_dir / "init.linkstats.parquet"
+        warmstart_file.parent.mkdir(parents=True)
+        warmstart_file.write_bytes(b"warmstart")
+
+        plans_file = tmp_path / "plans.csv.gz"
+        plans_file.write_bytes(b"plans")
+        hh_file = tmp_path / "households.csv.gz"
+        hh_file.write_bytes(b"hh")
+        persons_file = tmp_path / "persons.csv.gz"
+        persons_file.write_bytes(b"persons")
+
+        workspace = MagicMock()
+        workspace.get_beam_mutable_data_dir.return_value = str(beam_input_dir)
+        coupler = {
+            BEAM_PLANS_IN: str(plans_file),
+            BEAM_HOUSEHOLDS_IN: str(hh_file),
+            BEAM_PERSONS_IN: str(persons_file),
+            LINKSTATS_WARMSTART: str(warmstart_file),
+        }
+        scenario = SimpleNamespace(coupler=coupler)
+        settings = SimpleNamespace(
+            run=SimpleNamespace(region="sfbay"),
+            beam=SimpleNamespace(
+                router_directory="r5",
+                warmstart_linkstats_path="{router_directory}/init.linkstats.parquet",
+                full_skim=SimpleNamespace(run_schedule="standalone"),
+            ),
+            shared=SimpleNamespace(
+                geography=SimpleNamespace(
+                    zones=SimpleNamespace(
+                        source_file="pilates/activitysim/data/sfbay/taz_sfbay.geojson"
+                    )
+                )
+            ),
+        )
+
+        # 1. Verify _standalone_full_skim_preprocess_outputs ignores population
+        with patch("pilates.beam.preprocessor._prepare_beam_zone_shapefile"):
+            outputs = _standalone_full_skim_preprocess_outputs(
+                scenario=scenario,
+                workspace=workspace,
+                settings=settings,
+            )
+
+        assert LINKSTATS_WARMSTART in outputs.prepared_inputs
+        assert outputs.prepared_inputs[LINKSTATS_WARMSTART] == warmstart_file
+        assert BEAM_PLANS_IN not in outputs.prepared_inputs
+        assert BEAM_HOUSEHOLDS_IN not in outputs.prepared_inputs
+        assert BEAM_PERSONS_IN not in outputs.prepared_inputs
+
+        # Standalone mode unconditionally bypasses beam_preprocess
+        # 2. Verify _run_traffic_assignment_phase calls _standalone_full_skim_preprocess_outputs and never _run_beam_preprocess_step
+        state = MagicMock()
+        context = SimpleNamespace(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        inputs = TrafficAssignmentPhaseInputs(year=2020, iteration=0)
+
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            mock_beam_steps = stack.enter_context(
+                patch("pilates.workflows.stages.supply_demand_beam._run_beam_steps")
+            )
+            mock_standalone_outputs = stack.enter_context(
+                patch(
+                    "pilates.workflows.stages.supply_demand_beam._standalone_full_skim_preprocess_outputs",
+                    return_value=outputs,
+                )
+            )
+            mock_launch_config = stack.enter_context(
+                patch(
+                    "pilates.workflows.stages.supply_demand_beam._compile_beam_launch_config"
+                )
+            )
+            mock_full_skim_step = stack.enter_context(
+                patch(
+                    "pilates.workflows.stages.supply_demand_beam._run_beam_full_skim_step",
+                    return_value={},
+                )
+            )
+            _run_traffic_assignment_phase(
+                scenario=scenario,
+                inputs=inputs,
+                context=context,
+            )
+
+        mock_standalone_outputs.assert_called_once_with(
+            scenario=scenario,
+            workspace=workspace,
+            settings=settings,
+        )
+        mock_beam_steps.assert_not_called()
+        mock_launch_config.assert_called_once()
+        mock_full_skim_step.assert_called_once()
 
     def test_sfbay_standalone_fullskim_hpc_config_loads_validly(self):
         """scenarios/sfbay/settings-sfbay-consist-fullskim-hpc-2019.yaml validates as a standalone activitySimOmx full-skim config."""
