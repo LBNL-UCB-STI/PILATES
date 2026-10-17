@@ -1000,7 +1000,7 @@ def test_build_beam_launch_config_injects_full_skim_calculation_timeout_hours(
         calculation_timeout_hours=72,
     )
     source_root = tmp_path / "beam" / "input" / "seattle"
-    _write_base_config(source_root)
+    _write_shared_config_tree(source_root)
     tracker = Tracker(
         run_dir=tmp_path / "runs",
         db_path=str(tmp_path / "provenance.duckdb"),
@@ -1022,4 +1022,12 @@ def test_build_beam_launch_config_injects_full_skim_calculation_timeout_hours(
             env_overrides=env,
         )
         == 72
+    )
+    assert (
+        resolve_beam_config_value(
+            launch_config.primary_config,
+            key="beam.outputs.baseOutputDirectory",
+            env_overrides=env,
+        )
+        == "/app/output"
     )

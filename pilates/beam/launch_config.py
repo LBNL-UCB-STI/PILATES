@@ -21,6 +21,7 @@ from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
 from pilates.beam.admission import copy_linkstats_provenance_sidecar
 from pilates.beam.config_hocon import (
     beam_config_env_overrides,
+    missing_beam_config_keys,
     resolve_beam_config_value,
 )
 from pilates.workflows.artifact_keys import (
@@ -257,6 +258,7 @@ def _require_declared_non_policy_overrides(
 ) -> None:
     """Preserve strict validation when a legacy format key must be introduced."""
 
+    del settings
     policy_keys = frozenset(
         (
             _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
@@ -264,19 +266,14 @@ def _require_declared_non_policy_overrides(
             *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
         )
     )
-    environment = beam_config_env_overrides(settings, config_root=source_primary.parent)
-    for key in override_keys:
-        if key == "beam.inputDirectory" or key in policy_keys:
-            continue
-        if (
-            resolve_beam_config_value(
-                source_primary,
-                key=key,
-                env_overrides=environment,
-            )
-            is None
-        ):
-            raise KeyError(f"Override key not found: {key}")
+    non_policy_keys = tuple(
+        key
+        for key in override_keys
+        if key != "beam.inputDirectory" and key not in policy_keys
+    )
+    missing = missing_beam_config_keys(source_primary, keys=non_policy_keys)
+    if missing:
+        raise KeyError(f"Override key not found: {missing[0]}")
 
 
 def build_beam_launch_config(
