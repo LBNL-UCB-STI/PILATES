@@ -514,7 +514,7 @@ def _write_synthetic_parquet_stub(
     block_x: float,
     block_y: float,
 ) -> None:
-    """Write a 1-row Parquet stub matching ``ParquetReaders.scala`` and ``ODRequester``."""
+    """Write a minimal Parquet stub matching ``ParquetReaders.scala``, ``HOVModeTransformer``, and ``ODRequester``."""
 
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -542,18 +542,24 @@ def _write_synthetic_parquet_stub(
         ),
         "plans": pa.Table.from_pydict(
             {
-                "trip_id": [None],
-                "tour_id": [None],
-                "person_id": [1],
-                "PlanElementIndex": [1],
-                "ActivityElement": ["activity"],
-                "trip_mode": [None],
-                "ActivityType": ["Home"],
-                "x": [block_x],
-                "y": [block_y],
-                "departure_time": [8.0],
-                "trip_dur_min": [None],
-                "trip_cost_dollars": [None],
+                "trip_id": [None, None, None, None, None],
+                "tour_id": [None, None, None, None, None],
+                "person_id": [1, 1, 1, 1, 1],
+                "PlanElementIndex": [1, 2, 3, 4, 5],
+                "ActivityElement": [
+                    "activity",
+                    "leg",
+                    "activity",
+                    "leg",
+                    "activity",
+                ],
+                "trip_mode": [None, "WALK", None, "WALK", None],
+                "ActivityType": ["Home", None, "Work", None, "Home"],
+                "x": [block_x, None, block_x, None, block_x],
+                "y": [block_y, None, block_y, None, block_y],
+                "departure_time": [8.0, None, 17.0, None, None],
+                "trip_dur_min": [None, None, None, None, None],
+                "trip_cost_dollars": [None, None, None, None, None],
             },
             schema=pa.schema(
                 [
@@ -575,7 +581,7 @@ def _write_synthetic_parquet_stub(
         "households": pa.Table.from_pydict(
             {
                 "household_id": [1],
-                "cars": [0],
+                "cars": [1],
                 "income": [50000],
                 "block_id": [block_id],
             },

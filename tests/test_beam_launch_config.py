@@ -824,24 +824,39 @@ def test_build_beam_launch_config_writes_synthetic_parquet_exchange_stubs_when_n
         "households": ["household_id", "cars", "income", "block_id"],
         "blocks": ["block_id", "x", "y"],
     }
+    expected_rows = {
+        "persons": 1,
+        "plans": 5,
+        "households": 1,
+        "blocks": 1,
+    }
     for stem, cols in expected_columns.items():
         parquet_path = exchange_dir / f"{stem}.parquet"
         assert parquet_path.is_file()
         table = pq.read_table(parquet_path)
-        assert table.num_rows == 1
+        assert table.num_rows == expected_rows[stem]
         assert table.column_names == cols
 
     hh = pq.read_table(exchange_dir / "households.parquet").to_pydict()
     assert hh["block_id"] == [60014001001000]
     assert hh["household_id"] == [1]
+    assert hh["cars"] == [1]
     assert hh["income"] == [50000]
 
     plans = pq.read_table(exchange_dir / "plans.parquet").to_pydict()
-    assert plans["person_id"] == [1]
-    assert plans["ActivityElement"] == ["activity"]
-    assert plans["ActivityType"] == ["Home"]
-    assert plans["x"] == [551234.5]
-    assert plans["y"] == [4182345.0]
+    assert plans["person_id"] == [1, 1, 1, 1, 1]
+    assert plans["PlanElementIndex"] == [1, 2, 3, 4, 5]
+    assert plans["ActivityElement"] == [
+        "activity",
+        "leg",
+        "activity",
+        "leg",
+        "activity",
+    ]
+    assert plans["ActivityType"] == ["Home", None, "Work", None, "Home"]
+    assert plans["trip_mode"] == [None, "WALK", None, "WALK", None]
+    assert plans["x"] == [551234.5, None, 551234.5, None, 551234.5]
+    assert plans["y"] == [4182345.0, None, 4182345.0, None, 4182345.0]
 
 
 def test_build_beam_launch_config_copies_fallback_blocks_parquet_to_nested_exchange_folder(
