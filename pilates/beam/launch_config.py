@@ -443,19 +443,20 @@ def _ensure_parquet_exchange_scenario_files(
     scenario_folder: str,
     has_population_inputs: bool,
 ) -> None:
-    """Ensure ``UrbansimReaderV2`` finds required Parquet files in the exchange folder.
+    """Ensure ``UrbansimReaderV2`` and ``ODRequester`` find valid Parquet scenario files.
 
     When ``beam.exchange.scenario.fileFormat`` is ``"parquet"``, BEAM's
     ``UrbansimReaderV2`` unconditionally requires ``persons.parquet``,
     ``plans.parquet``, ``households.parquet``, and ``blocks.parquet`` in
-    ``beam.exchange.scenario.folder``—even during standalone ``beam_full_skim``
-    where ``FullSkimsCreatorApp`` never uses the population or blocks.
-    Additionally, when ``beam.exchange.scenario.folder`` points to a nested
-    subdirectory (such as ``urbansim/2018``) while ``blocks.parquet`` lives in
-    the parent ``scenario_folder`` (``urbansim/blocks.parquet``), copy
-    ``blocks.parquet`` into ``exchange_dir`` if present, or write 0-row
-    schema-valid Parquet stubs for any missing files when no population inputs
-    were staged.
+    ``beam.exchange.scenario.folder``, and ``ODRequester.createDummyPersonAttribute``
+    requires at least one loaded household with a member and plan—even during
+    standalone ``beam_full_skim`` where ``FullSkimsCreatorApp`` never simulates
+    agents. Additionally, when ``beam.exchange.scenario.folder`` points to a
+    nested subdirectory (such as ``urbansim/2018``) while ``blocks.parquet``
+    lives in the parent ``scenario_folder`` (``urbansim/blocks.parquet``), copy
+    ``blocks.parquet`` into ``exchange_dir`` if present, and write 1-row
+    synthetic Parquet stubs referencing a valid ``block_id`` for any missing
+    files when no population inputs were staged.
     """
 
     exchange_dir = derived_root / exchange_relative
@@ -468,67 +469,141 @@ def _ensure_parquet_exchange_scenario_files(
             shutil.copy2(fallback_blocks, blocks_dest)
 
     if not has_population_inputs:
-        for stem in ("persons", "plans", "households", "blocks"):
+        if not blocks_dest.is_file():
+            _write_synthetic_parquet_stub(
+                blocks_dest,
+                stem="blocks",
+                block_id=1,
+                block_x=550000.0,
+                block_y=4180000.0,
+            )
+        block_id, block_x, block_y = _first_block_row(blocks_dest)
+        for stem in ("persons", "plans", "households"):
             target = exchange_dir / f"{stem}.parquet"
             if not target.is_file():
-                _write_empty_parquet_stub(target, stem=stem)
+                _write_synthetic_parquet_stub(
+                    target,
+                    stem=stem,
+                    block_id=block_id,
+                    block_x=block_x,
+                    block_y=block_y,
+                )
 
 
-def _write_empty_parquet_stub(path: Path, *, stem: str) -> None:
-    """Write a 0-row Parquet file matching ``ParquetReaders.scala`` expectations."""
+def _first_block_row(blocks_path: Path) -> tuple[int, float, float]:
+    """Read the first ``(block_id, x, y)`` row from ``blocks.parquet``."""
+
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(blocks_path, columns=["block_id", "x", "y"])
+    if table.num_rows == 0:
+        return 1, 550000.0, 4180000.0
+    row = table.slice(0, 1).to_pydict()
+    return (
+        int(row["block_id"][0]),
+        float(row["x"][0]),
+        float(row["y"][0]),
+    )
+
+
+def _write_synthetic_parquet_stub(
+    path: Path,
+    *,
+    stem: str,
+    block_id: int,
+    block_x: float,
+    block_y: float,
+) -> None:
+    """Write a 1-row Parquet stub matching ``ParquetReaders.scala`` and ``ODRequester``."""
 
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    schemas: dict[str, pa.Schema] = {
-        "persons": pa.schema(
-            [
-                ("person_id", pa.int64()),
-                ("household_id", pa.int64()),
-                ("age", pa.int64()),
-                ("sex", pa.int64()),
-                ("industry", pa.string()),
-                ("value_of_time", pa.float64()),
-            ]
+    tables: dict[str, pa.Table] = {
+        "persons": pa.Table.from_pydict(
+            {
+                "person_id": [1],
+                "household_id": [1],
+                "age": [35],
+                "sex": [1],
+                "industry": ["stub"],
+                "value_of_time": [18.0],
+            },
+            schema=pa.schema(
+                [
+                    ("person_id", pa.int64()),
+                    ("household_id", pa.int64()),
+                    ("age", pa.int64()),
+                    ("sex", pa.int64()),
+                    ("industry", pa.string()),
+                    ("value_of_time", pa.float64()),
+                ]
+            ),
         ),
-        "plans": pa.schema(
-            [
-                ("trip_id", pa.string()),
-                ("tour_id", pa.string()),
-                ("person_id", pa.int64()),
-                ("PlanElementIndex", pa.int64()),
-                ("ActivityElement", pa.string()),
-                ("trip_mode", pa.string()),
-                ("ActivityType", pa.string()),
-                ("x", pa.float64()),
-                ("y", pa.float64()),
-                ("departure_time", pa.float64()),
-                ("trip_dur_min", pa.float64()),
-                ("trip_cost_dollars", pa.float64()),
-            ]
+        "plans": pa.Table.from_pydict(
+            {
+                "trip_id": [None],
+                "tour_id": [None],
+                "person_id": [1],
+                "PlanElementIndex": [1],
+                "ActivityElement": ["activity"],
+                "trip_mode": [None],
+                "ActivityType": ["Home"],
+                "x": [block_x],
+                "y": [block_y],
+                "departure_time": [8.0],
+                "trip_dur_min": [None],
+                "trip_cost_dollars": [None],
+            },
+            schema=pa.schema(
+                [
+                    ("trip_id", pa.string()),
+                    ("tour_id", pa.string()),
+                    ("person_id", pa.int64()),
+                    ("PlanElementIndex", pa.int64()),
+                    ("ActivityElement", pa.string()),
+                    ("trip_mode", pa.string()),
+                    ("ActivityType", pa.string()),
+                    ("x", pa.float64()),
+                    ("y", pa.float64()),
+                    ("departure_time", pa.float64()),
+                    ("trip_dur_min", pa.float64()),
+                    ("trip_cost_dollars", pa.float64()),
+                ]
+            ),
         ),
-        "households": pa.schema(
-            [
-                ("household_id", pa.int64()),
-                ("cars", pa.int64()),
-                ("income", pa.int64()),
-                ("block_id", pa.int64()),
-            ]
+        "households": pa.Table.from_pydict(
+            {
+                "household_id": [1],
+                "cars": [0],
+                "income": [50000],
+                "block_id": [block_id],
+            },
+            schema=pa.schema(
+                [
+                    ("household_id", pa.int64()),
+                    ("cars", pa.int64()),
+                    ("income", pa.int64()),
+                    ("block_id", pa.int64()),
+                ]
+            ),
         ),
-        "blocks": pa.schema(
-            [
-                ("block_id", pa.int64()),
-                ("x", pa.float64()),
-                ("y", pa.float64()),
-            ]
+        "blocks": pa.Table.from_pydict(
+            {
+                "block_id": [block_id],
+                "x": [block_x],
+                "y": [block_y],
+            },
+            schema=pa.schema(
+                [
+                    ("block_id", pa.int64()),
+                    ("x", pa.float64()),
+                    ("y", pa.float64()),
+                ]
+            ),
         ),
     }
-    schema = schemas[stem]
-    empty_table = pa.Table.from_pydict(
-        {field.name: [] for field in schema},
-        schema=schema,
-    )
-    pq.write_table(empty_table, path)
+    pq.write_table(tables[stem], path)
 
 
 def _activitysim_skims_file_base_name_override(

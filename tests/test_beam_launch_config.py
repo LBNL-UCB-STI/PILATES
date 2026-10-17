@@ -760,16 +760,30 @@ def test_build_beam_launch_config_clears_missing_configured_vehicles_path(
     )
 
 
-def test_build_beam_launch_config_writes_empty_parquet_exchange_stubs_when_no_population_inputs(
+def test_build_beam_launch_config_writes_synthetic_parquet_exchange_stubs_when_no_population_inputs(
     tmp_path: Path,
 ) -> None:
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
     from pilates.beam.launch_config import build_beam_launch_config
 
     settings = _settings()
+    settings.beam.scenario_folder = "urbansim"
     source_root = tmp_path / "beam" / "input" / "seattle"
     _write_base_config(source_root)
+    fallback_blocks = source_root / "urbansim" / "blocks.parquet"
+    fallback_blocks.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pydict(
+            {
+                "block_id": [60014001001000],
+                "x": [551234.5],
+                "y": [4182345.0],
+            }
+        ),
+        fallback_blocks,
+    )
     tracker = Tracker(
         run_dir=tmp_path / "runs",
         db_path=str(tmp_path / "provenance.duckdb"),
@@ -814,8 +828,20 @@ def test_build_beam_launch_config_writes_empty_parquet_exchange_stubs_when_no_po
         parquet_path = exchange_dir / f"{stem}.parquet"
         assert parquet_path.is_file()
         table = pq.read_table(parquet_path)
-        assert table.num_rows == 0
+        assert table.num_rows == 1
         assert table.column_names == cols
+
+    hh = pq.read_table(exchange_dir / "households.parquet").to_pydict()
+    assert hh["block_id"] == [60014001001000]
+    assert hh["household_id"] == [1]
+    assert hh["income"] == [50000]
+
+    plans = pq.read_table(exchange_dir / "plans.parquet").to_pydict()
+    assert plans["person_id"] == [1]
+    assert plans["ActivityElement"] == ["activity"]
+    assert plans["ActivityType"] == ["Home"]
+    assert plans["x"] == [551234.5]
+    assert plans["y"] == [4182345.0]
 
 
 def test_build_beam_launch_config_copies_fallback_blocks_parquet_to_nested_exchange_folder(
