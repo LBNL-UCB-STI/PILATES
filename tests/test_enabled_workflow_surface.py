@@ -347,3 +347,26 @@ def test_surface_invariant_rejects_enabled_step_with_disabled_dependency():
                 )
             ).profile,
         )
+
+
+def test_surface_standalone_full_skim_requires_only_beam_full_skims():
+    from pilates.runtime.scenario_runtime import _required_output_keys_for_surface
+    from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
+
+    settings = _settings(
+        land_use=None,
+        vehicle_ownership=None,
+        activity_demand=None,
+        traffic_assignment="beam",
+    )
+    settings.beam = SimpleNamespace(
+        full_skim=SimpleNamespace(run_schedule="standalone")
+    )
+
+    surface = build_enabled_workflow_surface(settings)
+
+    assert surface.step_enabled("beam_full_skim", include_optional=False) is True
+    assert surface.step_enabled("beam_run", include_optional=True) is False
+    assert surface.step_enabled("beam_postprocess", include_optional=True) is False
+    assert surface.step_enabled("beam_preprocess", include_optional=False) is False
+    assert _required_output_keys_for_surface(surface=surface) == [BEAM_FULL_SKIMS]

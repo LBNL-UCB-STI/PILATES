@@ -32,9 +32,19 @@ class RunMode(str, Enum):
     RESTART = "restart"
 
 
+def _full_skim_run_schedule(settings: Any) -> str:
+    beam_cfg = getattr(settings, "beam", None)
+    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg is not None else None
+    if skim_cfg is None:
+        return "disabled"
+    schedule = getattr(skim_cfg, "run_schedule", None)
+    return str(schedule) if schedule is not None else "disabled"
+
+
 def _enabled_schema_step_names_from_profile(
     profile: WorkflowProfile,
     *,
+    settings: Any = None,
     include_optional: bool,
 ) -> FrozenSet[str]:
     enabled_steps = set()
@@ -46,6 +56,16 @@ def _enabled_schema_step_names_from_profile(
             continue
         if profile.model_enabled(flag_attr):
             enabled_steps.add(spec.step_name)
+    if profile.traffic_assignment_enabled:
+        schedule = _full_skim_run_schedule(settings)
+        if schedule == "standalone":
+            enabled_steps.discard("beam_run")
+            enabled_steps.discard("beam_postprocess")
+            if not include_optional:
+                enabled_steps.discard("beam_preprocess")
+            enabled_steps.add("beam_full_skim")
+        elif schedule in {"after_each_iteration", "after_final_iteration"}:
+            enabled_steps.add("beam_full_skim")
     return frozenset(enabled_steps)
 
 
@@ -427,10 +447,12 @@ def build_enabled_workflow_surface(
 
     enabled_step_names = _enabled_schema_step_names_from_profile(
         profile,
+        settings=settings,
         include_optional=True,
     )
     required_enabled_step_names = _enabled_schema_step_names_from_profile(
         profile,
+        settings=settings,
         include_optional=False,
     )
     step_contracts = workflow_step_contracts_by_name(settings=settings)
