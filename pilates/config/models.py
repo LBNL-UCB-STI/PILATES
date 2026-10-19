@@ -1017,6 +1017,35 @@ class BeamConfig(BaseModel):
         False, description="Discard plans every year"
     )
     max_plans_memory: int = Field(5, description="Max plans in memory")
+    plan_memory_beta: float = Field(
+        1.0,
+        description="Logit scale parameter (brainExpBeta) for ExpBetaPlanSelector in PILATES plan merging.",
+    )
+    new_plan_selection_policy: Literal["force_new", "exp_beta", "probabilistic_new"] = (
+        Field(
+            "force_new",
+            description=(
+                "How to select the active plan when ActivitySim adds a new candidate plan: "
+                "'force_new' always selects the newly generated plan; "
+                "'exp_beta' assigns transient new_plan_initial_score (default 0.0) to unexecuted plans and samples via ExpBetaPlanSelector; "
+                "'probabilistic_new' forces the new plan with probability new_plan_adoption_rate and otherwise uses exp_beta."
+            ),
+        )
+    )
+    new_plan_initial_score: float = Field(
+        0.0,
+        description="Transient prior score assigned to unexecuted plans during ExpBetaPlanSelector sampling.",
+    )
+    new_plan_adoption_rate: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description="Probability of forcing the newly generated ActivitySim plan when policy is 'probabilistic_new'.",
+    )
+    plan_selection_random_seed: int = Field(
+        42,
+        description="Base random seed for deterministic, reproducible plan selection across iterations.",
+    )
     simulated_hwy_paths: List[str] = Field(
         default_factory=list, description="Simulated highway paths"
     )

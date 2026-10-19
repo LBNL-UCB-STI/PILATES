@@ -29,6 +29,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
     LINKSTATS_WARMSTART,
 )
 from workflow_state import WorkflowState
@@ -81,6 +82,7 @@ def _record_store_from_artifact_mappings(
             BEAM_PLANS_IN: "beam_plans",
             BEAM_HOUSEHOLDS_IN: "households",
             BEAM_PERSONS_IN: "persons",
+            BEAM_PLANS_OUT: "beam_plans_out",
         },
     )
     return combined
@@ -685,6 +687,8 @@ class BeamPreprocessor(GenericPreprocessor):
             workspace=workspace,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
             format_specific_output_records_fn=self._format_specific_output_records,
+            settings=self.settings,
+            state=self.state,
         )
 
     def _copy_with_compression_asim_file_to_beam(

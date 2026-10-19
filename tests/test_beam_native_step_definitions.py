@@ -138,6 +138,15 @@ def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> No
                 "canonical_index_column": None,
                 "beam_sort_column": "TAZ",
             },
+            "plan_memory": {
+                "max_plans_memory": 5,
+                "discard_plans_every_year": False,
+                "plan_memory_beta": 1.0,
+                "new_plan_selection_policy": "force_new",
+                "new_plan_initial_score": 0.0,
+                "new_plan_adoption_rate": 1.0,
+                "plan_selection_random_seed": 42,
+            },
         },
     }
 
@@ -509,7 +518,7 @@ def test_beam_output_layout_cache_versions_reject_pre_migration_artifacts() -> N
         "workspace": SimpleNamespace(),
     }
 
-    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 2
+    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 3
     assert beam_run.cache_options(**options_kwargs).cache_version == 1
 
 

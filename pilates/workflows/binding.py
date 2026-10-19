@@ -810,6 +810,12 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
                 required=False,
                 allow_fallback=False,
             ),
+            ArtifactBindingRule(
+                semantic_key=BEAM_PLANS_OUT,
+                required=False,
+                preferred_keys=(BEAM_PLANS_OUT,),
+                allow_fallback=False,
+            ),
         ),
     }
 
