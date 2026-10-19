@@ -14,8 +14,19 @@ import re
 import sys
 import warnings
 from dataclasses import dataclass, field as dataclass_field
-from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
+from typing import (
+    Annotated,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+)
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -449,15 +460,20 @@ class InfrastructureConfig(BaseModel):
 class PriorRunExpectation(BaseModel):
     """Select one persisted artifact from a completed Consist run."""
 
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     kind: Literal["prior_run"] = "prior_run"
     expected_run_id: str = Field(
-        ..., description="Completed Consist run supplying the expected artifact."
+        ...,
+        validation_alias=AliasChoices("expected_run_id", "run_id"),
+        description="Completed Consist run supplying the expected artifact.",
     )
     artifact_key: str = Field(
         ..., description="Exact persisted artifact key on expected_run_id."
     )
     direction: Literal["input", "output", "any"] = Field(
-        "input",
+        "any",
+        validation_alias=AliasChoices("expected_direction", "direction"),
         description="Whether the expected artifact on expected_run_id is an input, output, or either.",
     )
     source_tracker_db: Optional[str] = Field(
@@ -468,6 +484,46 @@ class PriorRunExpectation(BaseModel):
         None,
         description="Optional immutable historical bytes for hash re-verification.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_conflicting_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        payload = dict(data)
+        if "run_id" in payload and "expected_run_id" in payload:
+            if payload["run_id"] != payload["expected_run_id"]:
+                raise ValueError(
+                    "Conflicting 'run_id' and 'expected_run_id' values in PriorRunExpectation."
+                )
+            payload.pop("run_id")
+        if "direction" in payload and "expected_direction" in payload:
+            if payload["direction"] != payload["expected_direction"]:
+                raise ValueError(
+                    "Conflicting 'direction' and 'expected_direction' values in PriorRunExpectation."
+                )
+            payload.pop("expected_direction")
+        return payload
+
+    @field_validator("expected_run_id", "artifact_key")
+    @classmethod
+    def _validate_non_empty_identifier(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError(
+                "PriorRunExpectation requires non-empty 'expected_run_id' and 'artifact_key'."
+            )
+        return text
+
+    @property
+    def run_id(self) -> str:
+        """Alias matching Consist's PriorRunExpectation.run_id."""
+        return self.expected_run_id
+
+    @property
+    def expected_direction(self) -> Literal["input", "output", "any"]:
+        """Alias matching Consist's PriorRunExpectation.expected_direction."""
+        return self.direction
 
 
 class DeclaredDigestExpectation(BaseModel):
@@ -536,7 +592,7 @@ def admission_policy_fingerprint(
     else:
         fingerprint["expected_run_id"] = expectation.expected_run_id
         fingerprint["artifact_key"] = expectation.artifact_key
-        if expectation.direction != "input":
+        if expectation.direction != "any":
             fingerprint["direction"] = expectation.direction
     return fingerprint
 
@@ -728,7 +784,11 @@ class ActivitySimConfig(BaseModel):
             "database": self.database.model_dump() if self.database else None,
         }
         if self.admission is not None:
-            facet["admission"] = self.admission.model_dump()
+            facet["admission"] = {
+                "initial_skims": admission_policy_fingerprint(
+                    self.admission.initial_skims
+                )
+            }
         return facet
 
 
@@ -811,6 +871,14 @@ class FullSkimsCreatorConfig(BaseModel):
         None,
         description="Optional explicit path to congested linkstats.csv.gz or .parquet.",
     )
+    calculation_timeout_hours: int = Field(
+        72,
+        ge=1,
+        description=(
+            "Timeout in hours for BackgroundFullSkimsCreator "
+            "(beam.urbansim.backgroundODSkimsCreator.calculationTimeoutHours)."
+        ),
+    )
 
     def to_consist_facet(self) -> Dict[str, Any]:
         return {
@@ -832,9 +900,9 @@ class FullSkimsCreatorConfig(BaseModel):
 
 
 class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):
-    """Explicit prior-run expectation for one staged BEAM warm-start file."""
+    """Explicit prior-run or declared-digest expectation for one staged BEAM warm-start file."""
 
-    expectation: PriorRunExpectation
+    expectation: AdmissionExpectation
 
     @model_validator(mode="before")
     @classmethod
@@ -855,19 +923,25 @@ class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):
         return normalized
 
     @property
-    def expected_run_id(self) -> str:
+    def expected_run_id(self) -> Optional[str]:
         """Compatibility view for BEAM's existing runtime admission helper."""
-        return self.expectation.expected_run_id
+        if isinstance(self.expectation, PriorRunExpectation):
+            return self.expectation.expected_run_id
+        return None
 
     @property
-    def artifact_key(self) -> str:
+    def artifact_key(self) -> Optional[str]:
         """Compatibility view for BEAM's existing runtime admission helper."""
-        return self.expectation.artifact_key
+        if isinstance(self.expectation, PriorRunExpectation):
+            return self.expectation.artifact_key
+        return None
 
     @property
     def expected_bytes_path(self) -> Optional[str]:
         """Compatibility view for BEAM's existing runtime admission helper."""
-        return self.expectation.expected_bytes_path
+        if isinstance(self.expectation, PriorRunExpectation):
+            return self.expectation.expected_bytes_path
+        return None
 
 
 class BeamAdmissionConfig(BaseModel):
@@ -875,7 +949,7 @@ class BeamAdmissionConfig(BaseModel):
 
     linkstats: Optional[BeamLinkstatsAdmissionConfig] = Field(
         None,
-        description="Optional prior-run admission for staged warm-start linkstats.",
+        description="Optional prior-run or declared-digest admission for staged warm-start linkstats.",
     )
 
 

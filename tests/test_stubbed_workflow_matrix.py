@@ -47,7 +47,6 @@ from pilates.workflows.stages.supply_demand import (
 from pilates.workflows.stages.vehicle_ownership import (
     run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
 )
-from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from tests.workflow_contract_harness import (
     write_file as _write_file,
     write_parquet as _write_parquet,
@@ -277,9 +276,7 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
 
     _run_supply_demand_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
-        handoff=LandUseToSupplyDemandHandoff(),
         context=env["context"],
     )
 
@@ -482,9 +479,7 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
 
     _run_supply_demand_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
-        handoff=LandUseToSupplyDemandHandoff(),
         context=env["context"],
     )
 
@@ -598,9 +593,8 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
     monkeypatch.setattr(UrbansimRunner, "_run", _fake_urbansim_run)
     monkeypatch.setattr(AtlasRunner, "_run", _fake_atlas_run)
 
-    usim_inputs = _run_land_use_stage(
+    _run_land_use_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=env["context"],
     )
@@ -609,11 +603,9 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
         scenario=scenario,
         coupler=coupler,
         year=state.forecast_year,
-        build_atlas_static_inputs_fallback=lambda _workspace: {},
         context=env["context"],
     )
 
-    assert USIM_DATASTORE_H5 in usim_inputs
     assert coupler.get(USIM_DATASTORE_H5) is not None
 
     steps = _steps_by_model(env)

@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -25,6 +24,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
 )
 
 logger = logging.getLogger(__name__)
@@ -1120,7 +1120,7 @@ def copy_plans_from_asim(
 def handle_linkstats(
     *,
     workspace: Any,
-    previous_beam_records: List[Any],
+    previous_beam_records: Sequence[FileRecord],
     store: RecordStore,
     state: Any,
     settings: Any,
@@ -1130,52 +1130,72 @@ def handle_linkstats(
     """
 
     def abs_from_record(rec: FileRecord) -> Optional[str]:
-        if not getattr(rec, "file_path", None):
+        if not rec.file_path:
             return None
         if os.path.isabs(rec.file_path):
             return rec.file_path
         return os.path.abspath(os.path.join(str(workspace.full_path), rec.file_path))
 
-    beam_output_linkstats = None
+    beam_output_linkstats: Optional[FileRecord] = None
+    warmstart_source: Optional[str] = None
     csv_pattern = re.compile(r"^linkstats_\d+_\d+$")
     parquet_pattern = re.compile(r"^linkstats_parquet_\d+_\d+$")
 
+    # 1. Versioned BEAM output record: select the latest
+    versioned_beam_records: List[FileRecord] = []
     for rec in previous_beam_records or []:
-        short_name = getattr(rec, "short_name", "") or ""
-        if "_sub" in short_name:
+        short_name = rec.short_name or ""
+        if not isinstance(short_name, str) or "_sub" in short_name:
             continue
-        if csv_pattern.match(short_name):
-            beam_output_linkstats = rec
-            break
+        if (
+            short_name.startswith("linkstats_y")
+            or csv_pattern.match(short_name)
+            or parquet_pattern.match(short_name)
+        ):
+            versioned_beam_records.append(rec)
+    if versioned_beam_records:
+        beam_output_linkstats = versioned_beam_records[-1]
+        warmstart_source = "previous_beam_output"
 
+    # 2. Explicit warmstart input record: select the latest without warning
+    if beam_output_linkstats is None:
+        warmstart_input_records: List[FileRecord] = []
+        for rec in previous_beam_records or []:
+            if rec.short_name == LINKSTATS_WARMSTART:
+                warmstart_input_records.append(rec)
+        if warmstart_input_records:
+            beam_output_linkstats = warmstart_input_records[-1]
+            rec_meta = beam_output_linkstats.metadata or {}
+            source_meta = rec_meta.get("source")
+            if source_meta:
+                warmstart_source = str(source_meta)
+            else:
+                current_inner_iter = int(getattr(state, "current_inner_iter", 0) or 0)
+                warmstart_source = (
+                    "initial_inputs"
+                    if current_inner_iter == 0
+                    else "previous_beam_output"
+                )
+
+    # 3. Legacy unversioned record
     if beam_output_linkstats is None:
         for rec in previous_beam_records or []:
-            short_name = getattr(rec, "short_name", "") or ""
-            if "_sub" in short_name:
-                continue
-            if parquet_pattern.match(short_name):
-                beam_output_linkstats = rec
-                break
-
-    if beam_output_linkstats is None:
-        for rec in previous_beam_records or []:
-            short_name = getattr(rec, "short_name", "") or ""
-            if short_name in {"linkstats", "linkstats_parquet"}:
+            if rec.short_name in {"linkstats", "linkstats_parquet"}:
                 beam_output_linkstats = rec
                 logger.warning(
                     "[NOT IDEAL] Using an unversioned `%s` record as warm-start input. "
                     "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` "
                     "or `linkstats_parquet_<year>_<inner_iter>` so lineage is unambiguous.",
-                    short_name,
+                    rec.short_name,
                 )
+                warmstart_source = "previous_beam_output"
                 break
 
     warmstart_abs_path = None
-    warmstart_source = None
     if beam_output_linkstats is not None:
         warmstart_abs_path = abs_from_record(beam_output_linkstats)
-        warmstart_source = "previous_beam_output"
 
+    # 4. Fallback to initial linkstats path
     if warmstart_abs_path is None:
         warmstart_abs_path = resolve_initial_linkstats_path(settings, workspace)
         warmstart_source = "initial_inputs"
@@ -1188,54 +1208,40 @@ def handle_linkstats(
         )
         return
 
-    staged_warmstart = _stage_warmstart_linkstats(
-        source_path=Path(warmstart_abs_path),
-        workspace=workspace,
-        region=getattr(getattr(settings, "run", None), "region", None),
-    )
+    warmstart_abs_path = os.path.abspath(warmstart_abs_path)
+    resolved_warmstart = Path(warmstart_abs_path).resolve()
+    try:
+        rel_to_ws = str(
+            resolved_warmstart.relative_to(Path(workspace.full_path).resolve())
+        )
+        record_file_path = rel_to_ws
+    except ValueError:
+        record_file_path = str(resolved_warmstart)
 
-    warmstart_rel_path = os.path.relpath(staged_warmstart, str(workspace.full_path))
+    if hasattr(state, "set"):
+        try:
+            state.set("beam_warmstart_rel_path", record_file_path)
+        except Exception:
+            pass
+
+    current_year = getattr(state, "current_year", getattr(state, "forecast_year", None))
+    current_inner_iter = getattr(state, "current_inner_iter", None)
+
     warmstart_record = FileRecord(
-        file_path=warmstart_rel_path,
-        short_name="linkstats_warmstart",
-        description=f"BEAM warm-start linkstats (source={warmstart_source})",
+        file_path=record_file_path,
+        short_name=LINKSTATS_WARMSTART,
+        description=f"Warmstart linkstats for BEAM y{current_year} i{current_inner_iter}",
         year=getattr(state, "forecast_year", None),
-        iteration=getattr(state, "current_inner_iter", None),
+        iteration=current_inner_iter,
         metadata={
             "semantic_role": "beam_linkstats_warmstart",
             "source": warmstart_source,
-            "staged_from": str(Path(warmstart_abs_path).resolve()),
         },
     )
 
     logger.info(
         "[BEAM Preprocessor] Using warm-start linkstats (source=%s): %s",
         warmstart_source,
-        warmstart_rel_path,
+        record_file_path,
     )
     store.add_record(warmstart_record)
-
-
-def _stage_warmstart_linkstats(
-    *, source_path: Path, workspace: Any, region: Any
-) -> Path:
-    """Copy one selected warm-start source into BEAM's mutable input mount."""
-
-    if not region:
-        raise ValueError("BEAM warm-start staging requires a configured region.")
-    source_path = source_path.resolve()
-    if not source_path.is_file():
-        raise FileNotFoundError(
-            f"BEAM warm-start source must be one regular file: {source_path}"
-        )
-    staged_path = (
-        Path(workspace.get_beam_mutable_data_dir())
-        / str(region)
-        / "_pilates"
-        / "linkstats"
-        / f"warmstart{''.join(source_path.suffixes)}"
-    )
-    staged_path.parent.mkdir(parents=True, exist_ok=True)
-    if source_path != staged_path.resolve():
-        shutil.copy2(source_path, staged_path)
-    return staged_path

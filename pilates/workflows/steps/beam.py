@@ -20,11 +20,14 @@ from typing import Any, Callable, Iterable, Mapping
 
 import consist as cr
 from consist import (
+    Artifact,
     BindingResult,
     CacheOptions,
     ExecutionOptions,
     define_step,
 )
+from consist.core.persistence import DatabaseManager
+from consist.models.artifact import get_tracker_ref
 
 from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
@@ -35,9 +38,13 @@ from pilates.beam.launch_paths import (
     validate_staged_linkstats_reference,
 )
 from pilates.beam.admission import (
+    copy_linkstats_provenance_sidecar,
     has_staged_linkstats_admission_policy,
+    linkstats_provenance_sidecar_path,
     preflight_staged_linkstats_admission,
+    read_linkstats_provenance_sidecar,
     reject_or_warn_for_missing_staged_linkstats,
+    write_linkstats_provenance_sidecar,
 )
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
@@ -47,6 +54,8 @@ from pilates.beam.skim_provenance import (
     write_skim_provenance_sidecar,
 )
 from pilates.config.models import PilatesConfig
+from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
@@ -97,8 +106,6 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
-_BEAM_INCLUDE_RE = re.compile(r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))')
-_BEAM_CONFIG_REFERENCE_MANIFEST = "__archive_manifest.json"
 _ATLAS_VEHICLES2_BASENAME_RE = re.compile(r"^vehicles2_\d{4}\.csv(?:\.gz)?$")
 
 
@@ -197,13 +204,18 @@ def _native_output_destination(
 
 
 def _linkstats_warmstart_suffix(
-    *, workspace: Any, resolved_inputs: ResolvedStepInputs | None
+    *,
+    workspace: Any,
+    resolved_inputs: ResolvedStepInputs | None,
+    settings: Any = None,
 ) -> str:
     """Preserve the selected warm-start file format in its logged output path."""
-    if resolved_inputs is None:
-        return ".csv.gz"
-    source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
-    source_path = artifact_to_path(source, workspace=workspace)
+    source_path = None
+    if resolved_inputs is not None:
+        source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
+        source_path = artifact_to_path(source, workspace=workspace)
+    if not source_path and settings is not None and workspace is not None:
+        source_path = resolve_initial_linkstats_path(settings, workspace)
     suffixes = "".join(Path(source_path).suffixes) if source_path else ""
     return suffixes or ".csv.gz"
 
@@ -259,6 +271,7 @@ def _beam_preprocess_native_output_paths(
         LINKSTATS_WARMSTART: _linkstats_warmstart_suffix(
             workspace=workspace,
             resolved_inputs=resolved_inputs,
+            settings=settings,
         ),
         "vehicles_beam_in": ".csv",
     }
@@ -395,7 +408,11 @@ def _materialize_native_outputs(
                 f"BEAM native output {key!r} is missing before declared output logging: "
                 f"{source}."
             )
-        if source.resolve() == destination.resolve():
+        resolved = source.resolve()
+        if resolved == destination.resolve():
+            copy_linkstats_provenance_sidecar(
+                resolved, destination, fallback_source_path=source
+            )
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
@@ -412,12 +429,15 @@ def _materialize_native_outputs(
                 shutil.rmtree(aside)
             else:
                 staging.replace(destination)
-        elif source.resolve() != destination.resolve():
+        elif resolved != destination.resolve():
             staging = destination.parent / f".tmp_{destination.name}.{os.getpid()}"
             if staging.exists():
                 staging.unlink()
-            shutil.copy2(source, staging)
+            shutil.copy2(resolved, staging)
             staging.replace(destination)
+            copy_linkstats_provenance_sidecar(
+                resolved, destination, fallback_source_path=source
+            )
 
 
 def _beam_run_native_sources(produced: BeamRunOutputs) -> dict[str, Path]:
@@ -486,24 +506,86 @@ def _project_beam_preprocess_outputs(
         workspace=workspace,
         resolved_inputs=output_resolved_inputs,
     )
-    prepared = {
-        key: _path_from_output(
-            outputs=outputs,
-            step_name="beam_preprocess",
-            key=key,
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        )
-        for key in (
-            *BeamPreprocessOutputs.required_output_keys(),
-            "vehicles_beam_in",
-            LINKSTATS_WARMSTART,
-        )
-        if key in outputs and key in declared_outputs
-    }
+    prepared = {}
+    for key in (
+        *BeamPreprocessOutputs.required_output_keys(),
+        "vehicles_beam_in",
+        LINKSTATS_WARMSTART,
+    ):
+        if key in outputs and key in declared_outputs:
+            prepared[key] = _path_from_output(
+                outputs=outputs,
+                step_name="beam_preprocess",
+                key=key,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+        elif (
+            key == LINKSTATS_WARMSTART
+            and key in declared_outputs
+            and declared_outputs[key].exists()
+        ):
+            prepared[key] = declared_outputs[key]
+
+    if LINKSTATS_WARMSTART in prepared:
+        prepared_linkstats = prepared[LINKSTATS_WARMSTART]
+        sidecar_path = linkstats_provenance_sidecar_path(prepared_linkstats)
+        if not sidecar_path.is_file():
+            source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
+            source_path = artifact_to_path(source, workspace=workspace)
+            if not source_path and settings is not None and workspace is not None:
+                source_path = resolve_initial_linkstats_path(settings, workspace)
+            if source_path:
+                copy_linkstats_provenance_sidecar(source_path, prepared_linkstats)
+
+        if not sidecar_path.is_file() and LINKSTATS_WARMSTART in outputs:
+            artifact = outputs[LINKSTATS_WARMSTART]
+            meta = getattr(artifact, "meta", None)
+            cached_prov = (
+                meta.get("linkstats_provenance") if isinstance(meta, Mapping) else None
+            )
+            if isinstance(cached_prov, Mapping):
+                try:
+                    write_linkstats_provenance_sidecar(prepared_linkstats, cached_prov)
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to materialize cached linkstats provenance sidecar to %s: %s",
+                        sidecar_path,
+                        exc,
+                    )
+
+        if sidecar_path.is_file() and LINKSTATS_WARMSTART in outputs:
+            artifact = outputs[LINKSTATS_WARMSTART]
+            try:
+                payload = read_linkstats_provenance_sidecar(sidecar_path)
+            except Exception as exc:
+                logger.debug(
+                    "Unable to read linkstats provenance sidecar from %s: %s",
+                    sidecar_path,
+                    exc,
+                )
+                payload = None
+            if payload is not None and isinstance(artifact, Artifact):
+                current_meta = (
+                    dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
+                )
+                if current_meta.get("linkstats_provenance") != payload:
+                    current_meta["linkstats_provenance"] = payload
+                    artifact.meta = current_meta
+
+    prepared_metadata: dict[str, dict[str, Any]] = {}
+    if LINKSTATS_WARMSTART in prepared:
+        linkstats_artifact = outputs.get(LINKSTATS_WARMSTART)
+        meta = getattr(linkstats_artifact, "meta", None)
+        if isinstance(meta, Mapping) and "linkstats_provenance" in meta:
+            prepared_metadata[LINKSTATS_WARMSTART] = {
+                "linkstats_provenance": meta["linkstats_provenance"]
+            }
+
     projected = BeamPreprocessOutputs(
         beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
         prepared_inputs=prepared,
+        prepared_input_metadata=prepared_metadata,
     )
     _validate_native_outputs(
         projected,
@@ -563,30 +645,123 @@ def _attach_skim_provenance_to_output_artifacts(
     workspace: Any,
     skim_keys: Iterable[str],
 ) -> None:
-    for key in skim_keys:
-        artifact = outputs.get(key)
-        if artifact is None:
-            continue
-        path = artifact_to_path(artifact, workspace=workspace)
-        if path is None:
-            continue
-        sidecar_path = skim_provenance_sidecar_path(path)
-        if not sidecar_path.is_file():
-            continue
-        try:
-            payload = read_skim_provenance_sidecar(sidecar_path)
-        except Exception as exc:
-            logger.debug(
-                "Unable to attach skim provenance sidecar from %s: %s",
-                sidecar_path,
-                exc,
-            )
-            continue
-        meta = getattr(artifact, "meta", None)
-        if isinstance(meta, dict):
-            meta["skim_provenance"] = payload
-            if payload.get("identity"):
-                meta["admission_file_identity"] = payload["identity"]
+    import json
+
+    db_cache: dict[str, DatabaseManager] = {}
+    try:
+        for key in skim_keys:
+            artifact = outputs.get(key)
+            if artifact is None:
+                continue
+            path = artifact_to_path(artifact, workspace=workspace)
+            if path is None:
+                continue
+            sidecar_path = skim_provenance_sidecar_path(path)
+            payload: Mapping[str, Any] | None = None
+            if sidecar_path.is_file():
+                try:
+                    payload = read_skim_provenance_sidecar(sidecar_path)
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to attach skim provenance sidecar from %s: %s",
+                        sidecar_path,
+                        exc,
+                    )
+                    continue
+            else:
+                existing_meta = getattr(artifact, "meta", None)
+                cached_prov = (
+                    existing_meta.get("skim_provenance")
+                    if isinstance(existing_meta, Mapping)
+                    else None
+                )
+                if isinstance(cached_prov, Mapping) and Path(path).exists():
+                    payload = dict(cached_prov)
+                    try:
+                        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+                        tmp_path = (
+                            sidecar_path.parent
+                            / f".tmp_{sidecar_path.name}.{os.getpid()}"
+                        )
+                        tmp_path.write_text(
+                            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                        tmp_path.replace(sidecar_path)
+                    except Exception as exc:
+                        logger.debug(
+                            "Unable to materialize cached skim provenance sidecar to %s: %s",
+                            sidecar_path,
+                            exc,
+                        )
+            if payload is None:
+                continue
+            updates: dict[str, Any] = {"skim_provenance": dict(payload)}
+            identity = payload.get("identity")
+            if isinstance(identity, str) and identity.startswith("sha256:file:"):
+                updates["admission_file_identity"] = identity
+            if isinstance(artifact, Artifact):
+                current_meta = (
+                    dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
+                )
+                needs_persist = any(
+                    current_meta.get(meta_key) != meta_val
+                    for meta_key, meta_val in updates.items()
+                )
+                if not needs_persist:
+                    continue
+                current_meta.update(updates)
+                if isinstance(artifact.meta, dict):
+                    artifact.meta.update(updates)
+                else:
+                    try:
+                        artifact.meta = current_meta
+                    except Exception:
+                        artifact.__dict__["meta"] = current_meta
+                producer_info = payload.get("producer")
+                tracker_db_path = (
+                    producer_info.get("tracker_db_path")
+                    if isinstance(producer_info, Mapping)
+                    else None
+                ) or payload.get("tracker_db_path")
+                tracker_ref = get_tracker_ref(artifact)
+                explicit_owner = tracker_ref() if tracker_ref is not None else None
+                if explicit_owner is not None and explicit_owner.db is not None:
+                    explicit_owner.db.update_artifact_meta(artifact, updates)
+                    explicit_owner._run_artifacts_cache.clear()
+                    continue
+                active_tracker = cr.current_tracker()
+                if active_tracker is not None and active_tracker.db is not None:
+                    owner_db_path = getattr(active_tracker.db, "db_path", None)
+                    if (
+                        not isinstance(tracker_db_path, str)
+                        or not tracker_db_path
+                        or (
+                            owner_db_path is not None
+                            and Path(owner_db_path).resolve()
+                            == Path(tracker_db_path).resolve()
+                        )
+                    ):
+                        active_tracker.db.update_artifact_meta(artifact, updates)
+                        active_tracker._run_artifacts_cache.clear()
+                        continue
+                if (
+                    isinstance(tracker_db_path, str)
+                    and tracker_db_path
+                    and Path(tracker_db_path).is_file()
+                ):
+                    db = db_cache.get(tracker_db_path)
+                    if db is None:
+                        db = DatabaseManager(tracker_db_path)
+                        db_cache[tracker_db_path] = db
+                    db.update_artifact_meta(artifact, updates)
+            else:
+                meta = getattr(artifact, "meta", None)
+                if isinstance(meta, dict):
+                    meta.update(updates)
+    finally:
+        for db in db_cache.values():
+            db.engine.dispose()
 
 
 def _emit_skim_provenance_sidecars(
@@ -808,7 +983,7 @@ def _project_beam_full_skim_outputs(
 
 
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
-    if key == ZARR_SKIMS:
+    if key in {ZARR_SKIMS, LINKSTATS_WARMSTART}:
         existing = artifact_to_existing_path(source, workspace=workspace)
         if existing is not None:
             return Path(existing)
@@ -929,19 +1104,6 @@ def _strict_requested_output_cache(
     return CacheOptions(
         cache_hydration="outputs-requested",
         cache_hydration_failure="miss",
-    )
-
-
-def _beam_linkstats_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Partition caches from the historical linkstats filename contract."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
-        cache_version=1,
     )
 
 
@@ -1107,7 +1269,18 @@ def _resolve_beam_preprocess_inputs(
                     LINKSTATS_WARMSTART,
                     "vehicles_beam_in",
                 )
-                if key in (resolved.binding.inputs or {})
+                if (
+                    key in (resolved.binding.inputs or {})
+                    or (
+                        key == LINKSTATS_WARMSTART
+                        and resolve_initial_linkstats_path(settings, workspace)
+                        is not None
+                    )
+                    or (
+                        key == "vehicles_beam_in"
+                        and ATLAS_VEHICLES2_OUTPUT in (resolved.binding.inputs or {})
+                    )
+                )
             ),
         },
     )
@@ -1119,8 +1292,8 @@ def _resolve_beam_run_inputs(
     state: Any,
     workspace: Any,
     coupler: Any,
-    launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
+    del settings, state
     return _resolved_beam_inputs(
         step_name="beam_run",
         coupler=coupler,
@@ -1387,35 +1560,33 @@ def _resolve_beam_full_skim_inputs(
     state: Any,
     workspace: Any,
     coupler: Any,
-    launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
-    del settings, state, launch_config
-    return _resolved_beam_inputs(
-        step_name="beam_full_skim",
-        coupler=coupler,
-        workspace=workspace,
-        required_roles=(),
-        optional_roles=(
+    del state
+    schedule = (
+        str(get_setting(settings, "beam.full_skim.run_schedule", "never") or "never")
+        .strip()
+        .lower()
+    )
+    if schedule == "standalone":
+        optional_roles = (
+            LINKSTATS_WARMSTART,
+            LINKSTATS,
+        )
+    else:
+        optional_roles = (
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
             LINKSTATS_WARMSTART,
             LINKSTATS,
-        ),
-    )
-
-
-def _log_native_output_records(*, outputs: Any, context: Any) -> None:
-    logged_keys: set[str] = set()
-    for key, path, _description in outputs._iter_record_items():
-        if key in logged_keys:
-            continue
-        logged_keys.add(key)
-        context.log_output(
-            path,
-            key=key,
-            artifact_kind="directory" if Path(path).is_dir() else "file",
         )
+    return _resolved_beam_inputs(
+        step_name="beam_full_skim",
+        coupler=coupler,
+        workspace=workspace,
+        required_roles=(),
+        optional_roles=optional_roles,
+    )
 
 
 def _is_direct_beam_zarr_output_key(key: str) -> bool:
@@ -1540,7 +1711,85 @@ def _native_beam_preprocess(
     )
     for key, path in produced.prepared_inputs.items():
         enqueue_archive_copy(key=key, path=path, workspace=workspace)
+        if key == LINKSTATS_WARMSTART:
+            dest_sidecar = linkstats_provenance_sidecar_path(path)
+            if dest_sidecar.is_file():
+                enqueue_archive_copy(
+                    key=f"{LINKSTATS_WARMSTART}_provenance",
+                    path=dest_sidecar,
+                    workspace=workspace,
+                )
+                try:
+                    prov_payload = read_linkstats_provenance_sidecar(dest_sidecar)
+                    if isinstance(prov_payload, Mapping):
+                        if hasattr(_consist_ctx, "run_metadata") and isinstance(
+                            _consist_ctx.run_metadata, dict
+                        ):
+                            _consist_ctx.run_metadata[
+                                "linkstats_warmstart_provenance"
+                            ] = dict(prov_payload)
+                        try:
+                            active_run = cr.current_run()
+                        except RuntimeError:
+                            active_run = None
+                        if active_run is not None and isinstance(active_run.meta, dict):
+                            active_run.meta["linkstats_warmstart_provenance"] = dict(
+                                prov_payload
+                            )
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to attach linkstats warmstart provenance metadata: %s",
+                        exc,
+                    )
     del _consist_ctx
+
+
+def _preflight_beam_launch_inputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Workspace,
+    beam_launch_config: BeamLaunchConfig,
+    run_context: Any,
+) -> None:
+    launch_reference = validate_staged_linkstats_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=beam_launch_config.root,
+    )
+    if launch_reference is None:
+        reject_or_warn_for_missing_staged_linkstats(settings=settings)
+    elif has_staged_linkstats_admission_policy(settings=settings):
+        try:
+            active_run = cr.current_run()
+        except RuntimeError:
+            active_run = None
+        existing_admission_reports = (
+            active_run.meta.get("admission_reports", {})
+            if active_run is not None
+            else {}
+        )
+        if not isinstance(existing_admission_reports, Mapping):
+            existing_admission_reports = {}
+        try:
+            tracker = cr.current_tracker()
+        except RuntimeError:
+            tracker = None
+        preflight_staged_linkstats_admission(
+            tracker=tracker,
+            metadata_logger=run_context,
+            existing_admission_reports=existing_admission_reports,
+            settings=settings,
+            launch_reference=launch_reference,
+            report_dir=Path(state.run_info_path).parent,
+        )
+    validate_r5_execution_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=beam_launch_config.root,
+    )
 
 
 @define_step(
@@ -1575,36 +1824,12 @@ def _native_beam_run(
         raise FileNotFoundError(
             f"beam_run config is missing: {beam_launch_config.primary_config}"
         )
-    launch_reference = validate_staged_linkstats_reference(
+    _preflight_beam_launch_inputs(
         settings=settings,
+        state=state,
         workspace=workspace,
+        beam_launch_config=beam_launch_config,
         run_context=_consist_ctx,
-        config_root=beam_launch_config.root,
-    )
-    if launch_reference is None:
-        reject_or_warn_for_missing_staged_linkstats(settings=settings)
-    elif has_staged_linkstats_admission_policy(settings=settings):
-        active_run = cr.current_run()
-        existing_admission_reports = (
-            active_run.meta.get("admission_reports", {})
-            if active_run is not None
-            else {}
-        )
-        if not isinstance(existing_admission_reports, Mapping):
-            existing_admission_reports = {}
-        preflight_staged_linkstats_admission(
-            tracker=cr.current_tracker(),
-            metadata_logger=_consist_ctx,
-            existing_admission_reports=existing_admission_reports,
-            settings=settings,
-            launch_reference=launch_reference,
-            report_dir=Path(state.run_info_path).parent,
-        )
-    validate_r5_execution_reference(
-        settings=settings,
-        workspace=workspace,
-        run_context=_consist_ctx,
-        config_root=beam_launch_config.root,
     )
     prepared = {
         BEAM_PLANS_IN: plans_beam_in,
@@ -1731,6 +1956,14 @@ def _native_beam_postprocess(
         if key == ZARR_SKIMS:
             continue
         enqueue_archive_copy(key=key, path=path, workspace=workspace)
+        if key == FINAL_SKIMS_OMX:
+            sidecar_path = skim_provenance_sidecar_path(path)
+            if sidecar_path.is_file():
+                enqueue_archive_copy(
+                    key=f"{key}_provenance",
+                    path=sidecar_path,
+                    workspace=workspace,
+                )
     del _consist_ctx
 
 
@@ -1769,6 +2002,13 @@ def _native_beam_full_skim(
         raise FileNotFoundError(
             f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
         )
+    _preflight_beam_launch_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=beam_launch_config,
+        run_context=_consist_ctx,
+    )
     prepared: dict[str, Path] = {}
     if plans_beam_in is not None:
         prepared[BEAM_PLANS_IN] = plans_beam_in
@@ -1822,32 +2062,21 @@ def _native_beam_full_skim(
             context=_consist_ctx,
             skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
         )
-        if path_obj.name.endswith(".csv.gz"):
-            suffix = ".csv.gz"
-        elif path_obj.suffix == ".zarr":
-            suffix = ".zarr"
-        else:
-            suffix = path_obj.suffix or ".omx"
-        dest = _native_output_destination(
-            root=Path(workspace.get_beam_output_dir()),
-            step_name="beam_full_skim",
-            key="beam_full_skims",
-            suffix=suffix,
-        )
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if path_obj.is_dir():
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(path_obj, dest)
-        elif path_obj.resolve() != dest.resolve():
-            shutil.copy2(path_obj, dest)
-        enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
-        if produced.final_skims_omx is not None and FINAL_SKIMS_OMX in declared_outputs:
-            enqueue_archive_copy(
-                key=FINAL_SKIMS_OMX,
-                path=declared_outputs[FINAL_SKIMS_OMX],
-                workspace=workspace,
-            )
+        for key in (BEAM_FULL_SKIMS, FINAL_SKIMS_OMX):
+            if key in source_paths and key in declared_outputs:
+                target_path = declared_outputs[key]
+                enqueue_archive_copy(
+                    key=key,
+                    path=target_path,
+                    workspace=workspace,
+                )
+                sidecar_path = skim_provenance_sidecar_path(target_path)
+                if sidecar_path.is_file():
+                    enqueue_archive_copy(
+                        key=f"{key}_provenance",
+                        path=sidecar_path,
+                        workspace=workspace,
+                    )
     del _consist_ctx
 
 

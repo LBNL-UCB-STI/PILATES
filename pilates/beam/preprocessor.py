@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping
+from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping, Sequence
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -19,6 +19,7 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
@@ -37,8 +38,6 @@ logger = logging.getLogger(__name__)
 
 def _record_store_from_artifact_mappings(
     *,
-    activity_demand_outputs: Optional[Mapping[str, Any]],
-    previous_beam_outputs: Optional[Mapping[str, Any]],
     beam_preprocess_inputs: Optional[Mapping[str, Any]],
 ) -> RecordStore:
     """
@@ -60,6 +59,8 @@ def _record_store_from_artifact_mappings(
                 path = os.fspath(value)
             if not path:
                 continue
+            meta = getattr(value, "meta", None)
+            record_metadata = dict(meta) if isinstance(meta, Mapping) else {}
             record_key = key_aliases.get(key, key) if key_aliases else key
             store.add_record(
                 FileRecord(
@@ -67,20 +68,11 @@ def _record_store_from_artifact_mappings(
                     short_name=record_key,
                     description=f"{description_prefix}: {record_key}",
                     content_hash=artifact_fingerprint(value),
+                    metadata=record_metadata,
                 )
             )
 
     combined = RecordStore()
-    _append_mapping(
-        combined,
-        activity_demand_outputs,
-        description_prefix="BEAM preprocess activity-demand input",
-    )
-    _append_mapping(
-        combined,
-        previous_beam_outputs,
-        description_prefix="BEAM preprocess warm-start input",
-    )
     _append_mapping(
         combined,
         beam_preprocess_inputs,
@@ -89,7 +81,6 @@ def _record_store_from_artifact_mappings(
             BEAM_PLANS_IN: "beam_plans",
             BEAM_HOUSEHOLDS_IN: "households",
             BEAM_PERSONS_IN: "persons",
-            LINKSTATS_WARMSTART: "linkstats",
         },
     )
     return combined
@@ -192,6 +183,21 @@ def _prepare_beam_zone_shapefile(
                 canonical_zones_gdf.columns.tolist(),
             )
 
+        local_crs = settings.shared.geography.local_crs
+        if (
+            isinstance(local_crs, str)
+            and local_crs.strip()
+            and canonical_zones_gdf.crs is not None
+        ):
+            target_crs = local_crs.strip()
+            if str(canonical_zones_gdf.crs).lower() != target_crs.lower():
+                logger.info(
+                    "Reprojecting BEAM canonical zones from %s to local_crs '%s'.",
+                    canonical_zones_gdf.crs,
+                    target_crs,
+                )
+                canonical_zones_gdf = canonical_zones_gdf.to_crs(target_crs)
+
         canonical_zones_gdf.to_file(output_shapefile_path, driver="GeoJSON")
 
         logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
@@ -221,8 +227,7 @@ class BeamPreprocessor(GenericPreprocessor):
             workspace,
         )
         preferred_format = (
-            getattr(getattr(settings, "activitysim", None), "file_format", None)
-            or "parquet"
+            get_setting(settings, "activitysim.file_format", "parquet") or "parquet"
         )
         beam_input_paths = {
             BEAM_PLANS_IN: beam_exchange.locate_existing_beam_exchange_input(
@@ -245,7 +250,7 @@ class BeamPreprocessor(GenericPreprocessor):
         atlas_output_dir = None
         if settings.runtime.flags.vehicle_ownership_model_enabled:
             atlas_output_dir = workspace.get_atlas_output_dir()
-        beam_config = getattr(getattr(settings, "beam", None), "config", None)
+        beam_config = get_setting(settings, "beam.config", None)
         beam_config_path = (
             os.path.join(
                 workspace.get_beam_mutable_data_dir(), settings.run.region, beam_config
@@ -483,8 +488,6 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         *,
-        activity_demand_outputs: Optional[Mapping[str, Any]] = None,
-        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
         beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
         beam_preprocess_context: Optional[Mapping[str, Any]] = None,
     ) -> BeamPreprocessOutputs:
@@ -503,8 +506,6 @@ class BeamPreprocessor(GenericPreprocessor):
             self._resolved_exchange_scenario_folder = str(exchange_scenario_folder)
             self._resolved_zone_context = beam_preprocess_context
         input_store = _record_store_from_artifact_mappings(
-            activity_demand_outputs=activity_demand_outputs,
-            previous_beam_outputs=previous_beam_outputs,
             beam_preprocess_inputs=beam_preprocess_inputs,
         )
         try:
@@ -719,8 +720,11 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
     def _handle_linkstats(
-        self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
-    ):
+        self,
+        workspace: "Workspace",
+        previous_beam_records: Sequence[FileRecord],
+        store: RecordStore,
+    ) -> None:
         beam_input_staging.handle_linkstats(
             workspace=workspace,
             previous_beam_records=previous_beam_records,
@@ -740,7 +744,7 @@ class BeamPreprocessor(GenericPreprocessor):
             (
                 record
                 for record in store.all_records()
-                if getattr(record, "short_name", None) == LINKSTATS_WARMSTART
+                if record.short_name == LINKSTATS_WARMSTART
             ),
             None,
         )

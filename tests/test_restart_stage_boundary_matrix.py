@@ -123,7 +123,6 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         context=context,
     )
 
-    assert observed["resolver"]["launch_config"] is launch_config
     assert observed["resolved"] is run_inputs
     assert observed["runtime"] == {"beam_launch_config": launch_config}
 

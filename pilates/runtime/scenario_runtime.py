@@ -330,6 +330,18 @@ class ScenarioParentLinkProxy:
         )
         return result
 
+    def capture_coupler_snapshot(self, *args: Any, **kwargs: Any) -> Any:
+        fn = getattr(self._scenario, "capture_coupler_snapshot", None)
+        if callable(fn):
+            return fn(*args, **kwargs)
+        return None
+
+    def restore_coupler_snapshot(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        fn = getattr(self._scenario, "restore_coupler_snapshot", None)
+        if callable(fn):
+            return fn(*args, **kwargs)
+        return {}
+
 
 DEFAULT_CACHE_EPOCH = 2
 
@@ -376,7 +388,7 @@ def _required_output_keys_for_surface(
         surface=surface,
         state=state,
     )
-    for spec in schema_step_specs(include_optional=False):
+    for spec in schema_step_specs(include_optional=True):
         if min_order is not None and spec.order < min_order:
             continue
         step_name = spec.step_name
@@ -438,7 +450,7 @@ def _restart_frontier_stage_name(
             if any(
                 spec.stage_name == stage_name
                 and surface.step_enabled(spec.step_name, include_optional=False)
-                for spec in schema_step_specs(include_optional=False)
+                for spec in schema_step_specs(include_optional=True)
             ):
                 return stage_name
         return None
@@ -460,7 +472,7 @@ def _required_output_restart_frontier_order(
 
     orders = [
         spec.order
-        for spec in schema_step_specs(include_optional=False)
+        for spec in schema_step_specs(include_optional=True)
         if spec.stage_name == frontier_stage_name
         and surface.step_enabled(spec.step_name, include_optional=False)
     ]

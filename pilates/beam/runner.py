@@ -169,12 +169,18 @@ def _resolve_full_skim_input_path(
 
     region_candidate = os.path.join(abs_beam_input, region, configured_path)
     root_candidate = os.path.join(abs_beam_input, configured_path)
-    if os.path.exists(region_candidate):
-        host_path = region_candidate
-    elif os.path.exists(root_candidate):
-        host_path = root_candidate
+    input_is_region_root = os.path.basename(os.path.normpath(abs_beam_input)) == region
+    if input_is_region_root:
+        candidates = (root_candidate, region_candidate)
+        fallback = root_candidate
     else:
-        host_path = region_candidate
+        candidates = (region_candidate, root_candidate)
+        fallback = region_candidate
+    host_path = fallback
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            host_path = candidate
+            break
     container_path = _map_host_path_to_container(
         host_path, abs_beam_input, abs_beam_output
     )
@@ -237,6 +243,32 @@ def _select_latest_linkstats_path(
     path = best_record.file_path
     if not os.path.isabs(path):
         path = os.path.abspath(path)
+    norm_path = os.path.normpath(path)
+    norm_in = os.path.normpath(abs_beam_input)
+    norm_out = os.path.normpath(abs_beam_output)
+    is_under_mounted_root = (
+        norm_path == norm_in
+        or norm_path.startswith(norm_in + os.sep)
+        or norm_path == norm_out
+        or norm_path.startswith(norm_out + os.sep)
+    )
+    if (
+        not is_under_mounted_root
+        and getattr(best_record, "short_name", "") == "linkstats_warmstart"
+    ):
+        warmstart_dir = Path(abs_beam_input) / ".pilates" / "warmstarts"
+        staged_candidates: list[Path] = []
+        if os.path.isfile(path):
+            from pilates.beam.launch_config import _warmstart_destination_name
+
+            staged_candidates.append(
+                warmstart_dir / _warmstart_destination_name(Path(path))
+            )
+        staged_candidates.append(warmstart_dir / Path(path).name)
+        for staged_candidate in staged_candidates:
+            if os.path.exists(staged_candidate):
+                path = str(staged_candidate)
+                break
     return _map_host_path_to_container(path, abs_beam_input, abs_beam_output)
 
 
@@ -971,22 +1003,33 @@ class BeamFullSkimRunner(GenericRunner):
         if linkstats_path is None:
             router_dir = getattr(settings.beam, "router_directory", None)
             if router_dir:
-                init_parquet = os.path.join(
-                    abs_beam_input, region, router_dir, "init.linkstats.parquet"
+                input_is_region_root = (
+                    os.path.basename(os.path.normpath(abs_beam_input)) == region
                 )
-                init_csv = os.path.join(
-                    abs_beam_input, region, router_dir, "init.linkstats.csv.gz"
+                base_dirs = (
+                    (abs_beam_input, os.path.join(abs_beam_input, region))
+                    if input_is_region_root
+                    else (os.path.join(abs_beam_input, region), abs_beam_input)
                 )
-                if os.path.exists(init_parquet):
-                    linkstats_path = _map_host_path_to_container(
-                        init_parquet, abs_beam_input, abs_beam_output
+                for base_dir in base_dirs:
+                    init_parquet = os.path.join(
+                        base_dir, router_dir, "init.linkstats.parquet"
                     )
-                    extra_input_paths.append(init_parquet)
-                elif os.path.exists(init_csv):
-                    linkstats_path = _map_host_path_to_container(
-                        init_csv, abs_beam_input, abs_beam_output
+                    init_csv = os.path.join(
+                        base_dir, router_dir, "init.linkstats.csv.gz"
                     )
-                    extra_input_paths.append(init_csv)
+                    if os.path.exists(init_parquet):
+                        linkstats_path = _map_host_path_to_container(
+                            init_parquet, abs_beam_input, abs_beam_output
+                        )
+                        extra_input_paths.append(init_parquet)
+                        break
+                    if os.path.exists(init_csv):
+                        linkstats_path = _map_host_path_to_container(
+                            init_csv, abs_beam_input, abs_beam_output
+                        )
+                        extra_input_paths.append(init_csv)
+                        break
         if linkstats_path is not None:
             cmd_parts.append(f"--linkstatsPath={linkstats_path}")
 
@@ -1051,10 +1094,9 @@ class BeamFullSkimRunner(GenericRunner):
         workspace: Workspace,
         *,
         launch_config: BeamLaunchConfig,
-        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
     ) -> BeamFullSkimOutputs:
         """
-        Run FullSkimsCreatorApp from typed preprocess outputs and optional warm-start artifacts.
+        Run FullSkimsCreatorApp from typed preprocess outputs.
         """
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamFullSkimRunner.run expects BeamPreprocessOutputs")
@@ -1068,11 +1110,6 @@ class BeamFullSkimRunner(GenericRunner):
                 )
                 for short_name, path, description in inputs._iter_record_items()
             ]
-        )
-        _append_artifact_mapping_records(
-            input_store,
-            previous_beam_outputs,
-            description_prefix="BEAM full-skim warm-start input",
         )
         output_store = self._run(input_store, workspace, launch_config)
         mapping = output_store.to_mapping()

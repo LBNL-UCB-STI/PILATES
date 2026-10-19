@@ -344,6 +344,7 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
     linkstats_admission = (
         admission_config.linkstats if admission_config is not None else None
     )
+    linkstats_admission_dict = admission_policy_fingerprint(linkstats_admission)
     identity_config: Dict[str, Any] = {
         "config": cfg.config,
         "sample": cfg.sample,
@@ -354,16 +355,7 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         "write_skims_to_omx": bool(get_setting(settings, "write_skims_to_omx", False)),
         "router_directory": cfg.router_directory,
         "scenario_folder": cfg.scenario_folder,
-        "linkstats_admission": (
-            {
-                "mode": linkstats_admission.mode,
-                "expected_run_id": linkstats_admission.expected_run_id,
-                "artifact_key": linkstats_admission.artifact_key,
-                "expected_bytes_path": linkstats_admission.expected_bytes_path,
-            }
-            if linkstats_admission is not None
-            else None
-        ),
+        "linkstats_admission": linkstats_admission_dict,
     }
     full_skim = getattr(cfg, "full_skim", None)
     if isinstance(full_skim, FullSkimsCreatorConfig):

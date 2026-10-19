@@ -992,29 +992,19 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     assert init_marker.exists()
 
     # Phase 1: land-use stage publishes UrbanSim datastore handles.
-    usim_inputs = run_land_use_stage(
+    run_land_use_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=golden_stub_env["context"],
-    )
-    assert USIM_DATASTORE_BASE_H5 in usim_inputs
-    assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
-    assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
-    assert usim_inputs[USIM_DATASTORE_CURRENT_H5].endswith(
-        f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     )
     coupler_base_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_BASE_H5), workspace)
     coupler_current_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert coupler_base_h5 is not None
     assert coupler_current_h5 is not None
+    assert Path(coupler_base_h5).name == "usim_000.h5"
     assert (
-        Path(coupler_base_h5).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
-    )
-    assert (
-        Path(coupler_current_h5).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_CURRENT_H5]).resolve()
+        Path(coupler_current_h5).name
+        == f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     )
 
     # Phase 2: vehicle ownership stage consumes datastore handles and
@@ -1023,7 +1013,6 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
         scenario=scenario,
         coupler=coupler,
         year=state.forecast_year,
-        build_atlas_static_inputs_fallback=lambda _workspace: {},
         context=golden_stub_env["context"],
     )
     assert (
@@ -1078,9 +1067,7 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     asim_archive_iteration = state.current_inner_iter
     run_supply_demand_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
-        handoff=usim_inputs,
         context=golden_stub_env["context"],
     )
 

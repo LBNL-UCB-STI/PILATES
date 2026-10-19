@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from bisect import bisect_left
-from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     Any,
@@ -18,19 +18,14 @@ from typing import (
     TypedDict,
 )
 
-from pilates.runtime.scenario_runtime import resolve_cache_epoch
+from pilates.runtime.archive_paths import resolve_workspace_uri_path
 from pilates.runtime.promote_run_archive import _open_archive_tracker
+from pilates.runtime.scenario_runtime import resolve_cache_epoch
 from pilates.utils.coupler_helpers import (
     resolve_existing_path,
 )
-from pilates.workflows.artifact_keys import (
-    ZARR_SKIMS,
-)
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.binding import restart_required_local_artifact_policy
-from pilates.workflows.catalog import (
-    restart_query_scope_for_step,
-)
-from pilates.workflows.surface import RestartFrontierContract
 
 logger = logging.getLogger(__name__)
 
@@ -182,30 +177,40 @@ def hydrate_restart_atlas_continuation_inputs(
         atlas_subyear=prior_atlas_year,
         workspace=workspace,
     )
+    cache_epoch = resolve_cache_epoch(settings)
+    preprocess_target = {
+        "model": "atlas_preprocess",
+        "stage": "vehicle_ownership",
+        "phase": "preprocess",
+        "status": "completed",
+        "year": prior_atlas_year,
+        "cache_epoch": cache_epoch,
+        "facet": facet,
+        "run_scope": archive_run_dir.name,
+    }
+    if iteration is not None:
+        preprocess_target["iteration"] = iteration
     preprocess_run = _select_exact_completed_restart_run(
         tracker=tracker,
-        target=restart_target_for_step(
-            settings=settings,
-            step_name="atlas_preprocess",
-            year=prior_atlas_year,
-            iteration=iteration,
-            facet=facet,
-            state=state,
-            archive_run_dir=archive_run_dir,
-        ),
+        target=preprocess_target,
         step_name="atlas_preprocess",
     )
+
+    atlas_target = {
+        "model": "atlas_run",
+        "stage": "vehicle_ownership",
+        "phase": "run",
+        "status": "completed",
+        "year": prior_atlas_year,
+        "cache_epoch": cache_epoch,
+        "facet": facet,
+        "run_scope": archive_run_dir.name,
+    }
+    if iteration is not None:
+        atlas_target["iteration"] = iteration
     atlas_run = _select_exact_completed_restart_run(
         tracker=tracker,
-        target=restart_target_for_step(
-            settings=settings,
-            step_name="atlas_run",
-            year=prior_atlas_year,
-            iteration=iteration,
-            facet=facet,
-            state=state,
-            archive_run_dir=archive_run_dir,
-        ),
+        target=atlas_target,
         step_name="atlas_run",
     )
 
@@ -406,77 +411,6 @@ def read_archive_run_state_year(
     return _coerce_int(year)
 
 
-def read_archive_run_state_snapshot(
-    state_path: str,
-    *,
-    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
-) -> RestartStateSnapshot:
-    if not state_path:
-        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
-    try:
-        year, stage, iteration, *_ = read_current_stage_fn(state_path)
-    except Exception as exc:
-        logger.warning(
-            "Failed reading archive run_state snapshot from %s: %s", state_path, exc
-        )
-        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
-    return RestartStateSnapshot(
-        year=_coerce_int(year),
-        stage_name=getattr(stage, "name", None) if stage is not None else None,
-        iteration=_coerce_int(iteration),
-    )
-
-
-def _runtime_state_snapshot(state: Any) -> RestartStateSnapshot:
-    current_stage = getattr(state, "current_sub_stage", None) or getattr(
-        state, "current_major_stage", None
-    )
-    return RestartStateSnapshot(
-        year=_coerce_int(getattr(state, "current_year", None)),
-        stage_name=getattr(current_stage, "name", None)
-        if current_stage is not None
-        else None,
-        iteration=_coerce_int(getattr(state, "current_inner_iter", None)),
-    )
-
-
-def _stage_progress_rank(stage_name: Optional[str]) -> int:
-    order = {
-        "initialize_data": 0,
-        "land_use": 10,
-        "vehicle_ownership_model": 20,
-        "activity_demand": 30,
-        "activity_demand_directly_from_land_use": 30,
-        "traffic_assignment": 40,
-        "postprocessing": 50,
-    }
-    return order.get(str(stage_name), -1)
-
-
-def _progress_tuple(snapshot: RestartStateSnapshot) -> Tuple[int, int, int]:
-    return (
-        snapshot.year if snapshot.year is not None else -1,
-        snapshot.iteration if snapshot.iteration is not None else 0,
-        _stage_progress_rank(snapshot.stage_name),
-    )
-
-
-def is_rewind_resume_request(
-    *,
-    state: Any,
-    archive_state_path: str,
-    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
-) -> bool:
-    requested = _runtime_state_snapshot(state)
-    archive = read_archive_run_state_snapshot(
-        archive_state_path,
-        read_current_stage_fn=read_current_stage_fn,
-    )
-    if requested.year is None or archive.year is None:
-        return False
-    return _progress_tuple(requested) < _progress_tuple(archive)
-
-
 def enforce_resume_rewind_guardrail(
     *,
     state: Any,
@@ -502,146 +436,165 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
-@dataclass(frozen=True)
-class RestartStateSnapshot:
-    year: Optional[int]
-    stage_name: Optional[str]
-    iteration: Optional[int]
-
-
-def _surface_restart_frontier_contract(
-    surface: Any,
-) -> Optional[RestartFrontierContract]:
-    if surface is None:
-        return None
-    getter = getattr(surface, "restart_frontier", None)
-    contract = (
-        getter()
-        if callable(getter)
-        else getattr(surface, "restart_frontier_contract", None)
-    )
-    if contract is None:
-        return None
-    return RestartFrontierContract(
-        frontier_stage=str(contract.frontier_stage),
-        frontier_step=str(contract.frontier_step),
-        required_keys=tuple(contract.required_keys),
-    )
-
-
-def restart_frontier_contract(
+def _resolve_archived_artifact_source_path(
     *,
-    settings: Any,
-    state: Any,
-    workflow_stage: WorkflowStageLike,
-    surface: Any = None,
-) -> Optional[RestartFrontierContract]:
-    """Return the effective restart frontier, preferring the shared surface.
+    tracker: Any,
+    artifact: Any,
+    archive_run_dir: Path,
+    workspace: Any,
+) -> Optional[Path]:
+    """Resolve the source path in the archive directory for an artifact."""
+    container_uri = getattr(artifact, "container_uri", None)
+    if container_uri:
+        if container_uri.startswith("./"):
+            candidate = archive_run_dir / container_uri[2:]
+            if candidate.exists():
+                return candidate
+        resolved_local = resolve_workspace_uri_path(container_uri, workspace=workspace)
+        if resolved_local:
+            if not os.path.isabs(resolved_local):
+                candidate = archive_run_dir / resolved_local
+                if candidate.exists():
+                    return candidate
+            elif getattr(workspace, "full_path", None):
+                try:
+                    rel = (
+                        Path(resolved_local)
+                        .resolve()
+                        .relative_to(Path(workspace.full_path).resolve())
+                    )
+                    candidate = archive_run_dir / rel
+                    if candidate.exists():
+                        return candidate
+                except (ValueError, TypeError):
+                    pass
 
-    Keeping this bridge lets older restart callers continue using the legacy
-    module API while the runtime authority moves into `EnabledWorkflowSurface`.
-    """
-    surface_contract = _surface_restart_frontier_contract(surface)
-    if surface_contract is not None:
-        return surface_contract
-
-    if getattr(state, "current_major_stage", None) != workflow_stage.supply_demand_loop:
-        return None
-    if getattr(state, "current_sub_stage", None) != workflow_stage.traffic_assignment:
-        return None
-
-    models = getattr(getattr(settings, "run", None), "models", None)
-    if models is None:
-        return None
-    if getattr(models, "activity_demand", None) != "activitysim":
-        return None
-    if getattr(models, "traffic_assignment", None) != "beam":
-        return None
-
-    return RestartFrontierContract(
-        frontier_stage="traffic_assignment",
-        frontier_step="beam_preprocess",
-        required_keys=(
-            "beam_plans_asim_out",
-            "households_asim_out",
-            "persons_asim_out",
-            ZARR_SKIMS,
-        ),
-    )
-
-
-def restart_run_scope(
-    *,
-    state: Any = None,
-    workspace: Any = None,
-    archive_run_dir: Optional[str | os.PathLike[str]] = None,
-    local_run_dir: Optional[str | os.PathLike[str]] = None,
-) -> Optional[str]:
-    """Return the Consist run-scope prefix for restart lookups."""
-
-    candidate_paths: List[Any] = []
-    if archive_run_dir:
-        candidate_paths.append(archive_run_dir)
-    if state is not None:
-        run_info_path = getattr(state, "run_info_path", None)
-        if run_info_path:
+    artifact_path = getattr(artifact, "path", None)
+    if artifact_path:
+        candidate = archive_run_dir / artifact_path
+        if candidate.exists():
+            return candidate
+        if getattr(workspace, "full_path", None):
             try:
-                candidate_paths.append(Path(run_info_path).expanduser().parent)
-            except Exception:
+                rel = (
+                    Path(artifact_path)
+                    .resolve()
+                    .relative_to(Path(workspace.full_path).resolve())
+                )
+                candidate = archive_run_dir / rel
+                if candidate.exists():
+                    return candidate
+            except (ValueError, TypeError):
                 pass
-    if workspace is not None:
-        full_path = getattr(workspace, "full_path", None)
-        if full_path:
-            candidate_paths.append(full_path)
-    if local_run_dir:
-        candidate_paths.append(local_run_dir)
 
-    for value in candidate_paths:
-        try:
-            name = Path(value).expanduser().resolve().name
-        except Exception:
-            name = Path(str(value)).name
-        if name:
-            return name
     return None
 
 
-def restart_target_for_step(
-    *,
-    settings: Any,
-    step_name: str,
-    year: int,
-    iteration: Optional[int] = None,
-    facet: Optional[Mapping[str, Any]] = None,
-    state: Any = None,
-    workspace: Any = None,
-    archive_run_dir: Optional[str | os.PathLike[str]] = None,
-    local_run_dir: Optional[str | os.PathLike[str]] = None,
-    include_iteration: bool = True,
-) -> Dict[str, Any]:
-    """Build the shared semantic Consist target for a completed restart run."""
+def _stage_archived_path(*, source_path: Path, target_path: Path) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source_path, target_path)
+    except (OSError, NotImplementedError):
+        if source_path.is_dir():
+            shutil.copytree(source_path, target_path, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source_path, target_path)
 
-    scope = restart_query_scope_for_step(step_name)
-    target: Dict[str, Any] = {
-        "year": year,
-        "model": scope["model"],
-        "stage": scope["stage"],
-        "status": "completed",
-        "cache_epoch": resolve_cache_epoch(settings),
-    }
-    phase = scope.get("phase")
-    if phase is not None:
-        target["phase"] = phase
-    if include_iteration and iteration is not None:
-        target["iteration"] = iteration
-    if facet is not None:
-        target["facet"] = dict(facet)
-    run_scope = restart_run_scope(
-        state=state,
-        workspace=workspace,
-        archive_run_dir=archive_run_dir,
-        local_run_dir=local_run_dir,
+
+def restore_restart_coupler_snapshot(
+    *,
+    scenario: Any,
+    tracker: Any,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> Dict[str, Any]:
+    """Restore coupler artifacts on restart and ensure missing workspace files exist."""
+    candidate_ids: List[str] = []
+    output_run_name = get_setting(settings, "run.output_run_name", None)
+    for cand in (
+        output_run_name,
+        getattr(state, "scenario_id", None),
+        getattr(state, "run_id", None),
+        (
+            Path(state.run_info_path).resolve().parent.name
+            if getattr(state, "run_info_path", None)
+            else None
+        ),
+    ):
+        if cand and str(cand) not in candidate_ids:
+            candidate_ids.append(str(cand))
+
+    restored: Dict[str, Any] = {}
+    if candidate_ids:
+        for sid in candidate_ids:
+            try:
+                restored = scenario.restore_coupler_snapshot(
+                    phase="post",
+                    scenario_run_id=sid,
+                    clear_existing=False,
+                    fallback_to_completed_outputs=True,
+                )
+            except TypeError:
+                try:
+                    restored = scenario.restore_coupler_snapshot(phase="post")
+                except AttributeError:
+                    restored = {}
+            except AttributeError:
+                restored = {}
+            if restored:
+                break
+    else:
+        try:
+            restored = scenario.restore_coupler_snapshot(phase="post")
+        except AttributeError:
+            restored = {}
+
+    logger.info(
+        "Restored restart coupler snapshot with %d artifacts: %s",
+        len(restored) if restored else 0,
+        sorted(restored.keys()) if restored else [],
     )
-    if run_scope is not None:
-        target["run_scope"] = run_scope
-    return target
+
+    archive_run_dir_val = (
+        getattr(workspace, "archive_run_dir", None)
+        or get_setting(settings, "run.archive_run_dir", None)
+        or (
+            Path(state.run_info_path).parent
+            if getattr(state, "run_info_path", None)
+            else None
+        )
+    )
+    if archive_run_dir_val and restored:
+        archive_run_dir = Path(archive_run_dir_val).resolve()
+        for role_key, artifact in restored.items():
+            target_str = resolve_workspace_uri_path(
+                getattr(artifact, "container_uri", None)
+                or getattr(artifact, "path", None),
+                workspace=workspace,
+            )
+            if not target_str or "://" in str(target_str):
+                continue
+            target_path = Path(target_str)
+            if not target_path.is_absolute() and getattr(workspace, "full_path", None):
+                target_path = Path(workspace.full_path) / target_path
+            if not target_path.exists():
+                source_path = _resolve_archived_artifact_source_path(
+                    tracker=tracker,
+                    artifact=artifact,
+                    archive_run_dir=archive_run_dir,
+                    workspace=workspace,
+                )
+                if source_path and source_path.exists():
+                    logger.info(
+                        "Staging missing restart artifact %s from archive %s -> %s",
+                        role_key,
+                        source_path,
+                        target_path,
+                    )
+                    _stage_archived_path(
+                        source_path=source_path,
+                        target_path=target_path,
+                    )
+
+    return restored or {}

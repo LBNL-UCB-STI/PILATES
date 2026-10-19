@@ -26,26 +26,6 @@ from pilates.utils.usim_h5 import resolve_usim_h5_table_key
 
 logger = logging.getLogger(__name__)
 
-_ATLAS_RESTART_START_YEAR_CSVS: Tuple[str, ...] = (
-    "households.csv",
-    "blocks.csv",
-    "persons.csv",
-    "residential.csv",
-    "jobs.csv",
-)
-_ATLAS_RESTART_PRIOR_SUBYEAR_CSVS: Tuple[str, ...] = (
-    "households.csv",
-    "blocks.csv",
-    "persons.csv",
-    "grave.csv",
-    "residential.csv",
-    "jobs.csv",
-)
-_ATLAS_RESTART_PRIOR_SUBYEAR_RDATA: Tuple[str, ...] = (
-    "vehicles_output.RData",
-    "households_output.RData",
-)
-
 
 def _get_usim_datastore_fname(settings, io, year=None):
     # reference: asim postprocessor
@@ -117,116 +97,6 @@ def _export_atlas_table_to_csv(
         index=True,
         index_label=expected_index_name,
     )
-
-
-def _restart_required_atlas_input_years(
-    *,
-    start_year: int,
-    atlas_year: int,
-) -> List[int]:
-    """
-    Return the minimal ATLAS year-input directories required on restart.
-
-    Dynamic ATLAS subyear runs rely on the workflow start-year seed inputs and,
-    for later subyears, the immediately preceding ATLAS evolution-year inputs.
-    """
-    required_years = [start_year]
-    if atlas_year > start_year:
-        prior_subyear = atlas_year - 2
-        if prior_subyear >= start_year and prior_subyear not in required_years:
-            required_years.append(prior_subyear)
-    return required_years
-
-
-def restart_required_atlas_input_paths(
-    *,
-    atlas_input_root: str,
-    start_year: int,
-    atlas_year: int,
-) -> Dict[str, str]:
-    """
-    Return the restart-critical ATLAS files that should exist locally.
-
-    Native restart recovery should hydrate concrete files rather than treating
-    whole year directories as first-class artifacts.
-    """
-    atlas_input_root = os.path.realpath(atlas_input_root)
-    required: Dict[str, str] = {}
-
-    start_year_dir = os.path.join(atlas_input_root, f"year{start_year}")
-    for filename in _ATLAS_RESTART_START_YEAR_CSVS:
-        artifact_name = filename.rsplit(".", 1)[0]
-        required[f"atlas_restart_seed::{start_year}::{artifact_name}"] = os.path.join(
-            start_year_dir,
-            filename,
-        )
-
-    if atlas_year > start_year:
-        prior_subyear = atlas_year - 2
-        if prior_subyear >= start_year:
-            prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
-            for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_CSVS:
-                artifact_name = filename.rsplit(".", 1)[0]
-                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
-                    os.path.join(prior_year_dir, filename)
-                )
-            for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
-                artifact_name = filename.replace(".", "_")
-                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
-                    os.path.join(prior_year_dir, filename)
-                )
-
-    return required
-
-
-def _record_restart_chained_rdata_inputs(
-    *,
-    prepared_inputs: Dict[str, Path],
-    atlas_input_root: str,
-    start_year: int,
-    atlas_year: int,
-) -> None:
-    if atlas_year <= start_year:
-        return
-
-    prior_subyear = atlas_year - 2
-    if prior_subyear < start_year:
-        return
-
-    prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
-    for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
-        path = os.path.join(prior_year_dir, filename)
-        if not os.path.exists(path):
-            continue
-        artifact_name = filename.replace(".", "_")
-        prepared_inputs[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
-            Path(path)
-        )
-
-
-def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
-    """
-    Discover top-level static ATLAS global inputs that must be present in mutable input.
-
-    Returns tuples of (absolute_source_path, label_for_logging).
-    """
-    patterns = (
-        ("*.csv", "CSV"),
-        ("*.RData", "RData"),
-        ("*.Rdat", "Rdat"),
-        ("*.rdata", "RData"),
-        ("*.rdat", "Rdat"),
-    )
-    discovered: List[Tuple[str, str]] = []
-    seen: set[str] = set()
-    for pattern, label in patterns:
-        for path in glob.glob(os.path.join(global_source_dir, pattern)):
-            real = os.path.realpath(path)
-            if real in seen:
-                continue
-            seen.add(real)
-            discovered.append((real, label))
-    return discovered
 
 
 def _atlas_static_input_metadata(
@@ -582,12 +452,6 @@ class AtlasPreprocessor(GenericPreprocessor):
         atlas_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(),
             "year{}".format(self.state.year),
-        )
-        _record_restart_chained_rdata_inputs(
-            prepared_inputs=prepared_inputs,
-            atlas_input_root=workspace.get_atlas_mutable_input_dir(),
-            start_year=self.state.start_year,
-            atlas_year=self.state.year,
         )
 
         # Record BEAM skims as input if needed
