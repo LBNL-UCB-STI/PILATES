@@ -84,12 +84,6 @@ class BeamDataHelper:
             "person_id": pd.Int64Dtype(),
             "personId": pd.Int64Dtype(),
             "personid": pd.Int64Dtype(),
-            "trip_id": pd.Int64Dtype(),
-            "tripId": pd.Int64Dtype(),
-            "tripid": pd.Int64Dtype(),
-            "tour_id": pd.Int64Dtype(),
-            "tourId": pd.Int64Dtype(),
-            "tourid": pd.Int64Dtype(),
             "PlanElementIndex": pd.Int64Dtype(),
             "planElementIndex": pd.Int64Dtype(),
             "planIndex": pd.Int64Dtype(),
@@ -180,6 +174,18 @@ class BeamDataHelper:
         df = df.loc[:, ~df.columns.duplicated()].copy()
 
         if table_type == "plans":
+            for id_col in ("trip_id", "tour_id"):
+                if id_col in df.columns:
+                    non_null = df[id_col].dropna()
+                    if len(non_null) == 0:
+                        df[id_col] = df[id_col].astype(pd.Int64Dtype())
+                    else:
+                        numeric_col = pd.to_numeric(df[id_col], errors="coerce")
+                        if (
+                            numeric_col.notna().sum() == len(non_null)
+                            and ((numeric_col.dropna() % 1) == 0).all()
+                        ):
+                            df[id_col] = numeric_col.round().astype(pd.Int64Dtype())
             if "activityEndTime" in df.columns:
                 if "departure_time" not in df.columns:
                     df["departure_time"] = (

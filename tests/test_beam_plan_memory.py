@@ -1008,3 +1008,37 @@ def test_exp_beta_selection_deterministic_regardless_of_plan_order(
     sel_order_0_1 = run_selection([0, 1])
     sel_order_1_0 = run_selection([1, 0])
     assert sel_order_0_1 == sel_order_1_0
+
+
+def test_beam_data_helper_coerces_float_string_and_preserves_alphanumeric_trip_tour_ids(
+    tmp_path: Path,
+) -> None:
+    """Float-formatted string tripId/tourId coerce to Int64, while alphanumeric IDs stay intact."""
+    # 1. Float-formatted integer strings (e.g. '501.0') and empty strings on activity rows
+    csv_float_ids = tmp_path / "plans_float_ids.csv.gz"
+    df_float = _create_minimal_plans_df([1, 1], use_camel_case=True)
+    df_float["tripId"] = ["", "501.0"]
+    df_float["tourId"] = ["", "20.0"]
+    df_float.to_csv(csv_float_ids, index=False, compression="gzip")
+
+    cleaned_float = BeamDataHelper.read_and_clean(
+        str(csv_float_ids), "plans", file_format="csv"
+    )
+    assert cleaned_float["trip_id"].dtype == pd.Int64Dtype()
+    assert cleaned_float["tour_id"].dtype == pd.Int64Dtype()
+    assert pd.isna(cleaned_float.loc[0, "trip_id"])
+    assert cleaned_float.loc[1, "trip_id"] == 501
+    assert cleaned_float.loc[1, "tour_id"] == 20
+
+    # 2. Alphanumeric IDs (e.g. 'trip_1', 'tour_1') do not crash read_csv
+    csv_alpha_ids = tmp_path / "plans_alpha_ids.csv.gz"
+    df_alpha = _create_minimal_plans_df([1, 1], use_camel_case=True)
+    df_alpha["tripId"] = ["", "trip_1"]
+    df_alpha["tourId"] = ["", "tour_1"]
+    df_alpha.to_csv(csv_alpha_ids, index=False, compression="gzip")
+
+    cleaned_alpha = BeamDataHelper.read_and_clean(
+        str(csv_alpha_ids), "plans", file_format="csv"
+    )
+    assert cleaned_alpha.loc[1, "trip_id"] == "trip_1"
+    assert cleaned_alpha.loc[1, "tour_id"] == "tour_1"

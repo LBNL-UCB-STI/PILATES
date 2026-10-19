@@ -295,3 +295,24 @@ def test_beam_preprocess_binding_rules_prefer_linkstats_over_warmstart() -> None
         binding.LINKSTATS,
         binding.LINKSTATS_WARMSTART,
     )
+
+
+def test_beam_preprocess_binding_rules_prefer_asim_outputs_over_staged_beam_inputs() -> (
+    None
+):
+    rules = {
+        r.semantic_key: r.preferred_keys
+        for r in binding.artifact_rules_for_step_name("beam_preprocess")
+    }
+    assert rules[binding.BEAM_PLANS_IN] == (
+        "beam_plans_asim_out",
+        binding.BEAM_PLANS_IN,
+    )
+    assert rules[binding.BEAM_HOUSEHOLDS_IN] == (
+        "households_asim_out",
+        binding.BEAM_HOUSEHOLDS_IN,
+    )
+    assert rules[binding.BEAM_PERSONS_IN] == (
+        "persons_asim_out",
+        binding.BEAM_PERSONS_IN,
+    )
