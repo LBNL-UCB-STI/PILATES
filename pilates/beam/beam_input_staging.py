@@ -81,9 +81,6 @@ class BeamDataHelper:
 
     DTYPES = {
         "plans": {
-            "person_id": pd.Int64Dtype(),
-            "personId": pd.Int64Dtype(),
-            "personid": pd.Int64Dtype(),
             "PlanElementIndex": pd.Int64Dtype(),
             "planElementIndex": pd.Int64Dtype(),
             "planIndex": pd.Int64Dtype(),
@@ -97,7 +94,6 @@ class BeamDataHelper:
         },
         "persons": {
             "household_id": pd.Int64Dtype(),
-            "person_id": pd.Int64Dtype(),
             "age": pd.Int64Dtype(),
             "sex": pd.Int64Dtype(),
         },
@@ -172,6 +168,17 @@ class BeamDataHelper:
 
         df = df.rename(columns=rename_map)
         df = df.loc[:, ~df.columns.duplicated()].copy()
+
+        if table_type in ("plans", "persons"):
+            if "person_id" in df.columns:
+                non_null = df["person_id"].dropna()
+                if len(non_null) > 0:
+                    numeric_col = pd.to_numeric(df["person_id"], errors="coerce")
+                    if (
+                        numeric_col.notna().sum() == len(non_null)
+                        and ((numeric_col.dropna() % 1) == 0).all()
+                    ):
+                        df["person_id"] = numeric_col.round().astype(pd.Int64Dtype())
 
         if table_type == "plans":
             for id_col in ("trip_id", "tour_id"):
@@ -1139,8 +1146,31 @@ def merge_replanned_asim_files(
     else:
         active_person_ids = set(persons_final.index)
 
-    # Filter original_plans to active population (drops extinct/departed agents)
+    active_person_ids_str = {str(pid) for pid in active_person_ids}
+
+    # Partition original_plans into freight plans and passenger plans
+    freight_plans = pd.DataFrame()
     if not original_plans.empty and "person_id" in original_plans.columns:
+        is_freight = original_plans["person_id"].astype(str).str.startswith("ft-") | (
+            pd.to_numeric(original_plans["person_id"], errors="coerce").isna()
+            & ~original_plans["person_id"].astype(str).isin(active_person_ids_str)
+        )
+        freight_plans = original_plans.loc[is_freight].copy()
+        original_plans = original_plans.loc[~is_freight].copy()
+
+        # Coerce passenger person_id in original_plans to match active_person_ids dtype if numeric
+        if not original_plans.empty and active_person_ids:
+            first_active = next(iter(active_person_ids))
+            if isinstance(first_active, (int, np.integer)):
+                numeric_pids = pd.to_numeric(
+                    original_plans["person_id"], errors="coerce"
+                )
+                if numeric_pids.notna().all():
+                    original_plans["person_id"] = numeric_pids.astype(
+                        type(first_active)
+                    )
+
+        # Filter passenger original_plans to active population (drops extinct/departed agents)
         original_plans = original_plans.loc[
             original_plans["person_id"].isin(active_person_ids)
         ].copy()
@@ -1360,7 +1390,51 @@ def merge_replanned_asim_files(
     if "PlanElementIndex" in combined_plans.columns:
         sort_cols.append("PlanElementIndex")
 
-    plans_final = combined_plans.sort_values(sort_cols).reset_index(drop=True)
+    passenger_plans_sorted = combined_plans.sort_values(sort_cols).reset_index(
+        drop=True
+    )
+
+    if not freight_plans.empty:
+        # Align columns across passenger and freight plans
+        all_cols = list(passenger_plans_sorted.columns)
+        for col in freight_plans.columns:
+            if col not in all_cols:
+                all_cols.append(col)
+
+        passenger_aligned = passenger_plans_sorted.reindex(columns=all_cols)
+        freight_aligned = freight_plans.reindex(columns=all_cols)
+
+        for col, default_val in BeamDataHelper.PLAN_DEFAULTS.items():
+            if default_val is not None:
+                if col in passenger_aligned.columns:
+                    passenger_aligned[col] = passenger_aligned[col].fillna(default_val)
+                if col in freight_aligned.columns:
+                    freight_aligned[col] = freight_aligned[col].fillna(default_val)
+
+        if "planselected" in freight_aligned.columns:
+            if freight_aligned["planselected"].dtype == object:
+                freight_aligned["planselected"] = (
+                    freight_aligned["planselected"]
+                    .astype(str)
+                    .str.lower()
+                    .isin(["true", "1", "yes"])
+                )
+            else:
+                freight_aligned["planselected"] = (
+                    freight_aligned["planselected"].fillna(True).astype(bool)
+                )
+
+        freight_sort_cols = [c for c in sort_cols if c in freight_aligned.columns]
+        freight_plans_sorted = freight_aligned.sort_values(
+            freight_sort_cols
+        ).reset_index(drop=True)
+
+        plans_final = pd.concat(
+            [passenger_aligned, freight_plans_sorted], ignore_index=True
+        )
+        plans_final["person_id"] = plans_final["person_id"].astype(str)
+    else:
+        plans_final = passenger_plans_sorted
 
     record_list: List[FileRecord] = []
     outputs = [

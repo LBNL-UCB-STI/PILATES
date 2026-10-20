@@ -1042,3 +1042,171 @@ def test_beam_data_helper_coerces_float_string_and_preserves_alphanumeric_trip_t
     )
     assert cleaned_alpha.loc[1, "trip_id"] == "trip_1"
     assert cleaned_alpha.loc[1, "tour_id"] == "tour_1"
+
+
+def test_beam_data_helper_preserves_freight_person_ids(tmp_path: Path) -> None:
+    """Alphanumeric freight agent IDs (e.g. 'ft-f94a4b1') do not crash read_csv and are preserved."""
+    csv_freight_path = tmp_path / "plans_with_freight.csv.gz"
+    df_raw = pd.DataFrame(
+        {
+            "personId": [10001, 10001, "ft-f94a4b1", "ft-f94a4b1"],
+            "planIndex": [0, 0, 0, 0],
+            "planElementIndex": [1, 2, 1, 2],
+            "planElementType": ["activity", "leg", "activity", "leg"],
+            "activityType": ["Home", "", "Depot", ""],
+            "activityLocationX": [10.0, np.nan, 20.0, np.nan],
+            "activityLocationY": [10.0, np.nan, 20.0, np.nan],
+            "activityEndTime": [28800.0, np.nan, 32400.0, np.nan],
+            "legMode": ["", "car", "", "truck"],
+            "legDepartureTime": [np.nan, 28800.0, np.nan, 32400.0],
+            "legTravelTime": [np.nan, 1200.0, np.nan, 1800.0],
+            "planScore": [50.0, 50.0, 25.0, 25.0],
+            "planSelected": [True, True, True, True],
+            "tripId": ["", "1", "", "trip_ft_1"],
+            "tourId": ["", "10", "", "tour_ft_1"],
+        }
+    )
+    df_raw.to_csv(csv_freight_path, index=False, compression="gzip")
+
+    cleaned = BeamDataHelper.read_and_clean(
+        str(csv_freight_path), "plans", file_format="csv"
+    )
+    assert len(cleaned) == 4
+    assert list(cleaned["person_id"]) == ["10001", "10001", "ft-f94a4b1", "ft-f94a4b1"]
+    assert cleaned.loc[2, "person_id"] == "ft-f94a4b1"
+    assert cleaned.loc[2, "ActivityType"] == "Depot"
+    assert cleaned.loc[3, "trip_mode"] == "truck"
+    assert cleaned.loc[3, "trip_id"] == "trip_ft_1"
+
+
+def test_merge_replanned_asim_files_preserves_freight_and_drops_extinct_passengers(
+    tmp_path: Path,
+) -> None:
+    """merge_replanned_asim_files retains freight agents intact, merges passenger plans, and drops extinct passengers."""
+    scenario_dir = tmp_path / "scenario"
+    scenario_dir.mkdir()
+    asim_dir = tmp_path / "asim"
+    asim_dir.mkdir()
+
+    # Previous BEAM output (iteration 0) contains:
+    # - Active passenger 1 (score 100.0)
+    # - Extinct passenger 99999 (was in previous run, but dropped from current population)
+    # - Freight agent "ft-f94a4b1" (with routed leg links)
+    prior_beam_plans_path = scenario_dir / "beam_plans_out.csv.gz"
+    prior_plans_df = pd.DataFrame(
+        {
+            "personId": [1, 1, 99999, 99999, "ft-f94a4b1", "ft-f94a4b1"],
+            "planIndex": [0, 0, 0, 0, 0, 0],
+            "planElementIndex": [1, 2, 1, 2, 1, 2],
+            "planElementType": [
+                "activity",
+                "leg",
+                "activity",
+                "leg",
+                "activity",
+                "leg",
+            ],
+            "activityType": ["Home", "", "Home", "", "Depot", ""],
+            "activityLocationX": [1.0, np.nan, 2.0, np.nan, 3.0, np.nan],
+            "activityLocationY": [1.0, np.nan, 2.0, np.nan, 3.0, np.nan],
+            "activityEndTime": [28800.0, np.nan, 28800.0, np.nan, 28800.0, np.nan],
+            "legMode": ["", "car", "", "car", "", "truck"],
+            "legDepartureTime": [np.nan, 28800.0, np.nan, 28800.0, np.nan, 28800.0],
+            "legTravelTime": [np.nan, 1200.0, np.nan, 1200.0, np.nan, 1500.0],
+            "legRouteLinks": [
+                None,
+                "link_1,link_2",
+                None,
+                "link_3,link_4",
+                None,
+                "link_f1,link_f2",
+            ],
+            "legVehicleIds": [None, "veh_p1", None, "veh_p99", None, "veh_ft_1"],
+            "planScore": [100.0, 100.0, 50.0, 50.0, 75.0, 75.0],
+            "planSelected": [True, True, True, True, True, True],
+            "tripId": ["", "101", "", "999", "", "ft_trip_1"],
+            "tourId": ["", "201", "", "999", "", "ft_tour_1"],
+        }
+    )
+    prior_plans_df.to_csv(prior_beam_plans_path, index=False, compression="gzip")
+
+    # Current population (persons_final): only passenger 1 and new passenger 2 (passenger 99999 is extinct)
+    prior_per = pd.DataFrame({"household_id": [1, 2], "person_id": [1, 2]})
+    prior_per.to_csv(scenario_dir / "persons.csv.gz", index=False, compression="gzip")
+    prior_hh = pd.DataFrame({"household_id": [1, 2], "cars": [1, 2]})
+    prior_hh.to_csv(scenario_dir / "households.csv.gz", index=False, compression="gzip")
+
+    # ActivitySim replanned plans: new plans for passenger 1 and passenger 2
+    new_plans_df = pd.DataFrame(
+        {
+            "person_id": [1, 1, 2, 2],
+            "planindex": [0, 0, 0, 0],
+            "PlanElementIndex": [1, 2, 1, 2],
+            "ActivityElement": ["activity", "leg", "activity", "leg"],
+            "ActivityType": ["Home", "", "Work", ""],
+            "x": [10.0, np.nan, 20.0, np.nan],
+            "y": [10.0, np.nan, 20.0, np.nan],
+            "departure_time": [8.0, np.nan, 9.0, np.nan],
+            "trip_mode": ["", "walk", "", "bike"],
+            "trip_id": [None, 102, None, 202],
+            "tour_id": [None, 202, None, 302],
+        }
+    )
+    new_plans_path = asim_dir / "plans_beam_in.parquet"
+    new_plans_df.to_parquet(new_plans_path, index=False)
+
+    new_per = pd.DataFrame({"household_id": [1, 2], "person_id": [1, 2]})
+    new_per_path = asim_dir / "persons_beam_in.parquet"
+    new_per.to_parquet(new_per_path, index=False)
+
+    new_hh = pd.DataFrame({"household_id": [1, 2], "cars": [1, 2]})
+    new_hh_path = asim_dir / "households_beam_in.parquet"
+    new_hh.to_parquet(new_hh_path, index=False)
+
+    asim_file_paths = {
+        "beam_plans": (str(new_plans_path), None),
+        "persons": (str(new_per_path), None),
+        "households": (str(new_hh_path), None),
+        "beam_plans_out": (str(prior_beam_plans_path), None),
+    }
+
+    merge_replanned_asim_files(
+        asim_file_paths=asim_file_paths,
+        file_format="csv",
+        workspace=SimpleNamespace(),
+        resolve_beam_exchange_scenario_folder_fn=lambda _: str(scenario_dir),
+        format_specific_output_records_fn=_dummy_format_records,
+        settings=SimpleNamespace(
+            beam=SimpleNamespace(
+                max_plans_memory=5, new_plan_selection_policy="force_new"
+            ),
+            activitysim=SimpleNamespace(replan_hh_samp_size=0),
+        ),
+        state=SimpleNamespace(current_year=2020, current_inner_iter=1),
+    )
+
+    merged_plans = pd.read_csv(scenario_dir / "plans.csv.gz", compression="gzip")
+
+    # 1. Passenger 1 has 2 plans (historical plan 0 and new plan 1)
+    p1_plans = merged_plans[merged_plans["person_id"].astype(str) == "1"]
+    assert len(p1_plans) == 4  # 2 elements * 2 plans
+    assert set(p1_plans["planindex"]) == {0, 1}
+    p1_new = p1_plans[p1_plans["planindex"] == 1]
+    assert (p1_new["planselected"] == True).all()
+
+    # 2. Passenger 2 has 1 plan (new plan 0)
+    p2_plans = merged_plans[merged_plans["person_id"].astype(str) == "2"]
+    assert len(p2_plans) == 2
+    assert (p2_plans["planselected"] == True).all()
+
+    # 3. Extinct passenger 99999 was dropped
+    assert "99999" not in merged_plans["person_id"].astype(str).values
+
+    # 4. Freight agent "ft-f94a4b1" is preserved intact
+    ft_plans = merged_plans[merged_plans["person_id"] == "ft-f94a4b1"]
+    assert len(ft_plans) == 2
+    assert ft_plans.iloc[0]["ActivityType"] == "Depot"
+    assert ft_plans.iloc[1]["trip_mode"] == "truck"
+    assert ft_plans.iloc[1]["legRouteLinks"] == "link_f1,link_f2"
+    assert (ft_plans["planselected"] == True).all()
+    assert (ft_plans["planscore"] == 75.0).all()
