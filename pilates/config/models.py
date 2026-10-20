@@ -1378,7 +1378,7 @@ def _resolve_base_config_path(
     base_path: Union[str, Path],
     referencing_path: Optional[Path],
     config_path: Union[str, Path],
-    include_scenario_dirs: bool = False,
+    include_scenario_dirs: bool = True,
 ) -> Path:
     """Resolve a base configuration path relative to the child file, cwd, or repo root."""
     base_candidate = Path(str(base_path).strip())

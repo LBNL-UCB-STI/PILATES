@@ -3,7 +3,7 @@
 # SFBay ActivitySim <-> BEAM Smoke Supply-Demand Loop - Local Debug
 # =============================================================================
 
-base: settings-sfbay-smoke-sd-loop-hpc.yaml
+base: scenarios/sfbay/settings-sfbay-smoke-sd-loop-hpc.yaml
 
 run:
   output_directory: /Users/zaneedell/git/PILATES/tmp

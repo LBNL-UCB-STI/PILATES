@@ -3,7 +3,7 @@
 # SFBay ActivitySim <-> BEAM Smoke Supply-Demand Loop on Lawrencium HPC (lr6)
 # =============================================================================
 
-base: settings-sfbay-consist-base-hpc.yaml
+base: scenarios/sfbay/settings-sfbay-consist-base-hpc.yaml
 
 run:
   start_year: 2017

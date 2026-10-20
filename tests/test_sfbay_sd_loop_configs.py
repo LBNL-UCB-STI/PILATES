@@ -80,3 +80,18 @@ def test_smoke_sd_loop_local_inherits_from_smoke_hpc():
     assert cfg.activitysim.num_processes == 4
     assert cfg.infrastructure.container_manager == "docker"
     assert cfg.beam.memory == "16g"
+
+
+def test_smoke_sd_loop_resolves_when_referenced_from_repo_root(tmp_path: Path):
+    # Simulates job_runner.sh writing settings_<jobid>.yaml at repo root
+    simulated_runner_file = REPO_ROOT / f"settings_test_simulated_{tmp_path.name}.yaml"
+    try:
+        simulated_runner_file.write_text(
+            SMOKE_HPC_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        cfg = load_config(simulated_runner_file)
+        assert cfg.run.region == "sfbay"
+        assert cfg.beam.memory == "150g"
+    finally:
+        if simulated_runner_file.exists():
+            simulated_runner_file.unlink()
