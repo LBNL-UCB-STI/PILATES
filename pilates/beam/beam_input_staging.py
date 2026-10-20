@@ -1151,9 +1151,16 @@ def merge_replanned_asim_files(
     # Partition original_plans into freight plans and passenger plans
     freight_plans = pd.DataFrame()
     if not original_plans.empty and "person_id" in original_plans.columns:
-        is_freight = original_plans["person_id"].astype(str).str.startswith("ft-") | (
-            pd.to_numeric(original_plans["person_id"], errors="coerce").isna()
-            & ~original_plans["person_id"].astype(str).isin(active_person_ids_str)
+        # In BEAM, freight person IDs always start with FREIGHT_ID_PREFIX ('ft' / 'ft-').
+        # Non-numeric IDs not matching active passenger IDs are also treated as freight/external.
+        pids_str = original_plans["person_id"].astype(str)
+        is_freight = (
+            pids_str.str.startswith("ft-")
+            | pids_str.str.startswith("ft")
+            | (
+                pd.to_numeric(original_plans["person_id"], errors="coerce").isna()
+                & ~pids_str.isin(active_person_ids_str)
+            )
         )
         freight_plans = original_plans.loc[is_freight].copy()
         original_plans = original_plans.loc[~is_freight].copy()
@@ -1166,9 +1173,7 @@ def merge_replanned_asim_files(
                     original_plans["person_id"], errors="coerce"
                 )
                 if numeric_pids.notna().all():
-                    original_plans["person_id"] = numeric_pids.astype(
-                        type(first_active)
-                    )
+                    original_plans["person_id"] = numeric_pids.astype(pd.Int64Dtype())
 
         # Filter passenger original_plans to active population (drops extinct/departed agents)
         original_plans = original_plans.loc[
