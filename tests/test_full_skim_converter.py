@@ -214,11 +214,18 @@ def test_convert_beam_full_skims_to_activitysim_omx(tmp_path: Path) -> None:
             assert not np.any(np.isinf(arr)), f"Inf found in {mat_name}"
             assert not np.any(arr < 0.0), f"Negative value found in {mat_name}"
 
-        # 1. Dual zone lookups
+        # 1. Dual zone lookups + zone_number
         assert "TAZ" in lookup
         assert "zone_id" in lookup
+        assert "zone_number" in lookup
         np.testing.assert_array_equal(lookup["TAZ"][:], [1, 2, 3, 4])
         np.testing.assert_array_equal(lookup["zone_id"][:], [1, 2, 3, 4])
+        np.testing.assert_array_equal(lookup["zone_number"][:], [1, 2, 3, 4])
+
+        # Logical matrices SHA-256 stamped, dynamic timestamp omitted from HDF5 attrs
+        assert "logical_matrices_sha256" in f.attrs
+        assert f.attrs["logical_matrices_sha256"].startswith("sha256:logical_matrices:")
+        assert "pilates_converted_at" not in f.attrs
 
         # 2. Intrazonal diagonal imputation & WALK_DIST NaN backfill
         dist_2d = data["DIST"][:]
@@ -321,6 +328,10 @@ def test_run_tracked_full_skim_conversion_records_consist_run_and_sidecar(
     assert sidecar["producer"]["region"] == "sfbay"
     assert sidecar["producer"]["year"] == 2019
     assert sidecar["identity"].startswith("sha256:file:")
+    assert sidecar["skim_metadata"]["logical_matrices_sha256"].startswith(
+        "sha256:logical_matrices:"
+    )
+    assert "pilates_converted_at" in sidecar["skim_metadata"]
 
 
 def test_native_beam_full_skim_converts_final_skims_omx(tmp_path: Path) -> None:
