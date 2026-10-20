@@ -18,7 +18,10 @@ from pilates.activitysim.admission import (
     has_initial_skims_admission_policy,
     preflight_activitysim_initial_skims_admission,
 )
-from pilates.beam.skim_provenance import write_skim_provenance_sidecar
+from pilates.beam.skim_provenance import (
+    compute_omx_logical_matrices_sha256,
+    write_skim_provenance_sidecar,
+)
 from pilates.config.models import (
     ActivitySimAdmissionConfig,
     AdmissionPolicyConfig,
@@ -175,6 +178,142 @@ def test_declared_digest_sidecar_mismatch_rejects_in_strict_mode(
         mode="strict",
         expectation=DeclaredDigestExpectation(
             identity=identity,
+            provenance_sidecar_path=str(bad_sidecar),
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+
+    with pytest.raises(
+        ActivitySimInputAdmissionError, match="sidecar_identity_mismatched"
+    ):
+        preflight_activitysim_initial_skims_admission(
+            settings=settings,
+            metadata_logger=MagicMock(),
+            workspace_path=workspace_path,
+            report_dir=report_dir,
+        )
+
+
+def test_declared_logical_matrices_digest_verifies_despite_container_header_differences(
+    tmp_path: Path,
+) -> None:
+    """DeclaredDigestExpectation with sha256:logical_matrices:<hex> succeeds when array content is identical, even if container header bytes change."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+    _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=3.14)
+
+    logical_hex = compute_omx_logical_matrices_sha256(skims_path)
+    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+
+    # Stamp logical_matrices_sha256 into OMX attrs (like full_skim_converter step 10)
+    with h5py.File(skims_path, "a") as h5:
+        h5.attrs["logical_matrices_sha256"] = logical_identity
+
+    # Write provenance sidecar capturing the stamped logical matrices identity
+    sidecar_path, _ = write_skim_provenance_sidecar(
+        skims_path,
+        producer_step="beam_full_skim_converter",
+        run_id="test_producer",
+        region="sfbay",
+        year=2019,
+        iteration=0,
+    )
+
+    # Mutate ONLY HDF5 root attribute metadata without altering matrix data
+    with h5py.File(skims_path, "a") as h5:
+        h5.attrs["user_comment"] = "container_header_modified"
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=logical_identity,
+            provenance_sidecar_path=str(sidecar_path),
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+
+    report = preflight_activitysim_initial_skims_admission(
+        settings=settings,
+        metadata_logger=MagicMock(),
+        workspace_path=workspace_path,
+        report_dir=report_dir,
+    )
+
+    assert report is not None
+    assert report.outcome == "verified"
+    assert report.expected_artifact_id == logical_identity
+    assert report.observed_artifact_id == logical_identity
+    assert "declared_digest_verified" in report.observations
+
+
+def test_declared_logical_matrices_digest_rejects_on_data_matrix_change(
+    tmp_path: Path,
+) -> None:
+    """DeclaredDigestExpectation with sha256:logical_matrices:<hex> rejects in strict mode when matrix array values differ."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+    _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=1.0)
+
+    logical_hex = compute_omx_logical_matrices_sha256(skims_path)
+    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+
+    # Mutate data matrix value
+    with h5py.File(skims_path, "a") as h5:
+        data_grp = h5["data"]
+        ds = data_grp["SOV_TIME__AM"]
+        ds[0, 0] = 999.0
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=logical_identity,
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+
+    with pytest.raises(
+        ActivitySimInputAdmissionError, match="declared_digest_mismatched"
+    ):
+        preflight_activitysim_initial_skims_admission(
+            settings=settings,
+            metadata_logger=MagicMock(),
+            workspace_path=workspace_path,
+            report_dir=report_dir,
+        )
+
+
+def test_declared_logical_matrices_sidecar_mismatch_rejects_in_strict_mode(
+    tmp_path: Path,
+) -> None:
+    """DeclaredDigestExpectation with sha256:logical_matrices:<hex> rejects when sidecar logical matrices digest disagrees."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+    _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=1.0)
+
+    logical_hex = compute_omx_logical_matrices_sha256(skims_path)
+    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+
+    bad_sidecar = tmp_path / "bad_skims.omx.provenance.json"
+    bad_sidecar.write_text(
+        json.dumps(
+            {
+                "schema_version": "pilates.skim_provenance.v1",
+                "identity": "sha256:file:" + ("0" * 64),
+                "skim_metadata": {
+                    "logical_matrices_sha256": "sha256:logical_matrices:" + ("1" * 64),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=logical_identity,
             provenance_sidecar_path=str(bad_sidecar),
         ),
     )

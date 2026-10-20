@@ -550,10 +550,11 @@ class DeclaredDigestExpectation(BaseModel):
     @field_validator("identity")
     @classmethod
     def validate_identity(cls, value: str) -> str:
-        """Require one canonical raw-file SHA-256 identity before runtime."""
-        if not re.fullmatch(r"sha256:file:[0-9a-f]{64}", value):
+        """Require one canonical raw-file or logical-matrices SHA-256 identity before runtime."""
+        if not re.fullmatch(r"sha256:(file|logical_matrices):[0-9a-f]{64}", value):
             raise ValueError(
-                "identity must be sha256:file:<64 lowercase hexadecimal characters>"
+                "identity must be sha256:file:<64 lowercase hexadecimal characters> or "
+                "sha256:logical_matrices:<64 lowercase hexadecimal characters>"
             )
         return value
 

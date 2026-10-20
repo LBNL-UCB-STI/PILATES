@@ -2040,6 +2040,12 @@ def _native_beam_full_skim(
     # Materialize and enqueue full skims
     full_skims_path = produced.full_skims
     if full_skims_path:
+        import h5py
+        from pilates.beam.full_skim_converter import (
+            convert_beam_full_skims_to_activitysim_omx,
+            is_omx_already_converted,
+        )
+
         path_obj = Path(full_skims_path)
         declared_outputs = _beam_full_skim_native_output_paths(
             settings=settings,
@@ -2047,12 +2053,54 @@ def _native_beam_full_skim(
             workspace=workspace,
         )
         source_paths: dict[str, Path] = {BEAM_FULL_SKIMS: path_obj}
-        if produced.final_skims_omx is not None:
-            source_paths[FINAL_SKIMS_OMX] = Path(produced.final_skims_omx)
+        raw_declared_target = declared_outputs.get(BEAM_FULL_SKIMS, path_obj)
         _materialize_native_outputs(
-            source_paths=source_paths,
-            declared_outputs=declared_outputs,
+            source_paths={BEAM_FULL_SKIMS: path_obj},
+            declared_outputs=(
+                {BEAM_FULL_SKIMS: raw_declared_target}
+                if BEAM_FULL_SKIMS in declared_outputs
+                else {}
+            ),
         )
+        if produced.final_skims_omx is not None and FINAL_SKIMS_OMX in declared_outputs:
+            final_target = declared_outputs[FINAL_SKIMS_OMX]
+            produced_final_path = Path(produced.final_skims_omx)
+            if (
+                produced_final_path.is_file()
+                and produced_final_path.resolve() != raw_declared_target.resolve()
+                and is_omx_already_converted(produced_final_path)
+            ):
+                source_paths[FINAL_SKIMS_OMX] = produced_final_path
+                _materialize_native_outputs(
+                    source_paths={FINAL_SKIMS_OMX: produced_final_path},
+                    declared_outputs={FINAL_SKIMS_OMX: final_target},
+                )
+            elif (
+                raw_declared_target.is_file()
+                and h5py.is_hdf5(raw_declared_target)
+                and not is_omx_already_converted(raw_declared_target)
+            ):
+                conversion_report = convert_beam_full_skims_to_activitysim_omx(
+                    raw_declared_target,
+                    final_target,
+                    emit_provenance_sidecar=False,
+                )
+                source_paths[FINAL_SKIMS_OMX] = final_target
+                if _consist_ctx is not None:
+                    report_dict = conversion_report.model_dump(mode="json")
+                    run_meta = getattr(_consist_ctx, "run_metadata", None)
+                    if isinstance(run_meta, dict):
+                        run_meta["full_skim_conversion"] = report_dict
+                    if hasattr(_consist_ctx, "log_meta"):
+                        _consist_ctx.log_meta(full_skim_conversion=report_dict)
+            else:
+                source_paths[FINAL_SKIMS_OMX] = produced_final_path
+                _materialize_native_outputs(
+                    source_paths={FINAL_SKIMS_OMX: produced_final_path},
+                    declared_outputs={FINAL_SKIMS_OMX: final_target},
+                )
+        elif produced.final_skims_omx is not None:
+            source_paths[FINAL_SKIMS_OMX] = Path(produced.final_skims_omx)
         _emit_skim_provenance_sidecars(
             step_name="beam_full_skim",
             declared_outputs=declared_outputs,

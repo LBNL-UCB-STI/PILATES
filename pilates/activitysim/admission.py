@@ -10,7 +10,9 @@ from typing import Any, Mapping, Protocol
 import consist
 
 from pilates.beam.skim_provenance import (
+    compute_omx_logical_matrices_sha256,
     inspect_skim_artifact,
+    normalize_logical_matrices_identity,
     read_skim_provenance_sidecar,
     skim_provenance_sidecar_path,
 )
@@ -60,12 +62,189 @@ def has_initial_skims_admission_policy(settings: PilatesConfig) -> bool:
     return _initial_skims_admission_config(settings) is not None
 
 
+def _check_declared_logical_matrices_expectation(
+    *,
+    execution_path: Path,
+    expectation: DeclaredDigestExpectation,
+) -> tuple[consist.AdmissionReport, dict[str, Any] | None]:
+    """Evaluate a DeclaredDigestExpectation using semantic logical matrices identity."""
+    try:
+        physical_target_path = str(execution_path.resolve())
+    except OSError:
+        physical_target_path = str(execution_path)
+
+    if not execution_path.is_file():
+        report = consist.AdmissionReport(
+            outcome="unreadable",
+            input_role=_ASIM_INITIAL_SKIMS_ROLE,
+            artifact_key=None,
+            expected_run_id=None,
+            execution_path=str(execution_path),
+            physical_target_path=physical_target_path,
+            expected_source="declared_digest",
+            expected_source_label=expectation.source_label,
+            expected_source_uri=expectation.source_uri,
+            expected_artifact_id=expectation.identity,
+            observed_artifact_id=None,
+            digest_algorithm="sha256",
+            observations=("missing_regular_file",),
+            reason=f"Configured ActivitySim initial skims path {execution_path} is not a readable file.",
+        )
+        return report, None
+
+    observed_logical_identity: str | None = None
+    try:
+        inspection = inspect_skim_artifact(execution_path)
+        observed_logical_identity = inspection.get("logical_matrices_sha256")
+    except Exception as exc:
+        logger.debug("Failed inspecting skim artifact %s: %s", execution_path, exc)
+
+    if observed_logical_identity is None:
+        try:
+            observed_hex = compute_omx_logical_matrices_sha256(execution_path)
+            observed_logical_identity = f"sha256:logical_matrices:{observed_hex}"
+        except Exception as exc:
+            report = consist.AdmissionReport(
+                outcome="unreadable",
+                input_role=_ASIM_INITIAL_SKIMS_ROLE,
+                artifact_key=None,
+                expected_run_id=None,
+                execution_path=str(execution_path),
+                physical_target_path=physical_target_path,
+                expected_source="declared_digest",
+                expected_source_label=expectation.source_label,
+                expected_source_uri=expectation.source_uri,
+                expected_artifact_id=expectation.identity,
+                observed_artifact_id=None,
+                digest_algorithm="sha256",
+                observations=("unreadable_matrices",),
+                reason=f"Could not compute logical matrices SHA-256 for {execution_path}: {exc}",
+            )
+            return report, None
+
+    if observed_logical_identity == expectation.identity:
+        outcome: consist.AdmissionOutcome = "verified"
+        obs = ("declared_digest_verified",)
+        reason = (
+            f"Observed logical matrices digest for {execution_path} "
+            f"matches declared expectation {expectation.identity}."
+        )
+    else:
+        outcome = "mismatched"
+        obs = ("declared_digest_mismatched",)
+        reason = (
+            f"Observed logical matrices digest {observed_logical_identity} "
+            f"does not match declared expectation {expectation.identity}."
+        )
+
+    report = consist.AdmissionReport(
+        outcome=outcome,
+        input_role=_ASIM_INITIAL_SKIMS_ROLE,
+        artifact_key=None,
+        expected_run_id=None,
+        execution_path=str(execution_path),
+        physical_target_path=physical_target_path,
+        expected_source="declared_digest",
+        expected_source_label=expectation.source_label,
+        expected_source_uri=expectation.source_uri,
+        expected_artifact_id=expectation.identity,
+        observed_artifact_id=observed_logical_identity,
+        digest_algorithm="sha256",
+        observations=obs,
+        reason=reason,
+    )
+
+    sidecar_path: Path | None = None
+    explicit_sidecar = expectation.provenance_sidecar_path is not None
+    if explicit_sidecar:
+        sidecar_path = Path(expectation.provenance_sidecar_path).expanduser()
+    else:
+        default_sidecar = skim_provenance_sidecar_path(execution_path)
+        if default_sidecar.is_file():
+            sidecar_path = default_sidecar
+
+    if sidecar_path is None:
+        return report, None
+
+    try:
+        sidecar_payload = read_skim_provenance_sidecar(sidecar_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        sidecar_label = "Configured" if explicit_sidecar else "Co-located"
+        report = report.model_copy(
+            update={
+                "outcome": (
+                    "unverified" if report.outcome == "verified" else report.outcome
+                ),
+                "observations": (*report.observations, "sidecar_unreadable"),
+                "reason": (
+                    f"{sidecar_label} provenance sidecar could not be read: {exc}"
+                    if report.outcome == "verified"
+                    else report.reason
+                ),
+            }
+        )
+        return report, None
+
+    sidecar_logical = sidecar_payload.get("skim_metadata", {}).get(
+        "logical_matrices_sha256"
+    ) or sidecar_payload.get("logical_matrices_sha256")
+    norm_sidecar_logical = normalize_logical_matrices_identity(sidecar_logical)
+    sidecar_identity = sidecar_payload.get("identity")
+
+    if norm_sidecar_logical is not None:
+        if norm_sidecar_logical != expectation.identity or (
+            report.outcome == "verified"
+            and report.observed_artifact_id is not None
+            and norm_sidecar_logical != report.observed_artifact_id
+        ):
+            report = report.model_copy(
+                update={
+                    "outcome": (
+                        "mismatched" if report.outcome == "verified" else report.outcome
+                    ),
+                    "observations": (
+                        *report.observations,
+                        "sidecar_identity_mismatched",
+                    ),
+                    "reason": (
+                        "Provenance sidecar logical matrices identity does not match "
+                        "expected or observed skim digest."
+                        if report.outcome == "verified"
+                        else report.reason
+                    ),
+                }
+            )
+    elif sidecar_identity == expectation.identity:
+        pass
+    elif explicit_sidecar:
+        report = report.model_copy(
+            update={
+                "outcome": (
+                    "mismatched" if report.outcome == "verified" else report.outcome
+                ),
+                "observations": (*report.observations, "sidecar_identity_mismatched"),
+                "reason": (
+                    "Configured provenance sidecar does not contain expected logical matrices identity."
+                    if report.outcome == "verified"
+                    else report.reason
+                ),
+            }
+        )
+
+    return report, sidecar_payload
+
+
 def _check_declared_digest_expectation(
     *,
     execution_path: Path,
     expectation: DeclaredDigestExpectation,
 ) -> tuple[consist.AdmissionReport, dict[str, Any] | None]:
     """Evaluate a DeclaredDigestExpectation and optional provenance sidecar."""
+    if expectation.identity.startswith("sha256:logical_matrices:"):
+        return _check_declared_logical_matrices_expectation(
+            execution_path=execution_path,
+            expectation=expectation,
+        )
     reference = consist.AdmissionReference(
         artifact_key=None,
         input_role=_ASIM_INITIAL_SKIMS_ROLE,
