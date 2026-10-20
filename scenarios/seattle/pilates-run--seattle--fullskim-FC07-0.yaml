@@ -301,15 +301,21 @@ beam:
     run_schedule: standalone
     router_type: r5+gh
     skims_geo_type: taz
-    skims_kind: od
+    skims_kind: activitySimOmx
+    # Full 5 ActivitySim time periods (EA=5.0, AM=8.5, MD=12.0, PM=17.5, EV=22.1)
     peak_hours:
-    - 8.5
-    - 17.5
+      - 5.0
+      - 8.5
+      - 12.0
+      - 17.5
+      - 22.1
     modes_to_build:
       drive: true
-      walk: false
-      transit: false
-    parallelism_thread_ratio: 0.8
+      walk: true
+      transit: true
+    bifurcate_tolls: true
+    generate_return_trips: true
+    calculation_timeout_hours: 72
 postprocessing:
   output_folder: pilates/postprocessing/output
   mep_output_folder: pilates/postprocessing/MEP/
