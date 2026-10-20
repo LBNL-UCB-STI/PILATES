@@ -1,0 +1,25 @@
+# =============================================================================
+# PILATES Configuration File (Inherited Format)
+# SFBay ActivitySim <-> BEAM Smoke Supply-Demand Loop - Local Debug
+# =============================================================================
+
+base: settings-sfbay-smoke-sd-loop-hpc.yaml
+
+run:
+  output_directory: /Users/zaneedell/git/PILATES/tmp
+  local_workspace_root: null
+  recovery_archive_roots: []
+  enable_archive_copy: false
+
+shared:
+  database:
+    path: /Users/zaneedell/git/PILATES/tmp/provenance_sfbay.duckdb
+
+infrastructure:
+  container_manager: docker
+
+activitysim:
+  num_processes: 4
+
+beam:
+  memory: 16g
