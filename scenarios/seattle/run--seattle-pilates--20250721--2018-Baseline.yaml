@@ -247,7 +247,7 @@ beam:
   config: scenarios/freight/seattle-pilates--20250721--2018-Baseline.conf
   sample: 1.0
   replanning_portion: 0.4
-  memory: ${BEAM_MEMORY}
+  memory: 150g
   local_input_folder: pilates/beam/production/
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
