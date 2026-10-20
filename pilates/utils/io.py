@@ -96,6 +96,11 @@ def is_land_use_enabled(settings: Any) -> bool:
     """
     Resolve whether land use is enabled using attached runtime flags when present.
     """
+    if isinstance(settings, PilatesConfig):
+        if settings.runtime.flags_initialized:
+            return settings.land_use_enabled
+        return get_land_use_model(settings) == "urbansim"
+
     explicit = get_setting(settings, "land_use_enabled")
     if explicit is not None:
         return bool(explicit)
@@ -106,6 +111,14 @@ def is_activity_demand_enabled(settings: Any) -> bool:
     """
     Resolve whether activity demand is enabled using attached runtime flags when present.
     """
+    if isinstance(settings, PilatesConfig):
+        if settings.runtime.flags_initialized:
+            return settings.activity_demand_enabled
+        model_name = get_activity_demand_model(settings)
+        if model_name is not None:
+            return True
+        return settings.activitysim is not None
+
     explicit = get_setting(settings, "activity_demand_enabled")
     if explicit is not None:
         return bool(explicit)

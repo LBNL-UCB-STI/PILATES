@@ -17,7 +17,7 @@ from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.zone_utils import resolve_canonical_zone_source_path
-from pilates.workflows._profile import ensure_runtime_flags_initialized
+from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 
 if TYPE_CHECKING:
@@ -655,8 +655,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             except OSError:
                 pass
 
-        flags = ensure_runtime_flags_initialized(settings)
-        land_use_enabled = bool(flags.get("land_use_enabled"))
+        land_use_enabled = is_land_use_enabled(settings)
 
         if os.path.exists(skims_src):
             inputs.append(
