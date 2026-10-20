@@ -17,6 +17,7 @@ from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.zone_utils import resolve_canonical_zone_source_path
+from pilates.workflows._profile import ensure_runtime_flags_initialized
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 
 if TYPE_CHECKING:
@@ -630,28 +631,64 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 get_beam_omx_skims_name(settings),
             )
         )
+        if not os.path.exists(skims_src):
+            project_root = find_project_root(
+                start_path=os.path.dirname(__file__)
+            ) or os.path.realpath(os.getcwd())
+            alt_skims = os.path.abspath(
+                os.path.join(
+                    project_root,
+                    "pilates",
+                    "activitysim",
+                    "data",
+                    settings.run.region,
+                    get_beam_omx_skims_name(settings),
+                )
+            )
+            if os.path.exists(alt_skims):
+                skims_src = alt_skims
+
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
+        if os.path.islink(skims_target) and not os.path.exists(skims_target):
+            try:
+                os.unlink(skims_target)
+            except OSError:
+                pass
 
-        inputs.append(
-            FileRecord(
-                file_path=skims_src,
-                short_name="omx_skims",
-                description="Raw BEAM OD skims",
+        flags = ensure_runtime_flags_initialized(settings)
+        land_use_enabled = bool(flags.get("land_use_enabled"))
+
+        if os.path.exists(skims_src):
+            inputs.append(
+                FileRecord(
+                    file_path=skims_src,
+                    short_name="omx_skims",
+                    description="Raw BEAM OD skims",
+                )
             )
-        )
-        shutil.copy2(skims_src, skims_target)
+            shutil.copy2(skims_src, skims_target)
 
-        outputs.append(
-            FileRecord(
-                file_path=skims_target,
-                short_name="omx_skims",
-                description="Raw BEAM OD skims for USim",
+            outputs.append(
+                FileRecord(
+                    file_path=skims_target,
+                    short_name="omx_skims",
+                    description="Raw BEAM OD skims for USim",
+                )
             )
-        )
 
-        logger.info(
-            f"[UrbansimPreprocessor] Copying input beam skims data from {skims_src} to {skims_target}"
-        )
+            logger.info(
+                f"[UrbansimPreprocessor] Copying input beam skims data from {skims_src} to {skims_target}"
+            )
+        else:
+            if land_use_enabled:
+                raise FileNotFoundError(
+                    f"[UrbansimPreprocessor] UrbanSim skims file not found at {skims_src} "
+                    "and land_use model is enabled."
+                )
+            logger.info(
+                f"[UrbansimPreprocessor] UrbanSim skims file not found at {skims_src}; "
+                "skipping skims copy since land_use model is not enabled."
+            )
 
         other_data_fnames = {
             f"hsize_ct_{region_id}.csv": "hh_size",
