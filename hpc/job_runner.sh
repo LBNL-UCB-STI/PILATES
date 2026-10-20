@@ -118,7 +118,7 @@ while [ $# -gt 0 ]; do
     -h|--help)
         echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json [--editable-consist /absolute/consist] [--activitysim-image docker://image@sha256:digest]] [--urbansim-h5-snapshot-acceptance input-manifest.json]"
         echo "  -a, --account: Slurm account name (required)"
-        echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
+        echo "  --high-mem: for lr6 or lr7, request high memory (180G on lr6, 480G on lr7)."
         echo "  --beam-preprocess-acceptance: run the isolated cold-to-fresh BEAM preprocess acceptance harness."
         echo "  --activitysim-run-acceptance: run the isolated cold-to-fresh ActivitySim run acceptance harness."
         echo "  --editable-consist: explicit source for an editable ActivitySim pre-merge acceptance manifest."
@@ -141,7 +141,7 @@ case "$partition_arg" in
         MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-700}"
         BEAM_MEMORY="${BEAM_MEMORY:-600g}"
         if [ "$high_mem" = true ]; then
-            echo "NOTE: --high-mem is only applied for lr7; ignoring for lr8."
+            echo "NOTE: --high-mem is only applied for lr6 and lr7; ignoring for lr8."
         fi
         ;;
     lr7)
@@ -156,8 +156,20 @@ case "$partition_arg" in
             BEAM_MEMORY="${BEAM_MEMORY:-180g}"
         fi
         ;;
+    lr6|lr6_m192)
+        PARTITION="lr6"
+        QOS="lr_normal"
+        NUM_CPUS="${NUM_CPUS:-32}"
+        if [ "$high_mem" = true ] || [ "$partition_arg" = "lr6_m192" ]; then
+            MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-180}"
+            BEAM_MEMORY="${BEAM_MEMORY:-150g}"
+        else
+            MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-90}"
+            BEAM_MEMORY="${BEAM_MEMORY:-70g}"
+        fi
+        ;;
     *)
-        echo "ERROR: unsupported partition '$partition_arg' (expected lr7 or lr8)"
+        echo "ERROR: unsupported partition '$partition_arg' (expected lr6, lr7, or lr8)"
         exit 2
         ;;
 esac
