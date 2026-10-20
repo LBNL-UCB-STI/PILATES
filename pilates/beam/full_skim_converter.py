@@ -54,6 +54,7 @@ import consist as cr
 from consist import Tracker
 
 from pilates.beam.skim_provenance import (
+    compute_omx_logical_matrices_sha256,
     read_skim_provenance_sidecar,
     skim_provenance_sidecar_path,
     write_skim_provenance_sidecar,
@@ -529,9 +530,6 @@ def convert_beam_full_skims_to_activitysim_omx(
             dst_h5.attrs["SHAPE"] = np.array([zone_count, zone_count], dtype=np.int32)
             dst_h5.attrs[CONVERTED_ATTR_KEY] = np.int32(1)
             dst_h5.attrs["pilates_conversion_version"] = FULL_SKIM_CONVERTER_VERSION
-            dst_h5.attrs["pilates_converted_at"] = datetime.now(
-                timezone.utc
-            ).isoformat()
             dst_h5.attrs["pilates_transit_scale_factor"] = float(
                 cfg.transit_scale_factor
             )
@@ -545,12 +543,12 @@ def convert_beam_full_skims_to_activitysim_omx(
                 1 if cfg.disable_express_bus else 0
             )
 
-            # 2. Populate /lookup with both TAZ and zone_id
+            # 2. Populate /lookup with TAZ, zone_id, and zone_number
             dst_lookup = dst_h5.create_group("lookup")
             src_lookup = src_h5.get("lookup") or src_h5.get("LOOKUP")
             zone_vector: np.ndarray | None = None
             if src_lookup is not None and hasattr(src_lookup, "keys"):
-                for lkey in ("TAZ", "zone_id", "zone_number"):
+                for lkey in ("zone_number", "TAZ", "zone_id"):
                     if lkey in src_lookup:
                         zone_vector = np.asarray(src_lookup[lkey][...])
                         break
@@ -562,6 +560,7 @@ def convert_beam_full_skims_to_activitysim_omx(
                 zone_vector = np.arange(1, zone_count + 1, dtype=np.int64)
             dst_lookup.create_dataset("TAZ", data=zone_vector)
             dst_lookup.create_dataset("zone_id", data=zone_vector)
+            dst_lookup.create_dataset("zone_number", data=zone_vector.astype(np.int32))
 
             dst_data = dst_h5.create_group("data")
             zero_matrix = np.zeros((zone_count, zone_count), dtype=np.float32)
@@ -1094,6 +1093,13 @@ def convert_beam_full_skims_to_activitysim_omx(
                     compression_level=cfg.gzip_compression_level,
                 )
 
+            # 10. Compute canonical logical matrices SHA-256 and stamp root attribute
+            logical_matrices_hex = compute_omx_logical_matrices_sha256(dst_h5)
+            logical_matrices_identity = (
+                f"sha256:logical_matrices:{logical_matrices_hex}"
+            )
+            dst_h5.attrs["logical_matrices_sha256"] = logical_matrices_identity
+
             output_matrix_count = len(dst_data.keys())
 
         tmp_out_path.replace(out_path)
@@ -1150,6 +1156,8 @@ def convert_beam_full_skims_to_activitysim_omx(
         extra_metadata: dict[str, Any] = {
             "pilates_full_skim_converted": True,
             "conversion_config": cfg.to_consist_facet(),
+            "pilates_converted_at": datetime.now(timezone.utc).isoformat(),
+            "logical_matrices_sha256": logical_matrices_identity,
             "input_matrix_count": len(input_matrix_names),
             "scaled_transit_matrix_count": scaled_count,
             "intrazonal_imputed_matrix_count": imputed_count,
@@ -1171,13 +1179,14 @@ def convert_beam_full_skims_to_activitysim_omx(
         )
 
     logger.info(
-        "[FullSkimConverter] Converted %s (%d matrices) -> %s (%d matrices, transit_scale=%s, rh_pooled_mult=%s)",
+        "[FullSkimConverter] Converted %s (%d matrices) -> %s (%d matrices, transit_scale=%s, rh_pooled_mult=%s, logical_sha256=%s)",
         in_path,
         len(input_matrix_names),
         out_path,
         output_matrix_count,
         cfg.transit_scale_factor,
         cfg.rh_pooled_time_multiplier,
+        logical_matrices_identity,
     )
 
     return FullSkimConversionReport(
