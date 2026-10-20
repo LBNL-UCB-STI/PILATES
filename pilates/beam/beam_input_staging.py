@@ -114,6 +114,22 @@ class BeamDataHelper:
         "legVehicleIds": None,
     }
 
+    @staticmethod
+    def coerce_nullable_integer_ids(series: pd.Series) -> pd.Series:
+        """Coerce an identifier column to pd.Int64Dtype if all non-null entries represent whole integers.
+
+        Preserves the original series (e.g. string/object) if mixed or alphanumeric strings are present.
+        """
+        non_null = series.dropna()
+        if non_null.empty:
+            return series.astype(pd.Int64Dtype())
+        numeric_col = pd.to_numeric(series, errors="coerce")
+        if numeric_col.notna().sum() == len(non_null):
+            numeric_vals = numeric_col.dropna().to_numpy()
+            if np.all(numeric_vals == np.floor(numeric_vals)):
+                return numeric_col.round().astype(pd.Int64Dtype())
+        return series
+
     @classmethod
     def read_and_clean(
         cls,
@@ -171,28 +187,12 @@ class BeamDataHelper:
 
         if table_type in ("plans", "persons"):
             if "person_id" in df.columns:
-                non_null = df["person_id"].dropna()
-                if len(non_null) > 0:
-                    numeric_col = pd.to_numeric(df["person_id"], errors="coerce")
-                    if (
-                        numeric_col.notna().sum() == len(non_null)
-                        and ((numeric_col.dropna() % 1) == 0).all()
-                    ):
-                        df["person_id"] = numeric_col.round().astype(pd.Int64Dtype())
+                df["person_id"] = cls.coerce_nullable_integer_ids(df["person_id"])
 
         if table_type == "plans":
             for id_col in ("trip_id", "tour_id"):
                 if id_col in df.columns:
-                    non_null = df[id_col].dropna()
-                    if len(non_null) == 0:
-                        df[id_col] = df[id_col].astype(pd.Int64Dtype())
-                    else:
-                        numeric_col = pd.to_numeric(df[id_col], errors="coerce")
-                        if (
-                            numeric_col.notna().sum() == len(non_null)
-                            and ((numeric_col.dropna() % 1) == 0).all()
-                        ):
-                            df[id_col] = numeric_col.round().astype(pd.Int64Dtype())
+                    df[id_col] = cls.coerce_nullable_integer_ids(df[id_col])
             if "activityEndTime" in df.columns:
                 if "departure_time" not in df.columns:
                     df["departure_time"] = (
@@ -1143,8 +1143,12 @@ def merge_replanned_asim_files(
     # Active population person IDs (from persons_final index or person_id column)
     if "person_id" in persons_final.columns:
         active_person_ids = set(persons_final["person_id"])
+        is_numeric_active = pd.api.types.is_numeric_dtype(
+            persons_final["person_id"].dtype
+        )
     else:
         active_person_ids = set(persons_final.index)
+        is_numeric_active = pd.api.types.is_numeric_dtype(persons_final.index.dtype)
 
     active_person_ids_str = {str(pid) for pid in active_person_ids}
 
@@ -1153,6 +1157,7 @@ def merge_replanned_asim_files(
     if not original_plans.empty and "person_id" in original_plans.columns:
         # In BEAM, freight person IDs always start with FREIGHT_ID_PREFIX ('ft' / 'ft-').
         # Non-numeric IDs not matching active passenger IDs are also treated as freight/external.
+        # As defense-in-depth, plans with truck or freight modes are recognized as freight demand.
         pids_str = original_plans["person_id"].astype(str)
         is_freight = (
             pids_str.str.startswith("ft-")
@@ -1162,18 +1167,28 @@ def merge_replanned_asim_files(
                 & ~pids_str.isin(active_person_ids_str)
             )
         )
+        if "trip_mode" in original_plans.columns:
+            truck_modes = {"truck", "freight"}
+            truck_pids = set(
+                original_plans.loc[
+                    original_plans["trip_mode"]
+                    .astype(str)
+                    .str.lower()
+                    .isin(truck_modes),
+                    "person_id",
+                ]
+            )
+            if truck_pids:
+                is_freight = is_freight | original_plans["person_id"].isin(truck_pids)
+
         freight_plans = original_plans.loc[is_freight].copy()
         original_plans = original_plans.loc[~is_freight].copy()
 
         # Coerce passenger person_id in original_plans to match active_person_ids dtype if numeric
-        if not original_plans.empty and active_person_ids:
-            first_active = next(iter(active_person_ids))
-            if isinstance(first_active, (int, np.integer)):
-                numeric_pids = pd.to_numeric(
-                    original_plans["person_id"], errors="coerce"
-                )
-                if numeric_pids.notna().all():
-                    original_plans["person_id"] = numeric_pids.astype(pd.Int64Dtype())
+        if not original_plans.empty and is_numeric_active:
+            numeric_pids = pd.to_numeric(original_plans["person_id"], errors="coerce")
+            if numeric_pids.notna().all():
+                original_plans["person_id"] = numeric_pids.astype(pd.Int64Dtype())
 
         # Filter passenger original_plans to active population (drops extinct/departed agents)
         original_plans = original_plans.loc[

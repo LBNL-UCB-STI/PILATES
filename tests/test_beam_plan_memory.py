@@ -1210,3 +1210,144 @@ def test_merge_replanned_asim_files_preserves_freight_and_drops_extinct_passenge
     assert ft_plans.iloc[1]["legRouteLinks"] == "link_f1,link_f2"
     assert (ft_plans["planselected"] == True).all()
     assert (ft_plans["planscore"] == 75.0).all()
+
+
+def test_beam_data_helper_coerce_nullable_integer_ids() -> None:
+    """coerce_nullable_integer_ids correctly coerces whole numbers and preserves strings/fractions."""
+    # 1. Whole floats -> Int64
+    s_float = pd.Series([1.0, 2.0, np.nan])
+    coerced = BeamDataHelper.coerce_nullable_integer_ids(s_float)
+    assert coerced.dtype == pd.Int64Dtype()
+    assert list(coerced.dropna()) == [1, 2]
+
+    # 2. Fractions -> unchanged float
+    s_frac = pd.Series([1.5, 2.0, np.nan])
+    coerced_frac = BeamDataHelper.coerce_nullable_integer_ids(s_frac)
+    assert coerced_frac.dtype == s_frac.dtype
+
+    # 3. Numeric strings -> Int64
+    s_str = pd.Series(["10", "20", None])
+    coerced_str = BeamDataHelper.coerce_nullable_integer_ids(s_str)
+    assert coerced_str.dtype == pd.Int64Dtype()
+    assert list(coerced_str.dropna()) == [10, 20]
+
+    # 4. Alphanumeric freight strings -> unchanged object
+    s_ft = pd.Series(["ft-1", "ft-2", None])
+    coerced_ft = BeamDataHelper.coerce_nullable_integer_ids(s_ft)
+    assert coerced_ft.dtype == object
+
+    # 5. Mixed numeric and alphanumeric -> unchanged object
+    s_mixed = pd.Series(["10001", "ft-f94a4b1"])
+    coerced_mixed = BeamDataHelper.coerce_nullable_integer_ids(s_mixed)
+    assert coerced_mixed.dtype == object
+
+    # 6. All nulls -> Int64
+    s_null = pd.Series([None, np.nan])
+    coerced_null = BeamDataHelper.coerce_nullable_integer_ids(s_null)
+    assert coerced_null.dtype == pd.Int64Dtype()
+
+
+def test_merge_replanned_asim_files_preserves_numeric_freight_via_truck_mode(
+    tmp_path: Path,
+) -> None:
+    """Freight agent with a purely numeric ID (e.g. 88888) is preserved if using truck/freight trip mode."""
+    scenario_dir = tmp_path / "scenario"
+    scenario_dir.mkdir()
+    asim_dir = tmp_path / "asim"
+    asim_dir.mkdir()
+
+    # Prior BEAM output has passenger 1, extinct passenger 99999, and numeric freight agent 88888 (truck mode)
+    prior_beam_plans_path = scenario_dir / "beam_plans_out.csv.gz"
+    prior_plans_df = pd.DataFrame(
+        {
+            "personId": [1, 1, 99999, 99999, 88888, 88888],
+            "planIndex": [0, 0, 0, 0, 0, 0],
+            "planElementIndex": [1, 2, 1, 2, 1, 2],
+            "planElementType": [
+                "activity",
+                "leg",
+                "activity",
+                "leg",
+                "activity",
+                "leg",
+            ],
+            "activityType": ["Home", "", "Home", "", "Depot", ""],
+            "activityLocationX": [1.0, np.nan, 2.0, np.nan, 3.0, np.nan],
+            "activityLocationY": [1.0, np.nan, 2.0, np.nan, 3.0, np.nan],
+            "activityEndTime": [28800.0, np.nan, 28800.0, np.nan, 28800.0, np.nan],
+            "legMode": ["", "car", "", "car", "", "truck"],
+            "legDepartureTime": [np.nan, 28800.0, np.nan, 28800.0, np.nan, 28800.0],
+            "legTravelTime": [np.nan, 1200.0, np.nan, 1200.0, np.nan, 1500.0],
+            "planScore": [100.0, 100.0, 50.0, 50.0, 80.0, 80.0],
+            "planSelected": [True, True, True, True, True, True],
+            "tripId": ["", "101", "", "999", "", "888881"],
+            "tourId": ["", "201", "", "999", "", "888881"],
+        }
+    )
+    prior_plans_df.to_csv(prior_beam_plans_path, index=False, compression="gzip")
+
+    # Current population: only passenger 1
+    prior_per = pd.DataFrame({"household_id": [1], "person_id": [1]})
+    prior_per.to_csv(scenario_dir / "persons.csv.gz", index=False, compression="gzip")
+    prior_hh = pd.DataFrame({"household_id": [1], "cars": [1]})
+    prior_hh.to_csv(scenario_dir / "households.csv.gz", index=False, compression="gzip")
+
+    # ActivitySim produces replanned plan for passenger 1
+    new_plans_df = pd.DataFrame(
+        {
+            "person_id": [1, 1],
+            "planindex": [0, 0],
+            "PlanElementIndex": [1, 2],
+            "ActivityElement": ["activity", "leg"],
+            "ActivityType": ["Home", ""],
+            "x": [10.0, np.nan],
+            "y": [10.0, np.nan],
+            "departure_time": [8.0, np.nan],
+            "trip_mode": ["", "walk"],
+            "trip_id": [None, 102],
+            "tour_id": [None, 202],
+        }
+    )
+    new_plans_path = asim_dir / "plans_beam_in.parquet"
+    new_plans_df.to_parquet(new_plans_path, index=False)
+
+    new_per = pd.DataFrame({"household_id": [1], "person_id": [1]})
+    new_per_path = asim_dir / "persons_beam_in.parquet"
+    new_per.to_parquet(new_per_path, index=False)
+
+    new_hh = pd.DataFrame({"household_id": [1], "cars": [1]})
+    new_hh_path = asim_dir / "households_beam_in.parquet"
+    new_hh.to_parquet(new_hh_path, index=False)
+
+    asim_file_paths = {
+        "beam_plans": (str(new_plans_path), None),
+        "persons": (str(new_per_path), None),
+        "households": (str(new_hh_path), None),
+        "beam_plans_out": (str(prior_beam_plans_path), None),
+    }
+
+    merge_replanned_asim_files(
+        asim_file_paths=asim_file_paths,
+        file_format="csv",
+        workspace=SimpleNamespace(),
+        resolve_beam_exchange_scenario_folder_fn=lambda _: str(scenario_dir),
+        format_specific_output_records_fn=_dummy_format_records,
+        settings=SimpleNamespace(
+            beam=SimpleNamespace(
+                max_plans_memory=5, new_plan_selection_policy="force_new"
+            ),
+            activitysim=SimpleNamespace(replan_hh_samp_size=0),
+        ),
+        state=SimpleNamespace(current_year=2020, current_inner_iter=1),
+    )
+
+    merged_plans = pd.read_csv(scenario_dir / "plans.csv.gz", compression="gzip")
+
+    # Numeric freight agent 88888 is retained because of truck trip_mode
+    ft_plans = merged_plans[merged_plans["person_id"].astype(str) == "88888"]
+    assert len(ft_plans) == 2
+    assert ft_plans.iloc[0]["ActivityType"] == "Depot"
+    assert ft_plans.iloc[1]["trip_mode"] == "truck"
+
+    # Extinct passenger 99999 was dropped
+    assert "99999" not in merged_plans["person_id"].astype(str).values
