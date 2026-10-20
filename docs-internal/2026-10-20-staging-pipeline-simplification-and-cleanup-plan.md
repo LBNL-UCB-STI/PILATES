@@ -123,7 +123,7 @@ flowchart TD
      ```yaml
      shared:
        skims:
-         artifact_id: "sha256:347d8b2f1459ec2c1751e6d3f33730a8923c9c82b1ca6458f82930c5cd01eb8f"
+         artifact_id: "sha256:9ac724405b5f0bcf4ae6f366d7c61f6aece5703ce631a63b15bcbce3cd13979f"
          declared_source: "scenarios/sfbay/data/skims.omx"
      ```
    - Consist verifies content digests at admission time natively, rendering ad-hoc `.provenance.json` sidecar crawling obsolete.

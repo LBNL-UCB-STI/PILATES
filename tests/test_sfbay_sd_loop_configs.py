@@ -10,7 +10,7 @@ SMOKE_HPC_PATH = REPO_ROOT / "scenarios/sfbay/settings-sfbay-smoke-sd-loop-hpc.y
 SMOKE_LOCAL_PATH = REPO_ROOT / "scenarios/sfbay/settings-sfbay-smoke-sd-loop-local.yaml"
 
 EXPECTED_SKIMS_DIGEST = (
-    "sha256:file:347d8b2f1459ec2c1751e6d3f33730a8923c9c82b1ca6458f82930c5cd01eb8f"
+    "sha256:file:9ac724405b5f0bcf4ae6f366d7c61f6aece5703ce631a63b15bcbce3cd13979f"
 )
 EXPECTED_LINKSTATS_DIGEST = (
     "sha256:file:26e8153fa3e73cf3635c45cb00b185acf327dd75338ad77ca5e30ce060c6b2e5"
