@@ -1281,31 +1281,7 @@ def _resolve_beam_preprocess_inputs(
     binding_inputs = dict(resolved.binding.inputs or {})
     source_by_role = dict(resolved.source_by_role)
     selected_key_by_role = dict(resolved.selected_key_by_role)
-    if BEAM_PLANS_OUT in binding_inputs:
-        plans_out_source = binding_inputs[BEAM_PLANS_OUT]
-        existing_plans_out = artifact_to_existing_path(
-            plans_out_source, workspace=workspace
-        )
-        if existing_plans_out is None:
-            logger.warning(
-                "beam_preprocess: artifact for %s does not exist on disk (%r); "
-                "dropping from inputs to fallback to initial scenario plans.",
-                BEAM_PLANS_OUT,
-                plans_out_source,
-            )
-            binding_inputs.pop(BEAM_PLANS_OUT, None)
-            source_by_role[BEAM_PLANS_OUT] = "missing"
-            selected_key_by_role.pop(BEAM_PLANS_OUT, None)
-            logical_destinations.pop(BEAM_PLANS_OUT, None)
-
-    binding = (
-        BindingResult(
-            inputs=binding_inputs or None,
-            metadata=getattr(resolved.binding, "metadata", None),
-        )
-        if hasattr(resolved.binding, "inputs")
-        else resolved.binding
-    )
+    binding = resolved.binding
 
     return ResolvedStepInputs(
         step_name=resolved.step_name,

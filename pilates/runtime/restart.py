@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from bisect import bisect_left
 from pathlib import Path
 from typing import (
     Any,
     Callable,
-    Dict,
     List,
     Mapping,
     Optional,
@@ -18,16 +16,33 @@ from typing import (
     TypedDict,
 )
 
-from pilates.runtime.archive_paths import resolve_workspace_uri_path
 from pilates.runtime.promote_run_archive import _open_archive_tracker
 from pilates.runtime.scenario_runtime import resolve_cache_epoch
 from pilates.utils.coupler_helpers import (
     resolve_existing_path,
 )
 from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.artifact_keys import (
+    BEAM_PLANS_OUT,
+    LINKSTATS,
+    LINKSTATS_WARMSTART,
+    ZARR_SKIMS,
+)
 from pilates.workflows.binding import restart_required_local_artifact_policy
 
 logger = logging.getLogger(__name__)
+
+WARMSTART_CONVERGENCE_ROLES: frozenset[str] = frozenset(
+    {
+        LINKSTATS,
+        LINKSTATS_WARMSTART,
+        ZARR_SKIMS,
+    }
+)
+RESTART_REMAPPABLE_SCHEMES: Mapping[str, str] = {
+    "workspace": ".",
+    "beam_input": "beam/input",
+}
 
 
 class WorkflowStageLike(Protocol):
@@ -436,90 +451,6 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
-def _resolve_archived_artifact_source_path(
-    *,
-    tracker: Any,
-    artifact: Any,
-    archive_run_dir: Path,
-    workspace: Any,
-) -> Optional[Path]:
-    """Resolve the source path in the archive directory for an artifact."""
-    candidate_roots: List[Path] = [archive_run_dir]
-    raw_recovery_roots = (getattr(artifact, "meta", None) or {}).get("recovery_roots")
-    if not raw_recovery_roots and hasattr(artifact, "recovery_roots"):
-        raw_recovery_roots = getattr(artifact, "recovery_roots", None)
-    if isinstance(raw_recovery_roots, (list, tuple, set)):
-        for r in raw_recovery_roots:
-            if r:
-                rp = Path(r)
-                if rp not in candidate_roots:
-                    candidate_roots.append(rp)
-
-    for root_dir in candidate_roots:
-        if not root_dir.exists():
-            continue
-        if root_dir.is_file():
-            return root_dir
-
-        container_uri = getattr(artifact, "container_uri", None)
-        if container_uri:
-            if container_uri.startswith("./"):
-                candidate = root_dir / container_uri[2:]
-                if candidate.exists():
-                    return candidate
-            resolved_local = resolve_workspace_uri_path(
-                container_uri, workspace=workspace
-            )
-            if resolved_local:
-                if not os.path.isabs(resolved_local):
-                    candidate = root_dir / resolved_local
-                    if candidate.exists():
-                        return candidate
-                elif getattr(workspace, "full_path", None):
-                    try:
-                        rel = (
-                            Path(resolved_local)
-                            .resolve()
-                            .relative_to(Path(workspace.full_path).resolve())
-                        )
-                        candidate = root_dir / rel
-                        if candidate.exists():
-                            return candidate
-                    except (ValueError, TypeError):
-                        pass
-
-        artifact_path = getattr(artifact, "path", None)
-        if artifact_path:
-            candidate = root_dir / artifact_path
-            if candidate.exists():
-                return candidate
-            if getattr(workspace, "full_path", None):
-                try:
-                    rel = (
-                        Path(artifact_path)
-                        .resolve()
-                        .relative_to(Path(workspace.full_path).resolve())
-                    )
-                    candidate = root_dir / rel
-                    if candidate.exists():
-                        return candidate
-                except (ValueError, TypeError):
-                    pass
-
-    return None
-
-
-def _stage_archived_path(*, source_path: Path, target_path: Path) -> None:
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.link(source_path, target_path)
-    except (OSError, NotImplementedError):
-        if source_path.is_dir():
-            shutil.copytree(source_path, target_path, dirs_exist_ok=True)
-        else:
-            shutil.copy2(source_path, target_path)
-
-
 def restore_restart_coupler_snapshot(
     *,
     scenario: Any,
@@ -527,8 +458,9 @@ def restore_restart_coupler_snapshot(
     settings: Any,
     state: Any,
     workspace: Any,
-) -> Dict[str, Any]:
-    """Restore coupler artifacts on restart and ensure missing workspace files exist."""
+) -> Mapping[str, Any]:
+    """Restore coupler state from DuckDB, materializing available artifacts and enforcing warmstart policy."""
+    del tracker
     candidate_ids: List[str] = []
     output_run_name = get_setting(settings, "run.output_run_name", None)
     for cand in (
@@ -544,37 +476,8 @@ def restore_restart_coupler_snapshot(
         if cand and str(cand) not in candidate_ids:
             candidate_ids.append(str(cand))
 
-    restored: Dict[str, Any] = {}
-    if candidate_ids:
-        for sid in candidate_ids:
-            try:
-                restored = scenario.restore_coupler_snapshot(
-                    phase="post",
-                    scenario_run_id=sid,
-                    clear_existing=False,
-                    fallback_to_completed_outputs=True,
-                )
-            except TypeError:
-                try:
-                    restored = scenario.restore_coupler_snapshot(phase="post")
-                except AttributeError:
-                    restored = {}
-            except AttributeError:
-                restored = {}
-            if restored:
-                break
-    else:
-        try:
-            restored = scenario.restore_coupler_snapshot(phase="post")
-        except AttributeError:
-            restored = {}
-
-    logger.info(
-        "Restored restart coupler snapshot with %d artifacts: %s",
-        len(restored) if restored else 0,
-        sorted(restored.keys()) if restored else [],
-    )
-
+    workspace_full_path = getattr(workspace, "full_path", None)
+    target_root = Path(workspace_full_path) if workspace_full_path else None
     archive_run_dir_val = (
         getattr(workspace, "archive_run_dir", None)
         or get_setting(settings, "run.archive_run_dir", None)
@@ -584,36 +487,82 @@ def restore_restart_coupler_snapshot(
             else None
         )
     )
-    if archive_run_dir_val and restored:
-        archive_run_dir = Path(archive_run_dir_val).resolve()
-        for role_key, artifact in restored.items():
-            target_str = resolve_workspace_uri_path(
-                getattr(artifact, "container_uri", None)
-                or getattr(artifact, "path", None),
-                workspace=workspace,
-            )
-            if not target_str or "://" in str(target_str):
-                continue
-            target_path = Path(target_str)
-            if not target_path.is_absolute() and getattr(workspace, "full_path", None):
-                target_path = Path(workspace.full_path) / target_path
-            if not target_path.exists():
-                source_path = _resolve_archived_artifact_source_path(
-                    tracker=tracker,
-                    artifact=artifact,
-                    archive_run_dir=archive_run_dir,
-                    workspace=workspace,
-                )
-                if source_path and source_path.exists():
-                    logger.info(
-                        "Staging missing restart artifact %s from archive %s -> %s",
-                        role_key,
-                        source_path,
-                        target_path,
-                    )
-                    _stage_archived_path(
-                        source_path=source_path,
-                        target_path=target_path,
-                    )
+    source_root = Path(archive_run_dir_val).resolve() if archive_run_dir_val else None
 
-    return restored or {}
+    restored: Any = {}
+    if candidate_ids:
+        for sid in candidate_ids:
+            try:
+                restored = scenario.restore_coupler_snapshot(
+                    phase="post",
+                    scenario_run_id=sid,
+                    clear_existing=False,
+                    fallback_to_completed_outputs=True,
+                    target_root=target_root,
+                    source_root=source_root,
+                    remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
+                    prune_unrecoverable=True,
+                )
+            except TypeError:
+                try:
+                    restored = scenario.restore_coupler_snapshot(phase="post")
+                except AttributeError:
+                    restored = {}
+            except AttributeError:
+                restored = {}
+            pruned_for_sid = (
+                getattr(restored, "pruned_keys", ()) if restored is not None else ()
+            )
+            if restored or pruned_for_sid:
+                break
+    else:
+        try:
+            restored = scenario.restore_coupler_snapshot(
+                phase="post",
+                target_root=target_root,
+                source_root=source_root,
+                remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
+                prune_unrecoverable=True,
+            )
+        except TypeError:
+            try:
+                restored = scenario.restore_coupler_snapshot(phase="post")
+            except AttributeError:
+                restored = {}
+        except AttributeError:
+            restored = {}
+
+    logger.info(
+        "Restored restart coupler snapshot with %d artifacts: %s",
+        len(restored) if restored else 0,
+        sorted(restored.keys()) if restored else [],
+    )
+
+    pruned_keys: Sequence[str] = (
+        getattr(restored, "pruned_keys", ()) if restored is not None else ()
+    )
+    current_iteration = _coerce_int(getattr(state, "iteration", 0)) or 0
+    restart_strict = bool(
+        getattr(getattr(settings, "run", None), "restart_strict", False)
+    )
+    replan_pct = float(
+        getattr(getattr(settings, "beam", None), "replan_PercentOfIter", 0.0) or 0.0
+    )
+    critical_roles = set(WARMSTART_CONVERGENCE_ROLES)
+    if replan_pct > 0.0:
+        critical_roles.add(BEAM_PLANS_OUT)
+
+    for role_key in pruned_keys:
+        if current_iteration > 0 and role_key in critical_roles and restart_strict:
+            raise RuntimeError(
+                f"Strict restart failed: convergence artifact '{role_key}' from DuckDB "
+                f"snapshot is unrecoverable at iteration {current_iteration}."
+            )
+        logger.warning(
+            "[Restart Coupler] Pruned unrecoverable DB snapshot artifact '%s' "
+            "(iteration=%s). Backing file was not archived to persistent storage.",
+            role_key,
+            current_iteration,
+        )
+
+    return restored if restored is not None else {}

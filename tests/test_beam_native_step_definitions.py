@@ -1121,18 +1121,16 @@ def test_beam_preprocess_binds_beam_plans_out_in_iteration_1_when_file_exists(
     assert inputs[BEAM_PLANS_OUT] == existing_plans
 
 
-def test_beam_preprocess_drops_missing_beam_plans_out_in_iteration_1(
+def test_beam_preprocess_omits_pruned_beam_plans_out_in_iteration_1(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "beam.conf"
     config_path.write_text("beam {}\n", encoding="utf-8")
-    missing_plans = tmp_path / "missing_prior_plans.csv.gz"
     activitysim_outputs = {
         "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
         "households_asim_out": tmp_path / "households.parquet",
         "persons_asim_out": tmp_path / "persons.parquet",
-        "beam_plans_out": missing_plans,
     }
 
     class Coupler:
