@@ -248,3 +248,65 @@ def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_preserves_c
     rewound = _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
     assert rewound is False
     assert state.current_major_stage == "supply_demand_loop"
+
+
+def test_restore_restart_coupler_snapshot_stages_from_recovery_roots(tmp_path):
+    import shutil
+
+    db_path = str(tmp_path / "provenance.duckdb")
+    archive_dir = tmp_path / "archive_run"
+    archive_dir.mkdir()
+    recovery_root_dir = tmp_path / "recovery_root"
+    recovery_root_dir.mkdir()
+
+    node1_ws = tmp_path / "node1_workspace"
+    node1_ws.mkdir()
+    node1_file = node1_ws / "outputs" / "plans.csv"
+    node1_file.parent.mkdir(parents=True, exist_ok=True)
+    node1_file.write_text("node1-data\n")
+
+    recovery_file = recovery_root_dir / "outputs" / "plans.csv"
+    recovery_file.parent.mkdir(parents=True, exist_ok=True)
+    recovery_file.write_text("recovery-plan-data\n")
+
+    tracker_node1 = consist.Tracker(run_dir=node1_ws, db_path=db_path)
+    with tracker_node1.scenario("archive_scenario") as sc_arch:
+
+        def step_fn():
+            art = tracker_node1.log_artifact(
+                node1_file,
+                key="beam_plans",
+            )
+            tracker_node1.set_artifact_recovery_roots(art, [recovery_root_dir])
+            sc_arch.coupler.set("beam_plans", art)
+
+        sc_arch.run(step_fn, name="produce_archive_plans")
+        sc_arch.capture_coupler_snapshot(phase="post")
+
+    shutil.rmtree(node1_ws)
+
+    fresh_ws = tmp_path / "fresh_workspace"
+    fresh_ws.mkdir()
+    tracker_fresh = consist.Tracker(run_dir=fresh_ws, db_path=db_path)
+
+    target_missing_file = fresh_ws / "outputs" / "plans.csv"
+    assert not target_missing_file.exists()
+
+    settings = SimpleNamespace(run=SimpleNamespace(archive_run_dir=archive_dir))
+    state = SimpleNamespace(
+        scenario_id="archive_scenario", run_info_path=str(archive_dir / "run_info.yaml")
+    )
+    workspace = SimpleNamespace(full_path=fresh_ws, archive_run_dir=archive_dir)
+
+    with tracker_fresh.scenario("restart_scenario") as sc_restart:
+        restored = restart_runtime.restore_restart_coupler_snapshot(
+            scenario=sc_restart,
+            tracker=tracker_fresh,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+
+        assert "beam_plans" in restored
+        assert target_missing_file.exists()
+        assert target_missing_file.read_text() == "recovery-plan-data\n"
