@@ -302,6 +302,7 @@ beam:
     router_type: r5+gh
     skims_geo_type: taz
     skims_kind: activitySimOmx
+    parallelism_thread_ratio: 0.89  # 50 workers on 56-core lr7 (default 0.8 = 44)
     # Full 5 ActivitySim time periods (EA=5.0, AM=8.5, MD=12.0, PM=17.5, EV=22.1)
     peak_hours:
       - 5.0
