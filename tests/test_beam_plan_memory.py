@@ -1231,15 +1231,17 @@ def test_beam_data_helper_coerce_nullable_integer_ids() -> None:
     assert coerced_str.dtype == pd.Int64Dtype()
     assert list(coerced_str.dropna()) == [10, 20]
 
-    # 4. Alphanumeric freight strings -> unchanged object
+    # 4. Alphanumeric freight strings -> unchanged string/object
     s_ft = pd.Series(["ft-1", "ft-2", None])
     coerced_ft = BeamDataHelper.coerce_nullable_integer_ids(s_ft)
-    assert coerced_ft.dtype == object
+    assert coerced_ft.dtype == s_ft.dtype
+    assert list(coerced_ft.dropna()) == ["ft-1", "ft-2"]
 
-    # 5. Mixed numeric and alphanumeric -> unchanged object
+    # 5. Mixed numeric and alphanumeric -> unchanged string/object
     s_mixed = pd.Series(["10001", "ft-f94a4b1"])
     coerced_mixed = BeamDataHelper.coerce_nullable_integer_ids(s_mixed)
-    assert coerced_mixed.dtype == object
+    assert coerced_mixed.dtype == s_mixed.dtype
+    assert list(coerced_mixed) == ["10001", "ft-f94a4b1"]
 
     # 6. All nulls -> Int64
     s_null = pd.Series([None, np.nan])
