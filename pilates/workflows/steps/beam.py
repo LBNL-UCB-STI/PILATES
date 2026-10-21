@@ -81,6 +81,7 @@ from pilates.workflows.binding import (
     artifact_rules_for_step_name,
     resolve_artifact_roles,
 )
+from pilates.workflows.input_authority import requires_prior_beam_linkstats_handoff
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -1786,8 +1787,11 @@ def _preflight_beam_launch_inputs(
         config_root=beam_launch_config.root,
     )
     if launch_reference is None:
-        reject_or_warn_for_missing_staged_linkstats(settings=settings)
-    elif has_staged_linkstats_admission_policy(settings=settings):
+        if not requires_prior_beam_linkstats_handoff(settings=settings, state=state):
+            reject_or_warn_for_missing_staged_linkstats(settings=settings)
+    elif has_staged_linkstats_admission_policy(
+        settings=settings
+    ) and not requires_prior_beam_linkstats_handoff(settings=settings, state=state):
         try:
             active_run = cr.current_run()
         except RuntimeError:

@@ -14,7 +14,10 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
+from pilates.workflows.input_authority import (
+    requires_prior_beam_linkstats_handoff,
+    requires_prior_beam_skim_handoff,
+)
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import activitysim, urbansim_atlas
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
@@ -51,6 +54,27 @@ def test_prior_beam_skim_handoff_is_required_only_after_bootstrap() -> None:
         state=_state(current_year=2020, iteration=1),
     )
     assert not requires_prior_beam_skim_handoff(
+        settings=_settings(traffic_assignment=None),
+        state=_state(current_year=2022),
+    )
+
+
+def test_prior_beam_linkstats_handoff_is_required_only_after_bootstrap() -> None:
+    settings = _settings()
+
+    assert not requires_prior_beam_linkstats_handoff(
+        settings=settings,
+        state=_state(current_year=2020),
+    )
+    assert requires_prior_beam_linkstats_handoff(
+        settings=settings,
+        state=_state(current_year=2022),
+    )
+    assert requires_prior_beam_linkstats_handoff(
+        settings=settings,
+        state=_state(current_year=2020, iteration=1),
+    )
+    assert not requires_prior_beam_linkstats_handoff(
         settings=_settings(traffic_assignment=None),
         state=_state(current_year=2022),
     )
