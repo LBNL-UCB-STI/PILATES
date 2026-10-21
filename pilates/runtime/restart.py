@@ -444,48 +444,67 @@ def _resolve_archived_artifact_source_path(
     workspace: Any,
 ) -> Optional[Path]:
     """Resolve the source path in the archive directory for an artifact."""
-    container_uri = getattr(artifact, "container_uri", None)
-    if container_uri:
-        if container_uri.startswith("./"):
-            candidate = archive_run_dir / container_uri[2:]
-            if candidate.exists():
-                return candidate
-        resolved_local = resolve_workspace_uri_path(container_uri, workspace=workspace)
-        if resolved_local:
-            if not os.path.isabs(resolved_local):
-                candidate = archive_run_dir / resolved_local
+    candidate_roots: List[Path] = [archive_run_dir]
+    raw_recovery_roots = (getattr(artifact, "meta", None) or {}).get("recovery_roots")
+    if not raw_recovery_roots and hasattr(artifact, "recovery_roots"):
+        raw_recovery_roots = getattr(artifact, "recovery_roots", None)
+    if isinstance(raw_recovery_roots, (list, tuple, set)):
+        for r in raw_recovery_roots:
+            if r:
+                rp = Path(r)
+                if rp not in candidate_roots:
+                    candidate_roots.append(rp)
+
+    for root_dir in candidate_roots:
+        if not root_dir.exists():
+            continue
+        if root_dir.is_file():
+            return root_dir
+
+        container_uri = getattr(artifact, "container_uri", None)
+        if container_uri:
+            if container_uri.startswith("./"):
+                candidate = root_dir / container_uri[2:]
                 if candidate.exists():
                     return candidate
-            elif getattr(workspace, "full_path", None):
+            resolved_local = resolve_workspace_uri_path(
+                container_uri, workspace=workspace
+            )
+            if resolved_local:
+                if not os.path.isabs(resolved_local):
+                    candidate = root_dir / resolved_local
+                    if candidate.exists():
+                        return candidate
+                elif getattr(workspace, "full_path", None):
+                    try:
+                        rel = (
+                            Path(resolved_local)
+                            .resolve()
+                            .relative_to(Path(workspace.full_path).resolve())
+                        )
+                        candidate = root_dir / rel
+                        if candidate.exists():
+                            return candidate
+                    except (ValueError, TypeError):
+                        pass
+
+        artifact_path = getattr(artifact, "path", None)
+        if artifact_path:
+            candidate = root_dir / artifact_path
+            if candidate.exists():
+                return candidate
+            if getattr(workspace, "full_path", None):
                 try:
                     rel = (
-                        Path(resolved_local)
+                        Path(artifact_path)
                         .resolve()
                         .relative_to(Path(workspace.full_path).resolve())
                     )
-                    candidate = archive_run_dir / rel
+                    candidate = root_dir / rel
                     if candidate.exists():
                         return candidate
                 except (ValueError, TypeError):
                     pass
-
-    artifact_path = getattr(artifact, "path", None)
-    if artifact_path:
-        candidate = archive_run_dir / artifact_path
-        if candidate.exists():
-            return candidate
-        if getattr(workspace, "full_path", None):
-            try:
-                rel = (
-                    Path(artifact_path)
-                    .resolve()
-                    .relative_to(Path(workspace.full_path).resolve())
-                )
-                candidate = archive_run_dir / rel
-                if candidate.exists():
-                    return candidate
-            except (ValueError, TypeError):
-                pass
 
     return None
 

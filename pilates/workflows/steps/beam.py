@@ -93,6 +93,7 @@ from pilates.workflows.step_definition import (
     StepDefinition,
 )
 from pilates.workflows.outputs_base import ValidationContext
+from pilates.utils.state_access import is_start_year, iteration_index
 from pilates.workspace import Workspace
 
 # Model-specific native step definitions for BEAM.
@@ -1235,9 +1236,9 @@ def _resolve_beam_preprocess_inputs(
             }
         )
     surface = build_enabled_workflow_surface(settings)
+    current_iter = iteration_index(state, default=0) or 0
     requires_atlas_vehicles = (
-        surface.profile.vehicle_ownership_model_enabled
-        and getattr(state, "current_inner_iter", 0) == 0
+        surface.profile.vehicle_ownership_model_enabled and current_iter == 0
     )
     required_roles = (
         BEAM_PLANS_IN,
@@ -1246,9 +1247,11 @@ def _resolve_beam_preprocess_inputs(
         *((ATLAS_VEHICLES2_OUTPUT,) if requires_atlas_vehicles else ()),
     )
     beam_settings = getattr(settings, "beam", None)
-    should_resolve_beam_plans_out = getattr(
-        state, "current_inner_iter", 0
-    ) > 0 or not getattr(beam_settings, "discard_plans_every_year", False)
+    is_start = is_start_year(state, settings)
+    discard_plans = getattr(beam_settings, "discard_plans_every_year", False)
+    should_resolve_beam_plans_out = current_iter > 0 or (
+        not is_start and not discard_plans
+    )
     optional_roles = (
         LINKSTATS_WARMSTART,
         *((ATLAS_VEHICLES2_OUTPUT,) if not requires_atlas_vehicles else ()),
@@ -1275,13 +1278,42 @@ def _resolve_beam_preprocess_inputs(
             key,
             _input_destination(workspace=workspace, key=key, source=source),
         )
+    binding_inputs = dict(resolved.binding.inputs or {})
+    source_by_role = dict(resolved.source_by_role)
+    selected_key_by_role = dict(resolved.selected_key_by_role)
+    if BEAM_PLANS_OUT in binding_inputs:
+        plans_out_source = binding_inputs[BEAM_PLANS_OUT]
+        existing_plans_out = artifact_to_existing_path(
+            plans_out_source, workspace=workspace
+        )
+        if existing_plans_out is None:
+            logger.warning(
+                "beam_preprocess: artifact for %s does not exist on disk (%r); "
+                "dropping from inputs to fallback to initial scenario plans.",
+                BEAM_PLANS_OUT,
+                plans_out_source,
+            )
+            binding_inputs.pop(BEAM_PLANS_OUT, None)
+            source_by_role[BEAM_PLANS_OUT] = "missing"
+            selected_key_by_role.pop(BEAM_PLANS_OUT, None)
+            logical_destinations.pop(BEAM_PLANS_OUT, None)
+
+    binding = (
+        BindingResult(
+            inputs=binding_inputs or None,
+            metadata=getattr(resolved.binding, "metadata", None),
+        )
+        if hasattr(resolved.binding, "inputs")
+        else resolved.binding
+    )
+
     return ResolvedStepInputs(
         step_name=resolved.step_name,
-        binding=resolved.binding,
+        binding=binding,
         required_roles=resolved.required_roles,
         optional_roles=resolved.optional_roles,
-        source_by_role=resolved.source_by_role,
-        selected_key_by_role=resolved.selected_key_by_role,
+        source_by_role=source_by_role,
+        selected_key_by_role=selected_key_by_role,
         logical_destinations=logical_destinations,
         metadata={
             "beam_preprocess_context": MappingProxyType(preprocess_context),
@@ -1295,7 +1327,7 @@ def _resolve_beam_preprocess_inputs(
                     "vehicles_beam_in",
                 )
                 if (
-                    key in (resolved.binding.inputs or {})
+                    key in (binding.inputs or {})
                     or (
                         key == LINKSTATS_WARMSTART
                         and resolve_initial_linkstats_path(settings, workspace)
@@ -1303,7 +1335,7 @@ def _resolve_beam_preprocess_inputs(
                     )
                     or (
                         key == "vehicles_beam_in"
-                        and ATLAS_VEHICLES2_OUTPUT in (resolved.binding.inputs or {})
+                        and ATLAS_VEHICLES2_OUTPUT in (binding.inputs or {})
                     )
                 )
             ),
