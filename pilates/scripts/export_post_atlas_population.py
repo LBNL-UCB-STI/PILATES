@@ -605,7 +605,7 @@ def _translation_output_record(
         rows = int(
             conn.sql(
                 f"select count(*) from read_parquet('{str(output_path)}')"
-            ).fetchone()[0]
+            ).fetchall()[0][0]
         )
     finally:
         conn.close()
@@ -1021,13 +1021,13 @@ def _extract_year_sql(
         vehicles_columns = _relation_columns(conn.table("vehicles_post_atlas"))
 
         households_rows = int(
-            conn.sql("select count(*) from households_post_atlas").fetchone()[0]
+            conn.sql("select count(*) from households_post_atlas").fetchall()[0][0]
         )
         persons_rows = int(
-            conn.sql("select count(*) from persons_post_atlas").fetchone()[0]
+            conn.sql("select count(*) from persons_post_atlas").fetchall()[0][0]
         )
         vehicles_rows = int(
-            conn.sql("select count(*) from vehicles_post_atlas").fetchone()[0]
+            conn.sql("select count(*) from vehicles_post_atlas").fetchall()[0][0]
         )
     finally:
         conn.close()
