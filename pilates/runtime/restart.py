@@ -22,6 +22,7 @@ from pilates.utils.coupler_helpers import (
     resolve_existing_path,
 )
 from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.state_access import current_year, is_start_year, iteration_index
 from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS,
@@ -48,6 +49,10 @@ RESTART_REMAPPABLE_SCHEMES: Mapping[str, str] = {
 class WorkflowStageLike(Protocol):
     supply_demand_loop: Any
     traffic_assignment: Any
+
+
+class RestoredSnapshotLike(Protocol):
+    pruned_keys: Tuple[str, ...]
 
 
 class RestartArtifactDiagnostic(TypedDict):
@@ -464,14 +469,14 @@ def restore_restart_coupler_snapshot(
     candidate_ids: List[str] = []
     output_run_name = get_setting(settings, "run.output_run_name", None)
     for cand in (
-        output_run_name,
         getattr(state, "scenario_id", None),
-        getattr(state, "run_id", None),
         (
             Path(state.run_info_path).resolve().parent.name
             if getattr(state, "run_info_path", None)
             else None
         ),
+        getattr(state, "run_id", None),
+        output_run_name,
     ):
         if cand and str(cand) not in candidate_ids:
             candidate_ids.append(str(cand))
@@ -489,9 +494,18 @@ def restore_restart_coupler_snapshot(
     )
     source_root = Path(archive_run_dir_val).resolve() if archive_run_dir_val else None
 
+    coupler_obj = getattr(scenario, "coupler", None)
+    baseline_coupler: Optional[dict[str, Any]] = (
+        dict(coupler_obj) if isinstance(coupler_obj, Mapping) else None
+    )
+
     restored: Any = {}
+    fallback_pruned_result: Any = None
     if candidate_ids:
         for sid in candidate_ids:
+            if baseline_coupler is not None and coupler_obj is not None:
+                coupler_obj.clear()
+                coupler_obj.update(baseline_coupler)
             try:
                 restored = scenario.restore_coupler_snapshot(
                     phase="post",
@@ -505,16 +519,33 @@ def restore_restart_coupler_snapshot(
                 )
             except TypeError:
                 try:
-                    restored = scenario.restore_coupler_snapshot(phase="post")
-                except AttributeError:
-                    restored = {}
+                    restored = scenario.restore_coupler_snapshot(
+                        phase="post",
+                        scenario_run_id=sid,
+                        clear_existing=False,
+                        fallback_to_completed_outputs=True,
+                    )
+                except (TypeError, AttributeError):
+                    try:
+                        restored = scenario.restore_coupler_snapshot(phase="post")
+                    except AttributeError:
+                        restored = {}
             except AttributeError:
                 restored = {}
-            pruned_for_sid = (
-                getattr(restored, "pruned_keys", ()) if restored is not None else ()
-            )
-            if restored or pruned_for_sid:
+            if restored:
                 break
+            pruned_for_sid = (
+                restored.pruned_keys
+                if isinstance(restored, Mapping) and hasattr(restored, "pruned_keys")
+                else ()
+            )
+            if pruned_for_sid and fallback_pruned_result is None:
+                fallback_pruned_result = restored
+        if not restored and fallback_pruned_result is not None:
+            restored = fallback_pruned_result
+            if coupler_obj is not None:
+                for pruned_key in getattr(restored, "pruned_keys", ()):
+                    coupler_obj.pop(pruned_key, None)
     else:
         try:
             restored = scenario.restore_coupler_snapshot(
@@ -539,21 +570,33 @@ def restore_restart_coupler_snapshot(
     )
 
     pruned_keys: Sequence[str] = (
-        getattr(restored, "pruned_keys", ()) if restored is not None else ()
+        restored.pruned_keys
+        if isinstance(restored, Mapping) and hasattr(restored, "pruned_keys")
+        else ()
     )
-    current_iteration = _coerce_int(getattr(state, "iteration", 0)) or 0
+    current_iteration = _coerce_int(iteration_index(state, default=0)) or 0
     restart_strict = bool(
         getattr(getattr(settings, "run", None), "restart_strict", False)
     )
-    replan_pct = float(
-        getattr(getattr(settings, "beam", None), "replan_PercentOfIter", 0.0) or 0.0
+    beam_settings = getattr(settings, "beam", None)
+    replan_pct = float(getattr(beam_settings, "replan_PercentOfIter", 0.0) or 0.0)
+    discard_plans = bool(getattr(beam_settings, "discard_plans_every_year", False))
+    has_resolved_year = (
+        current_year(state) is not None
+        or getattr(state, "forecast_year", None) is not None
+        or callable(getattr(state, "is_start_year", None))
     )
-    critical_roles = set(WARMSTART_CONVERGENCE_ROLES)
-    if replan_pct > 0.0:
+    requires_cross_year_plans = (
+        has_resolved_year and not is_start_year(state, settings) and not discard_plans
+    )
+    critical_roles = (
+        set(WARMSTART_CONVERGENCE_ROLES) if current_iteration > 0 else set()
+    )
+    if (current_iteration > 0 and replan_pct > 0.0) or requires_cross_year_plans:
         critical_roles.add(BEAM_PLANS_OUT)
 
     for role_key in pruned_keys:
-        if current_iteration > 0 and role_key in critical_roles and restart_strict:
+        if role_key in critical_roles and restart_strict:
             raise RuntimeError(
                 f"Strict restart failed: convergence artifact '{role_key}' from DuckDB "
                 f"snapshot is unrecoverable at iteration {current_iteration}."

@@ -479,3 +479,35 @@ def test_restore_restart_coupler_snapshot_stages_directory_artifacts_and_enforce
         assert (fresh_ws / "skims" / "skims.zarr" / ".zgroup").exists()
         assert "zarr_skims" in sc_restart.coupler
         assert sc_restart.coupler.get("beam_plans_out") is None
+
+    # Cross-year warmstart (iteration == 0, non-start year, discard_plans_every_year=False)
+    # also treats missing beam_plans_out as critical under restart_strict=True
+    cross_year_settings = SimpleNamespace(
+        run=SimpleNamespace(
+            archive_run_dir=archive_dir,
+            restart_strict=True,
+            start_year=2020,
+        ),
+        beam=SimpleNamespace(
+            replan_PercentOfIter=0.0,
+            discard_plans_every_year=False,
+        ),
+    )
+    cross_year_state = SimpleNamespace(
+        scenario_id="archive_scenario",
+        current_inner_iter=0,
+        current_year=2025,
+        run_info_path=str(archive_dir / "run_info.yaml"),
+    )
+    with tracker_fresh.scenario("restart_scenario_cross_year") as sc_cross:
+        with pytest.raises(
+            RuntimeError,
+            match="Strict restart failed: convergence artifact 'beam_plans_out'",
+        ):
+            restart_runtime.restore_restart_coupler_snapshot(
+                scenario=sc_cross,
+                tracker=tracker_fresh,
+                settings=cross_year_settings,
+                state=cross_year_state,
+                workspace=workspace,
+            )

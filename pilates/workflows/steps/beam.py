@@ -1278,18 +1278,14 @@ def _resolve_beam_preprocess_inputs(
             key,
             _input_destination(workspace=workspace, key=key, source=source),
         )
-    binding_inputs = dict(resolved.binding.inputs or {})
-    source_by_role = dict(resolved.source_by_role)
-    selected_key_by_role = dict(resolved.selected_key_by_role)
-    binding = resolved.binding
 
     return ResolvedStepInputs(
         step_name=resolved.step_name,
-        binding=binding,
+        binding=resolved.binding,
         required_roles=resolved.required_roles,
         optional_roles=resolved.optional_roles,
-        source_by_role=source_by_role,
-        selected_key_by_role=selected_key_by_role,
+        source_by_role=dict(resolved.source_by_role),
+        selected_key_by_role=dict(resolved.selected_key_by_role),
         logical_destinations=logical_destinations,
         metadata={
             "beam_preprocess_context": MappingProxyType(preprocess_context),
@@ -1303,7 +1299,7 @@ def _resolve_beam_preprocess_inputs(
                     "vehicles_beam_in",
                 )
                 if (
-                    key in (binding.inputs or {})
+                    key in (resolved.binding.inputs or {})
                     or (
                         key == LINKSTATS_WARMSTART
                         and resolve_initial_linkstats_path(settings, workspace)
@@ -1311,7 +1307,7 @@ def _resolve_beam_preprocess_inputs(
                     )
                     or (
                         key == "vehicles_beam_in"
-                        and ATLAS_VEHICLES2_OUTPUT in (binding.inputs or {})
+                        and ATLAS_VEHICLES2_OUTPUT in (resolved.binding.inputs or {})
                     )
                 )
             ),
