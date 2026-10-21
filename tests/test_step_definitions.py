@@ -24,6 +24,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -532,7 +533,11 @@ def test_native_steps_declare_static_consist_metadata() -> None:
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,
             },
-            "optional": {LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT},
+            "optional": {
+                LINKSTATS_WARMSTART,
+                ATLAS_VEHICLES2_OUTPUT,
+                BEAM_PLANS_OUT,
+            },
             "schema_outputs": {
                 BEAM_PLANS_IN,
                 BEAM_HOUSEHOLDS_IN,

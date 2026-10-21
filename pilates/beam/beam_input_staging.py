@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 
 from pilates.beam.config_hocon import (
@@ -41,14 +42,38 @@ class BeamDataHelper:
 
     RENAMES = {
         "plans": {
-            "tripId": "trip_id",
-            "tripid": "trip_id",
             "personId": "person_id",
             "personid": "person_id",
+            "tripId": "trip_id",
+            "tripid": "trip_id",
+            "tourId": "tour_id",
+            "tourid": "tour_id",
+            "activityLocationX": "x",
+            "activityLocationY": "y",
+            "activitylocationx": "x",
+            "activitylocationy": "y",
+            "planElementType": "ActivityElement",
+            "planelementtype": "ActivityElement",
+            "planElementIndex": "PlanElementIndex",
+            "planelementindex": "PlanElementIndex",
+            "activityType": "ActivityType",
+            "activitytype": "ActivityType",
+            "legMode": "trip_mode",
+            "legmode": "trip_mode",
+            "planIndex": "planindex",
+            "planScore": "planscore",
+            "planSelected": "planselected",
             "vehicleId": "vehicle_id",
             "vehicleid": "vehicle_id",
-            "legVehicleIds": "leg_vehicle_ids",
-            "legvehicleids": "leg_vehicle_ids",
+            "legdeparturetime": "legDepartureTime",
+            "legtraveltime": "legTravelTime",
+            "legroutetype": "legRouteType",
+            "legroutestartlink": "legRouteStartLink",
+            "legrouteendlink": "legRouteEndLink",
+            "legroutetraveltime": "legRouteTravelTime",
+            "legroutedistance": "legRouteDistance",
+            "legroutelinks": "legRouteLinks",
+            "legvehicleids": "legVehicleIds",
         },
         "households": {"VEHICL": "cars", "auto_ownership": "cars"},
         "persons": {},
@@ -56,8 +81,9 @@ class BeamDataHelper:
 
     DTYPES = {
         "plans": {
-            "trip_id": pd.Int64Dtype(),
-            "person_id": pd.Int64Dtype(),
+            "PlanElementIndex": pd.Int64Dtype(),
+            "planElementIndex": pd.Int64Dtype(),
+            "planIndex": pd.Int64Dtype(),
             "planindex": pd.Int64Dtype(),
         },
         "households": {
@@ -68,7 +94,6 @@ class BeamDataHelper:
         },
         "persons": {
             "household_id": pd.Int64Dtype(),
-            "person_id": pd.Int64Dtype(),
             "age": pd.Int64Dtype(),
             "sex": pd.Int64Dtype(),
         },
@@ -76,16 +101,34 @@ class BeamDataHelper:
 
     PLAN_DEFAULTS = {
         "planindex": 0,
-        "planselected": False,
-        "planscore": 0.0,
-        "legtraveltime": 0.0,
-        "legroutetype": "",
-        "legroutestartlink": 0,
-        "legrouteendlink": 0,
-        "legroutetraveltime": 0.0,
-        "legroutedistance": 0.0,
-        "legroutelinks": "",
+        "planselected": True,
+        "planscore": np.nan,
+        "legDepartureTime": np.nan,
+        "legTravelTime": np.nan,
+        "legRouteType": None,
+        "legRouteStartLink": None,
+        "legRouteEndLink": None,
+        "legRouteTravelTime": np.nan,
+        "legRouteDistance": np.nan,
+        "legRouteLinks": None,
+        "legVehicleIds": None,
     }
+
+    @staticmethod
+    def coerce_nullable_integer_ids(series: pd.Series) -> pd.Series:
+        """Coerce an identifier column to pd.Int64Dtype if all non-null entries represent whole integers.
+
+        Preserves the original series (e.g. string/object) if mixed or alphanumeric strings are present.
+        """
+        non_null = series.dropna()
+        if non_null.empty:
+            return series.astype(pd.Int64Dtype())
+        numeric_col = pd.to_numeric(series, errors="coerce")
+        if numeric_col.notna().sum() == len(non_null):
+            numeric_vals = numeric_col.dropna().to_numpy()
+            if np.all(numeric_vals == np.floor(numeric_vals)):
+                return numeric_col.round().astype(pd.Int64Dtype())
+        return series
 
     @classmethod
     def read_and_clean(
@@ -97,9 +140,17 @@ class BeamDataHelper:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        if file_format == "parquet":
+        suffixes = [s.lower() for s in Path(file_path).suffixes]
+        if any(s in (".parquet", ".pq") for s in suffixes):
+            resolved_format = "parquet"
+        elif any(s == ".csv" for s in suffixes) or file_path.endswith(".csv.gz"):
+            resolved_format = "csv"
+        else:
+            resolved_format = file_format
+
+        if resolved_format == "parquet":
             df = pd.read_parquet(file_path)
-        elif file_format == "csv":
+        elif resolved_format == "csv":
             dtype_map = cls.DTYPES.get(table_type, {})
             df = pd.read_csv(file_path, dtype=dtype_map)
         else:
@@ -121,10 +172,33 @@ class BeamDataHelper:
                 if target == "cars" and source in df.columns
             ]
             df = df.drop(columns=ownership_aliases)
+
+        if table_type == "plans":
+            aliases_to_drop = [
+                source
+                for source, target in rename_map.items()
+                if target in df.columns and source in df.columns and source != target
+            ]
+            if aliases_to_drop:
+                df = df.drop(columns=aliases_to_drop)
+
         df = df.rename(columns=rename_map)
         df = df.loc[:, ~df.columns.duplicated()].copy()
 
+        if table_type in ("plans", "persons"):
+            if "person_id" in df.columns:
+                df["person_id"] = cls.coerce_nullable_integer_ids(df["person_id"])
+
         if table_type == "plans":
+            for id_col in ("trip_id", "tour_id"):
+                if id_col in df.columns:
+                    df[id_col] = cls.coerce_nullable_integer_ids(df[id_col])
+            if "activityEndTime" in df.columns:
+                if "departure_time" not in df.columns:
+                    df["departure_time"] = (
+                        pd.to_numeric(df["activityEndTime"], errors="coerce") / 3600.0
+                    )
+                df = df.drop(columns=["activityEndTime"])
             for col, default_val in cls.PLAN_DEFAULTS.items():
                 if col not in df.columns:
                     df[col] = default_val
@@ -894,10 +968,18 @@ def copy_with_compression_asim_file_to_beam(
     table_type = "plans" if "plans" in beam_file_name else beam_file_name
     df = BeamDataHelper.read_and_clean(asim_file_path, table_type, file_format)
 
-    if file_format == "parquet":
-        df.to_parquet(beam_file_path, index=True)
+    if df.index.name is not None:
+        if df.index.name in df.columns:
+            out_df = df.reset_index(drop=True)
+        else:
+            out_df = df.reset_index()
     else:
-        df.to_csv(
+        out_df = df
+
+    if file_format == "parquet":
+        out_df.to_parquet(beam_file_path, index=False)
+    else:
+        out_df.to_csv(
             beam_file_path,
             compression={"method": "gzip", "mtime": 0},
             index=False,
@@ -952,10 +1034,45 @@ def merge_replanned_asim_files(
     workspace: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     format_specific_output_records_fn: Callable[..., List[FileRecord]],
+    settings: Any = None,
+    state: Any = None,
 ) -> List[FileRecord]:
     logger.info("Merging asim outputs with existing beam input scenario files.")
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     os.makedirs(beam_scenario_folder, exist_ok=True)
+
+    beam_settings = getattr(settings, "beam", None) if settings is not None else None
+    asim_settings = (
+        getattr(settings, "activitysim", None) if settings is not None else None
+    )
+
+    max_plans_memory = int(getattr(beam_settings, "max_plans_memory", 5))
+    if max_plans_memory < 1:
+        max_plans_memory = 1
+
+    plan_memory_beta = float(getattr(beam_settings, "plan_memory_beta", 1.0))
+    new_plan_selection_policy = getattr(
+        beam_settings, "new_plan_selection_policy", "force_new"
+    )
+    new_plan_initial_score = float(
+        getattr(beam_settings, "new_plan_initial_score", 0.0)
+    )
+    new_plan_adoption_rate = float(
+        getattr(beam_settings, "new_plan_adoption_rate", 1.0)
+    )
+    plan_selection_random_seed = int(
+        getattr(beam_settings, "plan_selection_random_seed", 42)
+    )
+
+    current_year = int(getattr(state, "current_year", 0)) if state is not None else 0
+    current_inner_iter = (
+        int(getattr(state, "current_inner_iter", 0)) if state is not None else 0
+    )
+    replan_hh_samp_size = (
+        int(getattr(asim_settings, "replan_hh_samp_size", 0))
+        if asim_settings is not None
+        else 0
+    )
 
     asim_plans_path, _asim_plans_rec = asim_file_paths.get("beam_plans", (None, None))
     asim_persons_path, _asim_persons_rec = asim_file_paths.get("persons", (None, None))
@@ -974,39 +1091,370 @@ def merge_replanned_asim_files(
             )
         return BeamDataHelper.read_and_clean(path, table_type, file_format)
 
-    beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
-    beam_persons_path = locate_beam_file(beam_scenario_folder, "persons", file_format)
-    beam_households_path = locate_beam_file(
-        beam_scenario_folder, "households", file_format
-    )
-
-    original_hh = get_data(beam_households_path, "households", "BEAM")
-    original_per = get_data(beam_persons_path, "persons", "BEAM")
-    original_plans = get_data(beam_plans_path, "plans", "BEAM")
-
     updated_hh = get_data(asim_households_path, "households", "ActivitySim")
     updated_per = get_data(asim_persons_path, "persons", "ActivitySim")
     updated_plans = get_data(asim_plans_path, "plans", "ActivitySim")
 
-    updated_plans["planselected"] = True
+    per_idx = updated_per.index
+    hh_idx = updated_hh.index
+
     logger.info(
         "Replanned %d persons and %d households.",
         len(updated_per),
         len(updated_hh),
     )
 
-    per_idx = updated_per.index
-    hh_idx = updated_hh.index
+    # Locate previous plans: prioritize beam_plans_out from asim_file_paths,
+    # falling back to existing beam_scenario_folder/plans.*
+    beam_plans_out_path, _ = asim_file_paths.get("beam_plans_out", (None, None))
+    if beam_plans_out_path and os.path.exists(beam_plans_out_path):
+        previous_beam_plans_path = beam_plans_out_path
+    else:
+        previous_beam_plans_path = locate_beam_file(
+            beam_scenario_folder, "plans", file_format
+        )
 
-    persons_final = pd.concat(
-        [updated_per, original_per.loc[~original_per.index.isin(per_idx)]]
+    if os.path.exists(previous_beam_plans_path):
+        original_plans = BeamDataHelper.read_and_clean(
+            previous_beam_plans_path, "plans", file_format
+        )
+    else:
+        original_plans = pd.DataFrame()
+
+    beam_persons_path = locate_beam_file(beam_scenario_folder, "persons", file_format)
+    beam_households_path = locate_beam_file(
+        beam_scenario_folder, "households", file_format
     )
-    households_final = pd.concat(
-        [updated_hh, original_hh.loc[~original_hh.index.isin(hh_idx)]]
+
+    is_full_replan = (current_inner_iter == 0) or (replan_hh_samp_size == 0)
+    if is_full_replan:
+        persons_final = updated_per.copy()
+        households_final = updated_hh.copy()
+    else:
+        original_hh = get_data(beam_households_path, "households", "BEAM")
+        original_per = get_data(beam_persons_path, "persons", "BEAM")
+        persons_final = pd.concat(
+            [updated_per, original_per.loc[~original_per.index.isin(per_idx)]]
+        )
+        households_final = pd.concat(
+            [updated_hh, original_hh.loc[~original_hh.index.isin(hh_idx)]]
+        )
+
+    # Active population person IDs (from persons_final index or person_id column)
+    if "person_id" in persons_final.columns:
+        active_person_ids = set(persons_final["person_id"])
+        is_numeric_active = pd.api.types.is_numeric_dtype(
+            persons_final["person_id"].dtype
+        )
+    else:
+        active_person_ids = set(persons_final.index)
+        is_numeric_active = pd.api.types.is_numeric_dtype(persons_final.index.dtype)
+
+    active_person_ids_str = {str(pid) for pid in active_person_ids}
+
+    # Partition original_plans into freight plans and passenger plans
+    freight_plans = pd.DataFrame()
+    if not original_plans.empty and "person_id" in original_plans.columns:
+        # In BEAM, freight person IDs always start with FREIGHT_ID_PREFIX ('ft' / 'ft-').
+        # Non-numeric IDs not matching active passenger IDs are also treated as freight/external.
+        # As defense-in-depth, plans with truck or freight modes are recognized as freight demand.
+        pids_str = original_plans["person_id"].astype(str)
+        is_freight = (
+            pids_str.str.startswith("ft-")
+            | pids_str.str.startswith("ft")
+            | (
+                pd.to_numeric(original_plans["person_id"], errors="coerce").isna()
+                & ~pids_str.isin(active_person_ids_str)
+            )
+        )
+        if "trip_mode" in original_plans.columns:
+            truck_modes = {"truck", "freight"}
+            truck_pids = set(
+                original_plans.loc[
+                    original_plans["trip_mode"]
+                    .astype(str)
+                    .str.lower()
+                    .isin(truck_modes),
+                    "person_id",
+                ]
+            )
+            if truck_pids:
+                is_freight = is_freight | original_plans["person_id"].isin(truck_pids)
+
+        freight_plans = original_plans.loc[is_freight].copy()
+        original_plans = original_plans.loc[~is_freight].copy()
+
+        # Coerce passenger person_id in original_plans to match active_person_ids dtype if numeric
+        if not original_plans.empty and is_numeric_active:
+            numeric_pids = pd.to_numeric(original_plans["person_id"], errors="coerce")
+            if numeric_pids.notna().all():
+                original_plans["person_id"] = numeric_pids.astype(pd.Int64Dtype())
+
+        # Filter passenger original_plans to active population (drops extinct/departed agents)
+        original_plans = original_plans.loc[
+            original_plans["person_id"].isin(active_person_ids)
+        ].copy()
+    else:
+        original_plans = pd.DataFrame()
+
+    # Replanned agents
+    replanned_person_ids = set(per_idx)
+    if "person_id" in updated_plans.columns:
+        replanned_person_ids = replanned_person_ids | set(updated_plans["person_id"])
+
+    # Stage 1: Partition old/new, assign planindex = max(old) + 1, planscore = NaN
+    if not original_plans.empty:
+        if "planindex" not in original_plans.columns:
+            original_plans["planindex"] = 0
+        if "planscore" not in original_plans.columns:
+            original_plans["planscore"] = np.nan
+        original_plans["_is_new_plan"] = False
+        replanned_old = original_plans.loc[
+            original_plans["person_id"].isin(replanned_person_ids)
+        ]
+        if not replanned_old.empty:
+            max_old_idx = replanned_old.groupby("person_id")["planindex"].max()
+        else:
+            max_old_idx = pd.Series(dtype=int)
+    else:
+        original_plans = pd.DataFrame()
+        max_old_idx = pd.Series(dtype=int)
+
+    updated_plans = updated_plans.copy()
+    updated_plans["_is_new_plan"] = True
+    updated_plans["planscore"] = np.nan
+    updated_plans["planindex"] = (
+        updated_plans["person_id"].map(max_old_idx).fillna(-1).astype(int) + 1
     )
-    plans_final = pd.concat(
-        [updated_plans, original_plans.loc[~original_plans.person_id.isin(per_idx)]]
+
+    combined_plans = (
+        pd.concat([original_plans, updated_plans], ignore_index=True)
+        if not original_plans.empty
+        else updated_plans
     )
+
+    # Stage 2: Memory Pruning (WorstPlanForRemovalSelector) to max_plans_memory
+    plan_summary = (
+        combined_plans[["person_id", "planindex", "planscore", "_is_new_plan"]]
+        .drop_duplicates(subset=["person_id", "planindex"])
+        .copy()
+    )
+    plan_summary["removal_score"] = plan_summary["planscore"].fillna(-float("inf"))
+
+    hist_plans = plan_summary.loc[~plan_summary["_is_new_plan"]].copy()
+    if not hist_plans.empty:
+        # Sort historical plans: highest removal score first, ties broken by newer planindex first
+        hist_plans = hist_plans.sort_values(
+            ["person_id", "removal_score", "planindex"],
+            ascending=[True, False, False],
+        )
+        hist_plans["hist_rank"] = hist_plans.groupby("person_id").cumcount()
+
+        has_new_plan = plan_summary.groupby("person_id")["_is_new_plan"].any()
+        allowed_hist = has_new_plan.map(
+            lambda has_new: (
+                max(0, max_plans_memory - 1) if has_new else max_plans_memory
+            )
+        )
+        hist_plans["allowed_hist"] = hist_plans["person_id"].map(allowed_hist)
+        surviving_hist = hist_plans.loc[
+            hist_plans["hist_rank"] < hist_plans["allowed_hist"],
+            ["person_id", "planindex", "planscore", "_is_new_plan"],
+        ]
+    else:
+        surviving_hist = pd.DataFrame(
+            columns=["person_id", "planindex", "planscore", "_is_new_plan"]
+        )
+
+    surviving_new = plan_summary.loc[
+        plan_summary["_is_new_plan"],
+        ["person_id", "planindex", "planscore", "_is_new_plan"],
+    ]
+    surviving_summary = pd.concat([surviving_hist, surviving_new], ignore_index=True)
+
+    # Filter combined_plans to surviving plans and re-index planindex contiguously 0..k_i-1
+    surviving_plan_keys = (
+        surviving_summary[["person_id", "planindex"]]
+        .drop_duplicates()
+        .sort_values(["person_id", "planindex"])
+    )
+    surviving_plan_keys["new_planindex"] = surviving_plan_keys.groupby(
+        "person_id"
+    ).cumcount()
+
+    combined_plans = combined_plans.merge(
+        surviving_plan_keys,
+        on=["person_id", "planindex"],
+        how="inner",
+    )
+    combined_plans["planindex"] = combined_plans["new_planindex"]
+    combined_plans = combined_plans.drop(columns=["new_planindex"])
+
+    surviving_summary = surviving_summary.merge(
+        surviving_plan_keys,
+        on=["person_id", "planindex"],
+        how="inner",
+    )
+    surviving_summary["planindex"] = surviving_summary["new_planindex"]
+    surviving_summary = surviving_summary.drop(columns=["new_planindex"])
+    surviving_summary = surviving_summary.sort_values(
+        ["person_id", "planindex"]
+    ).reset_index(drop=True)
+
+    # Stage 3: Configurable Plan Selection & NaN Score Preservation
+    surviving_summary["effective_score"] = surviving_summary["planscore"].fillna(
+        new_plan_initial_score
+    )
+
+    seed = int(plan_selection_random_seed + current_year * 1000 + current_inner_iter)
+    rng = np.random.default_rng(seed)
+
+    unique_persons = sorted(surviving_summary["person_id"].unique())
+    replanned_active = sorted(replanned_person_ids & set(unique_persons))
+
+    persons_force_new: set[int] = set()
+    if new_plan_selection_policy == "force_new":
+        persons_force_new = set(replanned_active)
+    elif new_plan_selection_policy == "probabilistic_new":
+        if replanned_active:
+            draws = rng.uniform(0.0, 1.0, size=len(replanned_active))
+            for pid, u in zip(replanned_active, draws):
+                if u < new_plan_adoption_rate:
+                    persons_force_new.add(pid)
+    elif new_plan_selection_policy == "exp_beta":
+        persons_force_new = set()
+    else:
+        logger.warning(
+            "Unknown new_plan_selection_policy '%s', defaulting to 'force_new'",
+            new_plan_selection_policy,
+        )
+        persons_force_new = set(replanned_active)
+
+    # Only persons who actually have a new plan can force_new
+    has_new_mask = surviving_summary.groupby("person_id")["_is_new_plan"].any()
+    persons_with_new = set(has_new_mask[has_new_mask].index)
+    persons_force_new = persons_force_new & persons_with_new
+
+    surviving_summary["selected"] = False
+
+    # Force new plan for designated persons
+    force_new_mask = (
+        surviving_summary["person_id"].isin(persons_force_new)
+        & surviving_summary["_is_new_plan"]
+    )
+    surviving_summary.loc[force_new_mask, "selected"] = True
+
+    # exp_beta selection for remaining persons
+    exp_beta_mask = ~surviving_summary["person_id"].isin(persons_force_new)
+    exp_beta_df = surviving_summary.loc[exp_beta_mask].copy()
+
+    if not exp_beta_df.empty:
+        scaled = plan_memory_beta * exp_beta_df["effective_score"].astype(float)
+        max_scaled = scaled.groupby(exp_beta_df["person_id"]).transform("max")
+        weights = np.exp(scaled - max_scaled)
+        sum_weights = weights.groupby(exp_beta_df["person_id"]).transform("sum")
+        probs = weights / sum_weights
+        exp_beta_df["cum_prob"] = probs.groupby(exp_beta_df["person_id"]).cumsum()
+
+        exp_beta_persons = sorted(exp_beta_df["person_id"].unique())
+        u_draws = rng.uniform(0.0, 1.0, size=len(exp_beta_persons))
+        u_map = pd.Series(u_draws, index=exp_beta_persons)
+        exp_beta_df["u"] = exp_beta_df["person_id"].map(u_map)
+        exp_beta_df["u"] = np.clip(exp_beta_df["u"], 0.0, 1.0 - 1e-12)
+
+        is_candidate = exp_beta_df["cum_prob"] >= exp_beta_df["u"]
+        cum_cand = is_candidate.groupby(exp_beta_df["person_id"]).cumsum()
+        exp_beta_df["selected"] = cum_cand == 1
+
+        selected_per_person = exp_beta_df.groupby("person_id")["selected"].transform(
+            "any"
+        )
+        if not selected_per_person.all():
+            missing = exp_beta_df.loc[~selected_per_person, "person_id"].unique()
+            for pid in missing:
+                pid_idx = exp_beta_df.index[exp_beta_df["person_id"] == pid]
+                exp_beta_df.loc[pid_idx[-1], "selected"] = True
+
+        surviving_summary.loc[exp_beta_df.index, "selected"] = exp_beta_df["selected"]
+
+    # Verify exactly 1 plan selected per person
+    person_sel_counts = surviving_summary.groupby("person_id")["selected"].sum()
+    if (person_sel_counts != 1).any():
+        for pid, cnt in person_sel_counts.items():
+            pid_indices = surviving_summary.index[surviving_summary["person_id"] == pid]
+            if cnt == 0:
+                surviving_summary.loc[pid_indices[0], "selected"] = True
+            elif cnt > 1:
+                selected_indices = surviving_summary.index[
+                    (surviving_summary["person_id"] == pid)
+                    & surviving_summary["selected"]
+                ]
+                surviving_summary.loc[selected_indices[1:], "selected"] = False
+
+    # Join selected back to combined_plans
+    combined_plans = combined_plans.merge(
+        surviving_summary[["person_id", "planindex", "selected"]],
+        on=["person_id", "planindex"],
+        how="left",
+    )
+    combined_plans["planselected"] = (
+        combined_plans["selected"].fillna(False).astype(bool)
+    )
+    combined_plans = combined_plans.drop(columns=["selected"])
+
+    # Stage 4: Finalize, Sort, & Reset Index
+    if "_is_new_plan" in combined_plans.columns:
+        combined_plans = combined_plans.drop(columns=["_is_new_plan"])
+
+    sort_cols = ["person_id", "planindex"]
+    if "PlanElementIndex" in combined_plans.columns:
+        sort_cols.append("PlanElementIndex")
+
+    passenger_plans_sorted = combined_plans.sort_values(sort_cols).reset_index(
+        drop=True
+    )
+
+    if not freight_plans.empty:
+        # Align columns across passenger and freight plans
+        all_cols = list(passenger_plans_sorted.columns)
+        for col in freight_plans.columns:
+            if col not in all_cols:
+                all_cols.append(col)
+
+        passenger_aligned = passenger_plans_sorted.reindex(columns=all_cols)
+        freight_aligned = freight_plans.reindex(columns=all_cols)
+
+        for col, default_val in BeamDataHelper.PLAN_DEFAULTS.items():
+            if default_val is not None:
+                if col in passenger_aligned.columns:
+                    passenger_aligned[col] = passenger_aligned[col].fillna(default_val)
+                if col in freight_aligned.columns:
+                    freight_aligned[col] = freight_aligned[col].fillna(default_val)
+
+        if "planselected" in freight_aligned.columns:
+            if freight_aligned["planselected"].dtype == object:
+                freight_aligned["planselected"] = (
+                    freight_aligned["planselected"]
+                    .astype(str)
+                    .str.lower()
+                    .isin(["true", "1", "yes"])
+                )
+            else:
+                freight_aligned["planselected"] = (
+                    freight_aligned["planselected"].fillna(True).astype(bool)
+                )
+
+        freight_sort_cols = [c for c in sort_cols if c in freight_aligned.columns]
+        freight_plans_sorted = freight_aligned.sort_values(
+            freight_sort_cols
+        ).reset_index(drop=True)
+
+        plans_final = pd.concat(
+            [passenger_aligned, freight_plans_sorted], ignore_index=True
+        )
+        plans_final["person_id"] = plans_final["person_id"].astype(str)
+    else:
+        plans_final = passenger_plans_sorted
 
     record_list: List[FileRecord] = []
     outputs = [
@@ -1017,10 +1465,18 @@ def merge_replanned_asim_files(
 
     for df, name in outputs:
         path = locate_beam_file(beam_scenario_folder, name, file_format)
-        if file_format == "parquet":
-            df.to_parquet(path, index=True)
+        if df.index.name is not None:
+            if df.index.name in df.columns:
+                out_df = df.reset_index(drop=True)
+            else:
+                out_df = df.reset_index()
         else:
-            df.to_csv(
+            out_df = df
+
+        if file_format == "parquet":
+            out_df.to_parquet(path, index=False)
+        else:
+            out_df.to_csv(
                 path,
                 index=False,
                 compression={"method": "gzip", "mtime": 0},
@@ -1099,7 +1555,20 @@ def copy_plans_from_asim(
             f"{', '.join(missing_sources)}"
         )
 
-    if state.current_inner_iter <= 0:
+    replan_iters = getattr(
+        getattr(settings, "activitysim", None),
+        "replan_iters",
+        getattr(settings, "replan_iters", 0),
+    )
+    beam_settings = getattr(settings, "beam", None)
+    discard_plans_every_year = getattr(beam_settings, "discard_plans_every_year", False)
+    previous_beam_plans_path, _ = asim_file_paths.get("beam_plans_out", (None, None))
+
+    should_merge = (
+        getattr(state, "current_inner_iter", 0) > 0 and replan_iters > 0
+    ) or (not discard_plans_every_year and previous_beam_plans_path is not None)
+
+    if not should_merge:
         record_list = copy_initial_asim_files_fn(
             asim_file_paths,
             file_format,

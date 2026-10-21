@@ -217,12 +217,12 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260615
+    beam: docker://zaneedell/beam:1.1-beta-v261020
     activitysim: docker://zaneedell/activitysim:0.2.5
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-    beam: haitamlaarabi/beam:1.1-beta-v260615
+    beam: zaneedell/beam:1.1-beta-v261020
     activitysim: zaneedell/activitysim:0.2.5
     polaris: tbd
   docker_config:
@@ -247,13 +247,21 @@ beam:
   config: scenarios/freight/seattle-pilates--20250721--2018-Baseline.conf
   sample: 1.0
   replanning_portion: 0.4
-  memory: ${BEAM_MEMORY}
+  memory: 150g
   local_input_folder: pilates/beam/production/
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
   router_directory: r5/seattle-cbg120-ferry-weakConn-network
-  warmstart_linkstats_path:
+  warmstart_linkstats_path: "{router_directory}/init.linkstats.parquet"
+  admission:
+    linkstats:
+      mode: strict
+      expectation:
+        kind: declared_digest
+        identity: "sha256:file:3680f3148950886dcd1eb3c9e3a9c12978f119471213439ab854a124571635f8"
+        source_label: "Final Seattle Freight Electrification Study Runs (2018-Baseline it.0)"
+        source_uri: "https://drive.google.com/file/d/17uV2d9ta7uS607hdMiRsS7xn8QKGByrD/view?usp=share_link"
   skims_shapefile: shape/zones.shp
   skim_zone_source_id_col: objectid
   skim_zone_geoid_col: geoid10
@@ -293,15 +301,22 @@ beam:
     run_schedule: standalone
     router_type: r5+gh
     skims_geo_type: taz
-    skims_kind: od
+    skims_kind: activitySimOmx
+    parallelism_thread_ratio: 0.89  # 50 workers on 56-core lr7 (default 0.8 = 44)
+    # Full 5 ActivitySim time periods (EA=5.0, AM=8.5, MD=12.0, PM=17.5, EV=22.1)
     peak_hours:
-    - 8.5
-    - 17.5
+      - 5.0
+      - 8.5
+      - 12.0
+      - 17.5
+      - 22.1
     modes_to_build:
       drive: true
-      walk: false
-      transit: false
-    parallelism_thread_ratio: 0.8
+      walk: true
+      transit: true
+    bifurcate_tolls: true
+    generate_return_trips: true
+    calculation_timeout_hours: 72
 postprocessing:
   output_folder: pilates/postprocessing/output
   mep_output_folder: pilates/postprocessing/MEP/

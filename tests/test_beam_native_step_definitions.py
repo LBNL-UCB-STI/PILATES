@@ -138,6 +138,15 @@ def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> No
                 "canonical_index_column": None,
                 "beam_sort_column": "TAZ",
             },
+            "plan_memory": {
+                "max_plans_memory": 5,
+                "discard_plans_every_year": False,
+                "plan_memory_beta": 1.0,
+                "new_plan_selection_policy": "force_new",
+                "new_plan_initial_score": 0.0,
+                "new_plan_adoption_rate": 1.0,
+                "plan_selection_random_seed": 42,
+            },
         },
     }
 
@@ -318,7 +327,11 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
 
 def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:
     return SimpleNamespace(
-        run=SimpleNamespace(region="test-region"),
+        run=SimpleNamespace(
+            region="test-region",
+            start_year=2030,
+            models=SimpleNamespace(traffic_assignment="beam"),
+        ),
         beam=SimpleNamespace(
             artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format),
             admission=None,
@@ -509,7 +522,7 @@ def test_beam_output_layout_cache_versions_reject_pre_migration_artifacts() -> N
         "workspace": SimpleNamespace(),
     }
 
-    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 2
+    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 3
     assert beam_run.cache_options(**options_kwargs).cache_version == 1
 
 
@@ -717,7 +730,7 @@ def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admi
         settings=settings,
         state=SimpleNamespace(
             year=2030,
-            iteration=1,
+            iteration=0,
             run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
         ),
         workspace=workspace,
@@ -790,13 +803,106 @@ def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
             settings=settings,
             state=SimpleNamespace(
                 year=2030,
-                iteration=1,
+                iteration=0,
                 run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
             ),
             workspace=workspace,
             beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
             _consist_ctx=SimpleNamespace(canonicalization=object()),
         )
+
+
+def test_native_beam_run_skips_initial_linkstats_admission_on_subsequent_iterations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "beam.conf"
+    config.write_text("beam {}\n", encoding="utf-8")
+    inputs = {}
+    for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+        path = tmp_path / f"{key}.csv"
+        path.write_text(f"{key}\n", encoding="utf-8")
+        inputs[key] = path
+    mutable_data_dir = tmp_path / "beam-input"
+    mutable_data_dir.mkdir()
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+    context = SimpleNamespace(
+        canonicalization=object(), log_meta=lambda **_kwargs: None
+    )
+    events: list[str] = []
+
+    launch_config = BeamLaunchConfig(root=tmp_path, primary_config=config)
+
+    def validate_linkstats(*, settings, workspace, run_context, config_root) -> object:
+        events.append("validate")
+        return object()
+
+    def admit_linkstats(**kwargs) -> None:
+        events.append("admit")
+
+    def validate_r5(*, settings, workspace, run_context, config_root) -> None:
+        events.append("r5")
+
+    class Runner:
+        def __init__(self, name: str, state: object) -> None:
+            pass
+
+        def run(self, *_args, **_kwargs) -> object:
+            events.append("runner")
+            return BeamRunOutputs(
+                beam_output_dir=tmp_path / "beam-output",
+                raw_outputs={},
+            )
+
+    monkeypatch.setattr(
+        beam_steps,
+        "validate_staged_linkstats_reference",
+        validate_linkstats,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "preflight_staged_linkstats_admission",
+        admit_linkstats,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "validate_r5_execution_reference",
+        validate_r5,
+        raising=False,
+    )
+    monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps, "_materialize_native_outputs", lambda **_kwargs: None
+    )
+
+    settings = _beam_settings()
+    settings.beam.admission = SimpleNamespace(linkstats=SimpleNamespace(mode="strict"))
+
+    beam_steps._native_beam_run(
+        inputs[BEAM_PLANS_IN],
+        inputs[BEAM_HOUSEHOLDS_IN],
+        inputs[BEAM_PERSONS_IN],
+        settings=settings,
+        state=SimpleNamespace(
+            year=2030,
+            iteration=1,
+            run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
+        ),
+        workspace=workspace,
+        beam_launch_config=launch_config,
+        _consist_ctx=context,
+    )
+
+    # Note that 'admit' is absent because iteration=1 is a handoff, not bootstrap
+    assert events == ["validate", "r5", "runner"]
 
 
 def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(

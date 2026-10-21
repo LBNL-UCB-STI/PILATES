@@ -85,6 +85,19 @@ def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     return optimal
 
 
+def _resolve_beam_memory(settings: Any) -> str:
+    """
+    Resolve BEAM JVM heap memory string, expanding environment variables
+    and falling back to a safe default if an unexpanded template is encountered.
+    """
+    raw_memory = getattr(getattr(settings, "beam", None), "memory", None)
+    if raw_memory:
+        expanded = os.path.expandvars(str(raw_memory)).strip()
+        if expanded and not expanded.startswith("${"):
+            return expanded
+    return os.environ.get("BEAM_MEMORY", "150g")
+
+
 def _map_host_path_to_container(
     host_path: str, abs_beam_input: str, abs_beam_output: str
 ) -> str:
@@ -618,7 +631,7 @@ class BeamRunner(GenericRunner):
     ) -> RecordStore:
         launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
-        beam_memory = settings.beam.memory
+        beam_memory = _resolve_beam_memory(settings)
 
         client = None  # Handled by Consist
 
@@ -870,7 +883,7 @@ class BeamFullSkimRunner(GenericRunner):
         launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
         region = settings.run.region
-        beam_memory = settings.beam.memory
+        beam_memory = _resolve_beam_memory(settings)
 
         beam_cfg = getattr(settings, "beam", None)
         skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None

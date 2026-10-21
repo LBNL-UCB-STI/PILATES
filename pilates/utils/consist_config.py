@@ -352,6 +352,13 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         "memory": cfg.memory,
         "discard_plans_every_year": cfg.discard_plans_every_year,
         "max_plans_memory": cfg.max_plans_memory,
+        "plan_memory_beta": getattr(cfg, "plan_memory_beta", 1.0),
+        "new_plan_selection_policy": getattr(
+            cfg, "new_plan_selection_policy", "force_new"
+        ),
+        "new_plan_initial_score": getattr(cfg, "new_plan_initial_score", 0.0),
+        "new_plan_adoption_rate": getattr(cfg, "new_plan_adoption_rate", 1.0),
+        "plan_selection_random_seed": getattr(cfg, "plan_selection_random_seed", 42),
         "write_skims_to_omx": bool(get_setting(settings, "write_skims_to_omx", False)),
         "router_directory": cfg.router_directory,
         "scenario_folder": cfg.scenario_folder,

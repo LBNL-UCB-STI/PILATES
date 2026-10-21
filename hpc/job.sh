@@ -485,7 +485,7 @@ else
 fi
 
 is_new_format() {
-    grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1"
+    grep -q -E "^(base|extends):" "$1" || (grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1")
 }
 
 if ! is_new_format "$CONFIG_FILE"; then

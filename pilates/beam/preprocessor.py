@@ -15,6 +15,7 @@ from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
@@ -29,6 +30,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
     LINKSTATS_WARMSTART,
 )
 from workflow_state import WorkflowState
@@ -81,6 +83,7 @@ def _record_store_from_artifact_mappings(
             BEAM_PLANS_IN: "beam_plans",
             BEAM_HOUSEHOLDS_IN: "households",
             BEAM_PERSONS_IN: "persons",
+            BEAM_PLANS_OUT: "beam_plans_out",
         },
     )
     return combined
@@ -567,6 +570,68 @@ class BeamPreprocessor(GenericPreprocessor):
         # Note: BEAM input directories are captured via the BEAM config adapter;
         # we intentionally avoid tracking them as separate artifacts.
 
+        skims_fname = get_beam_omx_skims_name(settings)
+        dest_skims = os.path.join(dest_region, skims_fname)
+        if os.path.islink(dest_skims) and not os.path.exists(dest_skims):
+            try:
+                os.unlink(dest_skims)
+            except OSError:
+                pass
+
+        if not os.path.exists(dest_skims):
+            pilates_root = find_project_root(
+                start_path=os.path.dirname(__file__)
+            ) or os.path.realpath(os.getcwd())
+            candidate_sources: List[str] = []
+            if (
+                getattr(settings, "activitysim", None) is not None
+                and getattr(settings.activitysim, "admission", None) is not None
+                and getattr(settings.activitysim.admission, "initial_skims", None)
+                is not None
+                and getattr(
+                    settings.activitysim.admission.initial_skims, "expectation", None
+                )
+                is not None
+                and getattr(
+                    settings.activitysim.admission.initial_skims.expectation,
+                    "source_uri",
+                    None,
+                )
+            ):
+                candidate_sources.append(
+                    str(
+                        settings.activitysim.admission.initial_skims.expectation.source_uri
+                    )
+                )
+
+            candidate_sources.append(
+                os.path.join(
+                    pilates_root, "pilates", "activitysim", "data", region, skims_fname
+                )
+            )
+
+            for cand in candidate_sources:
+                cand_path = (
+                    os.path.abspath(cand)
+                    if os.path.isabs(cand)
+                    else os.path.abspath(os.path.join(pilates_root, cand))
+                )
+                if os.path.exists(cand_path):
+                    logger.info(
+                        f"[BEAM Preprocessor] Staging initial skims from {cand_path} -> {dest_skims}"
+                    )
+                    shutil.copy2(cand_path, dest_skims)
+                    sidecar_src = f"{cand_path}.provenance.json"
+                    sidecar_dst = f"{dest_skims}.provenance.json"
+                    if os.path.islink(sidecar_dst) and not os.path.exists(sidecar_dst):
+                        try:
+                            os.unlink(sidecar_dst)
+                        except OSError:
+                            pass
+                    if os.path.exists(sidecar_src) and not os.path.exists(sidecar_dst):
+                        shutil.copy2(sidecar_src, sidecar_dst)
+                    break
+
         # Optionally copy 'common' configs if present
         common_config_path = os.path.join(
             os.path.dirname(beam_production_path), "common"
@@ -685,6 +750,8 @@ class BeamPreprocessor(GenericPreprocessor):
             workspace=workspace,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
             format_specific_output_records_fn=self._format_specific_output_records,
+            settings=self.settings,
+            state=self.state,
         )
 
     def _copy_with_compression_asim_file_to_beam(

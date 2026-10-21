@@ -81,6 +81,7 @@ from pilates.workflows.binding import (
     artifact_rules_for_step_name,
     resolve_artifact_roles,
 )
+from pilates.workflows.input_authority import requires_prior_beam_linkstats_handoff
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -1142,7 +1143,7 @@ def _beam_preprocess_output_cache(
     return CacheOptions(
         cache_hydration="outputs-requested",
         cache_hydration_failure="miss",
-        cache_version=2,
+        cache_version=3,
     )
 
 
@@ -1179,6 +1180,25 @@ def _beam_preprocess_identity_payload(
                     "canonical_zone_index_column"
                 ),
                 "beam_sort_column": getattr(beam_settings, "skim_zone_geoid_col", None),
+            },
+            "plan_memory": {
+                "max_plans_memory": getattr(beam_settings, "max_plans_memory", 5),
+                "discard_plans_every_year": getattr(
+                    beam_settings, "discard_plans_every_year", False
+                ),
+                "plan_memory_beta": getattr(beam_settings, "plan_memory_beta", 1.0),
+                "new_plan_selection_policy": getattr(
+                    beam_settings, "new_plan_selection_policy", "force_new"
+                ),
+                "new_plan_initial_score": getattr(
+                    beam_settings, "new_plan_initial_score", 0.0
+                ),
+                "new_plan_adoption_rate": getattr(
+                    beam_settings, "new_plan_adoption_rate", 1.0
+                ),
+                "plan_selection_random_seed": getattr(
+                    beam_settings, "plan_selection_random_seed", 42
+                ),
             },
         },
     }
@@ -1225,9 +1245,14 @@ def _resolve_beam_preprocess_inputs(
         BEAM_PERSONS_IN,
         *((ATLAS_VEHICLES2_OUTPUT,) if requires_atlas_vehicles else ()),
     )
+    beam_settings = getattr(settings, "beam", None)
+    should_resolve_beam_plans_out = getattr(
+        state, "current_inner_iter", 0
+    ) > 0 or not getattr(beam_settings, "discard_plans_every_year", False)
     optional_roles = (
         LINKSTATS_WARMSTART,
         *((ATLAS_VEHICLES2_OUTPUT,) if not requires_atlas_vehicles else ()),
+        *((BEAM_PLANS_OUT,) if should_resolve_beam_plans_out else ()),
     )
     resolved = resolve_artifact_roles(
         step_name="beam_preprocess",
@@ -1632,7 +1657,7 @@ _BEAM_FULL_SKIM_INPUT_CONTRACT = InputContract(
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
     },
-    optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
+    optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT, BEAM_PLANS_OUT),
     schema_outputs=[
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
@@ -1652,6 +1677,7 @@ def _native_beam_preprocess(
     persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
     atlas_vehicles2_output: Path | None = None,
+    beam_plans_out: Path | None = None,
     *,
     settings: Any,
     state: Any,
@@ -1684,6 +1710,8 @@ def _native_beam_preprocess(
         inputs[LINKSTATS_WARMSTART] = linkstats_warmstart
     if atlas_vehicles2_output is not None:
         inputs[ATLAS_VEHICLES2_OUTPUT] = atlas_vehicles2_output
+    if beam_plans_out is not None:
+        inputs[BEAM_PLANS_OUT] = beam_plans_out
     produced = BeamPreprocessor("beam_preprocess", state).preprocess(
         workspace,
         beam_preprocess_inputs=inputs,
@@ -1759,8 +1787,11 @@ def _preflight_beam_launch_inputs(
         config_root=beam_launch_config.root,
     )
     if launch_reference is None:
-        reject_or_warn_for_missing_staged_linkstats(settings=settings)
-    elif has_staged_linkstats_admission_policy(settings=settings):
+        if not requires_prior_beam_linkstats_handoff(settings=settings, state=state):
+            reject_or_warn_for_missing_staged_linkstats(settings=settings)
+    elif has_staged_linkstats_admission_policy(
+        settings=settings
+    ) and not requires_prior_beam_linkstats_handoff(settings=settings, state=state):
         try:
             active_run = cr.current_run()
         except RuntimeError:

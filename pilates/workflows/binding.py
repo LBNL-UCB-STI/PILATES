@@ -788,17 +788,17 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=BEAM_PLANS_IN,
                 required=True,
-                preferred_keys=(BEAM_PLANS_IN, "beam_plans_asim_out", BEAM_PLANS_OUT),
+                preferred_keys=("beam_plans_asim_out", BEAM_PLANS_IN),
             ),
             ArtifactBindingRule(
                 semantic_key=BEAM_HOUSEHOLDS_IN,
                 required=True,
-                preferred_keys=(BEAM_HOUSEHOLDS_IN, "households_asim_out"),
+                preferred_keys=("households_asim_out", BEAM_HOUSEHOLDS_IN),
             ),
             ArtifactBindingRule(
                 semantic_key=BEAM_PERSONS_IN,
                 required=True,
-                preferred_keys=(BEAM_PERSONS_IN, "persons_asim_out"),
+                preferred_keys=("persons_asim_out", BEAM_PERSONS_IN),
             ),
             ArtifactBindingRule(
                 semantic_key=LINKSTATS_WARMSTART,
@@ -808,6 +808,12 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=ATLAS_VEHICLES2_OUTPUT,
                 required=False,
+                allow_fallback=False,
+            ),
+            ArtifactBindingRule(
+                semantic_key=BEAM_PLANS_OUT,
+                required=False,
+                preferred_keys=(BEAM_PLANS_OUT,),
                 allow_fallback=False,
             ),
         ),

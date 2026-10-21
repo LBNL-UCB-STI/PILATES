@@ -48,6 +48,14 @@ Use high-memory `lr7` mode (`480G`):
 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> --high-mem
 ```
 
+Use `lr6`:
+
+```bash
+./hpc/job_runner.sh -c scenarios/sfbay/settings-sfbay-smoke-sd-loop-hpc.yaml -a <slurm_account> -p lr6 --high-mem
+```
+
+By default `-p lr6` requests 32 CPUs and `90G` (70g BEAM heap). With `--high-mem` (or `-p lr6_m192`), it requests 32 CPUs and `180G` (150g BEAM heap).
+
 Use `lr8`:
 
 ```bash
@@ -316,6 +324,8 @@ selections before submitting.
 
 `job_runner.sh` supports settings files that contain `${BEAM_MEMORY}`.
 
+- For `lr6 --high-mem` (or `lr6_m192`), default is `150g` (180G job memory).
+- For default `lr6` (90G job memory), default is `70g`.
 - For `lr7 --high-mem`, default is `400g`.
 - For default `lr7` (240G job memory), default is `180g`.
 - For `lr8`, default is `600g`.
