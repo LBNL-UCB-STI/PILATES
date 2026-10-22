@@ -52,14 +52,14 @@ them before reading further:
 
 ## What Most Users Edit First
 
-Most first-run edits are in the `run` section:
+Most scenario variants in `scenarios/` use top-level `base: <parent.yaml>` inheritance so a new scenario only needs to specify the fields that differ from its regional baseline. Most first-run edits are in the `run` section:
 
 - where the archive run directory should live
 - whether the mutable workspace should live somewhere else
 - which models are enabled
 - the run name prefix
 
-Most readers do not need to change deeper model sections until the active template already loads and starts.
+Most readers do not need to duplicate or change deeper model sections until the active template already loads and starts. You can inspect the fully merged configuration of any `base:` overlay with `python -m pilates.config.models <path/to/scenario.yaml> --validate`.
 
 ## Validation And Normalization
 

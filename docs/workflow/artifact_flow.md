@@ -21,8 +21,7 @@ The flow below is about what PILATES publishes across step boundaries through th
 
 ### Land Use
 
-- `urbansim_preprocess` reads the base datastore handle plus the current OMX skim source (`OMX_SKIMS` by default or `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX handoff) and prepares mutable workspace inputs for the UrbanSim run boundary.
-- `urbansim_run` publishes the forecast datastore handle produced by the runner.
+- `urbansim_run` reads the base datastore handle (`USIM_DATASTORE_BASE_H5`), optional current datastore handle (`USIM_DATASTORE_CURRENT_H5`), and the current OMX skim source (`OMX_SKIMS` by default or `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX handoff), materializes the UrbanSim mutable workspace inputs, and publishes the forecast datastore handle produced by the runner.
 - `urbansim_postprocess` republishes the datastore as the current mutable UrbanSim handoff for downstream stages and can also publish year-scoped archive and merged snapshot families.
 
 Main published boundary roles:
