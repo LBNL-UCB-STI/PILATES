@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 import numpy as np
 import pandas as pd
 
-from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
 from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
@@ -25,23 +24,6 @@ from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import resolve_usim_h5_table_key
 
 logger = logging.getLogger(__name__)
-
-
-def _get_usim_datastore_fname(settings, io, year=None):
-    # reference: asim postprocessor
-    if io == "output":
-        datastore_name = get_setting(settings, "urbansim.output_file_template").format(
-            year=year
-        )
-    elif io == "input":
-        region = get_setting(settings, "run.region")
-        region_id = get_setting(
-            settings, "urbansim.region_mappings.region_to_region_id"
-        )[region]
-        usim_base_fname = get_setting(settings, "urbansim.input_file_template")
-        datastore_name = usim_base_fname.format(region_id=region_id)
-
-    return datastore_name
 
 
 def _prepare_atlas_table_for_export(
@@ -310,73 +292,6 @@ class AtlasPreprocessor(GenericPreprocessor):
     This includes extracting UrbanSim outputs, formatting them as ATLAS inputs, and (optionally) calculating accessibility
     using BEAM skims.
     """
-
-    @staticmethod
-    def declared_expected_inputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this preprocessor expects without disk checks.
-        """
-        usim_input_fname = _get_usim_datastore_fname(
-            settings,
-            io="input" if state.is_start_year() else "output",
-            year=state.forecast_year,
-        )
-        return {
-            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
-            "usim_datastore_h5": os.path.join(
-                workspace.get_usim_mutable_data_dir(), usim_input_fname
-            ),
-        }
-
-    @staticmethod
-    def runtime_expected_inputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        usim_input_fname = _get_usim_datastore_fname(
-            settings,
-            io="input" if state.is_start_year() else "output",
-            year=state.forecast_year,
-        )
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        return {
-            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
-            "usim_datastore_h5": (
-                usim_input_path if os.path.exists(usim_input_path) else None
-            ),
-        }
-
-    @staticmethod
-    def expected_inputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        return AtlasPreprocessor.runtime_expected_inputs(settings, state, workspace)
-
-    @staticmethod
-    def expected_outputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this preprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``atlas_mutable_input_dir``: ATLAS mutable input directory with
-              prepared configs and data.
-        Related docs
-            - See `pilates/atlas/inputs.py` for the corresponding input
-              descriptions used by ATLAS and downstream models.
-        """
-        return {
-            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
-        }
 
     def __init__(
         self,

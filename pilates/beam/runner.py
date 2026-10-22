@@ -21,17 +21,13 @@ from pilates.beam.postprocessor import (
 )
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
-    BEAM_CONFIG_FILE,
     BEAM_FULL_SKIMS,
-    BEAM_MUTABLE_DATA_DIR,
     BEAM_NETWORK_FINAL,
-    BEAM_OUTPUT_DIR,
     FINAL_SKIMS_OMX,
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
-from pilates.activitysim.runner import asim_runtime_zarr_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 
 logger = logging.getLogger(__name__)
@@ -354,60 +350,6 @@ class BeamRunner(GenericRunner):
     """
     Runner for the BEAM model.
     """
-
-    @staticmethod
-    def declared_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this runner expects without disk checks.
-        """
-        zarr_path = None
-        if getattr(settings, "activitysim", None) is not None:
-            zarr_path = asim_runtime_zarr_path(workspace)
-        return {
-            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "zarr_skims": zarr_path,
-        }
-
-    @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        inputs = {
-            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-        }
-        if getattr(settings, "activitysim", None) is not None:
-            candidate = asim_runtime_zarr_path(workspace)
-            if os.path.exists(candidate):
-                inputs["zarr_skims"] = candidate
-        return inputs
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        return BeamRunner.runtime_expected_inputs(settings, state, workspace)
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this runner produces.
-
-        Notes
-        -----
-        Output keys
-            - ``beam_output_dir``: BEAM output directory for the run.
-        Related docs
-            - See `pilates/beam/inputs.py` for the corresponding input
-              descriptions used by BEAM and downstream models.
-        """
-        return {"beam_output_dir": workspace.get_beam_output_dir()}
 
     def __init__(
         self,
@@ -807,23 +749,6 @@ class BeamFullSkimRunner(GenericRunner):
     """
     Runner for BEAM FullSkimsCreatorApp as a dedicated workflow step.
     """
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this runner expects without disk checks.
-        """
-        return {
-            BEAM_CONFIG_FILE: (
-                Path(workspace.get_beam_mutable_data_dir())
-                / settings.run.region
-                / settings.beam.config
-            ),
-            BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
-            BEAM_OUTPUT_DIR: workspace.get_beam_output_dir(),
-        }
 
     @staticmethod
     def expected_outputs(

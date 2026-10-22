@@ -28,7 +28,10 @@ from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs as NativeUrbanSimPostprocessOutputs,
 )
 from pilates.urbansim.outputs import UrbanSimRunOutputs as NativeUrbanSimRunOutputs
-from pilates.urbansim.postprocessor import UrbansimPostprocessor
+from pilates.urbansim.postprocessor import (
+    UrbansimPostprocessor,
+    get_usim_datastore_fname,
+)
 from pilates.urbansim.preprocessor import stage_urbansim_run_workspace
 from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
 from pilates.utils.consist_types import CouplerProtocol
@@ -528,13 +531,18 @@ def _resolve_atlas_preprocess_inputs(
         settings=settings,
         state=state,
     )
-    atlas_input = AtlasPreprocessor.expected_inputs(settings, state, workspace)[
-        USIM_DATASTORE_H5
-    ]
-    if atlas_input is None:
-        atlas_input = _urbansim_run_native_output_paths(
-            settings=settings, state=state, workspace=workspace
-        )[USIM_DATASTORE_H5]
+    usim_input_fname = get_usim_datastore_fname(
+        settings,
+        io="input" if state.is_start_year() else "output",
+        year=state.forecast_year,
+    )
+    atlas_input = Path(workspace.get_usim_mutable_data_dir()) / usim_input_fname
+    if not atlas_input.exists():
+        atlas_input = Path(
+            _urbansim_run_native_output_paths(
+                settings=settings, state=state, workspace=workspace
+            )[USIM_DATASTORE_H5]
+        )
     return _resolve_native_inputs(
         step_name="atlas_preprocess",
         function=_native_atlas_preprocess,

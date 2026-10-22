@@ -9,7 +9,6 @@ from consist import BindingResult
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     FINAL_SKIMS_OMX,
-    USIM_DATASTORE_H5,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
@@ -35,7 +34,11 @@ def _settings(*, traffic_assignment: str | None = "beam") -> SimpleNamespace:
 
 
 def _state(*, current_year: int, iteration: int = 0) -> SimpleNamespace:
-    return SimpleNamespace(current_year=current_year, iteration=iteration)
+    return SimpleNamespace(
+        current_year=current_year,
+        iteration=iteration,
+        is_start_year=lambda: current_year == 2020,
+    )
 
 
 def test_prior_beam_skim_handoff_is_required_only_after_bootstrap() -> None:
@@ -181,11 +184,6 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     )
 
     monkeypatch.setattr(urbansim_atlas, "_resolve_native_inputs", resolve_atlas)
-    monkeypatch.setattr(
-        urbansim_atlas.AtlasPreprocessor,
-        "expected_inputs",
-        staticmethod(lambda *_args: {USIM_DATASTORE_H5: "urbansim/data/input.h5"}),
-    )
     urbansim_atlas._resolve_atlas_preprocess_inputs(
         settings=settings,
         state=state,

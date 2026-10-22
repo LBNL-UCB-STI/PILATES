@@ -574,15 +574,6 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
         def __init__(self, *_args: object) -> None:
             pass
 
-        @staticmethod
-        def expected_inputs(
-            _settings: object, _state: object, run_workspace: object
-        ) -> dict[str, Path]:
-            return {
-                USIM_DATASTORE_H5: Path(run_workspace.get_usim_mutable_data_dir())
-                / "output_2030.h5"
-            }
-
         def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
             year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
             year_root.mkdir(parents=True)

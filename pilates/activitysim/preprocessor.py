@@ -2155,31 +2155,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         }
 
     @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Union[str, None]]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        inputs = ActivitysimPreprocessor.declared_expected_inputs(
-            settings, state, workspace
-        )
-        for key in ("usim_population_source_h5", FINAL_SKIMS_OMX):
-            input_path = inputs.get(key)
-            inputs[key] = (
-                input_path if input_path and os.path.exists(input_path) else None
-            )
-        return inputs
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Union[str, None]]:
-        return ActivitysimPreprocessor.runtime_expected_inputs(
-            settings, state, workspace
-        )
-
-    @staticmethod
     def expected_outputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, str]:

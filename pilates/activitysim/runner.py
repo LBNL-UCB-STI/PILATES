@@ -622,27 +622,6 @@ class ActivitysimRunner(GenericRunner):
         }
 
     @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        inputs = ActivitysimRunner.declared_expected_inputs(settings, state, workspace)
-        inputs[ZARR_SKIMS] = (
-            inputs[ZARR_SKIMS]
-            if inputs.get(ZARR_SKIMS) and os.path.exists(inputs[ZARR_SKIMS])
-            else None
-        )
-        return inputs
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        return ActivitysimRunner.runtime_expected_inputs(settings, state, workspace)
-
-    @staticmethod
     def expected_outputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
