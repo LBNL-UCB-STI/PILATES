@@ -17,11 +17,17 @@ if "geopandas" not in sys.modules:
     sys.modules["geopandas"] = geopandas_stub
 
 from pilates.config.models import PilatesConfig
+from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
-from pilates.atlas.preprocessor import AtlasPreprocessor
-from pilates.beam.runner import BeamRunner
-from pilates.urbansim.preprocessor import UrbansimPreprocessor
-from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX
+from pilates.activitysim.runner import ActivitysimRunner
+from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+    FINAL_SKIMS_OMX,
+    ZARR_SKIMS,
+)
 
 
 class _StubState:
@@ -36,6 +42,7 @@ class _StubState:
 class _StubWorkspace:
     def __init__(self, root: Path):
         self._root = root
+        self.full_path = str(root)
 
     def get_usim_mutable_data_dir(self):
         return os.path.join(self._root, "usim", "data")
@@ -43,11 +50,11 @@ class _StubWorkspace:
     def get_asim_mutable_configs_dir(self):
         return os.path.join(self._root, "asim", "configs")
 
+    def get_asim_mutable_data_dir(self):
+        return os.path.join(self._root, "asim", "data")
+
     def get_asim_output_dir(self):
         return os.path.join(self._root, "asim", "output")
-
-    def get_atlas_mutable_input_dir(self):
-        return os.path.join(self._root, "atlas", "input")
 
     def get_beam_mutable_data_dir(self):
         return os.path.join(self._root, "beam", "input")
@@ -124,11 +131,9 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
     with mock.patch(
         "pilates.activitysim.preprocessor.os.path.exists", side_effect=_raise_fs_call
     ), mock.patch(
-        "pilates.urbansim.preprocessor.os.path.exists", side_effect=_raise_fs_call
+        "pilates.activitysim.runner.os.path.exists", side_effect=_raise_fs_call
     ), mock.patch(
-        "pilates.atlas.preprocessor.os.path.exists", side_effect=_raise_fs_call
-    ), mock.patch(
-        "pilates.beam.runner.os.path.exists", side_effect=_raise_fs_call
+        "pilates.activitysim.postprocessor.os.path.exists", side_effect=_raise_fs_call
     ), mock.patch.object(Path, "exists", side_effect=_raise_fs_call):
         activitysim_contract = ActivitysimPreprocessor.declared_expected_inputs(
             settings, state, workspace
@@ -143,60 +148,39 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
             ),
         }
 
-        urbansim_contract = UrbansimPreprocessor.declared_expected_inputs(
+        runner_contract = ActivitysimRunner.declared_expected_inputs(
             settings, state, workspace
         )
-        assert urbansim_contract == {
-            "usim_source_data_dir": "usim/input",
-            "usim_mutable_data_dir": os.path.join(tmp_path, "usim", "data"),
-            "usim_datastore_h5": os.path.join(tmp_path, "usim", "data", "usim_123.h5"),
+        assert runner_contract == {
+            ASIM_LAND_USE_IN: tmp_path
+            / "activitysim"
+            / "native-launch"
+            / "data"
+            / "land_use.csv",
+            ASIM_HOUSEHOLDS_IN: tmp_path
+            / "activitysim"
+            / "native-launch"
+            / "data"
+            / "households.csv",
+            ASIM_PERSONS_IN: tmp_path
+            / "activitysim"
+            / "native-launch"
+            / "data"
+            / "persons.csv",
+            ASIM_OMX_SKIMS: tmp_path
+            / "activitysim"
+            / "native-launch"
+            / "data"
+            / "skims.omx",
+            ZARR_SKIMS: tmp_path / "asim" / "output" / "cache" / "skims.zarr",
         }
 
-        atlas_contract = AtlasPreprocessor.declared_expected_inputs(
+        postprocessor_contract = ActivitysimPostprocessor.declared_expected_inputs(
             settings, state, workspace
         )
-        assert atlas_contract == {
-            "atlas_mutable_input_dir": os.path.join(tmp_path, "atlas", "input"),
-            "usim_datastore_h5": os.path.join(tmp_path, "usim", "data", "usim_123.h5"),
-        }
-
-        beam_contract = BeamRunner.declared_expected_inputs(settings, state, workspace)
-        assert beam_contract == {
-            "beam_mutable_data_dir": os.path.join(tmp_path, "beam", "input"),
-            "zarr_skims": os.path.join(
-                tmp_path, "asim", "output", "cache", "skims.zarr"
-            ),
-        }
-
-
-def test_runtime_expected_inputs_still_probe_filesystem_for_presence(
-    tmp_path,
-):
-    settings = _build_settings(tmp_path)
-    workspace = _StubWorkspace(tmp_path)
-    state = _StubState()
-
-    usim_input_path = Path(workspace.get_usim_mutable_data_dir()) / "usim_123.h5"
-    usim_input_path.parent.mkdir(parents=True, exist_ok=True)
-    usim_input_path.write_text("stub", encoding="utf-8")
-    asim_zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
-    asim_zarr_path.parent.mkdir(parents=True, exist_ok=True)
-    asim_zarr_path.write_text("stub", encoding="utf-8")
-
-    activitysim_runtime = ActivitysimPreprocessor.runtime_expected_inputs(
-        settings, state, workspace
-    )
-    assert activitysim_runtime["usim_population_source_h5"] == str(usim_input_path)
-
-    urbansim_runtime = UrbansimPreprocessor.runtime_expected_inputs(
-        settings, state, workspace
-    )
-    assert urbansim_runtime["usim_datastore_h5"] == str(usim_input_path)
-
-    atlas_runtime = AtlasPreprocessor.runtime_expected_inputs(
-        settings, state, workspace
-    )
-    assert atlas_runtime["usim_datastore_h5"] == str(usim_input_path)
-
-    beam_runtime = BeamRunner.runtime_expected_inputs(settings, state, workspace)
-    assert beam_runtime["zarr_skims"] == str(asim_zarr_path)
+        assert postprocessor_contract["asim_output_dir"] == os.path.join(
+            tmp_path, "asim", "output"
+        )
+        assert postprocessor_contract[ZARR_SKIMS] == os.path.join(
+            tmp_path, "asim", "output", "cache", "skims.zarr"
+        )

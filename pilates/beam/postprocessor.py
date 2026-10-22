@@ -3513,28 +3513,6 @@ class BeamPostprocessor(GenericPostprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this postprocessor expects from the workflow.
-        """
-        beam_output_dir = workspace.get_beam_output_dir()
-        zarr_path = None
-        if _activitysim_skims_target_enabled(settings):
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
-        return {
-            "beam_output_dir": (
-                beam_output_dir if os.path.exists(beam_output_dir) else None
-            ),
-            "zarr_skims": zarr_path,
-        }
-
-    @staticmethod
     def expected_outputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Any]:

@@ -20,14 +20,9 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
-from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
-    ASIM_OUTPUT_DIR,
-    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
-    BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
@@ -217,76 +212,6 @@ class BeamPreprocessor(GenericPreprocessor):
     Preprocessor for the BEAM model. Handles data preparation, configuration updates,
     and copying of inputs from other model components like ActivitySim and ATLAS.
     """
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this preprocessor expects from the workflow.
-        """
-        beam_scenario_dir = beam_exchange.resolve_beam_exchange_scenario_folder(
-            settings,
-            workspace,
-        )
-        preferred_format = (
-            get_setting(settings, "activitysim.file_format", "parquet") or "parquet"
-        )
-        beam_input_paths = {
-            BEAM_PLANS_IN: beam_exchange.locate_existing_beam_exchange_input(
-                beam_scenario_dir, "plans", preferred_format
-            )[0],
-            BEAM_HOUSEHOLDS_IN: beam_exchange.locate_existing_beam_exchange_input(
-                beam_scenario_dir, "households", preferred_format
-            )[0],
-            BEAM_PERSONS_IN: beam_exchange.locate_existing_beam_exchange_input(
-                beam_scenario_dir, "persons", preferred_format
-            )[0],
-            LINKSTATS_WARMSTART: beam_exchange.locate_existing_beam_exchange_input(
-                beam_scenario_dir, "linkstats", preferred_format
-            )[0],
-        }
-        asim_output_dir = None
-        if settings.runtime.flags.activity_demand_enabled:
-            asim_output_dir = workspace.get_asim_output_dir()
-
-        atlas_output_dir = None
-        if settings.runtime.flags.vehicle_ownership_model_enabled:
-            atlas_output_dir = workspace.get_atlas_output_dir()
-        beam_config = get_setting(settings, "beam.config", None)
-        beam_config_path = (
-            os.path.join(
-                workspace.get_beam_mutable_data_dir(), settings.run.region, beam_config
-            )
-            if beam_config
-            else None
-        )
-        return {
-            BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
-            BEAM_CONFIG_FILE: beam_config_path,
-            ASIM_OUTPUT_DIR: asim_output_dir,
-            ATLAS_OUTPUT_DIR: atlas_output_dir,
-            ATLAS_VEHICLES2_OUTPUT: None,
-            **beam_input_paths,
-        }
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this preprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``beam_mutable_data_dir``: Mutable BEAM data directory populated
-              with inputs for the runner.
-        Related docs
-            - See `pilates/beam/inputs.py` for the corresponding input
-              descriptions used by BEAM and downstream models.
-        """
-        return {"beam_mutable_data_dir": workspace.get_beam_mutable_data_dir()}
 
     def __init__(
         self,

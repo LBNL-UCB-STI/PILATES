@@ -1037,36 +1037,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         return inputs
 
     @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        inputs = ActivitysimPostprocessor.declared_expected_inputs(
-            settings, state, workspace
-        )
-        asim_output_dir = inputs.get("asim_output_dir")
-        inputs["asim_output_dir"] = (
-            asim_output_dir
-            if asim_output_dir and os.path.exists(asim_output_dir)
-            else None
-        )
-        zarr_path = inputs.get(ZARR_SKIMS)
-        inputs[ZARR_SKIMS] = (
-            zarr_path if zarr_path and os.path.exists(zarr_path) else None
-        )
-        return inputs
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        return ActivitysimPostprocessor.runtime_expected_inputs(
-            settings, state, workspace
-        )
-
-    @staticmethod
     def expected_outputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:

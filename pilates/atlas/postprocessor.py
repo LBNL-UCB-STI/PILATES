@@ -16,9 +16,7 @@ from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.state_access import uses_input_datastore
 from pilates.workflows.artifact_keys import (
-    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
-    USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
 )
 from workflow_state import WorkflowState
@@ -580,24 +578,6 @@ class AtlasPostprocessor(GenericPostprocessor):
     This includes updating UrbanSim HDF5 with new vehicle ownership and adding vehicleTypeId to ATLAS vehicle outputs.
     Produces updated UrbanSim inputs and ATLAS vehicle outputs.
     """
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this postprocessor expects from the workflow.
-        """
-        usim_output_path = resolve_atlas_usim_datastore_path(settings, state, workspace)
-        atlas_output_dir = workspace.get_atlas_output_dir()
-        return {
-            ATLAS_OUTPUT_DIR: (
-                atlas_output_dir if os.path.exists(atlas_output_dir) else None
-            ),
-            USIM_DATASTORE_CURRENT_H5: (
-                usim_output_path if usim_output_path.exists() else None
-            ),
-        }
 
     @staticmethod
     def expected_outputs(

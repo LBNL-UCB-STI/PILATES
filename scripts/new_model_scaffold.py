@@ -1363,12 +1363,10 @@ def _render_checklist(
               `pilates/utils/consist_config.py` as needed.
         - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`.
         - [ ] Add/extend coupler schema entries in `pilates/workflows/coupler_schema.py`.
-        - [ ] Add model-specific expected input/output declarations (component classes + stage wiring).
 
         ## Test Plan
 
         - [ ] Add step contract tests for `{spec.model}` in `tests/test_stage_contracts.py` or a model-specific test.
-        - [ ] Add expected input/output contract tests (`tests/test_expected_inputs_contracts.py`).
         - [ ] Add facet/coupler/manifest invariants if this model introduces new cross-step artifacts.
         - [ ] Add or update architecture guardrail tests if the integration adds a new allowed seam.
         - [ ] Run targeted tests and record commands/results in your PR.

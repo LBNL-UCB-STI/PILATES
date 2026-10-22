@@ -41,35 +41,14 @@ the lineage point is that the land-use stage keeps base, current, forecast, and
 population-source roles explicit instead of treating every H5 path as
 interchangeable.
 
-#### `urbansim_preprocess`
+#### `urbansim_run`
 
 **Reads**
 
 - `USIM_DATASTORE_BASE_H5`
 - optional `USIM_DATASTORE_CURRENT_H5` when a current mutable datastore already exists
 - `OMX_SKIMS` or `FINAL_SKIMS_OMX`, depending on whether BEAM has already published updated OMX skims
-- workspace-backed UrbanSim inputs such as `hh_size`, `income_rates`, `relmap`, `geoid_to_zone`, `schools`, and `school_districts`
-
-**Publishes**
-
-- prepared run-local UrbanSim inputs for the run boundary:
-  - `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5`
-  - `omx_skims`
-  - model-supporting prepared inputs such as size, income-rate, relationship, zone, school, and district lookup files
-- optional `usim_skims_input_updated` when the skims input is restaged
-- optional `USIM_DATASTORE_BASE_H5` so restart-sensitive flows can keep the base role explicit
-
-**Why the next step cares**
-
-- it converts the base/current datastore roles and workspace inventory into the exact runner inputs for the current year
-
-#### `urbansim_run`
-
-**Reads**
-
-- the prepared UrbanSim input state from preprocess
-- `USIM_DATASTORE_BASE_H5` when available, kept as an optional role rather than collapsed into the current datastore
-- `usim_skims_input_updated` when preprocess restaged the skims input
+- workspace-backed UrbanSim inputs materialized for the current forecast year
 
 **Publishes**
 
@@ -101,7 +80,7 @@ interchangeable.
 
 #### Land-use stage boundary handoff
 
-After the three UrbanSim steps complete, `run_land_use_stage(...)` keeps the
+After the two UrbanSim steps complete, `run_land_use_stage(...)` keeps the
 important H5 roles explicit for the next stage:
 
 - `USIM_DATASTORE_BASE_H5`

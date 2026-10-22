@@ -139,37 +139,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this postprocessor expects from the workflow.
-        """
-        region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=region_id
-        )
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        usim_output_fname = settings.urbansim.output_file_template.format(
-            year=state.forecast_year
-        )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
-        )
-        return {
-            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
-            "usim_datastore_h5": (
-                usim_input_path if os.path.exists(usim_input_path) else None
-            ),
-            "usim_output_h5": (
-                usim_output_path if os.path.exists(usim_output_path) else None
-            ),
-        }
-
-    @staticmethod
     def expected_outputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:

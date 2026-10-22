@@ -31,28 +31,6 @@ class UrbansimRunner(
     """
 
     @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this runner expects from the workflow.
-        """
-        usim_data_dir = workspace.get_usim_mutable_data_dir()
-        if state.is_start_year():
-            usim_input_fname = usim_post.get_usim_datastore_fname(settings, io="input")
-        else:
-            usim_input_fname = usim_post.get_usim_datastore_fname(
-                settings, io="output", year=state.forecast_year
-            )
-        usim_input_path = os.path.join(usim_data_dir, usim_input_fname)
-        return {
-            "usim_mutable_data_dir": usim_data_dir,
-            "usim_datastore_h5": (
-                usim_input_path if os.path.exists(usim_input_path) else None
-            ),
-        }
-
-    @staticmethod
     def expected_outputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:

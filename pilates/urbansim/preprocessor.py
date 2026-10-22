@@ -6,8 +6,6 @@ import os
 import shutil
 import logging
 import pandas as pd
-import openmatrix as omx
-import numpy as np
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
@@ -24,26 +22,6 @@ if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
-
-skim_dtypes = {
-    "timePeriod": str,
-    "pathType": str,
-    "origin": int,
-    "destination": int,
-    "TIME_minutes": float,
-    "TOTIVT_IVT_minutes": float,
-    "VTOLL_FAR": float,
-    "DIST_meters": float,
-    "WACC_minutes": float,
-    "WAUX_minutes": float,
-    "WEGR_minutes": float,
-    "DTIM_minutes": float,
-    "DDIST_meters": float,
-    "KEYIVT_minutes": float,
-    "FERRYIVT_minutes": float,
-    "BOARDS": float,
-    "DEBUG_TEXT": str,
-}
 
 _OPTIONAL_URBANSIM_INPUT_FILENAMES = (
     ("schools_2010.csv", "schools"),
@@ -345,107 +323,6 @@ def stage_urbansim_run_workspace(
     )
 
 
-def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format, workspace):
-    """
-    Load raw skims and format for UrbanSim, ensuring canonical zone order.
-    """
-    from pilates.utils.zone_utils import load_canonical_zones
-
-    # Get the authoritative, sorted list of zone IDs
-    canonical_zones_df = load_canonical_zones(settings, workspace)
-    canonical_order = canonical_zones_df.index.values
-
-    skims_fname = settings.shared.skims.fname
-
-    try:
-        if skim_format == "beam":
-            if skims_fname.endswith("csv"):
-                raise NotImplementedError("DEMOS requires skims in omx format, not csv")
-
-            elif skims_fname.endswith("omx"):
-                skims_fname = "skims.omx"
-                mutable_skims_location = os.path.join(asim_data_dir, skims_fname)
-                # This copy seems redundant if the file is already in the right place,
-                # but preserving original logic for now.
-                region_id = settings.urbansim.region_mappings["region_to_region_id"][
-                    settings.run.region
-                ]
-                input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(
-                    region_id
-                )
-                logger.info(
-                    "Copying skims from {0} to {1} for urbansim".format(
-                        mutable_skims_location, input_skims_location
-                    )
-                )
-                shutil.copyfile(mutable_skims_location, input_skims_location)
-
-                with omx.open_file(mutable_skims_location, "r") as skims:
-                    # Use the canonical order for the DataFrame index and columns
-                    index = pd.Index(canonical_order, name="from_zone_id", dtype=str)
-                    columns = pd.Index(canonical_order, name="to_zone_id", dtype=str)
-
-                    # The skim matrix data is assumed to be in the canonical order
-                    # as enforced by the ActivitySim preprocessor.
-                    travel_time_mins = np.array(skims["SOV_TIME__AM"])
-                    out = (
-                        pd.DataFrame(travel_time_mins, index=index, columns=columns)
-                        .stack()
-                        .rename("SOV_AM_IVT_mins")
-                    )
-                    return out.to_frame()
-
-            elif skims_fname.endswith("zarr"):
-                beam_output_dir = settings.beam.local_output_folder
-                skims_fname = settings.shared.skims.fname
-                mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-                region_id = settings.urbansim.region_mappings["region_to_region_id"][
-                    settings.run.region
-                ]
-                input_skims_location = os.path.join(
-                    usim_data_dir, "skims_mpo_{0}.zarr".format(region_id)
-                )
-                logger.info(
-                    "Copying skims from {0} to {1} for urbansim".format(
-                        mutable_skims_location, input_skims_location
-                    )
-                )
-
-                if os.path.exists(input_skims_location):
-                    shutil.rmtree(input_skims_location)
-                shutil.copytree(mutable_skims_location, input_skims_location)
-
-                import xarray as xr
-
-                with xr.open_zarr(mutable_skims_location) as ds:
-                    # Use the canonical order for the DataFrame index and columns
-                    index = pd.Index(canonical_order, name="from_zone_id", dtype=str)
-                    columns = pd.Index(canonical_order, name="to_zone_id", dtype=str)
-
-                    # Get AM time period data
-                    am_idx = list(ds.coords["time_period"].values).index("AM")
-                    travel_time_data = ds["SOV_TIME"].isel(time_period=am_idx).values
-
-                    travel_time_mins = np.array(travel_time_data)
-                    out = (
-                        pd.DataFrame(travel_time_mins, index=index, columns=columns)
-                        .stack()
-                        .rename("SOV_AM_IVT_mins")
-                    )
-                    return out.to_frame()
-            else:
-                raise NotImplementedError(
-                    "Invalid skim format {0}".format(skims_fname.split(".")[-1])
-                )
-        elif skim_format == "polaris":
-            raise NotImplementedError("DEMOS requires skims in omx format, not polaris")
-
-    except KeyError:
-        raise KeyError("Couldn't find input skims named {0}".format(skims_fname))
-
-    raise NotImplementedError("Invalid skims format {0}".format(skim_format))
-
-
 def stage_synthetic_population(
     settings: PilatesConfig,
     output_dir: str,
@@ -532,94 +409,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
     This includes copying input files to a mutable location and preparing any additional
     data needed for the UrbanSim run.
     """
-
-    @staticmethod
-    def declared_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this preprocessor expects without disk checks.
-        """
-        region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=region_id
-        )
-        return {
-            "usim_source_data_dir": settings.urbansim.local_data_input_folder,
-            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
-            "usim_datastore_h5": os.path.join(
-                workspace.get_usim_mutable_data_dir(), usim_input_fname
-            ),
-        }
-
-    @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        project_root = find_project_root(start_path=os.path.dirname(__file__))
-        if not project_root:
-            project_root = os.path.realpath(os.getcwd())
-        source_dir = (
-            settings.urbansim.local_data_input_folder
-            if os.path.isabs(settings.urbansim.local_data_input_folder)
-            else os.path.join(project_root, settings.urbansim.local_data_input_folder)
-        )
-        region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=region_id
-        )
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        return {
-            "usim_source_data_dir": source_dir,
-            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
-            "usim_datastore_h5": (
-                usim_input_path if os.path.exists(usim_input_path) else None
-            ),
-        }
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        return UrbansimPreprocessor.runtime_expected_inputs(settings, state, workspace)
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this preprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``usim_mutable_data_dir``: UrbanSim mutable data directory populated
-              with inputs for the runner.
-            - ``usim_datastore_h5``: Base-year UrbanSim datastore staged into the
-              mutable directory.
-        Related docs
-            - See `pilates/urbansim/inputs.py` for the corresponding input
-              descriptions used by UrbanSim and downstream models.
-        """
-        region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=region_id
-        )
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        return {
-            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
-            "usim_datastore_h5": usim_input_path,
-        }
 
     def __init__(
         self,

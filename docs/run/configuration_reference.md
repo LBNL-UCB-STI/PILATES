@@ -7,14 +7,34 @@ summary: Reference for the current nested PILATES settings model and its workflo
 
 ## Top-Level Shape
 
-PILATES expects a YAML file with these top-level sections:
+PILATES expects a YAML file that resolves to these top-level sections:
 
+- optional `base` (or `extends`) pointing to a parent scenario YAML file
 - `run`
 - `shared`
 - `infrastructure`
 - optional model sections such as `urbansim`, `atlas`, `activitysim`, `beam`, and `postprocessing`
 
-The active templates under `scenarios/` already use this shape. The config loader validates the file with Pydantic and rejects missing model sections when the selected models require them.
+The active templates under `scenarios/` already use this shape. The config loader resolves `base:` inheritance recursively, validates the merged configuration with Pydantic, and rejects missing model sections when the selected models require them.
+
+## Scenario Inheritance (`base:`)
+
+Scenario variants can inherit from a shared regional or baseline YAML using a top-level `base:` key (relative to the child YAML file's directory or the repository root):
+
+```yaml
+base: settings-sfbay-consist-usim-hpc-2019.yaml
+
+run:
+  scenario: sfbay-2019-canary
+  output_run_name: sfbay-2019-canary
+```
+
+Merge rules in `resolve_config_dict`:
+
+- Nested mappings merge recursively so thin overlays only need to specify the keys they override.
+- Lists, scalars, and explicit `null` values in the child file replace the inherited value from `base`.
+- Circular `base:` chains fail fast with a `ValueError`.
+- To inspect the fully merged YAML for any overlay from the command line, run `python -m pilates.config.models <path/to/scenario.yaml> --validate`.
 
 ## `run`
 
