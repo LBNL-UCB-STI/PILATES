@@ -1123,7 +1123,6 @@ def _render_stage_patch_execution_block(
                     phase="postprocess",
                     resolved_inputs={spec.model}_postprocess_inputs,
                 )
-            )
             """
         ).strip()
     raise ValueError(f"Unsupported stage patch pattern: {pattern}")
@@ -1219,23 +1218,22 @@ def _render_stage_patch_plan(
             per_pattern_anchors[pattern] = _anchor_candidates_for_pattern(pattern)[0]
 
     pattern_sections = "\n\n".join(
-        dedent(
-            f"""
-            ### `{pattern}` native execution block
-
-            Suggested insertion anchor in function body: `{per_pattern_anchors[pattern]}`
-
-            ```python
-            {_render_stage_patch_execution_block(spec, pattern=pattern)}
-            ```
-            """
-        ).strip()
+        "\n".join(
+            [
+                f"### `{pattern}` native execution block",
+                "",
+                f"Suggested insertion anchor in function body: `{per_pattern_anchors[pattern]}`",
+                "",
+                "```python",
+                _render_stage_patch_execution_block(spec, pattern=pattern),
+                "```",
+            ]
+        )
         for pattern in stage_patterns
     )
 
-    return (
-        dedent(
-            f"""
+    header_and_anchors = dedent(
+        f"""
         # Stage Patch Plan: `{spec.model}`
 
         This patch plan was scaffolded by `scripts/new_model_scaffold.py`.
@@ -1259,13 +1257,11 @@ def _render_stage_patch_plan(
         ## Ready-to-Paste Snippets
 
         ### Import block for `from pilates.workflows.steps import (...)`
+        """
+    ).strip()
 
-        ```python
-        {_render_stage_patch_import_block(spec)}
-        ```
-
-        {pattern_sections}
-
+    checklist_footer = dedent(
+        f"""
         ## Required Variable Adaptation Checklist
 
         - [ ] Confirm the stage function has `coupler`, `scenario`, `state`, `settings`, `workspace`, `surface`, and `year`, or adapt the snippet to an existing `WorkflowRuntimeContext`.
@@ -1276,7 +1272,17 @@ def _render_stage_patch_plan(
               handoff to the following sequencing decision.
         - [ ] Keep `stage_name="{catalog_stage}"` aligned between stage wiring and catalog entries.
         """
-        ).strip()
+    ).strip()
+
+    return (
+        "\n\n".join(
+            [
+                header_and_anchors,
+                f"```python\n{_render_stage_patch_import_block(spec)}\n```",
+                pattern_sections,
+                checklist_footer,
+            ]
+        )
         + "\n"
     )
 
