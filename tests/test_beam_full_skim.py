@@ -1050,7 +1050,7 @@ class TestBeamFullSkimMode:
             mock_full_skim_step = stack.enter_context(
                 patch(
                     "pilates.workflows.stages.supply_demand_beam._run_beam_full_skim_step",
-                    return_value={},
+                    return_value=None,
                 )
             )
             _run_traffic_assignment_phase(

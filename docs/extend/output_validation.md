@@ -97,16 +97,13 @@ Warnings are logged and allow the run to continue. Errors are collected and
 reported together as an `AssertionError`. Raise directly only for an unexpected
 validator failure.
 
-## Handoff mappings
+## Handoff and coupler publication
 
-`step_output_mapping(outputs)` is a lossy key-to-path diagnostic view. Do not
-use it for a live workflow handoff because it discards artifact identity.
-
-`step_output_handoff_mapping(outputs, coupler=...)` is the path-oriented helper
-for a boundary that must preserve a current coupler artifact when one exists.
-Native steps still receive their persisted output contract through
-`RunResult.outputs` and the projector; a mapping is not a second execution or
-restart mechanism.
+Native steps receive their persisted output contract through `RunResult.outputs`
+and the step's projector, and publish downstream handoff artifacts directly
+through `scenario.coupler`. Do not convert typed step outputs into ad-hoc
+key-to-path dictionaries for workflow handoffs, as that discards Consist
+artifact identity.
 
 ## Recommended tests
 

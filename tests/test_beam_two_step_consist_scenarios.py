@@ -37,6 +37,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    LINKSTATS,
     ZARR_SKIMS,
 )
 from pilates.workflows.stages import supply_demand_beam
@@ -370,7 +371,8 @@ def test_scenario_1_crash_during_beam_run(tmp_path: Path) -> None:
             res = _run_beam_steps(
                 scenario=scenario, year=2020, iteration=0, context=env["context"]
             )
-            assert res is not None
+            assert res is None
+            assert scenario.coupler.require(LINKSTATS) is not None
             assert run_counts["container"] == 2
 
 
@@ -423,7 +425,8 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
             res = _run_beam_steps(
                 scenario=scenario, year=2020, iteration=0, context=env["context"]
             )
-            assert res is not None
+            assert res is None
+            assert scenario.coupler.require(LINKSTATS) is not None
             # Container was NOT rerun; cache hit on beam_run!
             assert run_counts["container"] == 1
 
@@ -497,7 +500,8 @@ def test_scenario_3_crash_partway_through_postprocess_restarts_idempotently(
                 res = _run_beam_steps(
                     scenario=scenario, year=2020, iteration=0, context=env["context"]
                 )
-                assert res is not None
+                assert res is None
+                coupler_skims_art = scenario.coupler.require(ZARR_SKIMS)
                 coupler_skims_path = scenario.coupler.path(ZARR_SKIMS)
 
     # Container was NOT rerun; beam_run hit cache while beam_postprocess reran cleanly
@@ -507,7 +511,7 @@ def test_scenario_3_crash_partway_through_postprocess_restarts_idempotently(
     expected_output_skims = Path(
         beam_postprocess_zarr_skims_output_path(env["ws"], env["context"].state)
     )
-    assert Path(res[ZARR_SKIMS].path).resolve() == expected_output_skims.resolve()
+    assert Path(coupler_skims_art.path).resolve() == expected_output_skims.resolve()
     assert coupler_skims_path.resolve() == expected_output_skims.resolve()
     assert expected_output_skims.resolve() != initial_skims_path.resolve()
 
@@ -597,7 +601,8 @@ def test_scenario_3_scratch_wiped_after_interrupted_postprocess_restarts_idempot
                 res = _run_beam_steps(
                     scenario=scenario, year=2020, iteration=0, context=env["context"]
                 )
-                assert res is not None
+                assert res is None
+                assert scenario.coupler.require(ZARR_SKIMS) is not None
 
     assert run_counts["container"] == 1
     assert postprocess_calls["count"] == 2
@@ -667,7 +672,8 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
             res = _run_beam_steps(
                 scenario=scenario, year=2020, iteration=0, context=env["context"]
             )
-            assert res is not None
+            assert res is None
+            assert scenario.coupler.require(LINKSTATS) is not None
 
     # Verify no second container run (cache hit) and outputs restored to scratch
     assert run_counts["container"] == 1
@@ -717,7 +723,7 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 res0 = _run_beam_steps(
                     scenario=scenario, year=2020, iteration=0, context=env["context"]
                 )
-                assert res0 is not None
+                assert res0 is None
                 iter0_zarr_art = scenario.coupler.require(ZARR_SKIMS)
                 assert isinstance(iter0_zarr_art.meta, dict)
                 assert iter0_zarr_art.meta.get("recovery_roots")
@@ -748,7 +754,7 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 res0_restart = _run_beam_steps(
                     scenario=scenario, year=2020, iteration=0, context=env["context"]
                 )
-                assert res0_restart is not None
+                assert res0_restart is None
                 assert run_counts["container"] == 1
                 assert run_counts["postprocess"] == 1
                 assert iter0_output_skims.exists()
@@ -762,7 +768,8 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 res1 = _run_beam_steps(
                     scenario=scenario, year=2020, iteration=1, context=env["context"]
                 )
-                assert res1 is not None
+                assert res1 is None
+                assert scenario.coupler.require(ZARR_SKIMS) is not None
                 assert run_counts["container"] == 2
                 assert run_counts["postprocess"] == 2
 
@@ -797,7 +804,8 @@ def test_scenario_5_beam_config_changed_causes_cache_miss(tmp_path: Path) -> Non
             res1 = _run_beam_steps(
                 scenario=scenario, year=2020, iteration=0, context=env["context"]
             )
-            assert res1 is not None
+            assert res1 is None
+            assert scenario.coupler.require(LINKSTATS) is not None
 
         assert run_counts["container"] == 1
 
@@ -819,7 +827,8 @@ def test_scenario_5_beam_config_changed_causes_cache_miss(tmp_path: Path) -> Non
             res2 = _run_beam_steps(
                 scenario=scenario, year=2020, iteration=0, context=env["context"]
             )
-            assert res2 is not None
+            assert res2 is None
+            assert scenario.coupler.require(LINKSTATS) is not None
             assert run_counts["container"] == 2
 
 

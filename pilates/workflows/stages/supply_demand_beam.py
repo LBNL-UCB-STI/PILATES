@@ -25,7 +25,6 @@ from pilates.workflows.coupler_namespace import coupler_storage_value
 from consist import Artifact, RunResult, Tracker
 from consist.api import archive_run_output_files
 from consist.protocols import ArtifactRecordLike
-from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.steps import (
     beam_full_skim,
     beam_postprocess,
@@ -289,7 +288,7 @@ def _run_beam_steps(
     year: int,
     iteration: int,
     context: WorkflowRuntimeContext,
-) -> Optional[Dict[str, Any]]:
+) -> None:
     """Dispatch native BEAM steps with Consist caching and verified archival."""
 
     settings = context.settings
@@ -368,7 +367,7 @@ def _run_beam_steps(
     )
     postprocess_inputs.require_complete()
 
-    postprocess_result, postprocess_outputs = execute_step(
+    postprocess_result, _ = execute_step(
         scenario=scenario,
         definition=beam_postprocess,
         settings=settings,
@@ -395,20 +394,15 @@ def _run_beam_steps(
             outputs=postprocess_result.outputs,
         )
 
-    combined_outputs = step_output_handoff_mapping(
-        postprocess_outputs, coupler=scenario.coupler
-    )
     if _should_run_full_skim(settings, iteration):
-        full_skim_outputs = _run_beam_full_skim_step(
+        _run_beam_full_skim_step(
             scenario=scenario,
             year=year,
             iteration=iteration,
             context=context,
             launch_config=launch_config,
         )
-        if full_skim_outputs is not None:
-            combined_outputs.update(full_skim_outputs)
-    return combined_outputs
+    return None
 
 
 def _run_beam_full_skim_step(
@@ -418,7 +412,7 @@ def _run_beam_full_skim_step(
     iteration: int,
     context: WorkflowRuntimeContext,
     launch_config: BeamLaunchConfig,
-) -> Optional[Dict[str, Any]]:
+) -> None:
     """Execute full skims through its native definition."""
 
     full_skim_inputs = beam_full_skim.resolve_inputs(
@@ -427,7 +421,7 @@ def _run_beam_full_skim_step(
         workspace=context.workspace,
         coupler=scenario.coupler,
     )
-    _, outputs = execute_step(
+    _, _ = execute_step(
         scenario=scenario,
         definition=beam_full_skim,
         settings=context.settings,
@@ -440,10 +434,7 @@ def _run_beam_full_skim_step(
         runtime_kwargs={"beam_launch_config": launch_config},
         resolved_inputs=full_skim_inputs,
     )
-    handoff = step_output_handoff_mapping(outputs, coupler=scenario.coupler)
-    result = {key: path for key, path, _description in outputs._iter_record_items()}
-    result.update(handoff)
-    return result
+    return None
 
 
 def _standalone_full_skim_preprocess_outputs(
@@ -545,7 +536,7 @@ def _run_traffic_assignment_phase(
             preprocess_outputs=preprocess_outputs,
             archive_run_dir=archive_run_dir,
         )
-        combined_beam_outputs = _run_beam_full_skim_step(
+        _run_beam_full_skim_step(
             scenario=scenario,
             year=inputs.year,
             iteration=inputs.iteration,
@@ -553,13 +544,12 @@ def _run_traffic_assignment_phase(
             launch_config=launch_config,
         )
     else:
-        combined_beam_outputs = _run_beam_steps(
+        _run_beam_steps(
             scenario=scenario,
             year=inputs.year,
             iteration=inputs.iteration,
             context=context,
         )
-    del combined_beam_outputs
 
     state.complete_step(
         state.Stage.supply_demand_loop,
