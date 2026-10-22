@@ -724,101 +724,92 @@ FALLBACK_PROVIDER_INVENTORY: tuple[FallbackProviderInventoryEntry, ...] = (
 )
 
 
-def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
-    return {
-        "urbansim_preprocess": (
-            ArtifactBindingRule(
-                semantic_key=OMX_SKIMS,
-                required=False,
-                allow_fallback=True,
-                preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
+_STEP_BINDING_OVERRIDES: dict[str, tuple[ArtifactBindingRule, ...]] = {
+    "activitysim_preprocess": (
+        *activitysim_population_source_selection_rules(),
+        ArtifactBindingRule(
+            semantic_key=FINAL_SKIMS_OMX,
+            required=False,
+        ),
+    ),
+    "activitysim_postprocess": (
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_CURRENT_H5,
+            required=False,
+            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_BASE_H5,
+            required=False,
+            allow_fallback=True,
+            fallback_provider="activitysim_input_datastore",
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_SOURCE_H5,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+            fallback_provider="activitysim_population_source",
+        ),
+    ),
+    "atlas_preprocess": (
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_CURRENT_H5,
+            required=True,
+            allow_fallback=True,
+            preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED),
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_BASE_H5,
+            required=True,
+            allow_fallback=True,
+            preferred_keys=(
+                USIM_DATASTORE_BASE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_H5_UPDATED,
             ),
         ),
-        "activitysim_preprocess": (
-            *activitysim_population_source_selection_rules(),
-            ArtifactBindingRule(
-                semantic_key=FINAL_SKIMS_OMX,
-                required=False,
-            ),
+        ArtifactBindingRule(
+            semantic_key=OMX_SKIMS,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
         ),
-        "activitysim_postprocess": (
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_CURRENT_H5,
-                required=False,
-                preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_BASE_H5,
-                required=False,
-                allow_fallback=True,
-                fallback_provider="activitysim_input_datastore",
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_POPULATION_SOURCE_H5,
-                required=False,
-                allow_fallback=True,
-                preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-                fallback_provider="activitysim_population_source",
-            ),
+    ),
+    "beam_preprocess": (
+        ArtifactBindingRule(
+            semantic_key=BEAM_PLANS_IN,
+            required=True,
+            preferred_keys=("beam_plans_asim_out", BEAM_PLANS_IN),
         ),
-        "atlas_preprocess": (
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_CURRENT_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED),
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_BASE_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(
-                    USIM_DATASTORE_BASE_H5,
-                    USIM_DATASTORE_CURRENT_H5,
-                    USIM_H5_UPDATED,
-                ),
-            ),
-            ArtifactBindingRule(
-                semantic_key=OMX_SKIMS,
-                required=False,
-                allow_fallback=True,
-                preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
-            ),
+        ArtifactBindingRule(
+            semantic_key=BEAM_HOUSEHOLDS_IN,
+            required=True,
+            preferred_keys=("households_asim_out", BEAM_HOUSEHOLDS_IN),
         ),
-        "beam_preprocess": (
-            ArtifactBindingRule(
-                semantic_key=BEAM_PLANS_IN,
-                required=True,
-                preferred_keys=("beam_plans_asim_out", BEAM_PLANS_IN),
-            ),
-            ArtifactBindingRule(
-                semantic_key=BEAM_HOUSEHOLDS_IN,
-                required=True,
-                preferred_keys=("households_asim_out", BEAM_HOUSEHOLDS_IN),
-            ),
-            ArtifactBindingRule(
-                semantic_key=BEAM_PERSONS_IN,
-                required=True,
-                preferred_keys=("persons_asim_out", BEAM_PERSONS_IN),
-            ),
-            ArtifactBindingRule(
-                semantic_key=LINKSTATS_WARMSTART,
-                required=False,
-                preferred_keys=(LINKSTATS, LINKSTATS_WARMSTART),
-            ),
-            ArtifactBindingRule(
-                semantic_key=ATLAS_VEHICLES2_OUTPUT,
-                required=False,
-                allow_fallback=False,
-            ),
-            ArtifactBindingRule(
-                semantic_key=BEAM_PLANS_OUT,
-                required=False,
-                preferred_keys=(BEAM_PLANS_OUT,),
-                allow_fallback=False,
-            ),
+        ArtifactBindingRule(
+            semantic_key=BEAM_PERSONS_IN,
+            required=True,
+            preferred_keys=("persons_asim_out", BEAM_PERSONS_IN),
         ),
-    }
+        ArtifactBindingRule(
+            semantic_key=LINKSTATS_WARMSTART,
+            required=False,
+            preferred_keys=(LINKSTATS, LINKSTATS_WARMSTART),
+        ),
+        ArtifactBindingRule(
+            semantic_key=ATLAS_VEHICLES2_OUTPUT,
+            required=False,
+            allow_fallback=False,
+        ),
+        ArtifactBindingRule(
+            semantic_key=BEAM_PLANS_OUT,
+            required=False,
+            preferred_keys=(BEAM_PLANS_OUT,),
+            allow_fallback=False,
+        ),
+    ),
+}
 
 
 def artifact_rules_for_step_name(
@@ -842,7 +833,7 @@ def artifact_rules_for_step_name(
             for key in contract.get("optional_input_keys", ())
         }
     )
-    for override in _pilot_binding_overrides().get(step_name, ()):
+    for override in _STEP_BINDING_OVERRIDES.get(step_name, ()):
         existing = rules.get(override.semantic_key)
         rules[override.semantic_key] = ArtifactBindingRule(
             semantic_key=override.semantic_key,

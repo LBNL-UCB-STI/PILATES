@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import re
 import sys
-import warnings
 from dataclasses import dataclass, field as dataclass_field
 from typing import (
     Annotated,
@@ -373,40 +372,10 @@ class DatabaseConfig(BaseModel):
     enabled: bool = Field(False, description="Enable database storage")
     type: str = Field("duckdb", description="Database type")
     path: str = Field(..., description="Database file path")
-    shapshot_path: Optional[str] = Field(
-        None, description="Matrix snapshot file path (legacy misspelling)."
-    )
     snapshot_path: Optional[str] = Field(
         None,
-        description="Alias for shapshot_path (preferred spelling).",
+        description="Matrix snapshot file path.",
     )
-    use_consist: bool = Field(
-        True,
-        description=(
-            "Deprecated toggle retained for config compatibility. "
-            "Consist is mandatory and this value is ignored."
-        ),
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _warn_deprecated_use_consist(cls, data):
-        if isinstance(data, dict) and "use_consist" in data:
-            warnings.warn(
-                "shared.database.use_consist is deprecated and ignored; "
-                "Consist is mandatory in PILATES. Use run.consist_hashing_strategy "
-                "or lineage/detail settings for performance tuning instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        return data
-
-    @model_validator(mode="after")
-    def _coalesce_snapshot_path(self):
-        if self.snapshot_path and not self.shapshot_path:
-            self.shapshot_path = self.snapshot_path
-        self.use_consist = True
-        return self
 
     @field_validator("path")
     @classmethod
@@ -732,10 +701,6 @@ class ActivitySimConfig(BaseModel):
         default_factory=ActivitySimDatabaseConfig,
         description="Database input configuration",
     )
-    warm_start_activities: bool = Field(
-        False,
-        description="Deprecated legacy warm-start flag; no longer supported.",
-    )
     replan_iters: int = Field(0, description="Replanning iterations")
     replan_hh_samp_size: int = Field(0, description="Replanning household sample size")
     replan_after: str = Field(
@@ -775,7 +740,6 @@ class ActivitySimConfig(BaseModel):
             "num_processes": self.num_processes,
             "file_format": self.file_format,
             "persist_sharrow_cache": self.persist_sharrow_cache,
-            "warm_start_activities": self.warm_start_activities,
             "replan_iters": self.replan_iters,
             "replan_hh_samp_size": self.replan_hh_samp_size,
             "replan_after": self.replan_after,
@@ -904,45 +868,6 @@ class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):
     """Explicit prior-run or declared-digest expectation for one staged BEAM warm-start file."""
 
     expectation: AdmissionExpectation
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_prior_run_fields(cls, value: Any) -> Any:
-        """Accept the existing flat BEAM policy while storing a shared expectation."""
-        if not isinstance(value, dict) or "expectation" in value:
-            return value
-        if "expected_run_id" not in value and "artifact_key" not in value:
-            return value
-
-        normalized = dict(value)
-        normalized["expectation"] = {
-            "kind": "prior_run",
-            "expected_run_id": normalized.pop("expected_run_id", None),
-            "artifact_key": normalized.pop("artifact_key", None),
-            "expected_bytes_path": normalized.pop("expected_bytes_path", None),
-        }
-        return normalized
-
-    @property
-    def expected_run_id(self) -> Optional[str]:
-        """Compatibility view for BEAM's existing runtime admission helper."""
-        if isinstance(self.expectation, PriorRunExpectation):
-            return self.expectation.expected_run_id
-        return None
-
-    @property
-    def artifact_key(self) -> Optional[str]:
-        """Compatibility view for BEAM's existing runtime admission helper."""
-        if isinstance(self.expectation, PriorRunExpectation):
-            return self.expectation.artifact_key
-        return None
-
-    @property
-    def expected_bytes_path(self) -> Optional[str]:
-        """Compatibility view for BEAM's existing runtime admission helper."""
-        if isinstance(self.expectation, PriorRunExpectation):
-            return self.expectation.expected_bytes_path
-        return None
 
 
 class BeamAdmissionConfig(BaseModel):

@@ -110,16 +110,6 @@ def test_runtime_values_are_excluded_from_model_dump():
     assert "state_file_loc" not in dumped
 
 
-def test_deprecated_use_consist_warns_and_is_ignored():
-    config = _minimal_config()
-    config["shared"]["database"]["use_consist"] = False
-
-    with pytest.warns(DeprecationWarning, match="shared.database.use_consist"):
-        settings = PilatesConfig(**config)
-
-    assert settings.shared.database.use_consist is True
-
-
 def test_workflow_rejects_retired_manifest_recovery_config():
     config = _minimal_config()
     config["workflow"] = {"manifests": {"disabled_stages": ["supply_demand"]}}

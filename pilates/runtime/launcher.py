@@ -988,11 +988,10 @@ def main(
             #
             # Step Pattern (used for all stages):
             #   1. build_*_inputs(...)      - Collect inputs from previous outputs + coupler
-            #   2. log_inputs(...)          - Log for provenance
-            #   3. build_*_outputs(...)     - Declare what we expect to produce
-            #   4. make_*_step(...)         - Create step function with coupler refs
-            #   5. build_step_config(...)   - Create config (year, iteration, inputs, outputs, kwargs)
-            #   6. scenario.run(...)        - Execute via Consist (handles caching + provenance)
+            #   2. build_*_outputs(...)     - Declare what we expect to produce
+            #   3. make_*_step(...)         - Create step function with coupler refs
+            #   4. build_step_config(...)   - Create config (year, iteration, inputs, outputs, kwargs)
+            #   5. scenario.run(...)        - Execute via Consist (handles caching + provenance)
             #
             for year in state:
                 formatted_print(f"STARTING YEAR {year}")

@@ -200,7 +200,7 @@ def preflight_staged_linkstats_admission(
     if linkstats_config is None:
         return None
 
-    expectation = getattr(linkstats_config, "expectation", None)
+    expectation = linkstats_config.expectation
     sidecar_payload: dict[str, object] | None = None
 
     if isinstance(expectation, DeclaredDigestExpectation):
@@ -219,9 +219,9 @@ def preflight_staged_linkstats_admission(
             runtime_reference=runtime_reference,
             expectation=expectation,
         )
-    else:
+    elif isinstance(expectation, PriorRunExpectation):
         runtime_reference = consist.AdmissionReference(
-            artifact_key=str(linkstats_config.artifact_key),
+            artifact_key=str(expectation.artifact_key),
             input_role=_LINKSTATS_ROLE,
             config_key=launch_reference.config_key,
             config_reference_key=launch_reference.config_key,
@@ -231,26 +231,18 @@ def preflight_staged_linkstats_admission(
             execution_path=launch_reference.execution_path,
             consumer_path=launch_reference.container_path,
         )
-        source_tracker_db = (
-            expectation.source_tracker_db
-            if isinstance(expectation, PriorRunExpectation)
-            else None
-        )
-        expected_direction = (
-            expectation.expected_direction
-            if isinstance(expectation, PriorRunExpectation)
-            else "any"
-        )
+        source_tracker_db = expectation.source_tracker_db
+        expected_direction = expectation.expected_direction
         if source_tracker_db is not None or expected_direction != "any":
             report = consist.check_admission_reference_prior_run_expectation(
                 tracker=tracker,
                 reference=runtime_reference,
                 expectation=consist.PriorRunExpectation(
-                    expected_run_id=str(linkstats_config.expected_run_id),
-                    artifact_key=str(linkstats_config.artifact_key),
+                    expected_run_id=str(expectation.expected_run_id),
+                    artifact_key=str(expectation.artifact_key),
                     expected_direction=expected_direction,
                     source_tracker_db=source_tracker_db,
-                    expected_bytes_path=linkstats_config.expected_bytes_path,
+                    expected_bytes_path=expectation.expected_bytes_path,
                     input_role=_LINKSTATS_ROLE,
                 ),
             )
@@ -258,9 +250,13 @@ def preflight_staged_linkstats_admission(
             report = consist.check_admission_reference(
                 tracker,
                 reference=runtime_reference,
-                expected_run_id=str(linkstats_config.expected_run_id),
-                expected_bytes_path=linkstats_config.expected_bytes_path,
+                expected_run_id=str(expectation.expected_run_id),
+                expected_bytes_path=expectation.expected_bytes_path,
             )
+    else:
+        raise ValueError(
+            f"Unsupported BEAM linkstats admission expectation: {type(expectation)!r}"
+        )
 
     _persist_admission_report(
         report_dir=report_dir,
