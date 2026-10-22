@@ -22,6 +22,6 @@ def test_workflow_code_uses_lossy_step_output_mapping_only_in_replay_paths() -> 
 
     assert offending_uses == [], (
         "Lossy step_output_mapping(...) should not be used in workflow runtime "
-        "handoffs; use step_output_handoff_mapping(...) instead.\n"
+        "handoffs; publish and resolve artifacts via the coupler instead.\n"
         + "\n".join(offending_uses)
     )

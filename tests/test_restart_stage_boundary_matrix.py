@@ -112,9 +112,6 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         beam_stage, "_maybe_fail_after_beam_run_for_canary", lambda **_: None
     )
     monkeypatch.setattr(beam_stage, "_archive_run_dir_for_restart", lambda _state: None)
-    monkeypatch.setattr(
-        beam_stage, "step_output_handoff_mapping", lambda *_args, **_kwargs: {}
-    )
 
     beam_stage._run_beam_steps(
         scenario=scenario,
@@ -316,9 +313,6 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
         beam_stage, "_maybe_fail_after_beam_run_for_canary", lambda **_: None
     )
     monkeypatch.setattr(beam_stage, "_archive_run_dir_for_restart", lambda _state: None)
-    monkeypatch.setattr(
-        beam_stage, "step_output_handoff_mapping", lambda *_args, **_kwargs: {}
-    )
 
     beam_stage._run_beam_steps(
         scenario=scenario,

@@ -24,8 +24,6 @@ from typing import (
 )
 
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
-from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.coupler_namespace import resolve_coupler_value
 
 if TYPE_CHECKING:
     from pilates.config import PilatesConfig
@@ -174,9 +172,9 @@ def step_output_mapping(
     Warning
     -------
     This helper intentionally strips artifact identity and content-hash-bearing
-    objects down to filesystem path strings. Use
-    ``step_output_handoff_mapping(...)`` for runtime handoffs between workflow
-    steps/stages/iterations where Consist lineage should be preserved.
+    objects down to filesystem path strings. Do not use it for runtime handoffs
+    between workflow steps/stages/iterations where Consist lineage should be
+    preserved; publish and resolve artifacts via the coupler instead.
 
     Parameters
     ----------
@@ -194,7 +192,7 @@ def step_output_mapping(
     if warn_lossy:
         logger.warning(
             "step_output_mapping(...) is lossy and should not be used for runtime "
-            "workflow handoffs; prefer step_output_handoff_mapping(...)."
+            "workflow handoffs; publish and resolve artifacts via the coupler."
         )
     mapping: Dict[str, str] = {}
     for key, path, _ in iter_step_output_items(outputs):
@@ -218,51 +216,6 @@ def step_output_mapping(
             )
             continue
         mapping[sanitized_key] = str(path)
-    return mapping
-
-
-def step_output_handoff_mapping(
-    outputs: Any,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-) -> Dict[str, Any]:
-    """
-    Build a runtime handoff mapping, preserving coupler-published artifacts.
-
-    This is for step-to-step or iteration-to-iteration handoffs where artifact
-    identity matters. When the current step has already published a key into the
-    coupler, the coupler value is preferred over the raw filesystem path string.
-    """
-    mapping: Dict[str, Any] = {}
-    if coupler is None:
-        logger.warning(
-            "step_output_handoff_mapping(...) called without a readable coupler; "
-            "handoff values will fall back to raw paths."
-        )
-    for key, path, _ in iter_step_output_items(outputs):
-        sanitized_key = sanitize_artifact_key(key)
-        if sanitized_key is None:
-            logger.warning(
-                "Invalid typed-output artifact key '%s' could not be sanitized; skipping.",
-                key,
-            )
-            continue
-        if sanitized_key != key:
-            logger.warning(
-                "Invalid typed-output artifact key '%s' sanitized to '%s' for Consist compatibility.",
-                key,
-                sanitized_key,
-            )
-        if sanitized_key in mapping:
-            logger.warning(
-                "Duplicate typed-output artifact key '%s' detected; keeping first path and skipping later duplicate.",
-                sanitized_key,
-            )
-            continue
-        resolved = resolve_coupler_value(coupler, sanitized_key)
-        mapping[sanitized_key] = (
-            resolved.value if resolved.value is not None else str(path)
-        )
     return mapping
 
 
