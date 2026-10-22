@@ -892,10 +892,28 @@ def golden_stub_env(tmp_path, monkeypatch):
         def __new__(cls, model_name, state=None, *_a, **_kw):
             return DummyPreprocessor(model_name, record_builder, state=state)
 
+    class _PatchedActivitysimRunner(activitysim_steps.ActivitysimRunner):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyRunner(model_name, record_builder, state=state)
+
+    class _PatchedActivitysimPostprocessor(activitysim_steps.ActivitysimPostprocessor):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyPostprocessor(model_name, record_builder, state=state)
+
     monkeypatch.setattr(
         activitysim_steps,
         "ActivitysimPreprocessor",
         _PatchedActivitysimPreprocessor,
+    )
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimRunner",
+        _PatchedActivitysimRunner,
+    )
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimPostprocessor",
+        _PatchedActivitysimPostprocessor,
     )
 
     tracker = consist.Tracker(
