@@ -1,8 +1,0 @@
-# PILATES Configuration File (Inherited Format)
-# SFBay Consist BEAM Preprocess HPC 2019 Acceptance Driver
-
-base: settings-sfbay-consist-usim-hpc-2019-canary.yaml
-
-run:
-  end_year: 2019
-  output_run_name: consist-sfbay-beam-preprocess-acceptance-2019

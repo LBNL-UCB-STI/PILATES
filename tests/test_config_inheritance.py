@@ -393,10 +393,6 @@ def test_swept_scenario_families_use_thin_base_overlays_and_resolve_cleanly() ->
             "settings-sfbay-consist-usim-hpc-2019.yaml",
             25,
         ),
-        "sfbay/settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml": (
-            "settings-sfbay-consist-usim-hpc-2019-canary.yaml",
-            20,
-        ),
         "sfbay/settings-sfbay-consist-usim-hpc.yaml": (
             "settings-sfbay-consist-usim-hpc-2019.yaml",
             35,
@@ -476,19 +472,6 @@ def test_swept_scenario_families_use_thin_base_overlays_and_resolve_cleanly() ->
         resolved = resolve_config_dict(scenario_path)
         assert "base" not in resolved
         load_config(scenario_path)
-
-    # Spot-check chained inheritance: acceptance -> canary -> 2019 base
-    acceptance_cfg = load_config(
-        SCENARIOS_DIR
-        / "sfbay"
-        / "settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml"
-    )
-    assert acceptance_cfg.run.end_year == 2019
-    assert acceptance_cfg.run.max_year_intervals == 1
-    assert (
-        acceptance_cfg.run.output_run_name
-        == "consist-sfbay-beam-preprocess-acceptance-2019"
-    )
 
     # Spot-check chained inheritance: fullskim -> 20250721-Baseline -> fy26-task1-Baseline
     fullskim_cfg = load_config(
