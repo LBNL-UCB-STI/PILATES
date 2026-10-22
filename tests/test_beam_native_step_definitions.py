@@ -17,6 +17,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
@@ -1008,6 +1009,169 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
     }
+
+
+def test_beam_preprocess_ignores_beam_plans_out_in_start_year_iteration_0(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "beam.conf"
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    activitysim_outputs = {
+        "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
+        "households_asim_out": tmp_path / "households.parquet",
+        "persons_asim_out": tmp_path / "persons.parquet",
+        "beam_plans_out": tmp_path / "nonexistent_prior_plans.csv.gz",
+    }
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return activitysim_outputs.get(key, default)
+
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            start_year=2017,
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf", scenario_folder="", discard_plans_every_year=False
+        ),
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_require_primary_beam_config",
+        lambda _settings, _workspace: config_path,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2017, start_year=2017, current_inner_iter=0),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+
+    inputs = resolved.binding.inputs or {}
+    assert BEAM_PLANS_OUT not in inputs
+    assert BEAM_PLANS_IN in inputs
+
+
+def test_beam_preprocess_binds_beam_plans_out_in_iteration_1_when_file_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "beam.conf"
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    existing_plans = tmp_path / "prior_plans.csv.gz"
+    existing_plans.write_text("dummy plans content\n", encoding="utf-8")
+    activitysim_outputs = {
+        "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
+        "households_asim_out": tmp_path / "households.parquet",
+        "persons_asim_out": tmp_path / "persons.parquet",
+        "beam_plans_out": existing_plans,
+    }
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return activitysim_outputs.get(key, default)
+
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            start_year=2017,
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_require_primary_beam_config",
+        lambda _settings, _workspace: config_path,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2017, start_year=2017, current_inner_iter=1),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+
+    inputs = resolved.binding.inputs or {}
+    assert BEAM_PLANS_OUT in inputs
+    assert inputs[BEAM_PLANS_OUT] == existing_plans
+
+
+def test_beam_preprocess_omits_pruned_beam_plans_out_in_iteration_1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "beam.conf"
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    activitysim_outputs = {
+        "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
+        "households_asim_out": tmp_path / "households.parquet",
+        "persons_asim_out": tmp_path / "persons.parquet",
+    }
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return activitysim_outputs.get(key, default)
+
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            start_year=2017,
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_require_primary_beam_config",
+        lambda _settings, _workspace: config_path,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2017, start_year=2017, current_inner_iter=1),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+
+    inputs = resolved.binding.inputs or {}
+    assert BEAM_PLANS_OUT not in inputs
+    assert resolved.source_by_role[BEAM_PLANS_OUT] == "missing"
+    assert BEAM_PLANS_OUT not in resolved.logical_destinations
 
 
 def test_beam_preprocess_preserves_atlas_vehicles_producer_basename(
