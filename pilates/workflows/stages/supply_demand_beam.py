@@ -5,7 +5,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
+from typing import Any, Dict, Mapping, Optional, Sequence, TYPE_CHECKING
 
 
 from pilates.config.models import PilatesConfig
@@ -204,6 +204,39 @@ def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
     raise RuntimeError(message)
 
 
+def _archive_beam_launch_config(
+    launch_config_dir: Path,
+    *,
+    year: int,
+    iteration: int,
+    targets: Sequence[Path | None],
+) -> None:
+    """Archive compiled BEAM launch config tree to durable run directories."""
+    if not launch_config_dir.exists():
+        return
+    launch_config_resolved = launch_config_dir.resolve()
+    for target in targets:
+        if target is None:
+            continue
+        dest_root = Path(target).expanduser().resolve()
+        dest_dir = (
+            dest_root / ".pilates-beam-launch-config" / f"y{year}" / f"i{iteration}"
+        )
+        if dest_dir.resolve() == launch_config_resolved:
+            continue
+        dest_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            launch_config_dir,
+            dest_dir,
+            dirs_exist_ok=True,
+            ignore_dangling_symlinks=True,
+        )
+        logger.debug(
+            "[beam] archived launch config to %s",
+            dest_dir,
+        )
+
+
 def _compile_beam_launch_config(
     *,
     scenario: ScenarioWithCoupler,
@@ -212,6 +245,7 @@ def _compile_beam_launch_config(
     year: int,
     iteration: int,
     preprocess_outputs: Any,
+    archive_run_dir: Optional[Path] = None,
 ) -> BeamLaunchConfig:
     """Create the one derived config tree consumed by the next BEAM process."""
 
@@ -235,6 +269,16 @@ def _compile_beam_launch_config(
         settings=settings,
         workspace=workspace,
         config_root=launch_config.root,
+    )
+    tracker_run_dir = getattr(getattr(scenario, "tracker", None), "run_dir", None)
+    _archive_beam_launch_config(
+        output_dir,
+        year=year,
+        iteration=iteration,
+        targets=[
+            archive_run_dir,
+            Path(tracker_run_dir) if tracker_run_dir else None,
+        ],
     )
     return launch_config
 
@@ -271,6 +315,7 @@ def _run_beam_steps(
         year=year,
         iteration=iteration,
         preprocess_outputs=preprocess_outputs,
+        archive_run_dir=archive_run_dir,
     )
     run_inputs = beam_run.resolve_inputs(
         settings=settings,
@@ -490,6 +535,7 @@ def _run_traffic_assignment_phase(
             workspace=workspace,
             settings=settings,
         )
+        archive_run_dir = _archive_run_dir_for_restart(state)
         launch_config = _compile_beam_launch_config(
             scenario=scenario,
             settings=settings,
@@ -497,6 +543,7 @@ def _run_traffic_assignment_phase(
             year=inputs.year,
             iteration=inputs.iteration,
             preprocess_outputs=preprocess_outputs,
+            archive_run_dir=archive_run_dir,
         )
         combined_beam_outputs = _run_beam_full_skim_step(
             scenario=scenario,
