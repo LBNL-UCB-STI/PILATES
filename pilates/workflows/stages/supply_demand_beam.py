@@ -367,7 +367,7 @@ def _run_beam_steps(
     )
     postprocess_inputs.require_complete()
 
-    postprocess_result, postprocess_outputs = execute_step(
+    postprocess_result, _ = execute_step(
         scenario=scenario,
         definition=beam_postprocess,
         settings=settings,
@@ -379,7 +379,6 @@ def _run_beam_steps(
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
     )
-    del postprocess_outputs
     if isinstance(postprocess_result, RunResult) and not getattr(
         postprocess_result, "cache_hit", False
     ):
@@ -422,7 +421,7 @@ def _run_beam_full_skim_step(
         workspace=context.workspace,
         coupler=scenario.coupler,
     )
-    _, outputs = execute_step(
+    _, _ = execute_step(
         scenario=scenario,
         definition=beam_full_skim,
         settings=context.settings,
@@ -435,7 +434,6 @@ def _run_beam_full_skim_step(
         runtime_kwargs={"beam_launch_config": launch_config},
         resolved_inputs=full_skim_inputs,
     )
-    del outputs
     return None
 
 
