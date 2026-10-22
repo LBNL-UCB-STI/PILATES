@@ -288,25 +288,31 @@ class ScenarioParentLinkProxy:
             iteration=iteration,
         )
 
-        if not run_kwargs.get("parent_run_id"):
-            resolved_parent = self._resolve_parent_run_id(
-                model_name=model_name,
-                year=year,
-                iteration=iteration,
+        resolved_parent = self._resolve_parent_run_id(
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+        )
+        if resolved_parent:
+            tags = list(run_kwargs.get("tags") or [])
+            causal_tag = f"causal_parent:{resolved_parent}"
+            if causal_tag not in tags:
+                tags.append(causal_tag)
+            run_kwargs["tags"] = tags
+
+            existing_facet = run_kwargs.get("facet")
+            facet_dict = (
+                dict(existing_facet) if isinstance(existing_facet, Mapping) else {}
             )
-            if resolved_parent:
-                run_kwargs["parent_run_id"] = resolved_parent
-            elif self._should_expect_parent(
-                model_name=model_name,
-                year=year,
-                iteration=iteration,
-            ):
-                logger.debug(
-                    "[RunTagging] parent_run_id unavailable for model=%s year=%s iteration=%s; leaving unset.",
-                    model_name,
-                    year,
-                    iteration,
-                )
+            facet_dict["causal_parent_run_id"] = resolved_parent
+            run_kwargs["facet"] = facet_dict
+        elif parent_expected:
+            logger.debug(
+                "[RunTagging] causal parent unavailable for model=%s year=%s iteration=%s; leaving unset.",
+                model_name,
+                year,
+                iteration,
+            )
 
         result = self._scenario.run(**run_kwargs)
         run_id = str(getattr(getattr(result, "run", None), "id", "")).strip() or None
@@ -319,13 +325,13 @@ class ScenarioParentLinkProxy:
         )
         self._log_parent_link(
             source="live_execution"
-            if run_kwargs.get("parent_run_id")
+            if (resolved_parent or run_kwargs.get("parent_run_id"))
             else "remained_unset",
             model_name=model_name,
             year=year,
             iteration=iteration,
             run_id=run_id,
-            parent_run_id=run_kwargs.get("parent_run_id"),
+            parent_run_id=resolved_parent or run_kwargs.get("parent_run_id"),
             parent_expected=parent_expected,
         )
         return result
