@@ -113,14 +113,6 @@ restart it validates and hydrates that closure to exact current destinations,
 then re-resolves and runs native `beam_postprocess`. The in-progress
 postprocess mutation gate remains non-restartable.
 
-## Evidence Status
-
-The SFBay structural checker is the formal structural acceptance artifact.
-Seattle v1 is supporting runtime evidence only. BEAM-preprocess and the
-editable-Consist ActivitySim-run acceptances are boundary-specific; replay with
-a released Consist wheel remains to be shown. HDF5 promotion is separate. This
-page does not claim an HPC execution path as acceptance evidence.
-
 All other restart behavior follows the normal durable stage/year frontier. In
 particular, an interrupted ActivitySim mid-stage operation fails closed.
 

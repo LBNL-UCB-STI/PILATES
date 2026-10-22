@@ -323,12 +323,3 @@ slurm_job_name, slurm_partition, node, duration_seconds, output_count,
 archive_run_dir, error
 ```
 
-## Legacy Config Migration
-
-If the passed settings file is in legacy format (does not contain `run:`, `shared:`, and `infrastructure:`), `job.sh` runs:
-
-```bash
-python3 scripts/migrate_config.py <old> <old>_migrated.yaml --no-validate
-```
-
-and uses the migrated file if migration succeeds.

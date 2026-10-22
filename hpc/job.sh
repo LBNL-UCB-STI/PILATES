@@ -260,21 +260,6 @@ else
     echo "Stage: <fresh run>"
 fi
 
-is_new_format() {
-    grep -q -E "^(base|extends):" "$1" || (grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1")
-}
-
-if ! is_new_format "$CONFIG_FILE"; then
-    echo "Detected legacy settings format; migrating..."
-    MIGRATED_CONFIG="${CONFIG_FILE%.yaml}_migrated.yaml"
-    if python3 scripts/migrate_config.py "$CONFIG_FILE" "$MIGRATED_CONFIG" --no-validate; then
-        CONFIG_FILE="$MIGRATED_CONFIG"
-        echo "Using migrated config: $CONFIG_FILE"
-    else
-        echo "WARNING: migration failed, continuing with original config"
-    fi
-fi
-
 if [ -n "$STAGE_FILE" ]; then
     PYTHONUNBUFFERED=1 python3 -u run.py -c "$CONFIG_FILE" -S "$STAGE_FILE" &
 else
