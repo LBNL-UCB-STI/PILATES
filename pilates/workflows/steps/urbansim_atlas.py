@@ -15,6 +15,11 @@ from consist import (
     define_step,
 )
 
+from pilates.atlas.outputs import (
+    AtlasPostprocessOutputs,
+    AtlasPreprocessOutputs,
+    AtlasRunOutputs,
+)
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasLaunchContext, AtlasRunner
@@ -26,9 +31,14 @@ from pilates.urbansim.outputs import UrbanSimRunOutputs as NativeUrbanSimRunOutp
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import stage_urbansim_run_workspace
 from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
+    USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_INPUT_ARCHIVE_PREFIX,
+    USIM_INPUT_MERGED_PREFIX,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.binding import build_resolved_binding
@@ -46,20 +56,7 @@ from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.utils.consist_runtime import require_runtime_kwargs
 from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workspace import Workspace
-
-# Model-specific step factories for UrbanSim and ATLAS.
-# Shared helpers/infrastructure are imported from shared.py.
-from .shared import (
-    USIM_DATASTORE_H5,
-    USIM_FORECAST_OUTPUT,
-    USIM_INPUT_ARCHIVE_PREFIX,
-    USIM_INPUT_MERGED_PREFIX,
-    AtlasPostprocessOutputs,
-    AtlasPreprocessOutputs,
-    AtlasRunOutputs,
-    CouplerProtocol,
-    WorkflowState,
-)
+from workflow_state import WorkflowState
 
 
 # Native Consist step definitions.

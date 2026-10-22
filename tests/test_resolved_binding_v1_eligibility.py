@@ -272,7 +272,10 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
     monkeypatch.setattr(body_runner, "get_asim_additional_args", lambda *_args: [])
     monkeypatch.setattr(body_runner, "run_container", capture_container)
 
-    class Runner:
+    class Runner(ActivitysimRunner):
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
         def run(
             self, inputs: object, context: ActivitySimLaunchContext, **kwargs: object
         ) -> None:
@@ -291,9 +294,9 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
             )
 
     monkeypatch.setattr(
-        activitysim_steps.ModelFactory,
-        "get_runner",
-        lambda _factory, *_args: Runner(),
+        activitysim_steps,
+        "ActivitysimRunner",
+        Runner,
     )
     monkeypatch.setenv(
         "PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_OBSERVATIONS", str(observation_log)

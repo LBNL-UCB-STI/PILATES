@@ -37,17 +37,29 @@ from pilates.activitysim.runner import (
 from pilates.activitysim.outputs import (
     ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
     configured_asim_output_keys,
 )
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.config.models import PilatesConfig
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
     FINAL_SKIMS_OMX,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_H5,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
 )
 from pilates.workflows.binding import (
     ArtifactBindingRule,
@@ -67,27 +79,10 @@ from pilates.workflows.step_definition import (
 )
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
-from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
+from workflow_state import WorkflowState
 
-# Model-specific step factories for ActivitySim.
-# Shared helpers/infrastructure are imported from shared.py.
-from .shared import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
-    USIM_DATASTORE_H5,
-    ZARR_SKIMS,
-    ActivitySimPostprocessOutputs,
-    ActivitySimPreprocessOutputs,
-    ActivitySimRunOutputs,
-    CouplerProtocol,
-    WorkflowState,
-    _activitysim_output_facet_meta,
-)
+from .shared import _activitysim_output_facet_meta
 
 logger = logging.getLogger(__name__)
 
@@ -1084,7 +1079,7 @@ def _activitysim_preprocess_callable(
     }
     if prepare_omx_skims and final_skims_omx is not None:
         preprocess_kwargs["final_skims_omx"] = final_skims_omx
-    ModelFactory().get_preprocessor("activitysim", state).preprocess(
+    ActivitysimPreprocessor("activitysim", state).preprocess(
         workspace, **preprocess_kwargs
     )
 
@@ -1164,7 +1159,7 @@ def _activitysim_run_callable(
         persons_table=Path(persons_asim_in),
         omx_skims=Path(omx_skims) if omx_skims is not None else None,
     )
-    ModelFactory().get_runner("activitysim", state).run(
+    ActivitysimRunner("activitysim", state).run(
         inputs,
         activitysim_launch_context,
         skim_mode=skim_mode,
@@ -1251,7 +1246,7 @@ def _activitysim_postprocess_callable(
             if path is not None
         },
     )
-    ModelFactory().get_postprocessor("activitysim", state).postprocess(
+    ActivitysimPostprocessor("activitysim", state).postprocess(
         raw_outputs,
         workspace,
         households_asim_input_path=str(households_asim_in),

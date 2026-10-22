@@ -9,7 +9,6 @@ from consist.types import CacheOptions, OutputArtifactSpec
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.config import PilatesConfig
 from pilates.activitysim.preprocessor import required_asim_config_dirs
-from pilates.generic.model_factory import ModelFactory
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -274,7 +273,6 @@ def seed_bootstrap_artifacts_to_coupler(
     state: Any,
     workspace: Workspace,
     coupler: CouplerProtocol,
-    model_factory_cls: type[ModelFactory] = ModelFactory,
 ) -> None:
     """
     Seed coupler keys for bootstrap-staged artifacts needed by later steps.
@@ -290,7 +288,6 @@ def seed_bootstrap_artifacts_to_coupler(
             settings=settings,
             state=state,
             workspace=workspace,
-            model_factory_cls=model_factory_cls,
         )
         if not resolved_artifacts:
             continue

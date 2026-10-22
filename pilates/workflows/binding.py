@@ -37,6 +37,7 @@ from consist import (
 )
 from consist.types import BindingResult
 
+from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
@@ -1069,7 +1070,6 @@ def _bootstrap_beam_exchange_inputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    model_factory_cls: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
     if get_traffic_assignment_model(settings) != "beam":
@@ -1080,8 +1080,7 @@ def _bootstrap_beam_exchange_inputs(
     if activity_demand_model is not None:
         return None
 
-    model_factory = model_factory_cls()
-    beam_preprocessor = model_factory.get_preprocessor("beam", state)
+    beam_preprocessor = BeamPreprocessor("beam", state)
     existing_inputs = getattr(beam_preprocessor, "existing_beam_exchange_inputs", None)
     if not callable(existing_inputs):
         logger.debug(

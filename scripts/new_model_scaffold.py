@@ -5,7 +5,7 @@ Scaffold a new PILATES model integration.
 This generator creates:
 - model package boilerplate (preprocessor/runner/postprocessor/outputs)
 - native Consist step definitions (decorated callable, resolver, projector)
-- central registrations (ModelFactory, native step exports, catalog policy)
+- central registrations (native step exports, catalog policy)
 - a model-specific checklist in docs/checklists/
 
 By default this writes directly to the repository. Use --dry-run to preview.
@@ -260,15 +260,6 @@ def _matching_delimiter_index(
     )
 
 
-def _matching_brace_index(text: str, open_brace_index: int) -> int:
-    return _matching_delimiter_index(
-        text,
-        open_brace_index,
-        open_char="{",
-        close_char="}",
-    )
-
-
 def _insert_once(text: str, *, anchor: str, snippet: str, dedupe_token: str) -> str:
     if dedupe_token in text:
         return text
@@ -276,75 +267,6 @@ def _insert_once(text: str, *, anchor: str, snippet: str, dedupe_token: str) -> 
     if idx == -1:
         raise ValueError(f"Anchor not found: {anchor!r}")
     return text[:idx] + snippet + text[idx:]
-
-
-def _append_import_after_pilates_imports(text: str, new_imports: List[str]) -> str:
-    for imp in new_imports:
-        if imp in text:
-            continue
-        lines = text.splitlines(keepends=True)
-        insertion_index = _find_pilates_import_insertion_index(lines)
-        lines.insert(insertion_index + 1, imp + "\n")
-        text = "".join(lines)
-    return text
-
-
-def _find_pilates_import_insertion_index(lines: Sequence[str]) -> int:
-    insertion_index = -1
-    line_index = 0
-    while line_index < len(lines):
-        line = lines[line_index]
-        if not line.startswith("from pilates."):
-            line_index += 1
-            continue
-
-        end_index = line_index
-        delimiter_depth = line.count("(") - line.count(")")
-        while delimiter_depth > 0:
-            end_index += 1
-            if end_index >= len(lines):
-                raise ValueError("Unbalanced multiline PILATES import block")
-            delimiter_depth += lines[end_index].count("(") - lines[end_index].count(")")
-
-        insertion_index = end_index
-        line_index = end_index + 1
-
-    if insertion_index < 0:
-        raise ValueError("Could not find PILATES import block")
-    return insertion_index
-
-
-def _insert_import_block_after_pilates_imports(
-    text: str,
-    *,
-    import_block: str,
-    dedupe_token: str,
-) -> str:
-    if dedupe_token in text:
-        return text
-    lines = text.splitlines(keepends=True)
-    insertion_index = _find_pilates_import_insertion_index(lines)
-    block = import_block if import_block.endswith("\n") else import_block + "\n"
-    lines.insert(insertion_index + 1, block)
-    return "".join(lines)
-
-
-def _insert_registry_entry(
-    text: str,
-    *,
-    registry_name: str,
-    key_token: str,
-    entry_block: str,
-) -> str:
-    if key_token in text:
-        return text
-    anchor = f"{registry_name} = {{"
-    start = text.find(anchor)
-    if start == -1:
-        raise ValueError(f"Could not find registry anchor {anchor!r}")
-    open_brace = text.find("{", start)
-    close_brace = _matching_brace_index(text, open_brace)
-    return text[:close_brace] + entry_block + text[close_brace:]
 
 
 def _insert_tuple_entry(
@@ -376,44 +298,6 @@ def _next_catalog_order(text: str) -> int:
     if not matches:
         return 10
     return max(matches) + 10
-
-
-def _upsert_model_factory(
-    repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool
-) -> Tuple[Path, bool]:
-    path = repo_root / "pilates/generic/model_factory.py"
-    text = _read_text(path)
-    original = text
-
-    text = _append_import_after_pilates_imports(
-        text,
-        [
-            f"from pilates.{spec.model}.preprocessor import {spec.preprocessor_class}",
-            f"from pilates.{spec.model}.runner import {spec.runner_class}",
-            f"from pilates.{spec.model}.postprocessor import {spec.postprocessor_class}",
-        ],
-    )
-
-    entry = dedent(
-        f"""
-                "{spec.model}": {{
-                    "preprocessor": {spec.preprocessor_class},
-                    "runner": {spec.runner_class},
-                    "postprocessor": {spec.postprocessor_class},
-                }},
-        """
-    )
-    text = _insert_registry_entry(
-        text,
-        registry_name="_registry",
-        key_token=f'        "{spec.model}": {{',
-        entry_block=entry,
-    )
-
-    changed = text != original
-    if changed:
-        _write_text(path, text, dry_run=dry_run)
-    return path, changed
 
 
 def _upsert_steps_init(
@@ -566,7 +450,7 @@ def _render_preprocessor(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
-        from typing import TYPE_CHECKING, Tuple
+        from typing import Optional, TYPE_CHECKING, Tuple
 
         from pilates.generic.preprocessor import GenericPreprocessor
         from pilates.generic.records import RecordStore
@@ -583,8 +467,10 @@ def _render_preprocessor(spec: ScaffoldSpec) -> str:
                 self,
                 settings: "PilatesConfig",
                 output_dir: str,
+                workspace: Optional["Workspace"] = None,
             ) -> Tuple[RecordStore, RecordStore]:
                 """Copy immutable inputs into the mutable workspace location."""
+                del settings, output_dir, workspace
                 return RecordStore(), RecordStore()
 
             def _preprocess(
@@ -794,12 +680,12 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
 
         from consist import BindingResult, define_step
 
-        from pilates.generic.model_factory import ModelFactory
         from pilates.{spec.model}.outputs import (
             {spec.postprocess_output_class},
             {spec.preprocess_output_class},
             {spec.run_output_class},
         )
+        from pilates.{spec.model}.preprocessor import {spec.preprocessor_class}
         from pilates.utils.consist_runtime import require_runtime_kwargs
         from pilates.workflows.resolved_inputs import ResolvedStepInputs
         from pilates.workflows.step_consist_meta import consist_step_meta
@@ -867,7 +753,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
         @require_runtime_kwargs("settings", "state", "workspace")
         def _{spec.model}_preprocess_callable(*, settings: Any, state: Any, workspace: Any) -> None:
             """Run the model-local preprocess adapter after native input resolution."""
-            ModelFactory().get_preprocessor("{spec.model}", state).preprocess(workspace)
+            {spec.preprocessor_class}("{spec.model}", state).preprocess(workspace)
 
 
         @define_step(
@@ -1442,7 +1328,6 @@ def _render_checklist(
 
         ## Registrations Applied
 
-        - [ ] `pilates/generic/model_factory.py`
         - [ ] `pilates/workflows/steps/__init__.py`
         - [ ] `pilates/workflows/steps/__init__.py` (`STEP_DEFINITIONS`)
         - [ ] `pilates/workflows/catalog.py`
@@ -1720,9 +1605,6 @@ def main() -> int:
             force=args.force,
         ):
             actions.append(("create", path, changed))
-
-        path, changed = _upsert_model_factory(repo_root, spec, dry_run=args.dry_run)
-        actions.append(("update", path, changed))
 
         path, changed = _upsert_steps_init(repo_root, spec, dry_run=args.dry_run)
         actions.append(("update", path, changed))

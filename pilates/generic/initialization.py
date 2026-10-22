@@ -1,12 +1,17 @@
-from typing import Optional, Iterator, Tuple, Dict, Any, TYPE_CHECKING
+from typing import Optional, Iterator, Tuple, Dict, Any
 
+from pilates.activitysim.preprocessor import ActivitysimPreprocessor
+from pilates.atlas.preprocessor import AtlasPreprocessor
+from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore, sanitize_artifact_key
-from pilates.urbansim.preprocessor import stage_synthetic_population
+from pilates.urbansim.preprocessor import (
+    UrbansimPreprocessor,
+    stage_synthetic_population,
+)
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.workspace import Workspace
-from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
 from pilates.workflows._profile import ensure_runtime_flags_initialized
 
@@ -14,10 +19,6 @@ import os
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-if TYPE_CHECKING:
-    from workflow_state import WorkflowState
 
 
 _BOOTSTRAP_DIRECTION_KEY = "bootstrap_direction"
@@ -284,13 +285,6 @@ class Initialization(Model):
     GenericPreprocessor interface.
     """
 
-    def __init__(
-        self,
-        model_name: str,
-        state: "WorkflowState",
-    ):
-        super().__init__(model_name, state)
-
     def run(self, settings: PilatesConfig, workspace: Workspace) -> RecordStore:
         """
         Execute the initialization process:
@@ -306,7 +300,6 @@ class Initialization(Model):
         vehicle_ownership_enabled = bool(
             enabled_flags["vehicle_ownership_model_enabled"]
         )
-        model_factory = ModelFactory()
 
         try:
             # BEAM model initialization
@@ -314,7 +307,7 @@ class Initialization(Model):
                 traffic_assignment_enabled
                 and get_traffic_assignment_model(settings) == "beam"
             ):
-                beam_preprocessor = model_factory.get_preprocessor("beam", self.state)
+                beam_preprocessor = BeamPreprocessor("beam", self.state)
 
                 beam_input_dir = workspace.get_beam_mutable_data_dir()
                 result = beam_preprocessor.copy_data_to_mutable_location(
@@ -352,9 +345,7 @@ class Initialization(Model):
                 if model_name == "urbansim":
                     output_dir = workspace.get_usim_mutable_data_dir()
                     os.makedirs(output_dir, exist_ok=True)
-                    usim_preprocessor = model_factory.get_preprocessor(
-                        "urbansim", self.state
-                    )
+                    usim_preprocessor = UrbansimPreprocessor("urbansim", self.state)
                     result = usim_preprocessor.copy_data_to_mutable_location(
                         settings, output_dir
                     )
@@ -385,9 +376,7 @@ class Initialization(Model):
                 if model_name == "atlas":
                     input_dir = workspace.get_atlas_mutable_input_dir()
                     os.makedirs(input_dir, exist_ok=True)
-                    atlas_preprocessor = model_factory.get_preprocessor(
-                        "atlas", self.state
-                    )
+                    atlas_preprocessor = AtlasPreprocessor("atlas", self.state)
                     result = atlas_preprocessor.copy_data_to_mutable_location(
                         settings, input_dir
                     )
@@ -401,7 +390,7 @@ class Initialization(Model):
 
                 # ActivitySim config copy
                 if model_name == "activitysim":
-                    activitysim_preprocessor = model_factory.get_preprocessor(
+                    activitysim_preprocessor = ActivitysimPreprocessor(
                         model_name, self.state
                     )
                     asim_input_dir = workspace.get_asim_mutable_data_dir()

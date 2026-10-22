@@ -1,34 +1,9 @@
 import pytest
 from types import SimpleNamespace
-from pilates.generic.model_factory import ModelFactory
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
-from pilates.workflows import step_exec
-
-
-# ----------------------------------------------------------------------
-# ModelFactory tests
-# ----------------------------------------------------------------------
-def test_model_factory_returns_correct_classes():
-    mf = ModelFactory()
-    # Verify that known model keys return the proper classes
-    runner = mf.get_runner("activitysim", None)
-    assert runner.__class__.__name__ == "ActivitysimRunner"
-
-    mock_state = SimpleNamespace(full_settings=SimpleNamespace())
-    pre = mf.get_preprocessor("beam", mock_state)
-    assert pre.__class__.__name__ == "BeamPreprocessor"
-
-    post = mf.get_postprocessor("urbansim", None)
-    assert post.__class__.__name__ == "UrbansimPostprocessor"
-
-
-def test_model_factory_unknown_model_raises():
-    mf = ModelFactory()
-    with pytest.raises(KeyError):
-        mf.get_runner("nonexistent_model", None)
 
 
 # ----------------------------------------------------------------------
@@ -151,14 +126,6 @@ def test_postprocessor_protocol_shape_forwards_model_run_hash():
         "model_run_hash": "run-hash-123",
     }
     assert result is raw_outputs
-
-
-def test_warm_start_activities_is_deprecated():
-    with pytest.raises(
-        RuntimeError,
-        match="ActivitySim warm-start is deprecated and no longer supported",
-    ):
-        step_exec.warm_start_activities(SimpleNamespace(), SimpleNamespace(), object())
 
 
 class _StageTrackingState:

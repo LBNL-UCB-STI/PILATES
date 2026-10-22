@@ -39,10 +39,9 @@ Checklist](model_contract_checklist.md) before relying on an integration.
 - **Native step module (`pilates/workflows/steps/<model>.py`)**: decorated
   Consist callables, semantic input resolver (`ResolvedStepInputs`), typed
   output projector, `InputContract`, and `StepDefinition` exports.
-- **Step surface & catalog (`pilates/workflows/steps/__init__.py`, `pilates/workflows/catalog.py`, `pilates/generic/model_factory.py`)**:
-  export the new `StepDefinition` objects in `STEP_DEFINITIONS`, add policy-only
-  `WorkflowStepSpec` entries, and register the model components in
-  `ModelFactory`.
+- **Step surface & catalog (`pilates/workflows/steps/__init__.py`, `pilates/workflows/catalog.py`)**:
+  export the new `StepDefinition` objects in `STEP_DEFINITIONS` and add policy-only
+  `WorkflowStepSpec` entries.
 - **Owning stage module (`pilates/workflows/stages/<stage>.py`)**: sequence the
   new `StepDefinition` objects with explicit `execute_step(...)` calls.
 - **Semantic roles & config schema (when introducing new cross-step roles or settings)**:
