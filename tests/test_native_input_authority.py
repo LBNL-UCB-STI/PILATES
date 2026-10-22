@@ -294,11 +294,11 @@ def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
         def preprocess(self, _workspace, **kwargs):
             captured.update(kwargs)
 
-    class _Factory:
-        def get_preprocessor(self, _model, _state):
-            return _Preprocessor()
-
-    monkeypatch.setattr(activitysim, "ModelFactory", _Factory)
+    monkeypatch.setattr(
+        activitysim,
+        "ActivitysimPreprocessor",
+        lambda *_args: _Preprocessor(),
+    )
     activitysim._activitysim_preprocess_callable(
         Path("/bound/population.h5"),
         settings=_settings(),
@@ -384,10 +384,6 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         def preprocess(self, _workspace, **kwargs):
             captured["activitysim"] = kwargs
 
-    class _Factory:
-        def get_preprocessor(self, _model, _state):
-            return _ActivitysimPreprocessor()
-
     class _UrbansimRunner:
         def __init__(self, *_args):
             pass
@@ -405,7 +401,11 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         def preprocess(self, _workspace, **kwargs):
             captured["atlas"] = kwargs
 
-    monkeypatch.setattr(activitysim, "ModelFactory", _Factory)
+    monkeypatch.setattr(
+        activitysim,
+        "ActivitysimPreprocessor",
+        lambda *_args: _ActivitysimPreprocessor(),
+    )
     monkeypatch.setattr(urbansim_atlas, "UrbansimRunner", _UrbansimRunner)
     monkeypatch.setattr(urbansim_atlas, "AtlasPreprocessor", _AtlasPreprocessor)
 

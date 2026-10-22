@@ -8,12 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.config import load_config
 from pilates.runtime import beam_preprocess_acceptance as acceptance
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 from pilates.workflows.steps import beam as beam_steps
-from pilates.workflows.steps.shared import BeamPreprocessOutputs
 from workflow_state import WorkflowState
 
 

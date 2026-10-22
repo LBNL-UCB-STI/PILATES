@@ -22,7 +22,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ZARR_SKIMS,
 )
-from pilates.workflows.step_exec import warm_start_activities
 
 
 class _StageTrackingState:
@@ -97,14 +96,6 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
         "postprocess": (previous_records, workspace, "run-hash"),
     }
     assert state.sub_stages == ["preprocessor", "runner", "postprocessor"]
-
-
-def test_warm_start_activities_is_deprecated() -> None:
-    with pytest.raises(
-        RuntimeError,
-        match="ActivitySim warm-start is deprecated and no longer supported",
-    ):
-        warm_start_activities(SimpleNamespace(), SimpleNamespace(), object())
 
 
 def test_activitysim_preprocess_public_method_constructs_expected_outputs(

@@ -39,11 +39,20 @@ class DummyPreprocessor:
         return RecordStore()
 
 
-class DummyModelFactory:
-    """ModelFactory stub that returns DummyPreprocessor for any model."""
-
-    def get_preprocessor(self, model_name, state, **_kwargs):
-        return DummyPreprocessor()
+def _patch_preprocessors(monkeypatch, factory_fn=None):
+    """Patch all preprocessor classes used by Initialization."""
+    if factory_fn is None:
+        factory_fn = lambda _model_name, _state=None, **_kw: DummyPreprocessor()
+    for cls_name in (
+        "BeamPreprocessor",
+        "UrbansimPreprocessor",
+        "AtlasPreprocessor",
+        "ActivitysimPreprocessor",
+    ):
+        monkeypatch.setattr(
+            f"pilates.generic.initialization.{cls_name}",
+            lambda model_name, state=None, **_kw: factory_fn(model_name, state),
+        )
 
 
 # ----------------------------------------------------------------------
@@ -93,10 +102,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     cr.set_enabled(False)
 
     try:
-        # Patch ModelFactory used inside Initialization
-        monkeypatch.setattr(
-            "pilates.generic.initialization.ModelFactory", DummyModelFactory
-        )
+        _patch_preprocessors(monkeypatch)
 
         init = Initialization("init", None)
         workspace = DummyWorkspace()
@@ -152,9 +158,7 @@ def test_initialization_runs_beam_when_only_traffic_assignment_is_set(monkeypatc
 
     cr.set_enabled(False)
     try:
-        monkeypatch.setattr(
-            "pilates.generic.initialization.ModelFactory", DummyModelFactory
-        )
+        _patch_preprocessors(monkeypatch)
 
         init = Initialization("init", None)
         workspace = DummyWorkspace()
@@ -187,9 +191,7 @@ def test_initialization_handles_missing_models_gracefully(monkeypatch):
     If a model key is missing from settings, Initialization should simply skip it
     without raising errors.
     """
-    monkeypatch.setattr(
-        "pilates.generic.initialization.ModelFactory", DummyModelFactory
-    )
+    _patch_preprocessors(monkeypatch)
 
     init = Initialization("init", None)
     workspace = DummyWorkspace()
@@ -263,21 +265,17 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
                 recordList=[out_record]
             )
 
-    class DummyLoggingModelFactory:
-        def __init__(self, input_path, output_path):
-            self.input_path = input_path
-            self.output_path = output_path
-
-        def get_preprocessor(self, model_name, state, **_kwargs):
-            return DummyLoggingPreprocessor(self.input_path, self.output_path)
-
     input_path = tmp_path / "source.txt"
     output_path = tmp_path / "dest.txt"
     input_path.write_text("source")
     output_path.write_text("dest")
 
-    factory = DummyLoggingModelFactory(input_path, output_path)
-    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+    _patch_preprocessors(
+        monkeypatch,
+        lambda _model_name, _state=None: DummyLoggingPreprocessor(
+            input_path, output_path
+        ),
+    )
 
     logged_inputs = []
     logged_outputs = []
@@ -367,15 +365,12 @@ def test_initialization_summary_counts_canonical_zones_under_activitysim(
 
     cr.set_enabled(False)
 
-    class _FactoryWithRealActivitySim:
-        def get_preprocessor(self, model_name, state, **_kwargs):
-            if model_name == "activitysim":
-                return ActivitysimPreprocessor(model_name="activitysim", state=state)
-            return DummyPreprocessor()
+    def _make_preprocessor(model_name, state):
+        if model_name == "activitysim":
+            return ActivitysimPreprocessor(model_name="activitysim", state=state)
+        return DummyPreprocessor()
 
-    monkeypatch.setattr(
-        "pilates.generic.initialization.ModelFactory", _FactoryWithRealActivitySim
-    )
+    _patch_preprocessors(monkeypatch, _make_preprocessor)
     monkeypatch.setattr(
         "pilates.activitysim.preprocessor._copytree_if_needed",
         lambda *args, **kwargs: None,
@@ -462,15 +457,11 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
             )
             return RecordStore(), RecordStore(recordList=[record])
 
-    class _CountingFactory:
-        def __init__(self):
-            self.calls = []
-
-        def get_preprocessor(self, model_name, state, **_kwargs):
-            return _CountingPreprocessor(model_name, self.calls)
-
-    factory = _CountingFactory()
-    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+    calls = []
+    _patch_preprocessors(
+        monkeypatch,
+        lambda model_name, _state=None: _CountingPreprocessor(model_name, calls),
+    )
 
     workspace = DummyWorkspace()
     workspace.activitysim_mutable_dir = str(tmp_path / "asim")
@@ -495,8 +486,8 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
         init = Initialization("init", None)
         init.run(settings, workspace)
 
-        urbansim_calls = [call for call in factory.calls if call[0] == "urbansim"]
-        activitysim_calls = [call for call in factory.calls if call[0] == "activitysim"]
+        urbansim_calls = [call for call in calls if call[0] == "urbansim"]
+        activitysim_calls = [call for call in calls if call[0] == "activitysim"]
 
         assert len(urbansim_calls) == 1
         assert len(activitysim_calls) == 1
@@ -519,17 +510,14 @@ def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_pa
             self.calls.append((output_dir, workspace))
             return RecordStore(), RecordStore()
 
-    class _Factory:
-        def __init__(self):
-            self.calls = []
+    calls = []
 
-        def get_preprocessor(self, model_name, state, **_kwargs):
-            if model_name == "activitysim":
-                return _ActivitySimPreprocessor(self.calls)
-            return DummyPreprocessor()
+    def _make_preprocessor(model_name, _state=None):
+        if model_name == "activitysim":
+            return _ActivitySimPreprocessor(calls)
+        return DummyPreprocessor()
 
-    factory = _Factory()
-    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+    _patch_preprocessors(monkeypatch, _make_preprocessor)
     monkeypatch.setattr(
         "pilates.generic.initialization.stage_synthetic_population",
         lambda settings, output_dir: (RecordStore(), RecordStore()),
@@ -566,7 +554,7 @@ def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_pa
         init = Initialization("init", None)
         init.run(settings, workspace)
 
-        assert factory.calls == [(workspace.get_asim_mutable_data_dir(), workspace)]
+        assert calls == [(workspace.get_asim_mutable_data_dir(), workspace)]
     finally:
         cr.set_enabled(None)
 
@@ -590,15 +578,11 @@ def test_initialization_beam_only_does_not_stage_disabled_models(monkeypatch, tm
             )
             return RecordStore(), RecordStore(recordList=[record])
 
-    class _Factory:
-        def __init__(self):
-            self.calls = []
-
-        def get_preprocessor(self, model_name, state, **_kwargs):
-            return _CountingPreprocessor(model_name, self.calls)
-
-    factory = _Factory()
-    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+    calls = []
+    _patch_preprocessors(
+        monkeypatch,
+        lambda model_name, _state=None: _CountingPreprocessor(model_name, calls),
+    )
 
     workspace = DummyWorkspace()
     workspace.beam_mutable_dir = str(tmp_path / "beam")
@@ -627,7 +611,7 @@ def test_initialization_beam_only_does_not_stage_disabled_models(monkeypatch, tm
         init = Initialization("init", None)
         copied_records = init.run(settings, workspace)
 
-        assert [call[0] for call in factory.calls] == ["beam"]
+        assert [call[0] for call in calls] == ["beam"]
         summary = build_bootstrap_artifact_summary(workspace, copied_records)
         assert summary["models"] == ["beam"]
         assert "activitysim" not in summary["input_records_by_model"]
@@ -658,15 +642,11 @@ def test_initialization_activitysim_beam_stages_only_required_model_families(
             )
             return RecordStore(), RecordStore(recordList=[record])
 
-    class _Factory:
-        def __init__(self):
-            self.calls = []
-
-        def get_preprocessor(self, model_name, state, **_kwargs):
-            return _CountingPreprocessor(model_name, self.calls)
-
-    factory = _Factory()
-    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+    calls = []
+    _patch_preprocessors(
+        monkeypatch,
+        lambda model_name, _state=None: _CountingPreprocessor(model_name, calls),
+    )
 
     usim_data_dir = tmp_path / "urbansim_data"
     usim_data_dir.mkdir(parents=True)
@@ -720,7 +700,7 @@ def test_initialization_activitysim_beam_stages_only_required_model_families(
         init = Initialization("init", None)
         copied_records = init.run(settings, workspace)
 
-        assert [call[0] for call in factory.calls] == [
+        assert [call[0] for call in calls] == [
             "beam",
             "activitysim",
         ]

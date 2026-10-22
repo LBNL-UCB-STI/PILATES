@@ -482,20 +482,6 @@ class ActivitysimNumbaWarmup(GenericRunner):
             runtime_cache_mode=runtime_cache_mode,
         )
 
-    def __init__(
-        self,
-        model_name: str,
-        state: "WorkflowState",
-    ):
-        super().__init__(model_name, state)
-        self.required_input_files = [
-            ASIM_OMX_SKIMS,
-            "asim_geoms",
-            ASIM_PERSONS_IN,
-            ASIM_HOUSEHOLDS_IN,
-            ASIM_LAND_USE_IN,
-        ]
-
     def run(
         self,
         inputs: ActivitySimPreprocessOutputs,
@@ -677,21 +663,6 @@ class ActivitysimRunner(GenericRunner):
         outputs: Dict[str, Any] = {"asim_output_dir": workspace.get_asim_output_dir()}
         outputs.update(asim_required_run_output_paths(settings, workspace))
         return outputs
-
-    def __init__(
-        self,
-        model_name: str,
-        state: "WorkflowState",
-    ):
-        super().__init__(model_name, state)
-        self.required_input_files = [
-            ASIM_PERSONS_IN,
-            ASIM_HOUSEHOLDS_IN,
-            ASIM_LAND_USE_IN,
-            ASIM_OMX_SKIMS,
-            "zarr_skims",
-            "asim_geoms",
-        ]
 
     @staticmethod
     def _allocate_private_compile_epoch(

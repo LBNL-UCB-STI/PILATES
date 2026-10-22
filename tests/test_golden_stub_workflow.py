@@ -368,10 +368,10 @@ def golden_stub_env(tmp_path, monkeypatch):
     """
     Assemble a full workflow harness with real Consist and stub model behavior.
 
-    The fixture creates realistic input/output files, patches ``ModelFactory``
-    to return deterministic stubs, and yields a live Consist ``scenario`` with
-    a working coupler so the stage runners execute their normal orchestration
-    logic.
+    The fixture creates realistic input/output files, patches step model
+    components to return deterministic stubs, and yields a live Consist
+    ``scenario`` with a working coupler so the stage runners execute their
+    normal orchestration logic.
     """
 
     consist = pytest.importorskip("consist")
@@ -886,26 +886,35 @@ def golden_stub_env(tmp_path, monkeypatch):
             return RecordStore()
         return RecordStore()
 
-    from pilates.generic.model_factory import ModelFactory
-    from pilates.atlas.preprocessor import AtlasPreprocessor
-    from pilates.atlas.postprocessor import AtlasPostprocessor
+    from pilates.workflows.steps import activitysim as activitysim_steps
 
-    def _make_preprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "atlas":
-            return AtlasPreprocessor(model_name, state)
-        return DummyPreprocessor(model_name, record_builder, state=state)
+    class _PatchedActivitysimPreprocessor(activitysim_steps.ActivitysimPreprocessor):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyPreprocessor(model_name, record_builder, state=state)
 
-    def _make_runner(self, model_name, state=None, *_args, **_kwargs):
-        return DummyRunner(model_name, record_builder, state=state)
+    class _PatchedActivitysimRunner(activitysim_steps.ActivitysimRunner):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyRunner(model_name, record_builder, state=state)
 
-    def _make_postprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "atlas":
-            return AtlasPostprocessor(model_name, state)
-        return DummyPostprocessor(model_name, record_builder, state=state)
+    class _PatchedActivitysimPostprocessor(activitysim_steps.ActivitysimPostprocessor):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyPostprocessor(model_name, record_builder, state=state)
 
-    monkeypatch.setattr(ModelFactory, "get_preprocessor", _make_preprocessor)
-    monkeypatch.setattr(ModelFactory, "get_runner", _make_runner)
-    monkeypatch.setattr(ModelFactory, "get_postprocessor", _make_postprocessor)
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimPreprocessor",
+        _PatchedActivitysimPreprocessor,
+    )
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimRunner",
+        _PatchedActivitysimRunner,
+    )
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimPostprocessor",
+        _PatchedActivitysimPostprocessor,
+    )
 
     tracker = consist.Tracker(
         run_dir=Path(workspace.full_path) / "consist_runs",

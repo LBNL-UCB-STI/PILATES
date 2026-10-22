@@ -47,6 +47,12 @@ from pilates.beam.admission import (
     write_linkstats_provenance_sidecar,
 )
 from pilates.beam.launch_config import BeamLaunchConfig
+from pilates.beam.outputs import (
+    BeamFullSkimOutputs,
+    BeamPostprocessOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
 from pilates.beam.runner import BeamRunner
 from pilates.beam.skim_provenance import (
     read_skim_provenance_sidecar,
@@ -72,6 +78,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -95,16 +102,6 @@ from pilates.workflows.step_definition import (
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.utils.state_access import is_start_year, iteration_index
 from pilates.workspace import Workspace
-
-# Model-specific native step definitions for BEAM.
-# Shared helpers/infrastructure are imported from shared.py.
-from .shared import (
-    BEAM_PLANS_OUT,
-    BeamFullSkimOutputs,
-    BeamPostprocessOutputs,
-    BeamPreprocessOutputs,
-    BeamRunOutputs,
-)
 
 logger = logging.getLogger(__name__)
 

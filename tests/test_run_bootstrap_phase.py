@@ -1570,6 +1570,7 @@ def test_seed_bootstrap_artifacts_to_coupler_consumes_stage_boundary_policy(
 
 def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
     tmp_path,
+    monkeypatch,
 ):
     class Coupler:
         def __init__(self):
@@ -1593,17 +1594,21 @@ def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
     warmstart_path.parent.mkdir(parents=True)
     warmstart_path.write_text("linkstats", encoding="utf-8")
 
-    class ModelFactory:
-        def get_preprocessor(self, model_name, _state):
-            assert model_name == "beam"
-            return SimpleNamespace(
-                existing_beam_exchange_inputs=lambda _workspace: RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(path), short_name=key)
-                        for key, path in exchange_paths.items()
-                    ]
-                )
+    def _make_beam_preprocessor(model_name, _state):
+        assert model_name == "beam"
+        return SimpleNamespace(
+            existing_beam_exchange_inputs=lambda _workspace: RecordStore(
+                recordList=[
+                    FileRecord(file_path=str(path), short_name=key)
+                    for key, path in exchange_paths.items()
+                ]
             )
+        )
+
+    monkeypatch.setattr(
+        "pilates.workflows.binding.BeamPreprocessor",
+        _make_beam_preprocessor,
+    )
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
@@ -1619,7 +1624,6 @@ def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
         state=SimpleNamespace(),
         workspace=DummyWorkspace(full_path=str(tmp_path)),
         coupler=coupler,
-        model_factory_cls=ModelFactory,
     )
 
     assert coupler.values == {

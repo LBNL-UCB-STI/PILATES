@@ -678,7 +678,10 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
     )
     received: dict[str, str] = {}
 
-    class _Postprocessor:
+    class _Postprocessor(activitysim.ActivitysimPostprocessor):
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
         def postprocess(self, *_args: object, **kwargs: object) -> None:
             received.update(
                 {
@@ -695,9 +698,9 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
                 path.write_text("persisted output\n", encoding="utf-8")
 
     monkeypatch.setattr(
-        activitysim.ModelFactory,
-        "get_postprocessor",
-        lambda _self, *_args: _Postprocessor(),
+        activitysim,
+        "ActivitysimPostprocessor",
+        _Postprocessor,
     )
     monkeypatch.setattr(
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
@@ -773,9 +776,9 @@ def test_activitysim_postprocess_uses_population_source_when_current_alias_is_om
             captured.update(kwargs)
 
     monkeypatch.setattr(
-        activitysim.ModelFactory,
-        "get_postprocessor",
-        lambda _self, *_args: _Postprocessor(),
+        activitysim,
+        "ActivitysimPostprocessor",
+        lambda *_args: _Postprocessor(),
     )
     population_source = Path("/inputs/population-source.h5")
     base_datastore = Path("/inputs/base.h5")
@@ -1416,9 +1419,9 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
             captured["context"] = context
 
     monkeypatch.setattr(
-        activitysim.ModelFactory,
-        "get_runner",
-        lambda _self, *_args: Runner(),
+        activitysim,
+        "ActivitysimRunner",
+        lambda *_args: Runner(),
     )
     activitysim._activitysim_run_callable(
         tmp_path / "land_use.csv",
@@ -1474,9 +1477,9 @@ def test_activitysim_run_callable_preserves_nested_config_staging_destination(
             return None
 
     monkeypatch.setattr(
-        activitysim.ModelFactory,
-        "get_runner",
-        lambda _self, *_args: Runner(),
+        activitysim,
+        "ActivitysimRunner",
+        lambda *_args: Runner(),
     )
     activitysim._activitysim_run_callable(
         tmp_path / "land_use.csv",
@@ -1538,9 +1541,9 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
             )
 
     monkeypatch.setattr(
-        activitysim.ModelFactory,
-        "get_runner",
-        lambda _self, *_args: Runner(),
+        activitysim,
+        "ActivitysimRunner",
+        lambda *_args: Runner(),
     )
     monkeypatch.setattr(
         activitysim, "stage_activitysim_config_roots", lambda *_args: None

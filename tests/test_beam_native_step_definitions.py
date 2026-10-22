@@ -40,9 +40,9 @@ from pilates.workflows.steps.beam import (
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import beam as beam_steps
-from pilates.workflows.steps.shared import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.beam import beam_exchange
 from pilates.beam.launch_config import BeamLaunchConfig
+from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.generic.records import RecordStore
 

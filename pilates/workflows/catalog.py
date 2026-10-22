@@ -77,11 +77,10 @@ class WorkflowStepSpec:
     def definition(self) -> "StepDefinition[Any]":
         """Return this catalog policy entry's committed native definition.
 
-        ``steps.shared`` still imports catalog dependency policy while the
-        native definition package initializes. Importing the package here,
-        after that initialization boundary, avoids an import cycle without a
-        second registry or any late registration: ``STEP_DEFINITIONS`` is the
-        committed definition registry established by the native step package.
+        ``steps.shared`` imports catalog specs while the native definition
+        package initializes. Importing ``STEP_DEFINITIONS`` here, after that
+        initialization boundary, avoids an import cycle without a second
+        registry or any late registration.
         """
         from pilates.workflows.steps import STEP_DEFINITIONS
 

@@ -14,7 +14,6 @@ from pilates.generic.model import Model
 from abc import ABC
 
 from pilates.utils import consist_runtime as cr
-from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 
 
@@ -35,14 +34,6 @@ class GenericRunner(
     """
     Base class for model runners with model-specific input and output types.
     """
-
-    def __init__(
-        self,
-        model_name: str,
-        state: "WorkflowState",
-    ):
-        super().__init__(model_name, state)
-        self.required_input_files = []
 
     @staticmethod
     def get_model_and_image(settings: PilatesConfig, model_type: str):

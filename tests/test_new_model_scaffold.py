@@ -12,31 +12,8 @@ import pytest
 
 
 def _seed_minimal_repo(repo_root: Path) -> None:
-    (repo_root / "pilates/generic").mkdir(parents=True, exist_ok=True)
     (repo_root / "pilates/workflows/steps").mkdir(parents=True, exist_ok=True)
     (repo_root / "pilates/workflows").mkdir(parents=True, exist_ok=True)
-
-    (repo_root / "pilates/generic/model_factory.py").write_text(
-        dedent(
-            """
-            from pilates.existing.preprocessor import ExistingPreprocessor
-            from pilates.existing.runner import ExistingRunner
-            from pilates.existing.postprocessor import ExistingPostprocessor
-
-
-            class ModelFactory:
-                _registry = {
-                    "existing": {
-                        "preprocessor": ExistingPreprocessor,
-                        "runner": ExistingRunner,
-                        "postprocessor": ExistingPostprocessor,
-                    },
-                }
-            """
-        ).strip()
-        + "\n",
-        encoding="utf-8",
-    )
 
     (repo_root / "pilates/workflows/steps/__init__.py").write_text(
         dedent(
@@ -60,29 +37,6 @@ def _seed_minimal_repo(repo_root: Path) -> None:
                     postprocessing_definition,
                 )
             }
-            """
-        ).strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    (repo_root / "pilates/workflows/steps/shared.py").write_text(
-        dedent(
-            """
-            from dataclasses import dataclass
-            from typing import Any, Optional
-
-            from pilates.existing.outputs import ExistingOutputs
-            from pilates.workflows.step_consist_meta import consist_step_meta
-
-
-            @dataclass
-            class RetiredHolder:
-                existing_preprocess: Optional[ExistingOutputs] = None
-
-                def set_attribute(self, step_name: str, outputs: Any) -> None:
-                    attr = step_name.replace("-", "_")
-                    setattr(self, attr, outputs)
             """
         ).strip()
         + "\n",
@@ -190,6 +144,11 @@ def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> 
     assert "_resolve_freight_inputs" in step_module_text
     assert "_project_freight_outputs" in step_module_text
     assert "StepDefinition(" in step_module_text
+    assert (
+        'FreightPreprocessor("freight", state).preprocess(workspace)'
+        in step_module_text
+    )
+    assert "Model" + "Factory" not in step_module_text
     for retired_symbol in (
         "Step" + "OutputsHolder",
         "Standard" + "StepSpec",
@@ -243,8 +202,17 @@ def test_scaffolded_step_module_imports_with_native_input_contracts(
         "FreightPostprocessOutputs",
     ):
         setattr(freight_outputs, name, type(name, (), {}))
+    freight_preprocessor = types.ModuleType("pilates.freight.preprocessor")
+    setattr(
+        freight_preprocessor,
+        "FreightPreprocessor",
+        type("FreightPreprocessor", (), {}),
+    )
     monkeypatch.setitem(sys.modules, "pilates.freight", freight_package)
     monkeypatch.setitem(sys.modules, "pilates.freight.outputs", freight_outputs)
+    monkeypatch.setitem(
+        sys.modules, "pilates.freight.preprocessor", freight_preprocessor
+    )
 
     module_path = tmp_path / "pilates/workflows/steps/freight.py"
     module_name = "pilates.workflows.steps.scaffolded_freight"
@@ -599,7 +567,6 @@ def test_scaffold_applies_cleanly_against_real_repo_files(tmp_path: Path) -> Non
     script_path = repo_root / "scripts/new_model_scaffold.py"
 
     for relpath in (
-        "pilates/generic/model_factory.py",
         "pilates/workflows/steps/__init__.py",
         "pilates/workflows/catalog.py",
         "pilates/workflows/stages/land_use.py",
@@ -632,7 +599,6 @@ def test_scaffold_applies_cleanly_against_real_repo_files(tmp_path: Path) -> Non
         "pilates/freight/postprocessor.py",
         "pilates/freight/outputs.py",
         "pilates/workflows/steps/freight.py",
-        "pilates/generic/model_factory.py",
         "pilates/workflows/steps/__init__.py",
         "pilates/workflows/catalog.py",
         "docs/checklists/stage_templates/add_model_freight.linear.py.snippet",

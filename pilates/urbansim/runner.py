@@ -78,14 +78,6 @@ class UrbansimRunner(
             "usim_datastore_h5": usim_output_path,
         }
 
-    def __init__(
-        self,
-        model_name: str,
-        state: "WorkflowState",
-    ):
-        super().__init__(model_name, state)
-        self.required_input_files = ["usim_datastore_h5"]
-
     def get_usim_docker_vols(self, output_dir: str) -> dict:
         """Constructs the volume mappings for the UrbanSim Docker container.
 

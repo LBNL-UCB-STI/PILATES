@@ -538,9 +538,6 @@ def build_scenario_runtime_contract(
     )
     validate_workflow_step_contracts_fn(
         declared_steps=schema_steps_enabled,
-        settings=settings,
-        state=state,
-        workspace=workspace,
         require_all_tracked_declared=False,
     )
     coupler_schema = build_coupler_schema_fn(schema_steps_enabled, settings=settings)
