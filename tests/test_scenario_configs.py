@@ -4,7 +4,7 @@ import subprocess
 import pytest
 import yaml
 
-from pilates.config.models import PilatesConfig, load_config
+from pilates.config.models import PilatesConfig, load_config, resolve_config_dict
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -108,8 +108,12 @@ def test_all_active_scenarios_use_hierarchical_schema_and_validate():
     assert ACTIVE_SCENARIO_PATHS, "Expected active scenario configs under scenarios/"
 
     for path in ACTIVE_SCENARIO_PATHS:
-        data = _load_raw_yaml(path)
-        assert "run" in data, f"{path} is not using the hierarchical schema"
+        raw_data = _load_raw_yaml(path)
+        assert "run" in raw_data or "base" in raw_data, (
+            f"{path} is not using the hierarchical schema"
+        )
+        data = resolve_config_dict(path)
+        assert "run" in data, f"{path} resolved without a 'run' block"
         PilatesConfig(**data)
 
 
@@ -125,7 +129,7 @@ def test_active_scenarios_load_via_runtime_config_loader():
 @pytest.mark.skip
 def test_active_scenarios_pin_beam_images_and_explicit_warmstart_setting():
     for path in ACTIVE_SCENARIO_PATHS:
-        data = _load_raw_yaml(path)
+        data = resolve_config_dict(path)
         infra = data["infrastructure"]
         beam = data["beam"]
         if path == REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml":
@@ -196,7 +200,7 @@ def test_active_scenarios_define_expected_zone_sources():
 @pytest.mark.skip
 def test_active_scenarios_use_expected_warmstart_paths():
     for path in ACTIVE_SCENARIO_PATHS:
-        warmstart_path = _load_raw_yaml(path)["beam"]["warmstart_linkstats_path"]
+        warmstart_path = resolve_config_dict(path)["beam"]["warmstart_linkstats_path"]
         expected = EXPECTED_WARMSTART_PATHS.get(path)
         assert warmstart_path == expected, (
             f"{path} warmstart mismatch: expected {expected!r}, got {warmstart_path!r}"

@@ -376,3 +376,130 @@ def test_pilot_refactored_scenarios_preserve_exact_resolved_configuration() -> N
         load_config(sfbay_local_path).model_dump()
         == PilatesConfig(**expected_sfbay_local).model_dump()
     )
+
+
+def test_swept_scenario_families_use_thin_base_overlays_and_resolve_cleanly() -> None:
+    expected_overlays: dict[str, tuple[str, int]] = {
+        # SFBay Consist UrbanSim 2019 family
+        "sfbay/settings-sfbay-consist-usim-hpc-ess-2019.yaml": (
+            "settings-sfbay-consist-usim-hpc-2019.yaml",
+            30,
+        ),
+        "sfbay/settings-sfbay-consist-usim-hpc-mandate-2019.yaml": (
+            "settings-sfbay-consist-usim-hpc-2019.yaml",
+            30,
+        ),
+        "sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml": (
+            "settings-sfbay-consist-usim-hpc-2019.yaml",
+            25,
+        ),
+        "sfbay/settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml": (
+            "settings-sfbay-consist-usim-hpc-2019-canary.yaml",
+            20,
+        ),
+        "sfbay/settings-sfbay-consist-usim-hpc.yaml": (
+            "settings-sfbay-consist-usim-hpc-2019.yaml",
+            35,
+        ),
+        # SFBay Newconfig family
+        "sfbay/settings-sfbay-newconfig-usim-hpc.yaml": (
+            "settings-sfbay-newconfig-hpc.yaml",
+            50,
+        ),
+        # SFBay 2018-Baseline / JDEQ calibration / Breathe family
+        "sfbay/pilates-run--sfbay--jdeq-calibration-FC06-0.yaml": (
+            "run--sfbay-pilates--20250730--2018-Baseline.yaml",
+            15,
+        ),
+        "sfbay/pilates-run--sfbay--jdeq-calibration-FC07-0.yaml": (
+            "run--sfbay-pilates--20250730--2018-Baseline.yaml",
+            15,
+        ),
+        "sfbay/pilates-run--sfbay--jdeq-calibration-FC08-0.yaml": (
+            "run--sfbay-pilates--20250730--2018-Baseline.yaml",
+            15,
+        ),
+        "breathe/settings--sfbay--2018-Baseline.yaml": (
+            "../sfbay/run--sfbay-pilates--20250730--2018-Baseline.yaml",
+            20,
+        ),
+        # Seattle FY26-Task1 / JDEQ calibration / 2018-Baseline / Fullskim family
+        "seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-060Elec.yaml": (
+            "pilates-run--seattle--fy26-task1--2018-Baseline.yaml",
+            15,
+        ),
+        "seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-100Elec.yaml": (
+            "pilates-run--seattle--fy26-task1--2018-Baseline.yaml",
+            15,
+        ),
+        "seattle/pilates-run--seattle--fy26-task1--2050-HighFuel-100Elec.yaml": (
+            "pilates-run--seattle--fy26-task1--2018-Baseline.yaml",
+            15,
+        ),
+        "seattle/pilates-run--seattle--jdeq-calibration-FC06-0.yaml": (
+            "pilates-run--seattle--fy26-task1--2018-Baseline.yaml",
+            15,
+        ),
+        "seattle/pilates-run--seattle--jdeq-calibration-FC07-0.yaml": (
+            "pilates-run--seattle--fy26-task1--2018-Baseline.yaml",
+            15,
+        ),
+        "seattle/pilates-run--seattle--jdeq-calibration-FC08-0.yaml": (
+            "pilates-run--seattle--fy26-task1--2018-Baseline.yaml",
+            15,
+        ),
+        "seattle/run--seattle-pilates--20250721--2018-Baseline.yaml": (
+            "pilates-run--seattle--fy26-task1--2018-Baseline.yaml",
+            35,
+        ),
+        "seattle/pilates-run--seattle--fullskim-FC07-0.yaml": (
+            "run--seattle-pilates--20250721--2018-Baseline.yaml",
+            40,
+        ),
+        # Seattle New-Asim family
+        "seattle/settings-new-asim-seattle-null.yaml": (
+            "settings-new-asim-seattle.yaml",
+            20,
+        ),
+    }
+
+    for rel_path, (expected_base, max_lines) in expected_overlays.items():
+        scenario_path = SCENARIOS_DIR / rel_path
+        text = scenario_path.read_text(encoding="utf-8")
+        raw = yaml.safe_load(text)
+        assert isinstance(raw, dict)
+        assert raw.get("base") == expected_base, f"Unexpected base in {rel_path}"
+        assert len(text.splitlines()) <= max_lines, (
+            f"{rel_path} has {len(text.splitlines())} lines (expected <= {max_lines})"
+        )
+
+        resolved = resolve_config_dict(scenario_path)
+        assert "base" not in resolved
+        load_config(scenario_path)
+
+    # Spot-check chained inheritance: acceptance -> canary -> 2019 base
+    acceptance_cfg = load_config(
+        SCENARIOS_DIR
+        / "sfbay"
+        / "settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml"
+    )
+    assert acceptance_cfg.run.end_year == 2019
+    assert acceptance_cfg.run.max_year_intervals == 1
+    assert (
+        acceptance_cfg.run.output_run_name
+        == "consist-sfbay-beam-preprocess-acceptance-2019"
+    )
+
+    # Spot-check chained inheritance: fullskim -> 20250721-Baseline -> fy26-task1-Baseline
+    fullskim_cfg = load_config(
+        SCENARIOS_DIR / "seattle" / "pilates-run--seattle--fullskim-FC07-0.yaml"
+    )
+    assert fullskim_cfg.run.end_year == 2017
+    assert fullskim_cfg.run.output_run_name == "20250721--2018-Baseline--fullskim"
+    assert fullskim_cfg.beam is not None
+    assert fullskim_cfg.beam.full_skim is not None
+    assert fullskim_cfg.beam.full_skim.run_schedule == "standalone"
+    assert (
+        fullskim_cfg.beam.warmstart_linkstats_path
+        == "{router_directory}/init.linkstats.parquet"
+    )

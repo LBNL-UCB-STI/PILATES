@@ -592,3 +592,71 @@ def test_stage_patch_plan_detects_iterative_loop_variant_anchor(tmp_path: Path) 
         "`for iteration_index in scenario.iteration_sequence:`"
     ) in stage_patch_text
     assert "execute_step(" in stage_patch_text
+
+
+def test_scaffold_applies_cleanly_against_real_repo_files(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts/new_model_scaffold.py"
+
+    for relpath in (
+        "pilates/generic/model_factory.py",
+        "pilates/workflows/steps/__init__.py",
+        "pilates/workflows/catalog.py",
+        "pilates/workflows/stages/land_use.py",
+        "pilates/workflows/stages/vehicle_ownership.py",
+        "pilates/workflows/stages/supply_demand.py",
+        "pilates/workflows/stages/postprocessing.py",
+    ):
+        src = repo_root / relpath
+        dst = tmp_path / relpath
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "freight",
+            "--repo-root",
+            str(tmp_path),
+            "--stage-patch-plan",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    for relpath in (
+        "pilates/freight/preprocessor.py",
+        "pilates/freight/runner.py",
+        "pilates/freight/postprocessor.py",
+        "pilates/freight/outputs.py",
+        "pilates/workflows/steps/freight.py",
+        "pilates/generic/model_factory.py",
+        "pilates/workflows/steps/__init__.py",
+        "pilates/workflows/catalog.py",
+        "docs/checklists/stage_templates/add_model_freight.linear.py.snippet",
+        "docs/checklists/stage_templates/add_model_freight.iterative.py.snippet",
+    ):
+        text = (tmp_path / relpath).read_text(encoding="utf-8")
+        ast.parse(text, filename=relpath)
+
+    stage_patch_text = (
+        tmp_path / "docs/checklists/stage_templates/add_model_freight.stage_patch.md"
+    ).read_text(encoding="utf-8")
+    in_python_block = False
+    current_block: list[str] = []
+    python_blocks: list[str] = []
+    for line in stage_patch_text.splitlines():
+        if line.strip() == "```python":
+            in_python_block = True
+            current_block = []
+        elif line.strip() == "```" and in_python_block:
+            in_python_block = False
+            python_blocks.append("\n".join(current_block))
+        elif in_python_block:
+            current_block.append(line)
+
+    assert len(python_blocks) == 3
+    for block in python_blocks:
+        ast.parse(block)

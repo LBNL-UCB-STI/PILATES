@@ -29,6 +29,36 @@ Checklist](model_contract_checklist.md) before relying on an integration.
 8. Add the explicit `execute_step(...)` call in the owning stage.
 9. Add focused contract, stage, and restart tests as applicable.
 
+## Touch Map (What You Edit vs. What You Leave Alone)
+
+### Files you create or edit (`pilates/<model>/` + 3–4 workflow files)
+
+- **Model adapter package (`pilates/<model>/`)**: `preprocessor.py`, `runner.py`,
+  `postprocessor.py`, and `outputs.py` (scaffolded by
+  `scripts/new_model_scaffold.py`).
+- **Native step module (`pilates/workflows/steps/<model>.py`)**: decorated
+  Consist callables, semantic input resolver (`ResolvedStepInputs`), typed
+  output projector, `InputContract`, and `StepDefinition` exports.
+- **Step surface & catalog (`pilates/workflows/steps/__init__.py`, `pilates/workflows/catalog.py`, `pilates/generic/model_factory.py`)**:
+  export the new `StepDefinition` objects in `STEP_DEFINITIONS`, add policy-only
+  `WorkflowStepSpec` entries, and register the model components in
+  `ModelFactory`.
+- **Owning stage module (`pilates/workflows/stages/<stage>.py`)**: sequence the
+  new `StepDefinition` objects with explicit `execute_step(...)` calls.
+- **Semantic roles & config schema (when introducing new cross-step roles or settings)**:
+  `pilates/workflows/artifact_keys.py`, `pilates/workflows/coupler_schema.py`,
+  and `pilates/config/models.py`.
+
+### Infrastructure you do NOT edit
+
+- `pilates/workflows/step_execution.py` (central `execute_step` bridge, cache
+  options, action refresh, and output archival/republication)
+- `pilates/workflows/step_definition.py` and `pilates/workflows/resolved_inputs.py`
+- `pilates/runtime/` (orchestrator, runtime context, archive/hydration helpers)
+- `pilates/workspace.py` and `workflow_state.py`
+- Unrelated model packages (`pilates/urbansim/`, `pilates/atlas/`,
+  `pilates/activitysim/`, `pilates/beam/`) and unrelated stage modules
+
 ## Ownership rules
 
 - Model adapters prepare files, run model code, and interpret local outputs.
