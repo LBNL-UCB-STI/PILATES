@@ -2,13 +2,9 @@ from typing import Optional, Iterator, Tuple, Dict, Any, TYPE_CHECKING
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
-from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
+from pilates.generic.records import RecordStore, sanitize_artifact_key
+from pilates.urbansim.preprocessor import stage_synthetic_population
 from pilates.utils.io import get_traffic_assignment_model
-from pilates.utils.path_utils import find_project_root
-from pilates.utils.zone_utils import (
-    copy_canonical_zone_source_to_dir,
-    resolve_canonical_zone_source_path,
-)
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
@@ -331,83 +327,6 @@ class Initialization(Model):
                     initialization_records_out=initialization_records_out,
                 )
 
-            if (
-                traffic_assignment_enabled
-                and get_traffic_assignment_model(settings) == "beam"
-            ):
-                zones_config = settings.shared.geography.zones
-                if zones_config is not None and activity_demand_enabled:
-                    project_root = find_project_root(
-                        start_path=os.path.dirname(__file__)
-                    )
-                    if not project_root:
-                        project_root = os.path.realpath(os.getcwd())
-                        logger.warning(
-                            "[NOT IDEAL] Could not locate PILATES project root via markers; "
-                            "falling back to cwd='%s'.",
-                            project_root,
-                        )
-                    zone_source_path = resolve_canonical_zone_source_path(
-                        settings, workspace
-                    )
-
-                    asim_input_dir = workspace.get_asim_mutable_data_dir()
-                    os.makedirs(asim_input_dir, exist_ok=True)
-                    if os.path.exists(zone_source_path):
-                        zone_fname = os.path.basename(zone_source_path)
-                        dest_path = os.path.join(asim_input_dir, zone_fname)
-                        if os.path.abspath(zone_source_path) != os.path.abspath(
-                            dest_path
-                        ):
-                            logger.info(
-                                "Copying canonical zones from %s to %s",
-                                zone_source_path,
-                                dest_path,
-                            )
-                            copy_canonical_zone_source_to_dir(
-                                zone_source_path, asim_input_dir
-                            )
-                        else:
-                            logger.info(
-                                "Canonical zones already at destination: %s",
-                                dest_path,
-                            )
-                        rec_in = RecordStore(
-                            recordList=[
-                                FileRecord(
-                                    file_path=zone_source_path,
-                                    short_name="canonical_zones_source",
-                                )
-                            ]
-                        )
-                        rec_out = RecordStore(
-                            recordList=[
-                                FileRecord(
-                                    file_path=dest_path,
-                                    short_name="canonical_zones",
-                                )
-                            ]
-                        )
-                        _accumulate_copy_result(
-                            result=(rec_in, rec_out),
-                            model_name="activitysim",
-                            initialization_records_in=initialization_records_in,
-                            initialization_records_out=initialization_records_out,
-                        )
-                    else:
-                        logger.warning(
-                            "Canonical zone source file not found at %s, skipping copy.",
-                            zone_source_path,
-                        )
-                elif zones_config is None:
-                    logger.info(
-                        "No zones configured in shared.geography.zones; skipping zone setup."
-                    )
-                else:
-                    logger.info(
-                        "ActivitySim not enabled; skipping activitysim directory setup."
-                    )
-
             # Other models
             model_map = {
                 "activity_demand": (
@@ -429,12 +348,8 @@ class Initialization(Model):
                 if not model_name:
                     continue
 
-                # UrbanSim data copy (once)
-                if model_name == "urbansim" or (
-                    model_name == "activitysim"
-                    and have_not_copied_usim_data
-                    and not urbansim_enabled
-                ):
+                # UrbanSim data copy (when land_use is enabled)
+                if model_name == "urbansim":
                     output_dir = workspace.get_usim_mutable_data_dir()
                     os.makedirs(output_dir, exist_ok=True)
                     usim_preprocessor = model_factory.get_preprocessor(
@@ -443,6 +358,21 @@ class Initialization(Model):
                     result = usim_preprocessor.copy_data_to_mutable_location(
                         settings, output_dir
                     )
+                    _accumulate_copy_result(
+                        result=result,
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                    )
+                    have_not_copied_usim_data = False
+                elif (
+                    model_name in ("activitysim", "atlas")
+                    and have_not_copied_usim_data
+                    and not urbansim_enabled
+                ):
+                    output_dir = workspace.get_usim_mutable_data_dir()
+                    os.makedirs(output_dir, exist_ok=True)
+                    result = stage_synthetic_population(settings, output_dir)
                     _accumulate_copy_result(
                         result=result,
                         model_name=model_name,

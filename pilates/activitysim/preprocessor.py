@@ -2978,34 +2978,43 @@ def _copy_data_to_mutable_location(
         return os.path.abspath(os.path.join(project_root, path))
 
     # --- 1. Handle Canonical Zone Geometries ---
-    zone_source_path = resolve_canonical_zone_source_path(settings, workspace)
+    geography_cfg = getattr(getattr(settings, "shared", None), "geography", None)
+    zones_config = getattr(geography_cfg, "zones", None)
+    if zones_config is not None:
+        zone_source_path = resolve_canonical_zone_source_path(settings, workspace)
 
-    if os.path.exists(zone_source_path):
-        zone_fname = os.path.basename(zone_source_path)
-        asim_zones_path = os.path.join(input_dir, zone_fname)
-        if os.path.abspath(zone_source_path) == os.path.abspath(asim_zones_path):
-            logger.info("Canonical zones already at destination: %s", asim_zones_path)
+        if os.path.exists(zone_source_path):
+            zone_fname = os.path.basename(zone_source_path)
+            asim_zones_path = os.path.join(input_dir, zone_fname)
+            if os.path.abspath(zone_source_path) == os.path.abspath(asim_zones_path):
+                logger.info(
+                    "Canonical zones already at destination: %s", asim_zones_path
+                )
+            else:
+                logger.info(
+                    f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
+                )
+                copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
+
+                input_records.add_record(
+                    FileRecord(
+                        file_path=zone_source_path,
+                        short_name="canonical_zones_source",
+                    )
+                )
+                output_records.add_record(
+                    FileRecord(
+                        file_path=asim_zones_path,
+                        short_name="canonical_zones",
+                    )
+                )
         else:
-            logger.info(
-                f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
-            )
-            copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
-
-            input_records.add_record(
-                FileRecord(
-                    file_path=zone_source_path,
-                    short_name="canonical_zones_source",
-                )
-            )
-            output_records.add_record(
-                FileRecord(
-                    file_path=asim_zones_path,
-                    short_name="canonical_zones",
-                )
+            logger.warning(
+                f"Canonical zone source file not found at {zone_source_path}, skipping copy."
             )
     else:
-        logger.warning(
-            f"Canonical zone source file not found at {zone_source_path}, skipping copy."
+        logger.info(
+            "No zones configured in shared.geography.zones; skipping zone setup."
         )
 
     # --- 2. Handle Clipped Geometries (from BEAM) ---
