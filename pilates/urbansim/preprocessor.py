@@ -17,7 +17,6 @@ from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.zone_utils import resolve_canonical_zone_source_path
-from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 
 if TYPE_CHECKING:
@@ -447,6 +446,86 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format, workspa
     raise NotImplementedError("Invalid skims format {0}".format(skim_format))
 
 
+def stage_synthetic_population(
+    settings: PilatesConfig,
+    output_dir: str,
+) -> Tuple[RecordStore, RecordStore]:
+    """
+    Stage the base synthetic population HDF5 datastore into the mutable workspace.
+
+    This helper copies ``custom_mpo_*.h5`` (and its ``.metadata.json`` sidecar if
+    present) into ``<workspace>/urbansim/data/`` without invoking full UrbanSim
+    land-use preprocessing or staging UrbanSim-only static/skim inputs.
+    """
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    if urbansim_cfg is None:
+        return RecordStore(), RecordStore()
+
+    region = settings.run.region
+    region_id = urbansim_cfg.region_mappings["region_to_region_id"][region]
+
+    year_template = urbansim_cfg.input_file_template_year
+    if year_template:
+        year_specific_model_data_fname = year_template.format(
+            region_id=region_id, start_year=settings.run.start_year
+        )
+    else:
+        year_specific_model_data_fname = ""
+
+    base_template = urbansim_cfg.input_file_template
+    if base_template:
+        model_data_fname = base_template.format(region_id=region_id)
+    else:
+        model_data_fname = ""
+    data_dir = str(_urbansim_source_data_dir(settings))
+
+    if not model_data_fname:
+        raise ValueError(
+            "UrbanSim input file template is not configured. "
+            "Please set 'urbansim.input_file_template' or 'usim_formattable_input_file_name' in settings."
+        )
+
+    if (
+        year_specific_model_data_fname
+        and os.path.exists(os.path.join(data_dir, year_specific_model_data_fname))
+        and urbansim_cfg.input_file_template_year is not None
+    ):
+        src = os.path.join(data_dir, year_specific_model_data_fname)
+    else:
+        src = os.path.join(data_dir, model_data_fname)
+    dest = os.path.join(output_dir, model_data_fname)
+
+    if not os.path.exists(src):
+        raise FileNotFoundError(
+            f"Synthetic population HDF5 file not found at configured path: {src}"
+        )
+
+    os.makedirs(output_dir, exist_ok=True)
+    logger.info(f"Copying synthetic population HDF5 data from {src} to {dest}")
+    shutil.copy2(src, dest)
+
+    sidecar_src = f"{src}.metadata.json"
+    sidecar_dest = f"{dest}.metadata.json"
+    if os.path.exists(sidecar_src):
+        shutil.copy2(sidecar_src, sidecar_dest)
+
+    inputs = [
+        FileRecord(
+            file_path=src,
+            description="Reference urbanSim model data",
+            short_name="usim_data_reference",
+        )
+    ]
+    outputs = [
+        FileRecord(
+            file_path=dest,
+            description="UrbanSim model data",
+            short_name="usim_datastore_h5",
+        )
+    ]
+    return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
+
+
 class UrbansimPreprocessor(GenericPreprocessor):
     """
     UrbanSim-specific preprocessor that consolidates all preprocessing steps for the UrbanSim land use model.
@@ -562,66 +641,14 @@ class UrbansimPreprocessor(GenericPreprocessor):
         Returns:
             Tuple[RecordStore, RecordStore]: (inputs, outputs) as RecordStores
         """
+        del workspace
         region = settings.run.region
         region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-
-        # Get the input file templates
-        year_template = settings.urbansim.input_file_template_year
-        if year_template:
-            year_specific_model_data_fname = year_template.format(
-                region_id=region_id, start_year=settings.run.start_year
-            )
-        else:
-            year_specific_model_data_fname = ""
-
-        base_template = settings.urbansim.input_file_template
-        if base_template:
-            model_data_fname = base_template.format(region_id=region_id)
-        else:
-            model_data_fname = ""
         data_dir = str(_urbansim_source_data_dir(settings))
 
-        # Validate we have a filename
-        if not model_data_fname:
-            raise ValueError(
-                "UrbanSim input file template is not configured. "
-                "Please set 'urbansim.input_file_template' or 'usim_formattable_input_file_name' in settings."
-            )
-
-        if os.path.exists(os.path.join(data_dir, year_specific_model_data_fname)) and (
-            settings.urbansim.input_file_template_year is not None
-        ):
-            src = os.path.join(data_dir, year_specific_model_data_fname)
-        else:
-            src = os.path.join(data_dir, model_data_fname)
-        dest = os.path.join(output_dir, model_data_fname)
-
-        logger.info(
-            f"[UrbansimPreprocessor] Copying input urbansim data from {src} to {dest}"
-        )
-        if os.path.exists(src):
-            shutil.copy2(src, dest)
-        else:
-            # Create an empty HDF5 file if the source does not exist
-            with pd.HDFStore(dest, "w"):
-                pass
-            logger.warning(
-                f"[UrbansimPreprocessor] Source UrbanSim HDF5 file not found at {src}. Created empty HDF5 at {dest}."
-            )
-        inputs = [
-            FileRecord(
-                file_path=src,
-                description="Reference urbanSim model data",
-                short_name="usim_data_reference",
-            )
-        ]
-        outputs = [
-            FileRecord(
-                file_path=dest,
-                description="UrbanSim model data",
-                short_name="usim_datastore_h5",
-            )
-        ]
+        in_store, out_store = stage_synthetic_population(settings, output_dir)
+        inputs = list(in_store.all_records())
+        outputs = list(out_store.all_records())
 
         beam_inputs_root = str(_beam_input_root(settings))
         skims_src = os.path.abspath(
@@ -631,22 +658,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 get_beam_omx_skims_name(settings),
             )
         )
-        if not os.path.exists(skims_src):
-            project_root = find_project_root(
-                start_path=os.path.dirname(__file__)
-            ) or os.path.realpath(os.getcwd())
-            alt_skims = os.path.abspath(
-                os.path.join(
-                    project_root,
-                    "pilates",
-                    "activitysim",
-                    "data",
-                    settings.run.region,
-                    get_beam_omx_skims_name(settings),
-                )
-            )
-            if os.path.exists(alt_skims):
-                skims_src = alt_skims
 
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
         if os.path.islink(skims_target) and not os.path.exists(skims_target):
@@ -654,8 +665,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 os.unlink(skims_target)
             except OSError:
                 pass
-
-        land_use_enabled = is_land_use_enabled(settings)
 
         if os.path.exists(skims_src):
             inputs.append(
@@ -679,14 +688,8 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 f"[UrbansimPreprocessor] Copying input beam skims data from {skims_src} to {skims_target}"
             )
         else:
-            if land_use_enabled:
-                raise FileNotFoundError(
-                    f"[UrbansimPreprocessor] UrbanSim skims file not found at {skims_src} "
-                    "and land_use model is enabled."
-                )
-            logger.info(
-                f"[UrbansimPreprocessor] UrbanSim skims file not found at {skims_src}; "
-                "skipping skims copy since land_use model is not enabled."
+            raise FileNotFoundError(
+                f"[UrbansimPreprocessor] UrbanSim skims file not found at {skims_src}"
             )
 
         other_data_fnames = {

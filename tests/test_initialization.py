@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from types import SimpleNamespace
 
@@ -361,11 +362,31 @@ def test_build_bootstrap_artifact_summary_counts_records_by_model():
 def test_initialization_summary_counts_canonical_zones_under_activitysim(
     monkeypatch, tmp_path
 ):
+    from pilates.activitysim.preprocessor import ActivitysimPreprocessor
     from pilates.utils import consist_runtime as cr
 
     cr.set_enabled(False)
+
+    class _FactoryWithRealActivitySim:
+        def get_preprocessor(self, model_name, state, **_kwargs):
+            if model_name == "activitysim":
+                return ActivitysimPreprocessor(model_name="activitysim", state=state)
+            return DummyPreprocessor()
+
     monkeypatch.setattr(
-        "pilates.generic.initialization.ModelFactory", DummyModelFactory
+        "pilates.generic.initialization.ModelFactory", _FactoryWithRealActivitySim
+    )
+    monkeypatch.setattr(
+        "pilates.activitysim.preprocessor._copytree_if_needed",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pilates.activitysim.preprocessor._ensure_required_asim_config_dirs",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pilates.activitysim.preprocessor._disable_activitysim_vehicle_ownership_models_for_atlas",
+        lambda *args, **kwargs: None,
     )
 
     workspace = DummyWorkspace()
@@ -380,6 +401,7 @@ def test_initialization_summary_counts_canonical_zones_under_activitysim(
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
+            region="sfbay",
             models=SimpleNamespace(
                 travel="beam",
                 activity_demand="activitysim",
@@ -387,6 +409,12 @@ def test_initialization_summary_counts_canonical_zones_under_activitysim(
                 land_use="urbansim",
             ),
             start_year=2020,
+        ),
+        activitysim=SimpleNamespace(
+            local_configs_folder=str(tmp_path / "asim_configs"),
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs",
+            clipped_geoms_path=None,
         ),
         shared=SimpleNamespace(
             skims=SimpleNamespace(zone_type="block_group"),
@@ -406,8 +434,8 @@ def test_initialization_summary_counts_canonical_zones_under_activitysim(
         copied_records = init.run(settings, workspace)
         summary = build_bootstrap_artifact_summary(workspace, copied_records)
 
-        assert summary["input_records_by_model"]["activitysim"] >= 1
-        assert summary["output_records_by_model"]["activitysim"] >= 1
+        assert summary["input_records_by_model"]["activitysim"] == 1
+        assert summary["output_records_by_model"]["activitysim"] == 1
         assert "activitysim" in summary["models"]
     finally:
         cr.set_enabled(None)
@@ -502,6 +530,10 @@ def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_pa
 
     factory = _Factory()
     monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+    monkeypatch.setattr(
+        "pilates.generic.initialization.stage_synthetic_population",
+        lambda settings, output_dir: (RecordStore(), RecordStore()),
+    )
 
     workspace = DummyWorkspace()
     workspace.activitysim_mutable_dir = str(tmp_path / "asim")
@@ -636,6 +668,13 @@ def test_initialization_activitysim_beam_stages_only_required_model_families(
     factory = _Factory()
     monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
 
+    usim_data_dir = tmp_path / "urbansim_data"
+    usim_data_dir.mkdir(parents=True)
+    h5_file = usim_data_dir / "custom_mpo_53033001_model_data_2020.h5"
+    h5_file.write_text("h5_bytes", encoding="utf-8")
+    meta_file = usim_data_dir / "custom_mpo_53033001_model_data_2020.h5.metadata.json"
+    meta_file.write_text('{"meta": true}', encoding="utf-8")
+
     workspace = DummyWorkspace()
     workspace.beam_mutable_dir = str(tmp_path / "beam")
     workspace.activitysim_mutable_dir = str(tmp_path / "asim")
@@ -655,6 +694,13 @@ def test_initialization_activitysim_beam_stages_only_required_model_families(
             ),
             start_year=2020,
             region="seattle",
+        ),
+        urbansim=SimpleNamespace(
+            region_id="53033001",
+            local_data_input_folder=str(usim_data_dir),
+            input_file_template="custom_mpo_{region_id}_model_data.h5",
+            input_file_template_year="custom_mpo_{region_id}_model_data_{start_year}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "53033001"}},
         ),
         beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
         activitysim=SimpleNamespace(file_format="parquet"),
@@ -676,12 +722,19 @@ def test_initialization_activitysim_beam_stages_only_required_model_families(
 
         assert [call[0] for call in factory.calls] == [
             "beam",
-            "urbansim",
             "activitysim",
         ]
+        assert (
+            Path(workspace.usim_mutable_dir) / "custom_mpo_53033001_model_data.h5"
+        ).exists()
+        assert (
+            Path(workspace.usim_mutable_dir)
+            / "custom_mpo_53033001_model_data.h5.metadata.json"
+        ).exists()
         summary = build_bootstrap_artifact_summary(workspace, copied_records)
         assert "beam" in summary["models"]
         assert "activitysim" in summary["models"]
+        assert "urbansim" not in summary["models"]
         assert "atlas" not in summary["models"]
     finally:
         cr.set_enabled(None)

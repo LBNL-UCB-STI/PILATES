@@ -550,12 +550,6 @@ class BeamPreprocessor(GenericPreprocessor):
         region = settings.run.region
         beam_production_path = self._find_beam_production_path(settings, region)
 
-        if not beam_production_path:
-            logger.error(
-                f"Could not find BEAM production directory for region {region}."
-            )
-            return RecordStore(), RecordStore()
-
         dest_region = os.path.join(os.path.abspath(output_dir), region)
         logger.info(
             f"Copying BEAM production inputs from {beam_production_path} to {dest_region}"
@@ -582,7 +576,7 @@ class BeamPreprocessor(GenericPreprocessor):
             pilates_root = find_project_root(
                 start_path=os.path.dirname(__file__)
             ) or os.path.realpath(os.getcwd())
-            candidate_sources: List[str] = []
+            source_uri: Optional[str] = None
             if (
                 getattr(settings, "activitysim", None) is not None
                 and getattr(settings.activitysim, "admission", None) is not None
@@ -598,39 +592,40 @@ class BeamPreprocessor(GenericPreprocessor):
                     None,
                 )
             ):
-                candidate_sources.append(
-                    str(
-                        settings.activitysim.admission.initial_skims.expectation.source_uri
-                    )
+                source_uri = str(
+                    settings.activitysim.admission.initial_skims.expectation.source_uri
                 )
 
-            candidate_sources.append(
-                os.path.join(
-                    pilates_root, "pilates", "activitysim", "data", region, skims_fname
+            if source_uri and (
+                source_uri.startswith("file://") or "://" not in source_uri
+            ):
+                local_source = (
+                    source_uri[len("file://") :]
+                    if source_uri.startswith("file://")
+                    else source_uri
                 )
-            )
-
-            for cand in candidate_sources:
                 cand_path = (
-                    os.path.abspath(cand)
-                    if os.path.isabs(cand)
-                    else os.path.abspath(os.path.join(pilates_root, cand))
+                    os.path.abspath(local_source)
+                    if os.path.isabs(local_source)
+                    else os.path.abspath(os.path.join(pilates_root, local_source))
                 )
-                if os.path.exists(cand_path):
-                    logger.info(
-                        f"[BEAM Preprocessor] Staging initial skims from {cand_path} -> {dest_skims}"
+                if not os.path.exists(cand_path):
+                    raise FileNotFoundError(
+                        f"Configured initial_skims source_uri does not exist: {cand_path}"
                     )
-                    shutil.copy2(cand_path, dest_skims)
-                    sidecar_src = f"{cand_path}.provenance.json"
-                    sidecar_dst = f"{dest_skims}.provenance.json"
-                    if os.path.islink(sidecar_dst) and not os.path.exists(sidecar_dst):
-                        try:
-                            os.unlink(sidecar_dst)
-                        except OSError:
-                            pass
-                    if os.path.exists(sidecar_src) and not os.path.exists(sidecar_dst):
-                        shutil.copy2(sidecar_src, sidecar_dst)
-                    break
+                logger.info(
+                    f"[BEAM Preprocessor] Staging initial skims from {cand_path} -> {dest_skims}"
+                )
+                shutil.copy2(cand_path, dest_skims)
+                sidecar_src = f"{cand_path}.provenance.json"
+                sidecar_dst = f"{dest_skims}.provenance.json"
+                if os.path.islink(sidecar_dst) and not os.path.exists(sidecar_dst):
+                    try:
+                        os.unlink(sidecar_dst)
+                    except OSError:
+                        pass
+                if os.path.exists(sidecar_src) and not os.path.exists(sidecar_dst):
+                    shutil.copy2(sidecar_src, sidecar_dst)
 
         # Optionally copy 'common' configs if present
         common_config_path = os.path.join(
@@ -849,16 +844,14 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
     @staticmethod
-    def _find_beam_production_path(
-        settings: PilatesConfig, region: str
-    ) -> Optional[str]:
+    def _find_beam_production_path(settings: PilatesConfig, region: str) -> str:
         """
         Finds the path to the BEAM production data directory.
 
         Semantics:
         - `settings.beam.local_input_folder` is interpreted as an inputs-root-relative
           path (relative to the directory containing `run.py`) unless absolute.
-        - The returned path should point at the region subdirectory inside that tree.
+        - The returned path points at the region subdirectory inside that tree.
         """
         pilates_root = find_project_root(start_path=os.path.dirname(__file__))
         if not pilates_root:
@@ -876,8 +869,7 @@ class BeamPreprocessor(GenericPreprocessor):
             else None
         )
         if not configured_root:
-            logger.error("BEAM local_input_folder is not configured.")
-            return None
+            raise ValueError("BEAM local_input_folder is not configured.")
 
         if os.path.isabs(configured_root):
             root_candidate = configured_root
@@ -885,26 +877,11 @@ class BeamPreprocessor(GenericPreprocessor):
             root_candidate = os.path.join(pilates_root, configured_root)
 
         primary_path = os.path.abspath(os.path.join(root_candidate, region))
-        if os.path.exists(primary_path):
-            return primary_path
-
-        # Legacy fallback observed in some HPC layouts.
-        alt_root = os.path.join(pilates_root, "sources", "PILATES")
-        alt_path = os.path.abspath(os.path.join(alt_root, configured_root, region))
-        if os.path.exists(alt_path):
-            logger.warning(
-                "[NOT IDEAL] Primary BEAM production path not found; using legacy alternate layout: %s. "
-                "Prefer fixing mounts/paths so inputs resolve directly under the configured inputs root.",
-                alt_path,
+        if not os.path.exists(primary_path):
+            raise FileNotFoundError(
+                f"BEAM production input directory does not exist at configured path: {primary_path}"
             )
-            return alt_path
-
-        logger.error(
-            "BEAM production input directory does not exist at either %s or %s",
-            primary_path,
-            alt_path,
-        )
-        return None
+        return primary_path
 
     def _update_beam_config(self, *_args: Any, **_kwargs: Any) -> None:
         """Reject obsolete in-preprocess configuration mutation.
