@@ -30,32 +30,32 @@ Tracked files under `scenarios/` serve as baseline templates that contain machin
 
 1. Create a scenario YAML file that inherits from a tracked regional config via `base:`, or copy a template such as `scenarios/sfbay/settings-sfbay-newconfig-local.yaml`:
 
-```yaml
-base: scenarios/sfbay/settings-sfbay-newconfig-local.yaml
+    ```yaml
+    base: scenarios/sfbay/settings-sfbay-newconfig-local.yaml
 
-run:
-  scenario: sfbay-local-first-run
-  output_run_name: sfbay-local-first-run
-  output_directory: /abs/path/to/pilates-outputs
-  local_workspace_root: /abs/path/to/pilates-workspace
-  start_year: 2010
-  end_year: 2011
-  supply_demand_iters: 1
-```
+    run:
+      scenario: sfbay-local-first-run
+      output_run_name: sfbay-local-first-run
+      output_directory: /abs/path/to/pilates-outputs
+      local_workspace_root: /abs/path/to/pilates-workspace
+      start_year: 2010
+      end_year: 2011
+      supply_demand_iters: 1
+    ```
 
 2. Edit `run.output_directory` to point to the parent folder where PILATES stores durable run archives. Set `run.local_workspace_root` to a separate scratch folder if you want mutable model execution files isolated from the archive directory, or omit it to colocate both in `run.output_directory`.
 3. Check `run.models` and any model input paths in the parent template to verify that every enabled model has its source data tree in place.
 4. Validate the merged configuration before starting the workflow:
 
-```bash
-python -m pilates.config.models path/to/your-settings.yaml --validate
-```
+    ```bash
+    python -m pilates.config.models path/to/your-settings.yaml --validate
+    ```
 
 5. Launch the simulation:
 
-```bash
-python run.py -c path/to/your-settings.yaml
-```
+    ```bash
+    python run.py -c path/to/your-settings.yaml
+    ```
 
 ## Run Startup and Outputs
 
