@@ -8,8 +8,8 @@ to keep data lineage and archived outputs queryable for run comparison and repla
 Minimal path:
 
 ```bash
+python run.py -c <settings.yaml> --dry-run
 python run.py -c <settings.yaml>
-python examples/consist/restart_replay_inspection.py <archive-run-dir>
 ```
 
 For a deeper Consist-facing walkthrough, start with

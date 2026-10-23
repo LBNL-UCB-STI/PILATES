@@ -75,8 +75,8 @@ dependencies:
     - sqlmodel
     - pyhocon==0.3.61
 
-    # Provenance tracking
-    - consist[ingest,ibis]>=0.3.3
+    # Provenance tracking (pinned to pre-v0.4.0 commit until consist v0.4.0 is published on PyPI)
+    - consist[ingest,ibis] @ git+https://github.com/LBNL-UCB-STI/consist.git@60501d0ea57dd5d400c02e301b3872319fd90e0c
     - openlineage-python
     - attrs>=20.0
     - httpx>=0.27.0
