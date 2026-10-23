@@ -31,7 +31,8 @@ This release completes PILATES' cutover to Consist-native step execution, introd
 - Decoupled synthetic population staging from `UrbansimPreprocessor` when land-use is disabled, deduplicated `CanonicalZones` staging, and enforced fail-fast input path checks (`#105`).
 - Retired `ModelFactory` (`pilates/generic/model_factory.py`), the legacy `Model` base class (`pilates/generic/model.py`), `scripts/migrate_config.py`, `step_output_handoff_mapping`, dead `expected_inputs` methods, and unused `coupler_helpers.py` / `steps/shared.py` wrappers (`#82`, `#104`, `#107`, `#108`, `#109`).
 - Retired finished one-off HPC migration acceptance harnesses (`#110`).
-- Split monolithic `urbansim_atlas.py` into dedicated `pilates/workflows/steps/urbansim.py` and `pilates/workflows/steps/atlas.py` step modules (`#112`), and updated `scripts/new_model_scaffold.py` and `docs/extend/adding_a_model.md` (`#106`, `#107`).
+- Split monolithic `urbansim_atlas.py` into dedicated `pilates/workflows/steps/urbansim.py` and `pilates/workflows/steps/atlas.py` step modules (`#112`), and updated `scripts/new_model_scaffold.py` and `docs/extend/adding_a_model.md` (`#106`, `#107`, `#114`).
+- Overhauled the Zensical user and developer documentation (`docs/`) for `v1.1.0`, adding interactive tabs, Mermaid architecture diagrams, inline code annotations, and updated guides for step contracts, `scenario.coupler` artifact flow, lineage mapping, YAML inheritance, BEAM plan memory, full skims, and Ibis/DuckDB analysis (`#114`).
 
 ## v1.0.1 - 2026-06-05
 
