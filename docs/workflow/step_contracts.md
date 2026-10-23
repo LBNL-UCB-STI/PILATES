@@ -180,7 +180,7 @@ Because PILATES supports modular workflows (for example, running ActivitySim + B
     When ATLAS prepares its yearly CSV inputs in `pilates/workflows/steps/atlas.py`, it needs the current UrbanSim HDF5 datastore and optional OMX travel skims:
 
     ```python
-    binding_rules=(
+    binding_rules = (
         ArtifactBindingRule(
             semantic_key="usim_datastore_current_h5",
             required=True,
@@ -204,7 +204,7 @@ Because PILATES supports modular workflows (for example, running ActivitySim + B
     When `activitysim_postprocess` merges accessibility tables back into the HDF5 datastore in `pilates/workflows/steps/activitysim.py`, its binding rules adapt across three different workflow configurations:
 
     ```python
-    binding_rules=(
+    binding_rules = (
         ArtifactBindingRule(
             semantic_key="usim_datastore_current_h5",
             required=False,
