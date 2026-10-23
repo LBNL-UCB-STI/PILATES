@@ -165,6 +165,15 @@ class FullSkimConversionConfig(BaseModel):
         le=1.0,
         description="Multiplier on nearest-neighbor mean for intrazonal diagonal imputation.",
     )
+    max_speed_mph: float | None = Field(
+        70.0,
+        gt=0.0,
+        description=(
+            "Maximum vehicular speed in mph used to floor auto travel times "
+            "(SOV_TIME, SOVTOLL_TIME) such that time >= (dist / max_speed_mph) * 60. "
+            "Set to None to disable speed capping."
+        ),
+    )
     copy_hov_from_sov: bool = Field(
         True,
         description=(
@@ -274,6 +283,7 @@ class FullSkimConversionConfig(BaseModel):
             ),
             "intrazonal_nearest_neighbors_k": self.intrazonal_nearest_neighbors_k,
             "intrazonal_factor": self.intrazonal_factor,
+            "max_speed_mph": self.max_speed_mph,
             "copy_hov_from_sov": self.copy_hov_from_sov,
             "disable_express_bus": self.disable_express_bus,
             "synthesize_wlk_trn_wlk": self.synthesize_wlk_trn_wlk,
@@ -303,6 +313,8 @@ class FullSkimConversionReport(BaseModel):
     output_matrix_count: int
     scaled_transit_matrix_count: int
     intrazonal_imputed_matrix_count: int
+    speed_capped_matrix_count: int = 0
+    speed_capped_cell_count: int = 0
     time_periods: list[str]
     config_facet: dict[str, Any]
 
@@ -377,6 +389,25 @@ def _impute_intrazonal_diagonal(
     merged_diag = np.where(zero_diag_mask, imputed_diag, diag).astype(np.float32)
     np.fill_diagonal(out, merged_diag)
     return out, True
+
+
+def _cap_travel_times_by_max_speed(
+    time_matrix: np.ndarray,
+    dist_matrix: np.ndarray,
+    max_speed_mph: float,
+) -> tuple[np.ndarray, int]:
+    """Floor travel times so implied vehicular speed (dist / time * 60) <= max_speed_mph."""
+    if max_speed_mph <= 0.0:
+        return time_matrix, 0
+    arr_time = np.asarray(time_matrix, dtype=np.float32)
+    arr_dist = np.asarray(dist_matrix, dtype=np.float32)
+    min_time = (arr_dist / np.float32(max_speed_mph)) * np.float32(60.0)
+    excess_mask = (arr_dist > 0) & (arr_time < min_time)
+    n_capped = int(np.count_nonzero(excess_mask))
+    if n_capped == 0:
+        return arr_time, 0
+    capped = np.where(excess_mask, min_time, arr_time).astype(np.float32)
+    return capped, n_capped
 
 
 def _write_matrix(
@@ -502,6 +533,8 @@ def convert_beam_full_skims_to_activitysim_omx(
 
     scaled_count = 0
     imputed_count = 0
+    speed_capped_matrix_count = 0
+    speed_capped_cell_count = 0
 
     try:
         with h5py.File(in_path, "r") as src_h5, h5py.File(tmp_out_path, "w") as dst_h5:
@@ -530,6 +563,9 @@ def convert_beam_full_skims_to_activitysim_omx(
             dst_h5.attrs["SHAPE"] = np.array([zone_count, zone_count], dtype=np.int32)
             dst_h5.attrs[CONVERTED_ATTR_KEY] = np.int32(1)
             dst_h5.attrs["pilates_conversion_version"] = FULL_SKIM_CONVERTER_VERSION
+            dst_h5.attrs["pilates_max_speed_mph"] = (
+                float(cfg.max_speed_mph) if cfg.max_speed_mph is not None else -1.0
+            )
             dst_h5.attrs["pilates_transit_scale_factor"] = float(
                 cfg.transit_scale_factor
             )
@@ -595,6 +631,12 @@ def convert_beam_full_skims_to_activitysim_omx(
                     k=cfg.intrazonal_nearest_neighbors_k,
                     factor=cfg.intrazonal_factor,
                 )
+            if cfg.max_speed_mph is not None and cfg.max_speed_mph > 0:
+                ref_sov_time, _ = _cap_travel_times_by_max_speed(
+                    ref_sov_time,
+                    ref_sov_dist,
+                    cfg.max_speed_mph,
+                )
 
             # 3. Copy existing matrices, applying NaN sanitization, highway/walk backfill,
             #    intrazonal imputation, and transit scaling.
@@ -648,6 +690,47 @@ def convert_beam_full_skims_to_activitysim_omx(
                     )
                     if did_impute:
                         imputed_count += 1
+
+                if (
+                    cfg.max_speed_mph is not None
+                    and cfg.max_speed_mph > 0
+                    and prefix in ("SOV", "SOVTOLL")
+                    and measure == "TIME"
+                ):
+                    dist_name = (
+                        f"{prefix}_DIST__{_period}" if _period else f"{prefix}_DIST"
+                    )
+                    if dist_name in dst_data:
+                        dist_arr = np.asarray(
+                            dst_data[dist_name][...], dtype=np.float32
+                        )
+                    elif dist_name in src_data:
+                        dist_arr = _sanitize_non_negative_float32(
+                            src_data[dist_name][...]
+                        )
+                    else:
+                        fallback_dist_name = (
+                            f"SOV_DIST__{_period}" if _period else "SOV_DIST"
+                        )
+                        if fallback_dist_name in dst_data:
+                            dist_arr = np.asarray(
+                                dst_data[fallback_dist_name][...], dtype=np.float32
+                            )
+                        elif fallback_dist_name in src_data:
+                            dist_arr = _sanitize_non_negative_float32(
+                                src_data[fallback_dist_name][...]
+                            )
+                        else:
+                            dist_arr = ref_sov_dist
+
+                    raw_arr, n_capped = _cap_travel_times_by_max_speed(
+                        raw_arr,
+                        dist_arr,
+                        cfg.max_speed_mph,
+                    )
+                    if n_capped > 0:
+                        speed_capped_matrix_count += 1
+                        speed_capped_cell_count += n_capped
 
                 if _should_scale_transit_matrix(prefix, measure):
                     raw_arr = (raw_arr * np.float32(cfg.transit_scale_factor)).astype(
@@ -1161,6 +1244,8 @@ def convert_beam_full_skims_to_activitysim_omx(
             "input_matrix_count": len(input_matrix_names),
             "scaled_transit_matrix_count": scaled_count,
             "intrazonal_imputed_matrix_count": imputed_count,
+            "speed_capped_matrix_count": speed_capped_matrix_count,
+            "speed_capped_cell_count": speed_capped_cell_count,
         }
         if isinstance(upstream_prov, Mapping):
             extra_metadata["raw_beam_omx_identity"] = upstream_prov.get("identity")
@@ -1179,13 +1264,14 @@ def convert_beam_full_skims_to_activitysim_omx(
         )
 
     logger.info(
-        "[FullSkimConverter] Converted %s (%d matrices) -> %s (%d matrices, transit_scale=%s, rh_pooled_mult=%s, logical_sha256=%s)",
+        "[FullSkimConverter] Converted %s (%d matrices) -> %s (%d matrices, transit_scale=%s, max_speed_mph=%s, capped_cells=%d, logical_sha256=%s)",
         in_path,
         len(input_matrix_names),
         out_path,
         output_matrix_count,
         cfg.transit_scale_factor,
-        cfg.rh_pooled_time_multiplier,
+        cfg.max_speed_mph,
+        speed_capped_cell_count,
         logical_matrices_identity,
     )
 
@@ -1198,6 +1284,8 @@ def convert_beam_full_skims_to_activitysim_omx(
         output_matrix_count=output_matrix_count,
         scaled_transit_matrix_count=scaled_count,
         intrazonal_imputed_matrix_count=imputed_count,
+        speed_capped_matrix_count=speed_capped_matrix_count,
+        speed_capped_cell_count=speed_capped_cell_count,
         time_periods=time_periods,
         config_facet=cfg.to_consist_facet(),
     )
@@ -1364,6 +1452,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Disable nearest-neighbor intrazonal diagonal imputation.",
     )
     parser.add_argument(
+        "--max-speed-mph",
+        type=float,
+        default=70.0,
+        help="Maximum plausible vehicular speed cap in mph for auto skims (default: 70.0).",
+    )
+    parser.add_argument(
+        "--no-speed-capping",
+        action="store_true",
+        help="Disable speed capping on auto travel times.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Allow re-converting an OMX file that already has converted metadata.",
@@ -1377,9 +1476,11 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
     )
     args = _build_arg_parser().parse_args(argv)
+    max_speed_mph: float | None = None if args.no_speed_capping else args.max_speed_mph
     config = FullSkimConversionConfig(
         transit_scale_factor=args.transit_scale_factor,
         impute_intrazonal_from_nearest_neighbors=not args.no_intrazonal_imputation,
+        max_speed_mph=max_speed_mph,
         disable_express_bus=not args.keep_express_bus,
         rh_pooled_time_multiplier=args.rh_pooled_time_multiplier,
         rh_pooled_dist_multiplier=args.rh_pooled_dist_multiplier,
@@ -1399,7 +1500,8 @@ def main(argv: list[str] | None = None) -> int:
         f"Converted {report.input_omx_path} ({report.input_matrix_count} matrices) -> "
         f"{report.output_omx_path} ({report.output_matrix_count} matrices, "
         f"{report.zone_count} zones, {report.scaled_transit_matrix_count} transit matrices scaled, "
-        f"{report.intrazonal_imputed_matrix_count} diagonals imputed)"
+        f"{report.intrazonal_imputed_matrix_count} diagonals imputed, "
+        f"{report.speed_capped_cell_count} cells speed-capped across {report.speed_capped_matrix_count} matrices)"
     )
     return 0
 

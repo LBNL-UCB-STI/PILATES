@@ -300,6 +300,79 @@ def test_convert_beam_full_skims_to_activitysim_omx(tmp_path: Path) -> None:
         )
 
 
+def test_convert_full_skims_enforces_max_speed_capping(tmp_path: Path) -> None:
+    """Verify conversion floors auto travel times exceeding max_speed_mph."""
+    raw_omx = _create_synthetic_raw_beam_omx(tmp_path / "raw_skims.omx")
+    out_omx = tmp_path / "speed_capped_skims.omx"
+
+    # Inject an extreme hyper-speed outlier cell (0, 3): distance 14.0 miles, time 0.2 minutes (4,200 mph)
+    with h5py.File(raw_omx, "r+") as f:
+        data = f["data"]
+        sov_dist = data["SOV_DIST__AM"][:]
+        sov_time = data["SOV_TIME__AM"][:]
+        sov_dist[0, 3] = 14.0
+        sov_time[0, 3] = 0.2
+        del data["SOV_DIST__AM"]
+        del data["SOV_TIME__AM"]
+        data.create_dataset("SOV_DIST__AM", data=sov_dist)
+        data.create_dataset("SOV_TIME__AM", data=sov_time)
+
+    cfg = FullSkimConversionConfig(max_speed_mph=70.0)
+    report = convert_beam_full_skims_to_activitysim_omx(raw_omx, out_omx, config=cfg)
+
+    expected_min_time = (14.0 / 70.0) * 60.0  # 12.0 minutes
+    assert report.speed_capped_matrix_count > 0
+    assert report.speed_capped_cell_count > 0
+
+    with h5py.File(out_omx, "r") as f:
+        data = f["data"]
+        # SOV_TIME__AM must be floored to 12.0 min
+        assert pytest.approx(data["SOV_TIME__AM"][0, 3], rel=1e-5) == expected_min_time
+        # Derived HOV2, HOV3 must inherit this floored time
+        assert pytest.approx(data["HOV2_TIME__AM"][0, 3], rel=1e-5) == expected_min_time
+        assert pytest.approx(data["HOV3_TIME__AM"][0, 3], rel=1e-5) == expected_min_time
+
+        # Normal unproblematic cells remain untouched
+        # Cell (0, 1) has dist=1.0, original time=2.5 min -> 24 mph (under 70 mph), so unchanged
+        assert pytest.approx(data["SOV_TIME__AM"][0, 1], rel=1e-5) == 2.5
+        assert pytest.approx(f.attrs["pilates_max_speed_mph"]) == 70.0
+
+    sidecar = read_skim_provenance_sidecar(skim_provenance_sidecar_path(out_omx))
+    assert sidecar is not None
+    assert sidecar["skim_metadata"]["speed_capped_cell_count"] > 0
+    assert sidecar["skim_metadata"]["conversion_config"]["max_speed_mph"] == 70.0
+
+
+def test_convert_full_skims_can_disable_speed_capping(tmp_path: Path) -> None:
+    """Verify conversion preserves hyper-speeds when max_speed_mph is None."""
+    raw_omx = _create_synthetic_raw_beam_omx(tmp_path / "raw_skims.omx")
+    out_omx = tmp_path / "uncapped_skims.omx"
+
+    # Inject hyper-speed outlier cell (0, 3)
+    with h5py.File(raw_omx, "r+") as f:
+        data = f["data"]
+        sov_dist = data["SOV_DIST__AM"][:]
+        sov_time = data["SOV_TIME__AM"][:]
+        sov_dist[0, 3] = 14.0
+        sov_time[0, 3] = 0.2
+        del data["SOV_DIST__AM"]
+        del data["SOV_TIME__AM"]
+        data.create_dataset("SOV_DIST__AM", data=sov_dist)
+        data.create_dataset("SOV_TIME__AM", data=sov_time)
+
+    cfg = FullSkimConversionConfig(max_speed_mph=None)
+    report = convert_beam_full_skims_to_activitysim_omx(raw_omx, out_omx, config=cfg)
+
+    assert report.speed_capped_matrix_count == 0
+    assert report.speed_capped_cell_count == 0
+
+    with h5py.File(out_omx, "r") as f:
+        data = f["data"]
+        # Travel time remains un-floored at 0.2 min
+        assert pytest.approx(data["SOV_TIME__AM"][0, 3], rel=1e-5) == 0.2
+        assert f.attrs["pilates_max_speed_mph"] == -1.0
+
+
 def test_run_tracked_full_skim_conversion_records_consist_run_and_sidecar(
     tmp_path: Path,
 ) -> None:
