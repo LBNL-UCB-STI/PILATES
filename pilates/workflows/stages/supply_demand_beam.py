@@ -338,7 +338,7 @@ def _run_beam_steps(
 
     # Archive beam_run outputs natively with verify=True
     base_archive = (
-        archive_run_dir
+        archive_run_dir / "consist-recovery"
         if archive_run_dir is not None
         else Path(scenario.tracker.run_dir) / "archive"
     )

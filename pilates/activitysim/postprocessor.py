@@ -1181,7 +1181,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             source_input_paths = raw_outputs.source_input_paths
             source_input_hashes = raw_outputs.source_input_hashes
             if not source_input_paths and not source_input_hashes:
-                logger.warning(
+                logger.debug(
                     "ActivitySim postprocess raw outputs are missing source input metadata; "
                     "archived input content hashes may be unavailable."
                 )

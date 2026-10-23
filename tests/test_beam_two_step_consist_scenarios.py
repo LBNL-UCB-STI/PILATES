@@ -726,7 +726,12 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 assert res0 is None
                 iter0_zarr_art = scenario.coupler.require(ZARR_SKIMS)
                 assert isinstance(iter0_zarr_art.meta, dict)
-                assert iter0_zarr_art.meta.get("recovery_roots")
+                recovery_roots = iter0_zarr_art.meta.get("recovery_roots")
+                assert recovery_roots
+                assert any(
+                    str((archive_dir / "consist-recovery").resolve()) in str(root)
+                    for root in recovery_roots
+                )
 
     assert run_counts["container"] == 1
     assert run_counts["postprocess"] == 1

@@ -405,7 +405,7 @@ def find_iteration_file(
         logger.debug(f"Found file at {path}")
         return path
     else:
-        logger.warning(f"Could not find file at {path}")
+        logger.debug(f"Could not find file at {path}")
         return None
 
 
@@ -3655,7 +3655,7 @@ class BeamPostprocessor(GenericPostprocessor):
         for name in possible_skim_names:
             if name in raw_output_files:
                 if name != zarr_skim_name:
-                    logger.warning(
+                    logger.debug(
                         f"Could not find skim file with name {zarr_skim_name}, but found {name}. Proceeding with this file."
                     )
                 skim_name_found = name
