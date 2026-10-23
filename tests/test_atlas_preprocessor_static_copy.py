@@ -12,8 +12,8 @@ import pilates.atlas.preprocessor as atlas_preprocessor_module
 from pilates.runtime import restart as restart_runtime
 from pilates.workflows import binding as workflow_binding
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.steps import urbansim_atlas
-from pilates.workflows.steps.urbansim_atlas import ATLAS_PREPROCESS, ATLAS_RUN
+from pilates.workflows.steps import atlas
+from pilates.workflows.steps.atlas import ATLAS_PREPROCESS, ATLAS_RUN
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
@@ -243,8 +243,8 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
             (root / "vehicles_output.RData").write_text("vehicles\n")
             (root / "households_output.RData").write_text("households\n")
 
-    monkeypatch.setattr(urbansim_atlas, "AtlasPreprocessor", _Preprocessor)
-    monkeypatch.setattr(urbansim_atlas, "AtlasRunner", _Runner)
+    monkeypatch.setattr(atlas, "AtlasPreprocessor", _Preprocessor)
+    monkeypatch.setattr(atlas, "AtlasRunner", _Runner)
     source_h5 = tmp_path / "source" / "output_2023.h5"
     source_h5.parent.mkdir(parents=True)
     source_h5.write_bytes(b"source")

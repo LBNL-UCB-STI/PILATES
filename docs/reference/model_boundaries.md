@@ -84,7 +84,7 @@ the post-run handoff for downstream stages.
 - Typed outputs: `UrbanSimRunOutputs`, `UrbanSimPostprocessOutputs`
 - Trace it in code:
   - catalog: `pilates/workflows/catalog.py`
-  - steps: `pilates/workflows/steps/urbansim_atlas.py`
+  - steps: `pilates/workflows/steps/urbansim.py`
   - input resolver policy: `pilates/workflows/binding.py`, `pilates/urbansim/inputs.py`
   - stage: `pilates/workflows/stages/land_use.py`
 
@@ -142,7 +142,7 @@ ATLAS refines the current regional state with vehicle-ownership outputs and choo
 - Typed outputs: `AtlasPreprocessOutputs`, `AtlasRunOutputs`, `AtlasPostprocessOutputs`
 - Trace it in code:
   - catalog: `pilates/workflows/catalog.py`
-  - steps: `pilates/workflows/steps/urbansim_atlas.py`
+  - steps: `pilates/workflows/steps/atlas.py`
   - input resolver policy: `pilates/workflows/binding.py`, `pilates/atlas/inputs.py`
   - stage: `pilates/workflows/stages/vehicle_ownership.py`
 

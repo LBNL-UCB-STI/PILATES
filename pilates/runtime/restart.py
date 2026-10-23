@@ -234,7 +234,7 @@ def hydrate_restart_atlas_continuation_inputs(
         step_name="atlas_run",
     )
 
-    from pilates.workflows.steps.urbansim_atlas import (
+    from pilates.workflows.steps.atlas import (
         _atlas_preprocess_prepared_input_paths,
     )
 

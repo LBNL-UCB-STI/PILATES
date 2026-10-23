@@ -8,7 +8,7 @@ from pilates.atlas.inputs import (
     atlas_static_input_relpaths,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.steps.urbansim_atlas import ATLAS_RUN
+from pilates.workflows.steps.atlas import ATLAS_RUN
 
 
 def _settings(
