@@ -1,95 +1,91 @@
----
-title: Faceted Comparison
-summary: Comparing archived outputs across scenario, year, iteration, and policy-parameter facets.
----
+# Scenario Comparison
 
-# Faceted Comparison
+PILATES tracks run configurations, input bindings, and output artifacts in `.consist/provenance.duckdb`, enabling structured comparisons across policy scenarios, parameter sweeps, and warm-start branches.
 
-## Adjacent Pages
+## Faceted Outcome Comparison
 
-- Read [Opening Archives](opening_archives.md) first.
-- Use [Consist in Action](consist_in_action.md) for script examples.
-- Use [SQL and DuckDB](sql_and_duckdb.md) only when the Ibis table path is too narrow.
-
-## Mental Model
-
-Do not start with a hand-built pair. Start with a measured table:
-
-1. choose a logical artifact table such as `activitysim.trips`
-2. request the facets you want as columns
-3. group by those facets
-4. compare over one facet
-
-`scenario_id` is just a facet. Parameter sweeps use the same shape as baseline
-versus policy comparisons.
-
-## Notebook Shape
+Group related archives into a `RunSet` via `AnalysisSession.from_roots(...)` and compute outcome differences against a baseline scenario:
 
 ```python
-from pilates_consist_analysis import delta, difference, open_archive
-
-archive = open_archive(
-    "/path/to/archive/run", project_root="/Users/zaneedell/git/PILATES"
+from pilates_consist_analysis import (
+    AnalysisSession,
+    delta,
+    delta_change,
+    difference,
+    rank,
 )
 
-trips = archive.table(
-    "activitysim.trips",
-    facets=["year", "iteration", "pricing_policy", "trip_mode"],
-    where={"year": [2020, 2030]},
-)
+session = AnalysisSession.from_roots(["outputs/scenarios"])
+runset = session.filter(status="completed", region="sfbay")
 
-counts = archive.measure(
-    trips,
-    by=["pricing_policy", "year", "iteration", "trip_mode"],
-    measures={"trip_count": lambda table: table.count()},
-)
-totals = counts.group_by(["pricing_policy", "year", "iteration"]).agg(
-    total_trips=counts["trip_count"].sum(),
-)
-mode_shares = counts.join(
-    totals,
-    ["pricing_policy", "year", "iteration"],
-).mutate(
-    mode_share=counts["trip_count"] / totals["total_trips"],
-)
+# Load an aligned table of measures across scenarios and forecast years
+vmt = runset.measure("beam_vmt_total")
+mode_share = runset.table("mode_choice_summary", year=2020)
 
-over_time = delta(
-    mode_shares,
-    value="mode_share",
-    over="year",
-    by=["pricing_policy", "trip_mode"],
-)
-
-sweep = difference(
-    mode_shares,
-    value="mode_share",
-    compare="pricing_policy",
-    baseline="none",
-    at={"year": 2030},
-    by=["iteration", "trip_mode"],
-)
+# Compute absolute and relative deltas against the baseline run
+vmt_diff = difference(vmt, baseline="sf_baseline")
+vmt_pct = delta_change(vmt, baseline="sf_baseline")
+scenario_ranks = rank(vmt, by="value", ascending=True)
 ```
 
-Call `.to_pandas()` at the display or export boundary.
+For a self-contained runnable script that compares scenario metrics side by side, see `examples/consist/run_comparison.py`.
 
-## Script Shape
+## Boundary Overlap and Shared Upstream Artifacts
 
-The small read-only example script measures ActivitySim trip mode share and
-compares over a chosen facet:
+Policy scenarios that branch from a shared baseline often reuse prior forecast years or warm-start steps. Inspect shared vs. diverged artifacts across scenario boundaries to confirm which stages executed fresh and which hydrated from cache:
+
+```python
+overlap = session.boundary_overlap(
+    left_run_id="sf_baseline_2020",
+    right_run_id="sf_transit_boost_2020",
+)
+print(overlap.shared_steps)
+print(overlap.diverged_steps)
+```
+
+See `examples/consist/cache_hit_inspection.py` for a walkthrough of cache reuse across scenario branches.
+
+## Diagnosing Cache Hits, Misses, and Config Diffs
+
+To investigate a cache miss or step divergence between two runs, compare their resolved configuration facets and input artifact hashes with `diff_runs` and `session.diff_configs(...)`:
+
+```python
+from pilates_consist_analysis import diff_runs
+
+# Compare step-by-step cache signatures, input hashes, and config facets
+step_diff = diff_runs(
+    left_archive="outputs/scenarios/sf_baseline",
+    right_archive="outputs/scenarios/sf_transit_boost",
+    step_name="activitysim_demand",
+    year=2015,
+)
+print(step_diff.changed_inputs)
+print(step_diff.changed_config_keys)
+
+# Inspect config facet differences across an entire RunSet
+config_diffs = session.diff_configs("sf_baseline", "sf_transit_boost")
+print(runset.config_diffs())
+```
+
+`step_diff` pinpoints whether the divergence came from an upstream coupler artifact (such as updated skims or households), a parameter change in `config.yaml`, or an adapter file edit. See [Step Contracts](../workflow/step_contracts.md) for how Consist computes step identity.
+
+## Tracing Artifact Lineage
+
+Trace any output artifact backward to the exact steps, configuration parameters, and upstream inputs that produced it:
+
+```python
+import consist
+
+# Return the upstream Merkle DAG for an artifact or run
+lineage_tree = consist.lineage(
+    artifact_or_run_id="final_trips_2020",
+    db_path="outputs/scenarios/sf_transit_boost/.consist/provenance.duckdb",
+)
+print(lineage_tree)
+```
+
+You can also print the lineage tree from the terminal using the Consist CLI:
 
 ```bash
-python examples/consist/run_comparison.py \
-  /path/to/archive-run \
-  --table activitysim.trips \
-  --compare pricing_policy \
-  --baseline none \
-  --where year=2030
+consist lineage final_trips_2020 --db outputs/scenarios/sf_transit_boost/.consist/provenance.duckdb
 ```
-
-If `--baseline` is omitted, the script ranks facet values instead of computing
-differences.
-
-## Lower-Level Path
-
-Use `RunSet` only when the question is about selecting or aligning runs
-themselves. For output comparisons, keep the simpler measured-table shape above.

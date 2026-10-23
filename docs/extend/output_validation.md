@@ -1,140 +1,44 @@
----
-title: Output Validation
-summary: Typed-output validation at native PILATES–Consist step boundaries.
----
-
 # Output Validation
 
-PILATES validates a workflow boundary in two complementary places:
+PILATES validates model outputs at the end of every step before promoting artifacts to the scenario coupler or downstream stages.
 
-1. **Definition validation** checks the committed `StepDefinition`, its
-   decorated Consist callable, and the policy catalog before a run starts.
-2. **Typed-output validation** checks the concrete values projected from
-   `RunResult.outputs` after Consist has executed a step or admitted a cache
-   hit.
+## Validation Sequence
 
-Definition validation detects wiring drift. Typed-output validation detects a
-missing destination, malformed handoff, or model-specific semantic error in the
-current boundary result. Neither layer selects historical outputs or rebuilds a
-previous execution.
+At the end of each step, `execute_step(...)` and the model's `Postprocessor` run four checks in order:
 
-## Native boundary path
+1. **Required coupler key presence**: `StepOutputsBase.assert_required(...)` verifies that every key listed in `required_outputs` exists on the coupler and resolves to a non-empty artifact reference.
+2. **Filesystem path verification**: `StepOutputsBase.validate_paths(...)` checks that every path listed in `required_path_fields` exists on disk before Consist logs or archives the file.
+3. **Tabular schema and primary-key checks**: For steps with registered SQLModel schemas in `pilates/database/schema/registry.py`, Consist and the postprocessor validate column names, data types, and non-null key constraints. See [Database and Schemas](../reference/database_and_schemas.md) for the schema registry.
+4. **Domain-specific structural invariants**: Postprocessors verify cross-table referential integrity, zone coordinate bounds, and positive row counts on core outputs.
 
-Every enabled model phase follows one path:
+## Configuring Output Validation by Model
 
-```text
-semantic roles
--> ResolvedStepInputs
--> execute_step(..., StepDefinition)
--> Consist RunResult.outputs
--> TypedOutputProjector
--> validated typed PILATES output
+### UrbanSim
+
+UrbanSim postprocessing checks that forecasted HDF5 and Parquet tables contain all required geographic and demographic keys (`block_id`, `zone_id`, `household_id`, `person_id`) and match canonical zone identifiers. See [Zone and Skim Alignment](../reference/zone_and_skim_alignment.md) for zone validation rules.
+
+### ATLAS
+
+ATLAS validation verifies that `households.csv` and `vehicles.csv` exist for the target simulation year, contain non-zero household counts when input populations are non-empty, and preserve `household_id` alignment with UrbanSim.
+
+### ActivitySim
+
+ActivitySim output validation checks both coupler artifact bindings and optional DuckDB ingestion schemas (`final_households`, `final_persons`, `final_tours`, `final_trips`, `final_land_use`). Enable strict schema enforcement during ingestion with `shared.database.strict_schema`:
+
+```yaml
+shared:
+  database:
+    enabled: true
+    strict_schema: true
 ```
 
-The resolver selects the current coupler artifacts once and records their exact
-destinations. `execute_step()` requires that selection to be complete, passes it
-to Consist, then refreshes post-run action evidence, archives configured outputs,
-and republishes archived artifacts to the coupler before it gives persisted
-output links to the projector. Model integrations must not recreate that
-sequence. A projector must validate the declared current destinations and
-return the typed object the following stage consumes.
+### BEAM
 
-The same path applies to fresh execution, an admitted cache hit, and the sole
-committed mid-stage restart (`beam_run_completed -> beam_postprocess`).
+BEAM postprocessing verifies `FINAL_SKIMS_OMX` (or `ZARR_SKIMS`), `BEAM_LINKSTATS`, and `BEAM_EVENTS`. Skim validation confirms 0-based matrix coordinates and finite travel time values before the next replanning or forecast year begins.
 
-## Typed outputs
+## Adding Custom Validation to a New Model
 
-Output classes inherit from `StepOutputsBase` when they represent a public
-workflow handoff. Their dataclass fields hold concrete `Path` values, optional
-paths, path dictionaries, and any small metadata needed by semantic validators.
+Implement custom checks in two places:
 
-The common class fields are:
-
-- `declared_outputs`: semantic keys the output type can publish.
-- `required_outputs`: keys required at the boundary.
-- `required_output_families`: state-expanded required-key families.
-- `optional_outputs`: declared keys allowed to be absent.
-- `record_keys`: mapping from dataclass field name to semantic artifact key.
-- `required_path_fields`, `optional_path_fields`, and `dict_path_fields`:
-  filesystem paths that the output object must validate.
-- `validators`: semantic checks that go beyond path existence.
-
-Keep a key declaration and its path validation aligned. A required published
-singleton normally has both a `record_keys` entry and a
-`required_path_fields` entry. Dictionary-shaped outputs normally declare
-`dict_path_fields` and customize their record iteration.
-
-`declared_outputs` describes the schema surface; `required_outputs` describes
-the strict boundary surface. Optional declared outputs may be absent, but a
-required projected output must be linked by Consist and validate at its
-declared destination.
-
-## Semantic validators
-
-Use a semantic validator when a filesystem path alone is insufficient. Examples
-include an ActivitySim table that must live under the mutable data directory, a
-skim required only for particular settings, or a value that must agree with an
-explicit upstream typed result.
-
-A validator implements the `OutputValidator` protocol:
-
-```python
-class MyValidator:
-    name = "my_output_contract"
-    level = "error"  # or "warning"
-
-    def validate(self, outputs, context):
-        if ...:
-            return [ValidationResult("explain the contract problem")]
-        return []
-```
-
-`ValidationContext` supplies the active settings, state, workspace, and
-canonical step name. Treat it as read-only. It exists for a validator to assess
-the boundary result, not to perform another input resolution.
-
-Warnings are logged and allow the run to continue. Errors are collected and
-reported together as an `AssertionError`. Raise directly only for an unexpected
-validator failure.
-
-## Handoff and coupler publication
-
-Native steps receive their persisted output contract through `RunResult.outputs`
-and the step's projector, and publish downstream handoff artifacts directly
-through `scenario.coupler`. Do not convert typed step outputs into ad-hoc
-key-to-path dictionaries for workflow handoffs, as that discards Consist
-artifact identity.
-
-## Recommended tests
-
-Add focused tests next to the boundary being changed:
-
-- required path fields fail when missing; optional fields pass when absent and
-  fail when set to a missing path;
-- dictionary path fields report the missing key and path;
-- semantic validator warnings log without failing, while errors identify the
-  validator and step;
-- a projector rejects a missing Consist output link or a wrong final
-  destination;
-- declared, required, optional, and state-expanded output keys resolve as
-  intended;
-- a fresh run, admitted cache hit, and supported checkpoint hand back the same
-  typed output contract.
-
-Existing examples include `tests/test_step_execution.py`,
-`tests/test_step_definitions.py`, `tests/test_activitysim_step_definitions.py`,
-and `tests/test_urbansim_atlas_native_step_definitions.py`.
-
-## Adjacent pages
-
-- Read [Step Contracts](../workflow/step_contracts.md) first.
-- Pair this with [Adding a Model](adding_a_model.md).
-- Use [Testing New Integrations](testing_new_integrations.md) for the acceptance path.
-
-## Evidence basis
-
-- Native execution: `pilates/workflows/step_execution.py`
-- Contract type: `pilates/workflows/step_definition.py`
-- Output projector protocol: `pilates/workflows/output_projection.py`
-- Typed-output base: `pilates/workflows/outputs_base.py`
-- Model definitions: `pilates/workflows/steps/`
+1. **Path and key contracts on `StepOutputs`**: Define `required_outputs` and `required_path_fields` on your `StepOutputsBase` subclass in `pilates/<model>/outputs.py`. `execute_step(...)` runs `assert_required()` and `validate_paths()` after `scenario.run(...)` completes.
+2. **Content checks in `Postprocessor`**: Raise a `ValueError` or `FileNotFoundError` inside `pilates/<model>/postprocessor.py` when an output table is empty, missing required columns, or violates domain constraints. Raising before coupler promotion keeps corrupt artifacts out of `.consist/provenance.duckdb` and prevents false cache hits on subsequent runs.

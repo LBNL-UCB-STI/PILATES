@@ -1,89 +1,99 @@
----
-title: SQL and DuckDB
-summary: Current SQL entry points for Consist-backed PILATES archive analysis.
----
-
 # SQL and DuckDB
 
-## Adjacent Pages
+Each PILATES run archive maintains a DuckDB database at `<archive>/.consist/provenance.duckdb` containing run metadata, artifact lineage, and materialized simulation tables.
 
-- Read [Opening Archives](opening_archives.md) first.
-- Use [Consist Analysis CLI](consist_analysis_cli.md) for discovery and health checks.
-- See the repo-local `analysis/README.md` for notebook-first examples.
+## Inspecting Provenance with the CLI
 
-## Recommended Path
+### Consist CLI
 
-PILATES analysis is Consist-first. Start from an archived run directory, open it
-through the analysis API, and prefer faceted Ibis tables before writing raw SQL.
+Use the `consist` CLI to inspect runs, artifacts, schemas, and lineage from a `.consist/provenance.duckdb` file:
 
-```python
-from pathlib import Path
+```bash
+# List recorded workflow steps and cache status
+consist runs --db outputs/my_run/.consist/provenance.duckdb
 
-from pilates_consist_analysis import open_archive
+# List logged input and output artifacts
+consist artifacts --db outputs/my_run/.consist/provenance.duckdb
 
-archive = open_archive(
-    Path("/path/to/archive/run"),
-    project_root=Path("/Users/zaneedell/git/PILATES"),
-)
+# Preview rows from a logged tabular artifact
+consist preview final_trips --db outputs/my_run/.consist/provenance.duckdb --limit 10
 
-trips = archive.table(
-    "activitysim.trips",
-    facets=["scenario_id", "year", "iteration"],
-    where={"year": 2030},
-)
+# Print upstream artifact and step lineage
+consist lineage final_trips --db outputs/my_run/.consist/provenance.duckdb
 
-trips.limit(10).to_pandas()
+# Validate artifact paths and database integrity
+consist validate --db outputs/my_run/.consist/provenance.duckdb
+
+# List registered hybrid views
+consist views --db outputs/my_run/.consist/provenance.duckdb
 ```
 
-The maintained SQL surfaces are:
+### `pilates-consist-analysis` CLI
 
-- `open_archive(...)`, the preferred notebook entry point for archived runs
-- `Archive.table(...)`, for faceted Ibis tables over grouped artifacts
-- `Archive.views(epoch)`, for archive-local view discovery and direct view access
-- `Epoch.sql(sql)` and `Epoch.query(sql)`, for epoch-scoped SQL with named views
-- `EpochTables.load(...)` and table helpers such as `epoch.tables.trips(...)`
-For file outputs, materialize the Ibis expression or DataFrame explicitly at the
-end of the notebook/script.
+Use the `pilates-consist-analysis` command to scan multiple output directories and export summary tables:
 
-## Named Epoch Tables
+```bash
+# Discover runs across output roots
+pilates-consist-analysis discover-runs outputs/
 
-The compatibility API exposes common epoch-backed tables through `epoch.tables`
-when the underlying artifacts are present:
+# Export a multi-year epoch panel to CSV or Parquet
+pilates-consist-analysis epoch-panel outputs/ --out panel.parquet
 
-- `trips`
-- `persons`
-- `households`
-- `land_use`
-- `linkstats`
-- `skim_summary`
-- `urbansim_persons`
-- `urbansim_households`
-- `urbansim_jobs`
+# Check DuckDB database health and run facet tagging
+pilates-consist-analysis db-health outputs/
+pilates-consist-analysis run-tagging outputs/
+```
 
-Prefer `Archive.table(...)` for new notebook work. Drop to `Epoch.sql(...)` when
-you need an older epoch-scoped path, exact SQL text, joins, projections, or
-diagnostics that the Ibis table path does not cover.
+## Querying DuckDB from Python
 
-## DuckDB Health
+### Using `Archive` and `Epoch` SQL Helpers
 
-Use the analysis package health surfaces for Consist DB inspection:
+`Archive` and `Epoch` expose SQL execution helpers bound to the archive's DuckDB store and registered hybrid views:
 
-- `pilates-consist-analysis db-health`, for operator-facing CLI checks
-- `AnalysisSession.inspect_db()` and `AnalysisSession.assert_db_healthy(...)`,
-  for notebook or script checks after `open_run(...)`
-- `Archive.summary()` and `Archive.issues(...)`, for archive-level health
-  summaries after `open_archive(...)`
-- `get_db_health(...)`, `get_db_health_issues(...)`, and
-  `db_health_to_frame(...)`, for lower-level programmatic checks
+```python
+from pilates_consist_analysis import Archive
 
-The analysis tracker mounts the archive run directory as `workspace`, so archive
-queries resolve shared archived data rather than a node-local execution
-workspace.
+archive = Archive.from_dir("outputs/my_run")
 
-## Deprecated Example File
+# Load a registered table for a specific forecast year
+trips_2020 = archive.table("final_trips", year=2020)
 
-[`docs/example_queries.sql`](../example_queries.sql) is now only a redirect
-stub. Do not treat it as a schema reference; its old examples targeted stale
-legacy tables. Use this page, [Consist Analysis CLI](consist_analysis_cli.md),
-and the repo-local `analysis/README.md` for maintained SQL entry
-points.
+# Run custom SQL scoped to a single forecast epoch
+epoch_2020 = archive.epoch(year=2020)
+mode_counts = epoch_2020.sql(
+    """
+    SELECT trip_mode, COUNT(*) AS trips
+    FROM final_trips
+    GROUP BY trip_mode
+    ORDER BY trips DESC
+    """
+)
+```
+
+### Using `consist.run_query` and Direct DuckDB Connections
+
+For cross-run joins or custom analytical queries over cold Parquet files and hot `dlt` tables, use `consist.run_query(...)` or open a read-only DuckDB connection:
+
+```python
+import consist
+import duckdb
+
+db_path = "outputs/my_run/.consist/provenance.duckdb"
+
+# Execute a query through Consist's hybrid view layer
+df = consist.run_query(
+    """
+    SELECT r.id AS run_id, r.model_name, r.status, a.key AS artifact_key, a.driver
+    FROM run r
+    JOIN artifact a ON a.run_id = r.id
+    ORDER BY r.started_at
+    """,
+    db_path=db_path,
+)
+
+# Or connect with the DuckDB Python client in read-only mode
+with duckdb.connect(db_path, read_only=True) as con:
+    tables = con.sql("SHOW ALL TABLES").df()
+```
+
+See [Database and Schemas](../reference/database_and_schemas.md) for the list of ingested table schemas and column definitions.

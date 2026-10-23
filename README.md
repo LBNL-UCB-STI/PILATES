@@ -13,8 +13,8 @@ python examples/consist/restart_replay_inspection.py <archive-run-dir>
 ```
 
 For a deeper Consist-facing walkthrough, start with
-[docs/workflow/consist_in_pilates.md](docs/workflow/consist_in_pilates.md) and
-[docs/analysis/consist_in_action.md](docs/analysis/consist_in_action.md).
+[docs/workflow/step_contracts.md](docs/workflow/step_contracts.md) and
+[docs/analysis/scenario_comparison.md](docs/analysis/scenario_comparison.md).
 
 The full documentation now lives in the static docs site:
 
@@ -35,12 +35,11 @@ Use the site for the real paths through the project:
 
 - First local run: [docs/start-here/getting_started.md](docs/start-here/getting_started.md)
 - Runtime CLI and config: [docs/run/cli.md](docs/run/cli.md) and [docs/run/configuration_reference.md](docs/run/configuration_reference.md)
-- Workflow semantics: [docs/workflow/workflow_primer.md](docs/workflow/workflow_primer.md)
+- Workflow architecture and contracts: [docs/workflow/architecture.md](docs/workflow/architecture.md) and [docs/workflow/step_contracts.md](docs/workflow/step_contracts.md)
 - Model requirements and handoffs: [docs/reference/model_boundaries.md](docs/reference/model_boundaries.md)
 - Adding a model: [docs/extend/adding_a_model.md](docs/extend/adding_a_model.md)
-- Archived-run analysis: [docs/analysis/overview.md](docs/analysis/overview.md)
-- Consist showcase scripts: [docs/analysis/consist_in_action.md](docs/analysis/consist_in_action.md)
-- Lawrencium: [docs/run/lawrencium.md](docs/run/lawrencium.md)
+- Archived-run analysis and comparison: [docs/analysis/overview.md](docs/analysis/overview.md) and [docs/analysis/scenario_comparison.md](docs/analysis/scenario_comparison.md)
+- Lawrencium and HPC: [docs/run/hpc_overview.md](docs/run/hpc_overview.md) and [docs/run/lawrencium.md](docs/run/lawrencium.md)
 
 ## Citation
 
