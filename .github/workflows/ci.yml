@@ -31,7 +31,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install --no-deps "git+https://github.com/LBNL-UCB-STI/consist.git@60501d0ea57dd5d400c02e301b3872319fd90e0c"
 
       - name: Check Ruff formatting
         run: |
