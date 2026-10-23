@@ -7,8 +7,3 @@ run:
   max_year_intervals: 1
   output_run_name: consist-sfbay-usim-base-short-canary
 
-infrastructure:
-  docker_images:
-    beam: zaneedell/beam:0.9.10
-  singularity_images:
-    beam: docker://zaneedell/beam:1.1-beta-v260422

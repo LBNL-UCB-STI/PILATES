@@ -13,11 +13,5 @@ shared:
   database:
     path: /global/home/users/$USER/scratch/sources/PILATES/pilates/database/provenance_sfbay_clean.duckdb
 
-infrastructure:
-  docker_images:
-    beam: zaneedell/beam:0.9.10
-  singularity_images:
-    beam: docker://zaneedell/beam:1.1-beta-v260421
-
 activitysim:
   num_processes: 22

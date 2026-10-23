@@ -5,9 +5,9 @@ run:
 
 infrastructure:
   docker_images:
-    beam: zaneedell/beam:1.1-beta-v261020
+    beam: zaneedell/beam:1.1.0
   singularity_images:
-    beam: docker://zaneedell/beam:1.1-beta-v261020
+    beam: docker://zaneedell/beam:1.1.0
 
 beam:
   admission:
