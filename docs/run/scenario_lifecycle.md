@@ -44,8 +44,11 @@ For each simulation year from `run.start_year` to `run.end_year`, `ScenarioEngin
 
 Each stage resolves its semantic inputs once from the coupler, runs its native Consist `@define_step` functions, projects `RunResult.outputs` into typed stage outputs, and updates `run_state.yaml`.
 
-```text
-resolved semantic inputs -> Consist RunResult.outputs -> TypedOutputProjector -> coupler publication
+```mermaid
+flowchart LR
+    Inputs["Resolved Semantic Inputs"] -->Outputs["Consist RunResult.outputs"]
+    Outputs --> Projector["TypedOutputProjector"]
+    Projector --> Coupler["Coupler Publication"]
 ```
 
 At the end of each stage and outer year, the launcher snapshots `.consist/provenance.duckdb` to `.consist/snapshots/latest/`.
