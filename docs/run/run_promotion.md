@@ -1,32 +1,15 @@
 ---
 title: Run Promotion
-summary: Copy completed archive runs to NFS and merge run-local Consist DB state into a main database.
+summary: Promote completed scratch archive runs to cold storage and merge run-local Consist databases into a shared main database.
 ---
 
 # Run Promotion
 
-Use this workflow after a completed HPC run when the active archive lives on
-shared scratch and the long-term copy should live on project NFS or another cold
-archive root.
-
-Promotion has two separate jobs:
-
-1. copy the complete archive run directory to one or more recovery roots
-2. make the run's Consist metadata usable from durable storage
-
-The promotion helper always handles the first job and updates the run-local DB
-so promoted output artifacts record their `recovery_roots`. When passed
-`--merge-main-db`, it also handles the second job by exporting only the new root
-run lineage from the run-local DB and merging that filtered shard into the main
-DB.
+Use `pilates.runtime.promote_run_archive` after a cluster run finishes to copy the completed archive run directory from shared scratch (`run.output_directory`) to cold project storage (`run.recovery_archive_roots`) and merge the new run lineage into a central Consist DuckDB database.
 
 ## Prerequisites
 
-Start from a completed archive run directory. Do not promote or merge a DB while
-the Slurm job is still writing to it.
-
-Your settings file should identify the active scratch archive root and, when
-possible, the cold archive destination:
+Wait until the Slurm job finishes before promoting or merging its database. Configure the active scratch archive root and cold recovery roots in your scenario YAML, or pass `--root` on the command line:
 
 ```yaml
 run:
@@ -35,12 +18,9 @@ run:
     - /clusterfs/<project-or-nfs-root>/${USER}/pilates-outputs
 ```
 
-If `run.recovery_archive_roots` is not set, pass one or more `--root` values on
-the command line.
+## 1. Preview Promotion (`--dry-run`)
 
-## 1. Preview Promotion
-
-Use `--dry-run` first to confirm the source run and destination path:
+Run with `--dry-run` first to confirm the resolved source run directory and destination paths without copying files or mutating databases:
 
 ```bash
 python -m pilates.runtime.promote_run_archive \
@@ -50,13 +30,11 @@ python -m pilates.runtime.promote_run_archive \
   --dry-run
 ```
 
-`--run-dir` is optional when the helper can resolve the latest matching run from
-`run.output_directory` and `run.output_run_name`, but it is safer for handoff
-workflows because it makes the source explicit.
+If you omit `--run-dir`, the helper selects the latest archive directory under `run.output_directory` matching `run.output_run_name`.
 
-## 2. Promote The Archive
+## 2. Promote the Archive
 
-Run the same command without `--dry-run`:
+Execute the promotion by dropping `--dry-run`:
 
 ```bash
 python -m pilates.runtime.promote_run_archive \
@@ -65,60 +43,29 @@ python -m pilates.runtime.promote_run_archive \
   --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs
 ```
 
-For each recovery root, the helper:
+For each destination root, `promote_run_archive`:
 
-- copies the full archive run directory to `<root>/<run-dir-name>`
-- verifies the promoted copy has the expected run state and `.consist` state
-- updates artifact `recovery_roots` in the run-local Consist DB
-- syncs the updated `.consist` directory into the promoted copy
-- writes `.consist/recovery_promotion.json` in both the source and promoted run
+1. Copies the archive run directory to `<root>/<run-dir-name>` while skipping transient directories (`activitysim/output/final_pipeline`, `activitysim/output/cache`, `shared_cache/numba`, and `.consist/snapshots/history`).
+2. Verifies that the promoted copy contains `run_state.yaml` and `.consist/` metadata (pass `--no-recovery-copy-verify` only when you want to skip byte-level checksum verification on the promoted files).
+3. Updates artifact `recovery_roots` inside the run-local Consist DB and syncs `.consist/` to the promoted archive.
+4. Writes `.consist/recovery_promotion.json` in both the source and promoted directories.
 
-The promoted copy intentionally drops transient trees such as
-`activitysim/output/final_pipeline`, `activitysim/output/cache`,
-`shared_cache/numba`, and `.consist/snapshots/history`. The source scratch
-archive remains complete.
+## 3. Promote and Merge into the Main DB (`--merge-main-db`)
 
-That marker is the operator-visible record of what was promoted, where it was
-copied, and whether each destination succeeded.
-
-## 3. Promote And Merge Into The Main DB
-
-If the run-local DB was seeded from the shared main DB at startup, do not merge
-the whole run-local DB back into the main DB. It contains historical runs that
-already exist upstream. Instead, let the promotion helper resolve the new root
-run, export that root run plus its child runs to a filtered shard, and merge only
-that shard:
+To prevent collisions with historical runs in the shared main DB, pass `--merge-main-db`. The helper resolves the single new root run, exports that root run and its child steps to a filtered shard, and merges that shard with `--merge-conflict error`:
 
 ```bash
 MAIN_DB=/clusterfs/<project-or-nfs-root>/pilates-main/provenance.duckdb
 
+# Preview the main-DB merge (still promotes the archive copy)
 python -m pilates.runtime.promote_run_archive \
   -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
   --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
   --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs \
   --merge-main-db "$MAIN_DB" \
   --merge-dry-run
-```
 
-Review the JSON output. It should identify exactly one `root_run_id`, list the
-expected `scoped_run_ids`, and show the Consist merge preview under
-`merge_result`. `--merge-dry-run` only protects the main DB from mutation; the
-archive copy and artifact `recovery_roots` update still run. If the preview
-looks right, run the same command without `--merge-dry-run`:
-
-```bash
-python -m pilates.runtime.promote_run_archive \
-  -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
-  --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
-  --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs \
-  --merge-main-db "$MAIN_DB"
-```
-
-If the archive copy already exists from the dry-run and you only want to reuse
-it for the real main-DB merge, add `--merge-only` instead of repeating the full
-copy:
-
-```bash
+# Execute the main-DB merge reusing the already-promoted archive (--merge-only)
 python -m pilates.runtime.promote_run_archive \
   -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
   --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
@@ -127,63 +74,16 @@ python -m pilates.runtime.promote_run_archive \
   --merge-only
 ```
 
-If you only want to update the seed/main Consist DB and do not want to promote
-the scratch archive tree to recovery roots at all, use `--merge-db-only`:
+Additional merge flags:
 
-```bash
-python -m pilates.runtime.promote_run_archive \
-  -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
-  --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
-  --merge-main-db "$MAIN_DB" \
-  --merge-db-only
-```
+- `--merge-db-only`: Exports the new root run lineage and merges it into `MAIN_DB` without copying the archive directory to recovery roots.
+- `--root-run-id <run_id>`: Specifies the root run ID when automatic root resolution finds multiple candidate runs.
 
-That path exports the resolved root run lineage from the run-local DB and
-merges only that Consist shard into the seed DB. It skips recovery-root
-registration, archive copying, and promotion marker writes.
+If `MAIN_DB` does not exist yet, the helper initializes it from the exported shard.
 
-If you trust the promoted copy and want to skip the byte-level Consist
-verification of recovery-copy files as well, add `--no-recovery-copy-verify`.
-Keep this opt-in path narrow; it avoids re-reading each promoted output file but
-removes the independent checksum check on the NFS copy:
+## 4. Verify the Promoted Copy (`--verify-only`)
 
-```bash
-python -m pilates.runtime.promote_run_archive \
-  -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
-  --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
-  --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs \
-  --merge-main-db "$MAIN_DB" \
-  --merge-only \
-  --no-recovery-copy-verify
-```
-
-If the target main DB does not exist yet, the helper seeds it from the filtered
-shard instead of failing. That is the right behavior for a new region or a fresh
-deployment where you are creating the shared provenance DB for the first time.
-
-By default the helper uses `--merge-conflict error`. That is intentional: the
-filtered shard should contain only the new root run subtree, so any run-ID
-conflict usually means the wrong root was selected or the run was already
-merged. If root resolution is ambiguous, pass the root explicitly:
-
-```bash
-python -m pilates.runtime.promote_run_archive \
-  -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
-  --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
-  --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs \
-  --root-run-id <new-root-run-id> \
-  --merge-main-db "$MAIN_DB"
-```
-
-Automatic root selection is conservative. With `--merge-main-db`, the helper
-excludes root runs already present in the main DB, then requires exactly one
-remaining root. It prefers a run tagged `pilates_simulation`, then a
-`pilates_orchestrator` run, and otherwise fails with candidate details instead
-of guessing.
-
-## 4. Verify The Promoted Copy
-
-After promotion, verify the copied run without rewriting metadata:
+Check the promoted archive structure and run database health diagnostics without modifying metadata:
 
 ```bash
 python -m pilates.runtime.promote_run_archive \
@@ -191,218 +91,35 @@ python -m pilates.runtime.promote_run_archive \
   --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
   --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs \
   --verify-only
-```
 
-Then open the promoted archive through the analysis CLI:
-
-```bash
 pilates-consist-analysis db-health \
   --archive-run-dir /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
-  --project-root /Users/zaneedell/git/PILATES \
+  --project-root /path/to/PILATES \
   --strict \
   --fail-on-issues
 ```
 
 ## 5. Manual Merge Fallback
 
-Promotion keeps the promoted archive self-contained. The integrated
-`--merge-main-db` path above is preferred when the run-local DB may contain
-seeded historical runs. The manual Consist CLI commands below are useful for
-inspection, recovery, or one-off maintenance.
-
-The current Consist CLI entrypoint is:
+If you need to inspect, repair, or merge a promoted run database outside `promote_run_archive`, use the Consist CLI against `<promoted-run>/.consist/provenance.duckdb` (`$RUN_DB`) and your shared catalog (`$MAIN_DB`):
 
 ```bash
-consist db merge <shard-or-run-db.duckdb> --db-path <main-db.duckdb>
-```
-
-Despite the command wording, the input does not have to be a shard created by
-`consist db export`. It can be the completed run-local DB from a promoted
-PILATES archive, as long as it has the Consist schema.
-
-### What Merge Copies
-
-`consist db merge` reads the input DB and copies eligible rows into the target
-main DB:
-
-- run rows
-- run-artifact links
-- run config key-value rows
-- artifacts and artifact metadata
-- artifact schema rows and observations
-- `global_tables` rows that are scoped by `consist_run_id` or linked by `run_id`
-
-It does not overwrite existing run IDs. It also skips unscoped cache-style
-`global_tables` rows because those rows cannot be safely attributed to a merged
-run. Schema drift is checked before copying global tables: with
-`--conflict error`, incompatible shared column types fail the merge; with
-`--conflict skip`, incompatible global tables are skipped and reported.
-
-### Identify The Source And Target DBs
-
-First identify the promoted run DB. The common paths are:
-
-- `<promoted-run>/.consist/snapshots/latest/provenance.duckdb`
-- `<promoted-run>/.consist/provenance.duckdb`
-- `<promoted-run>/.consist/snapshots/latest/consist.duckdb`
-- `<promoted-run>/.consist/consist.duckdb`
-
-Set shell variables so the following commands are easy to review:
-
-```bash
-PROMOTED_RUN=/clusterfs/<project-or-nfs-root>/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000
-RUN_DB=$PROMOTED_RUN/.consist/provenance.duckdb
-MAIN_DB=/clusterfs/<project-or-nfs-root>/pilates-main/provenance.duckdb
-```
-
-### Preflight Both DBs
-
-Inspect the promoted run DB:
-
-```bash
-consist db inspect --db-path "$RUN_DB"
+# Check database integrity and snapshot the main DB before manual changes
 consist db doctor --db-path "$RUN_DB"
-consist runs --db-path "$RUN_DB" --limit 20
-```
-
-Inspect the main DB:
-
-```bash
-consist db inspect --db-path "$MAIN_DB"
 consist db doctor --db-path "$MAIN_DB"
+consist db snapshot --db-path "$MAIN_DB" --out "$MAIN_DB.premerge.duckdb"
+
+# Export a single root run lineage and merge it into the main DB
+consist db export <root-run-id> --db-path "$RUN_DB" --out "$PROMOTED_RUN/.consist/new-run-only.duckdb" --include-data --json
+consist db merge "$PROMOTED_RUN/.consist/new-run-only.duckdb" --db-path "$MAIN_DB" --dry-run --conflict error --json
+consist db merge "$PROMOTED_RUN/.consist/new-run-only.duckdb" --db-path "$MAIN_DB" --conflict error --json
 ```
 
-Before a real merge, snapshot the main DB:
+Use `--conflict skip` only when merging an unfiltered `$RUN_DB` that contains pre-existing seeded runs, and verify that `conflicts_detected` lists only those historical run IDs.
 
-```bash
-consist db snapshot \
-  --db-path "$MAIN_DB" \
-  --out "$MAIN_DB.premerge.duckdb"
-```
+## 6. Seed Future Runs from the Main DB
 
-Use a timestamped or otherwise unique snapshot path in real operations so each
-pre-merge backup is preserved.
-
-### Choose A Conflict Policy
-
-If the run-local DB is a pure shard that was not seeded from the main DB, use
-the strict path:
-
-```bash
-consist db merge "$RUN_DB" \
-  --db-path "$MAIN_DB" \
-  --dry-run \
-  --conflict error \
-  --json
-```
-
-If that dry run reports no conflicts, run the real merge:
-
-```bash
-consist db merge "$RUN_DB" \
-  --db-path "$MAIN_DB" \
-  --conflict error \
-  --json
-```
-
-If the run-local DB was seeded from the main DB at startup, a direct strict
-merge will usually find conflicts for the pre-existing seeded runs. In that case
-use `--conflict skip`, but review the JSON output carefully:
-
-```bash
-consist db merge "$RUN_DB" \
-  --db-path "$MAIN_DB" \
-  --dry-run \
-  --conflict skip \
-  --json
-```
-
-The dry-run output should show:
-
-- `runs_skipped`: pre-existing runs that were already in the main DB
-- `conflicts_detected`: the same expected pre-existing run IDs
-- `runs_merged`: the new completed run IDs you want to add
-- `ingested_tables_merged`: any run-scoped hot tables that will be copied
-- `unscoped_cache_tables_skipped`: cache tables Consist cannot safely scope
-- `incompatible_global_tables_skipped`: tables skipped because of schema
-  incompatibility
-
-Only run the real merge when the skipped conflicts are expected:
-
-```bash
-consist db merge "$RUN_DB" \
-  --db-path "$MAIN_DB" \
-  --conflict skip \
-  --json
-```
-
-### Export Only The New Run First
-
-This is the manual equivalent of the promotion helper's `--merge-main-db` path.
-When the run-local DB contains seeded historical runs, export just the new root
-run lineage to a temporary shard, then merge that shard with `--conflict error`.
-
-Find the new root run ID:
-
-```bash
-consist runs --db-path "$RUN_DB" --limit 50 --status completed
-```
-
-Then export and merge:
-
-```bash
-ROOT_RUN_ID=<new-root-run-id>
-FILTERED_SHARD=$PROMOTED_RUN/.consist/new-run-only.duckdb
-
-consist db export "$ROOT_RUN_ID" \
-  --db-path "$RUN_DB" \
-  --out "$FILTERED_SHARD" \
-  --include-data \
-  --json
-
-consist db merge "$FILTERED_SHARD" \
-  --db-path "$MAIN_DB" \
-  --dry-run \
-  --conflict error \
-  --json
-
-consist db merge "$FILTERED_SHARD" \
-  --db-path "$MAIN_DB" \
-  --conflict error \
-  --json
-```
-
-`consist db export` includes child runs by default. Use `--no-children` only
-when you deliberately want one exact run row and not its descendants. Use
-`--include-data` when run-scoped or run-linked `global_tables` rows should be
-portable with the shard.
-
-### Verify After Merge
-
-After the real merge, re-run maintenance checks on the main DB:
-
-```bash
-consist db inspect --db-path "$MAIN_DB"
-consist db doctor --db-path "$MAIN_DB"
-consist runs --db-path "$MAIN_DB" --limit 20
-```
-
-Optionally compact the main DB after a batch of merges:
-
-```bash
-consist db compact --db-path "$MAIN_DB"
-```
-
-Do not pass `--include-snapshots` for the direct promoted-run DB merge unless
-you intentionally created a Consist export shard with a sibling
-`shard_snapshots/` directory. The promoted PILATES archive already preserves
-run-local archive state; the main DB merge is about making the run rows and
-artifact metadata discoverable from the central DB.
-
-## 6. Seed Future Runs From The Main DB
-
-DB seeding is a startup behavior, not a post-run promotion action. Use it when a
-new run should hydrate its run-local DB from a shared main DB before execution:
+To let subsequent cluster runs cache-hit or validate admission policies against promoted runs while isolating active writes to a run-local DuckDB shard, enable shared database seeding in your scenario YAML:
 
 ```yaml
 shared:
@@ -416,12 +133,8 @@ run:
   consist_db_seed_strict: false
 ```
 
-With that posture, each run writes to its run-local shard during execution. At
-the end, promote the archive to NFS with `--merge-main-db` if the run should
-become part of the shared historical catalog.
+## Related Pages
 
-## Adjacent Pages
-
-- Use [Lawrencium](lawrencium.md) for the current cluster storage posture.
-- Use [Workspace Layout](../reference/workspace_layout.md) for archive versus mutable workspace semantics.
-- Use [Opening Archives](../analysis/opening_archives.md) for analysis access after promotion.
+- Read [Lawrencium](lawrencium.md) and [HPC Overview](hpc_overview.md) for 3-tier cluster storage setup.
+- Consult [Workspace Layout](../reference/workspace_layout.md) for archive versus mutable workspace structure.
+- See [Analysis Overview](../analysis/overview.md) and [SQL and DuckDB](../analysis/sql_and_duckdb.md) for querying promoted archives.

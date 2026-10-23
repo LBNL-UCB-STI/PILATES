@@ -1,294 +1,194 @@
----
-title: Lineage Map
-summary: Detailed step-by-step lineage reference for the current PILATES workflow.
----
-
 # Lineage Map
 
-## How To Read This Page
+This page provides a step-by-step reference of the artifacts consumed and published by each canonical step in the PILATES workflow. For high-level coupler mechanics, semantic key definitions, and queryable run/artifact facets, see [Artifact Flow, Roles & Facets](artifact_flow.md).
 
-- Each stage below shows what PILATES reads, what it publishes, and which keys matter for restart.
-- The list is derived from the current workflow catalog and step publication logic, not from older migration notes.
-- The emphasis is on workflow-visible lineage: what later tracked steps can resolve through published keys, not every internal temporary file.
-- For key meanings and query facets, use [Artifact Semantics](artifact_semantics.md) and [Artifact Facet Catalog](artifact_facet_catalog.md). This page focuses on where those roles move through the workflow.
+## End-to-End Lineage Diagram
 
-## Static Renderer Contract
+```mermaid
+flowchart TD
+    Boot["initialize_data (Bootstrap)"] -->|"usim_datastore_h5, usim_datastore_base_h5, omx_skims"| URun["urbansim_run"]
+    URun -->|"usim_datastore_h5, usim_forecast_output"| UPost["urbansim_postprocess"]
+    UPost -->|"usim_datastore_h5, usim_population_source_h5"| APre["atlas_preprocess"]
+    APre -->|"atlas_households_csv, atlas_persons_csv, ..."| ARun["atlas_run"]
+    ARun -->|"householdv_{year}, vehicles_{year}"| APost["atlas_postprocess"]
+    APost -->|"usim_h5_updated, usim_population_source_h5, atlas_vehicles2_output"| ASPre["activitysim_preprocess"]
+    ASPre -->|"land_use_asim_in, households_asim_in, persons_asim_in, omx_skims"| ASRun["activitysim_run"]
+    ASRun -->|"ActivitySim tables, zarr_skims"| ASPost["activitysim_postprocess"]
+    ASPost -->|"Archived ActivitySim tables"| BPre["beam_preprocess"]
+    APost -->|"atlas_vehicles2_output"| BPre
+    BPre -->|"plans_beam_in, households_beam_in, persons_beam_in, vehicles_beam_in, linkstats_warmstart"| BRun["beam_run"]
+    BRun -->|"linkstats, beam_plans_out, beam_output_plans_xml, beam_experienced_plans_xml"| BPost["beam_postprocess"]
+    BPost -->|"final_skims_omx, zarr_skims"| ASRun
+    BPost -->|"final_skims_omx, linkstats_warmstart"| URun
+    BPost -->|"BEAM state"| BFull["beam_full_skim (optional)"]
+    UPost & APost -->|"Updated HDF5 tables"| Post["postprocessing"]
+```
 
-The static workflow-lineage renderer serializes each planned step's canonical
-`step_name` and `depends_on` relation. It does not emit legacy
-upstream-step-input aliases; consumers should use `depends_on` for planned
-step dependencies.
+## Summary of Step Inputs and Outputs
 
-## Stage Map
+| Step Name | Stage | Consumed Roles / Keys | Published Keys |
+| :--- | :--- | :--- | :--- |
+| `initialize_data` | `bootstrap` | Configured input paths in `PilatesConfig` | `usim_datastore_h5`, `usim_datastore_base_h5`, `omx_skims`, `asim_mutable_data_dir`, `beam_mutable_data_dir`, optional `linkstats_warmstart` |
+| `urbansim_run` | `land_use` | `usim_datastore_h5`, optional `final_skims_omx` / `omx_skims` | `usim_datastore_h5`, `usim_forecast_output` |
+| `urbansim_postprocess` | `land_use` | `usim_datastore_h5`, optional `usim_datastore_base_h5` | `usim_datastore_h5`, `usim_population_source_h5`, `usim_input_merged_{year}`, `usim_input_archive_{year}` |
+| `atlas_preprocess` | `vehicle_ownership_model` | `usim_datastore_h5`, `usim_datastore_base_h5`, optional `final_skims_omx` | `atlas_households_csv`, `atlas_blocks_csv`, `atlas_persons_csv`, `atlas_residential_csv`, `atlas_jobs_csv`, optional `atlas_grave_csv`, optional `atlas_accessibility_csv` |
+| `atlas_run` | `vehicle_ownership_model` | Prepared ATLAS CSVs from `atlas_preprocess` | `householdv_{year}`, `vehicles_{year}`, `atlas_continuation_{year}` (`vehicles_output.RData`, `households_output.RData`) |
+| `atlas_postprocess` | `vehicle_ownership_model` | `householdv_{year}`, `vehicles_{year}`, `usim_datastore_h5` | `usim_population_source_h5`, `usim_h5_updated`, `atlas_vehicles2_output` |
+| `activitysim_preprocess` | `activity_demand` | `usim_population_source_h5` (or fallback datastore), optional `final_skims_omx` | `land_use_asim_in`, `households_asim_in`, `persons_asim_in`, `omx_skims` |
+| `activitysim_run` | `activity_demand` | `land_use_asim_in`, `households_asim_in`, `persons_asim_in`, `zarr_skims` or `omx_skims` | ActivitySim run tables (`plans`, `households`, `persons`, `tours`, `trips`), `zarr_skims` |
+| `activitysim_postprocess` | `activity_demand` | `land_use_asim_in`, `households_asim_in`, `persons_asim_in`, `omx_skims`, `zarr_skims`, ActivitySim run outputs, optional UrbanSim HDF5 roles | Archived ActivitySim tables (`persons_asim_out`, `trips_asim_out`, `tours_asim_out`, `beam_plans_asim_out`, `households_asim_out`), `usim_input_merged_{year}` |
+| `beam_preprocess` | `traffic_assignment` | ActivitySim demand tables, optional `atlas_vehicles2_output`, optional `linkstats_warmstart` and prior BEAM plans | `plans_beam_in`, `households_beam_in`, `persons_beam_in`, `vehicles_beam_in`, `linkstats_warmstart`, `beam_input_*_archived` |
+| `beam_run` | `traffic_assignment` | `plans_beam_in`, `households_beam_in`, `persons_beam_in`, `vehicles_beam_in`, `linkstats_warmstart` | `linkstats`, `beam_plans_out`, `beam_output_plans_xml`, `beam_experienced_plans_xml`, `beam_output_experienced_plans_xml` |
+| `beam_postprocess` | `traffic_assignment` | `beam_run` outputs | `zarr_skims`, `final_skims_omx`, `omx_skims`, `linkstats`, `beam_network_final`, `linkstats_unmodified_parquet__*` |
+| `beam_full_skim` | `traffic_assignment` | Staged BEAM scenario and network outputs | `beam_full_skims` |
+| `postprocessing` | `postprocessing` | Forecast-year HDF5 tables and base datastore | `usim_input_next`, `usim_input_archive_{year}`, updated `usim_datastore_h5` |
 
-### Bootstrap
+## Stage-by-Stage Lineage Details
 
-What PILATES does:
+### Bootstrap (`initialize_data`)
 
-- Creates the scenario and workspace context for the run.
-- Seeds bootstrap-safe inputs that later tracked steps resolve through normal workflow lookup instead of direct filesystem discovery.
+- **Reads**: Scenario configuration paths from `PilatesConfig`.
+- **Publishes**: Initial `usim_datastore_h5`, `usim_datastore_base_h5`, `omx_skims`, `asim_mutable_data_dir`, `beam_mutable_data_dir`, and optional `linkstats_warmstart`.
+- **Downstream handoff**: Registers all bootstrap-safe inputs in `scenario.coupler` so downstream steps resolve initial files through standard binding rules rather than ad-hoc filesystem lookups.
 
-Why it matters:
-
-- Restart begins at the normal stage frontier, so later stages do not need a
-  second lineage model just because a run resumed.
-
-### UrbanSim
-
-UrbanSim is the one place where the same physical H5 can carry several
-workflow roles. The full role catalog lives in [Artifact Semantics](artifact_semantics.md);
-the lineage point is that the land-use stage keeps base, current, forecast, and
-population-source roles explicit instead of treating every H5 path as
-interchangeable.
+### Land Use (`land_use`)
 
 #### `urbansim_run`
 
-**Reads**
-
-- `USIM_DATASTORE_BASE_H5`
-- optional `USIM_DATASTORE_CURRENT_H5` when a current mutable datastore already exists
-- `OMX_SKIMS` or `FINAL_SKIMS_OMX`, depending on whether BEAM has already published updated OMX skims
-- workspace-backed UrbanSim inputs materialized for the current forecast year
-
-**Publishes**
-
-- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5` as the raw run datastore output
-- optional `USIM_FORECAST_OUTPUT` for the forecast-year runner output role
-
-**Why the next step cares**
-
-- postprocess needs the runner output to make it the public mutable datastore
-  handoff, while downstream restart and audit paths can still distinguish the
-  forecast-output role
+- **Reads**:
+  - `usim_datastore_h5` (`USIM_DATASTORE_CURRENT_H5`) materialized to `<usim_mutable_data_dir>/<input_file_template>`.
+  - `final_skims_omx` (`FINAL_SKIMS_OMX`, required on years following a prior BEAM pass, optional on the start year) materialized to `<usim_mutable_data_dir>/final_skims.omx`.
+  - Static UrbanSim input files tracked via `identity_inputs`.
+- **Publishes**:
+  - `usim_datastore_h5` (`USIM_DATASTORE_CURRENT_H5`): Raw forecast HDF5 datastore (`model_data_{year}.h5`).
+  - `usim_forecast_output` (`USIM_FORECAST_OUTPUT`): Forecast-year runner output reference.
+- **Downstream handoff**: Supplies the raw forecast HDF5 datastore to `urbansim_postprocess` while preserving `usim_forecast_output` for audit and restart checks.
 
 #### `urbansim_postprocess`
 
-**Reads**
+- **Reads**:
+  - `usim_datastore_h5` from `urbansim_run`.
+  - Optional `usim_datastore_base_h5` (`USIM_DATASTORE_BASE_H5`).
+- **Publishes**:
+  - `usim_datastore_h5`: Postprocessed mutable datastore.
+  - `usim_population_source_h5` (`USIM_POPULATION_SOURCE_H5`): Immutable snapshot (`model_data_{year}_population_source.h5`) used as the population source for downstream models.
+  - `usim_input_merged_{year}` (`USIM_INPUT_MERGED_PREFIX`): Merged input datastore for the forecast year.
+  - `usim_input_archive_{year}` (`USIM_INPUT_ARCHIVE_PREFIX`): Archived input datastore (`input_data_for_{year}_outputs.h5`).
+- **Downstream handoff**: After `urbansim_postprocess` finishes, `run_land_use_stage()` keeps `usim_datastore_base_h5`, `usim_datastore_h5`, `usim_forecast_output`, and `usim_population_source_h5` distinct in `scenario.coupler` so ATLAS and ActivitySim bind the exact HDF5 role they require.
 
-- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5` from the run boundary
-- optional `USIM_DATASTORE_BASE_H5`
-
-**Publishes**
-
-- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5`
-- `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`)
-- `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`)
-
-**Why the next stage cares**
-
-- ATLAS and later restart/archive logic read the published datastore roles rather than reconstructing them from the UrbanSim run directory
-
-#### Land-use stage boundary handoff
-
-After the two UrbanSim steps complete, `run_land_use_stage(...)` keeps the
-important H5 roles explicit for the next stage:
-
-- `USIM_DATASTORE_BASE_H5`
-- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5`
-- `USIM_FORECAST_OUTPUT`
-- `USIM_POPULATION_SOURCE_H5`
-
-`USIM_FORECAST_OUTPUT` and
-`USIM_POPULATION_SOURCE_H5` may initially point at the UrbanSim runner output,
-while `USIM_DATASTORE_CURRENT_H5` prefers the postprocessed mutable datastore
-when postprocess produced one. Keeping those names distinct prevents later
-ActivitySim or restart handling from treating every H5 path as the same concept.
-
-### ATLAS
+### Vehicle Ownership (`vehicle_ownership_model`)
 
 #### `atlas_preprocess`
 
-**Reads**
-
-- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5`
-- `USIM_DATASTORE_BASE_H5`
-- optional skim inputs such as `FINAL_SKIMS_OMX` when available
-
-**Publishes**
-
-- the staged inputs ATLAS needs for the current year
-
-**Why the next step cares**
-
-- the ATLAS run boundary is driven from the current UrbanSim-side state, not from bootstrap inputs directly
+- **Reads**:
+  - `usim_datastore_h5` (`USIM_DATASTORE_H5`) and `usim_datastore_base_h5` (`USIM_DATASTORE_BASE_H5`).
+  - `final_skims_omx` (`FINAL_SKIMS_OMX`, required when a prior BEAM skim handoff exists, optional otherwise) materialized to `<atlas_mutable_input_dir>/final_skims.omx`.
+- **Publishes**:
+  - Prepared CSV tables under `<atlas_mutable_input_dir>/year{forecast_year}/`: `atlas_households_csv` (`households.csv`), `atlas_blocks_csv` (`blocks.csv`), `atlas_persons_csv` (`persons.csv`), `atlas_residential_csv` (`residential.csv`), `atlas_jobs_csv` (`jobs.csv`), conditional `atlas_grave_csv` (`grave.csv` when `year > start_year`), and conditional `atlas_accessibility_csv` (`accessibility_{forecast_year}_tract.csv` when `atlas.beamac > 0`).
+- **Downstream handoff**: Provides staged CSV inputs to `atlas_run` derived from the active UrbanSim datastore state.
 
 #### `atlas_run`
 
-**Reads**
-
-- staged ATLAS inputs from preprocess
-
-**Publishes**
-
-- `householdv_{year}`
-- `vehicles_{year}`
-
-**Why the next step cares**
-
-- postprocess uses the ATLAS outputs plus the current datastore state to construct the downstream handoff
+- **Reads**:
+  - All prepared CSV roles emitted by `atlas_preprocess`.
+  - Static ATLAS model data tracked via `identity_inputs`.
+- **Publishes**:
+  - `householdv_{forecast_year}`: `<atlas_output_dir>/householdv_{forecast_year}.csv`.
+  - `vehicles_{forecast_year}`: `<atlas_output_dir>/vehicles_{forecast_year}.csv`.
+  - `atlas_continuation_{forecast_year}` (`OutputSet` containing `vehicles_output.RData` and `households_output.RData` under `<atlas_mutable_input_dir>/year{forecast_year}/`).
+- **Downstream handoff**: Supplies predicted household vehicle counts and fleet tables to `atlas_postprocess`.
 
 #### `atlas_postprocess`
 
-**Reads**
+- **Reads**:
+  - `householdv_{forecast_year}` (`atlas_householdv_csv`), `vehicles_{forecast_year}` (`atlas_vehicles_csv`), and `usim_datastore_h5`.
+- **Publishes**:
+  - `usim_population_source_h5` (`USIM_POPULATION_SOURCE_H5`): Post-mutation HDF5 snapshot containing updated `households[cars]` and `households[vehicl]`.
+  - `usim_h5_updated` (`USIM_H5_UPDATED`): Updated datastore role.
+  - `atlas_vehicles2_output` (`ATLAS_VEHICLES2_OUTPUT`): Vehicle fleet table for BEAM.
+- **Downstream handoff**: ActivitySim binds its population tables from `usim_population_source_h5` / `usim_h5_updated`, and `beam_preprocess` binds `atlas_vehicles2_output`.
 
-- the current UrbanSim datastore role
-- ATLAS vehicle ownership outputs
-
-**Publishes**
-
-- `USIM_POPULATION_SOURCE_H5`
-- `USIM_H5_UPDATED` where the postprocess path republishes the updated datastore role
-- `ATLAS_VEHICLES2_OUTPUT`
-
-**Why the next stage cares**
-
-- ActivitySim preprocess resolves its population-side input from `USIM_POPULATION_SOURCE_H5`, and downstream consumers can read the ATLAS vehicle output through a stable workflow key
-
-### ActivitySim
+### Activity Demand (`activity_demand`)
 
 #### `activitysim_preprocess`
 
-**Reads**
-
-- `USIM_POPULATION_SOURCE_H5`
-- optional population table metadata resolved from the selected H5
-- optional `USIM_DATASTORE_CURRENT_H5` for writeback-sensitive postprocess flows
-- current skim inputs such as `FINAL_SKIMS_OMX` when that path is active
-
-**Publishes**
-
-- `ASIM_LAND_USE_IN`
-- `ASIM_HOUSEHOLDS_IN`
-- `ASIM_PERSONS_IN`
-- `ASIM_OMX_SKIMS`
-
-**Why the next step cares**
-
-- `activitysim_run` operates on these staged inputs rather than re-deriving them from the datastore each time
+- **Reads**:
+  - `usim_population_source_h5` (`USIM_POPULATION_SOURCE_H5`, or fallback datastore role when running without UrbanSim/ATLAS).
+  - Optional `final_skims_omx` (`FINAL_SKIMS_OMX`).
+- **Publishes**:
+  - `land_use_asim_in` (`ASIM_LAND_USE_IN`), `households_asim_in` (`ASIM_HOUSEHOLDS_IN`), and `persons_asim_in` (`ASIM_PERSONS_IN`) with file schema profiling enabled.
+  - `omx_skims` (`ASIM_OMX_SKIMS`).
+- **Downstream handoff**: Stages the canonical CSV inputs and OMX skims consumed by `activitysim_run`.
 
 #### `activitysim_run`
 
-**Reads**
-
-- `ASIM_LAND_USE_IN`
-- `ASIM_HOUSEHOLDS_IN`
-- `ASIM_PERSONS_IN`
-- `ZARR_SKIMS` when a durable shared-skims handoff already exists; otherwise `ASIM_OMX_SKIMS`
-
-**Publishes**
-
-- the standard ActivitySim run outputs for the current year and iteration
-- `ZARR_SKIMS` when the run starts from `ASIM_OMX_SKIMS`; that durable handoff is then available to later Zarr-mode ActivitySim runs and downstream consumers
-
-**Why the next step cares**
-
-- postprocess archives the actual ActivitySim-side inputs and outputs that the workflow used
-- Numba/Sharrow warming is node-local runtime preparation for a multiprocessing
-  miss. It is not a tracked or archived workflow artifact.
+- **Reads**:
+  - `land_use_asim_in`, `households_asim_in`, `persons_asim_in`.
+  - `zarr_skims` (`ZARR_SKIMS`) when a shared Zarr skim store is already published in the coupler; otherwise `omx_skims` (`ASIM_OMX_SKIMS`).
+- **Publishes**:
+  - Configured ActivitySim output tables for the current year and iteration.
+  - `zarr_skims` (`ZARR_SKIMS`) at `<asim_runtime_cache_dir>/skims.zarr` when converting from `omx_skims`.
+- **Downstream handoff**: Supplies raw demand outputs to `activitysim_postprocess` and publishes `zarr_skims` for subsequent Zarr-mode ActivitySim iterations. Node-local Numba/Sharrow warmups during multiprocessing cache misses remain untracked runtime preparation.
 
 #### `activitysim_postprocess`
 
-**Reads**
+- **Reads**:
+  - `households_asim_in`, `persons_asim_in`, `land_use_asim_in`, `omx_skims`, `zarr_skims`, ActivitySim run outputs, and optional `usim_population_source_h5`, `usim_datastore_current_h5`, and `usim_datastore_base_h5`.
+- **Publishes**:
+  - Archived ActivitySim output artifacts (`persons_asim_out`, `trips_asim_out`, `tours_asim_out`, `beam_plans_asim_out`, `households_asim_out`).
+  - `usim_input_merged_{year}` (`USIM_INPUT_MERGED_PREFIX`) tables used for archive and lineage inspection.
+- **Downstream handoff**: Publishes the demand tables that `beam_preprocess` stages into BEAM scenario inputs.
 
-- ActivitySim run outputs and the current datastore context
-
-**Publishes**
-
-- archived ActivitySim input/output materials needed for inspection
-- the `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) family used by later archive and lineage queries
-
-**Why the next stage cares**
-
-- BEAM preprocess and archive analysis can resolve the exact demand-side state that was produced for this iteration
-
-### BEAM
+### Traffic Assignment (`traffic_assignment`)
 
 #### `beam_preprocess`
 
-**Reads**
-
-- `BEAM_PLANS_IN`
-- `BEAM_HOUSEHOLDS_IN`
-- `BEAM_PERSONS_IN`
-- BEAM config and optional warm-start inputs such as `LINKSTATS_WARMSTART`
-
-**Publishes**
-
-- the staged BEAM run inputs and archived-input snapshots used for inspection
-
-**Why the next step cares**
-
-- BEAM run consumes the staged, workflow-resolved travel-demand inputs instead of ad hoc files from earlier step directories
+- **Reads**:
+  - ActivitySim demand outputs (`plans`, `households`, `persons`), optional `atlas_vehicles2_output`, BEAM configuration files, and optional warm-start artifacts (`linkstats_warmstart`, prior-iteration or prior-year BEAM plans and experienced plans).
+- **Publishes**:
+  - Active BEAM inputs under `<beam_mutable_data_dir>/.pilates-consist-outputs/beam_preprocess/`: `plans_beam_in`, `households_beam_in`, `persons_beam_in`, `vehicles_beam_in`, and `linkstats_warmstart`.
+  - Archived input snapshots (`beam_input_plans_archived`, `beam_input_households_archived`, `beam_input_persons_archived`, `beam_input_vehicles_archived`, `beam_input_config_archived`, `beam_input_config_references_archived`).
+- **Downstream handoff**: Guarantees that `beam_run` reads resolver-staged, provenance-tracked inputs rather than mutable files left behind by earlier steps.
 
 #### `beam_run`
 
-**Reads**
-
-- staged BEAM inputs and optional warm-start materials
-
-**Publishes**
-
-- `LINKSTATS`
-- `BEAM_PLANS_OUT`
-- BEAM plan/XML outputs used as later restart sources
-
-**Why the next step cares**
-
-- postprocess and later iterations depend on the network-performance outputs and restart-capable XML publications
+- **Reads**:
+  - `plans_beam_in`, `households_beam_in`, `persons_beam_in`, `vehicles_beam_in`, and optional `linkstats_warmstart`.
+- **Publishes**:
+  - `linkstats` (`LINKSTATS`), `beam_plans_out` (`BEAM_PLANS_OUT`), `beam_output_plans_xml` (`BEAM_OUTPUT_PLANS_XML`), `beam_experienced_plans_xml` (`BEAM_EXPERIENCED_PLANS_XML`), and `beam_output_experienced_plans_xml` (`BEAM_OUTPUT_EXPERIENCED_PLANS_XML`).
+- **Downstream handoff**: Provides raw network performance and plan XML outputs to `beam_postprocess` and subsequent replanning iterations.
 
 #### `beam_postprocess`
 
-**Reads**
+- **Reads**:
+  - `beam_run` outputs (`linkstats`, plan XML outputs, and iteration skims).
+- **Publishes**:
+  - `zarr_skims` (`ZARR_SKIMS`) and `final_skims_omx` (`FINAL_SKIMS_OMX`).
+  - Updated `omx_skims` and `linkstats_warmstart` handles in `scenario.coupler`.
+  - Unmodified physical-simulation linkstats Parquet artifacts (`linkstats_unmodified_parquet__y{year}__i{iteration}__phys_sim_iter{N}`) indexed under the `linkstats_unmodified_phys_sim_iter_parquet` artifact facet family.
+- **Downstream handoff**: Supplies updated travel skims and linkstats to the next inner supply-demand iteration or the next simulation year.
 
-- BEAM run outputs, including linkstats and plan/XML publications
+#### `beam_full_skim` (Optional)
 
-**Publishes**
+- **Reads**:
+  - Staged BEAM configuration and network state from the completed traffic assignment pass.
+- **Publishes**:
+  - `beam_full_skims` (`BEAM_FULL_SKIMS`).
+- **Downstream handoff**: Produces a standalone full-matrix OMX skim artifact when `beam.full_skim.enabled` is true.
 
-- `ZARR_SKIMS`
-- `FINAL_SKIMS_OMX` when produced
-- linkstats families with structured year/iteration/phys-sim metadata
+### Postprocessing (`postprocessing`)
 
-**Why the next stage cares**
+- **Reads**: Forecast-year HDF5 tables (`usim_h5_updated` or `usim_population_source_h5`) and `usim_datastore_base_h5`.
+- **Publishes**: `usim_input_next`, `usim_input_archive_{year}`, and updates `usim_datastore_h5` for the next simulation year.
 
-- later demand or archive-analysis paths can resolve shared skim outputs and indexed network-performance artifacts from this boundary
+## Restart and Resume Boundaries
 
-#### `beam_full_skim`
+- **Stage-boundary restarts**: Scenario restarts resume at the start of an orchestration stage, or at the single supported mid-stage boundary `beam_run_completed -> beam_postprocess`.
+- **Coupler-driven recovery**: Resumed runs rehydrate `scenario.coupler` from persisted step records (`ZARR_SKIMS`, `USIM_POPULATION_SOURCE_H5`, `FINAL_SKIMS_OMX`, and BEAM plan XML keys) so resumed steps bind their upstream inputs through the same rules used in uninterrupted runs. See [Scenario Lifecycle](../run/scenario_lifecycle.md) for resume configuration details.
 
-**Reads**
+## Related Documentation
 
-- the BEAM state required for the separate full-skim production path
-
-**Publishes**
-
-- `BEAM_FULL_SKIMS`
-
-**Why it matters**
-
-- this is a tracked output family with its own producer step rather than an implicit side effect of `beam_postprocess`
-
-### Postprocessing
-
-What PILATES does:
-
-- Runs the final postprocessing boundary from the workflow catalog after the main staged exchanges are already complete.
-
-Why it matters:
-
-- This stage can produce final derived products, but the main cross-model lineage has already been established by the UrbanSim, ATLAS, ActivitySim, and BEAM boundaries.
-
-## Restart-Relevant Notes
-
-- The public restart policy resumes at a stage boundary, with the sole
-  mid-stage boundary `beam_run_completed -> beam_postprocess`.
-- `ZARR_SKIMS` and the published ActivitySim and BEAM artifacts remain
-  restart-relevant because normal native step resolution can consume their
-  declared roles at the resumed frontier.
-- `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`) and
-  `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) preserve published
-  UrbanSim datastore lineage for archive inspection.
-
-## Adjacent Pages
-
-- Read [Artifact Flow](artifact_flow.md) first if you only need the boundary map.
-- Pair this with [Artifact Semantics](artifact_semantics.md).
-- For archived-run inspection, go to [Opening Archives](../analysis/opening_archives.md).
+- [Workflow Architecture](architecture.md): High-level control flow, stages, and simulation logic.
+- [Step Contracts & Execution](step_contracts.md): Step definitions, input binding, and Consist execution lifecycle.
+- [Artifact Flow, Roles & Facets](artifact_flow.md): Coupler keys, semantic roles, and provenance facets.
+- [Analysis Overview](../analysis/overview.md): Inspecting run archives and querying provenance data.

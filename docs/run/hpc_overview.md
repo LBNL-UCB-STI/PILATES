@@ -1,102 +1,73 @@
 ---
 title: HPC Overview
-summary: Generic HPC execution posture for PILATES and how it differs from local runs.
+summary: Facility-agnostic Slurm execution workflow, 3-tier storage split, and environment controls for PILATES on HPC clusters.
 ---
 
 # HPC Overview
 
-## What Stays The Same
+PILATES runs the same launcher, scenario lifecycle, and Consist workflow contracts on an HPC cluster as on a workstation. Cluster execution adds a two-script Slurm wrapper (`hpc/job_runner.sh` and `hpc/job.sh`), Apptainer/Singularity container execution, and a 3-tier storage layout that separates mutable node-local scratch from durable shared storage.
 
-- PILATES still loads the same YAML settings file.
-- The launcher still resolves the same run roots, workflow state, and restart behavior.
-- The workflow still runs through the same scenario lifecycle after the environment is ready.
+## Slurm Wrapper Flow
 
-## What Changes On HPC
+Cluster runs use two scripts in `hpc/`:
 
-- The run is submitted through `hpc/job_runner.sh` instead of starting directly in your shell.
-- `job_runner.sh` creates a per-job settings file when `${BEAM_MEMORY}` templating is present.
-- `job.sh` bootstraps a Python virtual environment inside the job.
-- `job.sh` installs PILATES dependencies from `hpc/requirements-hpc.txt` when that file exists, or from `requirements.txt` otherwise.
-- `job.sh` prefers an editable Consist checkout when `CONSIST_SRC_DIR` exists;
-  otherwise it installs `CONSIST_PYPI_PACKAGE`, then a Consist requirement pin,
-  then the default `consist==0.2.0`.
+1. **`hpc/job_runner.sh` (login node)**: Parses CLI options (`-c`, `-s`, `-p`, `-a/--account`, `--high-mem`, `--editable-consist`), selects CPU and memory presets for the target partition, substitutes `${BEAM_MEMORY}` into a per-job `settings_<jobid>.yaml` when the scenario template contains that variable, and submits `hpc/job.sh` via `sbatch`.
+2. **`hpc/job.sh` (compute node)**: Loads cluster compiler, PROJ, and Python modules, creates or reuses the Python virtual environment at `PILATES_VENV_PATH`, installs dependencies from `hpc/requirements-hpc.txt` (or `requirements.txt`), installs `consist` (from `CONSIST_SRC_DIR`, `CONSIST_PYPI_PACKAGE`, or `consist>=0.3.3`), and runs `python run.py`.
 
-## Most Important Difference From Local Runs
+## Three-Tier HPC Storage Split
 
-Local and HPC runs go through the same launcher and workflow logic. The main difference is operational:
+Configure three separate storage tiers in your HPC scenario YAML to keep high-churn I/O off shared filesystems while preserving durable archives:
 
-- local runs start directly from your shell
-- HPC runs start through the Slurm wrapper, generated settings file, and job-side environment bootstrap
+| Storage Tier | YAML Field | Cluster Filesystem Role | Lifecycle Purpose |
+| --- | --- | --- | --- |
+| Tier 1: Fast mutable workspace | `run.local_workspace_root` | Node-local NVMe/SSD (`/local/job${SLURM_JOB_ID}/...`) or fast scratch | Holds staged model inputs and high-churn intermediate files during container execution. Can be wiped when the Slurm job ends. |
+| Tier 2: Active durable archive | `run.output_directory` | Shared parallel scratch | Receives mirrored step outputs (`run.enable_archive_copy: true`), `run_state.yaml` checkpoints, and `.consist/provenance.duckdb` snapshots during the run. Survives job termination so `-S` restarts work across compute nodes. |
+| Tier 3: Cold recovery archive | `run.recovery_archive_roots` | Project NFS or long-term storage | Receives completed run archives and provenance metadata after the job finishes via `python -m pilates.runtime.promote_run_archive`. |
 
-## Storage Posture
+During startup, the launcher exports `PILATES_LOCAL_RUN_DIR`, `PILATES_ARCHIVE_RUN_DIR`, and `PILATES_ENABLE_ARCHIVE_COPY` so step wrappers know both the mutable workspace and the active archive target.
 
-- `run.output_directory` is the active durable archive root for the run. On HPC this should normally live on shared scratch, not on node-local storage.
-- `run.local_workspace_root` can point at a node-local mutable workspace for the actual model execution.
-- `run.recovery_archive_roots` is an optional list of colder post-run promotion roots, such as project NFS storage.
-- The launcher exports `PILATES_LOCAL_RUN_DIR`, `PILATES_ARCHIVE_RUN_DIR`, and `PILATES_ENABLE_ARCHIVE_COPY` so archive-copy helpers know where to write.
+## Wrapper Flags and Environment Variables
 
-## Recommended HPC Storage Split
+Pass `-a/--account` and `-c` to `hpc/job_runner.sh`; override environment variables when your cluster paths or resource requirements differ from the defaults:
 
-For the native Consist archive model, treat the three tiers differently:
+| Control | Required | Default / Resolution Order | Description |
+| --- | --- | --- | --- |
+| `-a`, `--account <acct>` | Yes | None | Slurm billing account passed to `sbatch --account`. |
+| `-c <settings.yaml>` | No | `settings.yaml` | Scenario YAML file (or `base:` overlay) to execute. |
+| `-s <run_state.yaml>` | No | None | Existing `run_state.yaml` path forwarded to `python run.py -S` for restart. |
+| `-p <partition>` | No | `lr7` | Partition preset (`lr6`, `lr6_m192`, `lr7`, `lr8`). |
+| `-H`, `--high-mem` | No | Disabled | Selects high-memory partition presets on `lr6` (`180G` / `150g`) or `lr7` (`480G` / `400g`). |
+| `--editable-consist <dir>` | No | None | Sets `CONSIST_SRC_DIR` to an absolute checkout path for `pip install --no-deps -e`. |
+| `PILATES_DIR` | No | `/global/scratch/users/$USER/sources/PILATES` | Repository checkout root on the cluster. |
+| `PILATES_VENV_PATH` | No | `$PILATES_DIR/PILATES-env` | Python virtual environment path created or reused by `hpc/job.sh`. |
+| `PILATES_REQUIREMENTS_FILE` | No | `$PILATES_DIR/hpc/requirements-hpc.txt`, fallback `$PILATES_DIR/requirements.txt` | Dependency requirements file installed inside the job environment. |
+| `CONSIST_SRC_DIR` | No | `$PILATES_DIR/../consist` | Editable Consist checkout path tried first before wheel installation. |
+| `CONSIST_PYPI_PACKAGE` | No | Explicit env, then pin in requirements file, then `consist>=0.3.3` | Package specification installed when no valid `CONSIST_SRC_DIR` is present. |
+| `EXPECTED_EXECUTION_DURATION` | No | `3-00:00:00` | Slurm walltime request (`sbatch --time`). |
+| `MEMORY_LIMIT_GB` | No | Partition preset | Slurm memory limit (`sbatch --mem`); overrides partition and `--high-mem` defaults. |
+| `BEAM_MEMORY` | No | Partition preset | JVM heap limit substituted into `${BEAM_MEMORY}` in the scenario YAML; overrides partition and `--high-mem` defaults. |
+| `PILATES_THREADS` | No | `8` | Thread cap exported to `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, and `NUMEXPR_NUM_THREADS`. |
 
-- shared scratch: active archive root during the run via `run.output_directory`
-- node-local scratch: mutable workspace via `run.local_workspace_root`
-- colder shared storage: post-run promotion destination via `run.recovery_archive_roots`
+## Adapting to Another Slurm Cluster
 
-This keeps slower archival storage out of the hot path while preserving a complete run archive after promotion.
+To run PILATES on a Slurm cluster outside Lawrencium:
+
+1. Set `PILATES_DIR` to your repository checkout and configure `run.output_directory`, `run.local_workspace_root`, and `run.recovery_archive_roots` for your cluster's parallel scratch, node-local scratch, and project filesystems.
+2. Set `infrastructure.container_manager: singularity` and point `infrastructure.singularity_images` at your local `.sif` image files or registry URIs.
+3. Update the partition case block in `hpc/job_runner.sh` and the `module load` block in `hpc/job.sh` to match your facility's partition names and Python/PROJ module names.
 
 ## Post-Run Promotion
 
-PILATES supports a manual promotion helper for copying a completed archive run into one or more recovery roots and recording those promoted roots on the run's logged artifacts:
+Once a cluster job finishes on shared scratch, promote the completed archive run directory to cold storage and merge its run-local provenance DB into your shared catalog:
 
 ```bash
 python -m pilates.runtime.promote_run_archive -c path/to/settings.yaml
 ```
 
-Use `--run-dir` when you want to promote a specific completed archive directory, and `--root` to add or override recovery roots for a one-off promotion. The helper copies the full archive run directory, updates artifact `recovery_roots` in the run-local Consist DB, syncs the updated `.consist` state into the promoted copy, and writes a promotion marker at `.consist/recovery_promotion.json`. If you only want to update the seed/main Consist DB and skip the NFS archive promotion step entirely, add `--merge-db-only`.
+See [Run Promotion](run_promotion.md) for preview, verification, and database merge commands.
 
-The NFS promotion copy skips transient trees such as `activitysim/output/final_pipeline`, `activitysim/output/cache`, `shared_cache/numba`, and `.consist/snapshots/history`. The scratch archive stays intact.
+## Related Pages
 
-Read [Run Promotion](run_promotion.md) for the full post-run workflow,
-including NFS promotion, verification, and merging the completed run-local DB
-into a central main DB.
-
-## Practical Environment Variables
-
-The current wrapper scripts recognize the following controls. The Slurm account
-is required on the command line; the environment variables are optional unless
-your cluster layout differs from the defaults.
-
-| Setting | Required? | Default or source                                                             | What it controls |
-| --- | --- |-------------------------------------------------------------------------------| --- |
-| `-a`, `--account` | Yes | none                                                                          | Slurm account passed to `sbatch --account`. |
-| `-p` | No | `lr7`                                                                         | Partition preset. Current scripts support `lr7` and `lr8`. |
-| `PILATES_DIR` | No | `/global/scratch/users/$USER/sources/PILATES`                                 | Checkout used by `job_runner.sh` and `job.sh`. Override this first if the repo lives elsewhere. |
-| `PILATES_VENV_PATH` | No | `$PILATES_DIR/PILATES-env`                                                    | Job-side Python virtual environment. |
-| `PILATES_REQUIREMENTS_FILE` | No | `$PILATES_DIR/hpc/requirements-hpc.txt`, then `$PILATES_DIR/requirements.txt` | Requirements file installed inside the job. |
-| `CONSIST_SRC_DIR` | No | `$PILATES_DIR/../consist` | Existing path takes precedence: the job attempts an editable install, then falls back to the resolved released package if it fails. |
-| `CONSIST_PYPI_PACKAGE` | No | explicit value, then requirement pin, then `consist==0.2.0` | Released-wheel package spec used only when no editable source directory is present. |
-| `EXPECTED_EXECUTION_DURATION` | No | `3-00:00:00`                                                                  | Slurm wall time. |
-| `MEMORY_LIMIT_GB` | No | partition preset                                                              | Slurm memory request. Explicit env value overrides partition and `--high-mem` defaults. |
-| `BEAM_MEMORY` | No | partition preset                                                              | Value substituted into settings templates containing `${BEAM_MEMORY}`. Explicit env value overrides partition and `--high-mem` defaults. |
-| `PILATES_THREADS` | No | `8`                                                                           | Caps native Python/BLAS/OpenMP thread pools inside `job.sh`. |
-
-Memory precedence is: explicit `MEMORY_LIMIT_GB` / `BEAM_MEMORY` environment
-values first, then partition presets. On `lr7`, `--high-mem` changes only the
-default preset from `240G` / `180g` to `480G` / `400g`; explicit environment
-values still win. On `lr8`, the current defaults are `700G` / `600g`.
-
-## Adapting To Other Slurm Clusters
-
-The Lawrencium paths are examples, not a portability requirement. On another
-Slurm cluster, set `PILATES_DIR`, choose the equivalent partition/account
-arguments, and update `run.output_directory`, `run.local_workspace_root`, and
-`run.recovery_archive_roots` to match that cluster's scratch, node-local, and
-archive filesystems. If the module stack differs, edit `hpc/job.sh` in the
-small setup block that loads compiler, PROJ, and Python modules.
-
-## Adjacent Pages
-
-- Read [Scenario Lifecycle](scenario_lifecycle.md) first.
-- Use [Lawrencium](lawrencium.md) for the concrete LBNL path.
-- Use [Restart and Resume](restart_and_resume.md) for restart behavior.
+- Read [Lawrencium](lawrencium.md) for LBNL Lawrencium partition presets, filesystem paths, and submission commands.
+- Follow [Run Promotion](run_promotion.md) for post-run archive promotion and DuckDB merging.
+- Consult [Scenario Lifecycle](scenario_lifecycle.md) for restart and checkpoint behavior across Slurm jobs.

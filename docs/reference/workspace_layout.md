@@ -1,55 +1,68 @@
----
-title: Workspace Layout
-summary: Stable path semantics for local workspace, archive roots, and run-local artifacts.
----
+# Workspace and Archive Layout
 
-# Workspace Layout
+PILATES separates mutable execution scratch space from durable run archives and read-only recovery stores across three directory tiers.
 
-## Current Path Model
+## Three-Tier Directory Hierarchy
 
-The normal launcher path requires `run.output_directory`. PILATES uses that
-field as the parent for the durable archive run directory. If
-`run.local_workspace_root` is unset, the mutable workspace is created under the
-same root; if it is set, the mutable workspace is created under that separate
-root. In both cases, the launcher creates a run-specific folder named from the
-region, `run.output_run_name`, and the startup timestamp.
+| Tier | Config Key | Mutability | Purpose |
+| --- | --- | --- | --- |
+| **1. Execution Workspace** | `run.local_workspace_root` | Mutable scratch | Holds active container bind mounts, intermediate preprocessor files, and live `.consist/` state during run execution. |
+| **2. Run Archive** | `run.output_directory` | Durable write-once per step | Stores promoted stage outputs, config snapshots, workflow state, and the canonical `.consist/provenance.duckdb` database. |
+| **3. Recovery Roots** | `run.recovery_archive_roots` | Read-only | Supplies historical archives and cold `.consist/provenance.duckdb` catalogs for cross-run cache hits, artifact hydration, and warm starts. |
 
-`Workspace.full_path` is the root of that run-specific mutable workspace. The
-lower-level `Workspace` class still has an in-place fallback for direct test or
-helper use, but that is not the supported `python run.py -c ...` runtime path.
+```mermaid
+flowchart LR
+    Recovery["3. Recovery Roots\nrun.recovery_archive_roots\n(Read-Only)"] -->|Hydrate cached inputs| Workspace["1. Execution Workspace\nrun.local_workspace_root\n(Mutable Scratch)"]
+    Workspace -->|Archive completed step| Archive["2. Run Archive\nrun.output_directory\n(Durable Output)"]
+```
 
-The workspace owns model-facing mutable directories such as:
+See [Configuration Reference](../run/configuration_reference.md) for configuring these paths in `config.yaml` and [Step Contracts](../workflow/step_contracts.md) for how recovery roots participate in cache lookups.
 
-- UrbanSim mutable data
-- ActivitySim mutable data, configs, output, and runtime cache
-- BEAM mutable data and output
-- ATLAS mutable input and output directories
+## Execution Workspace Layout (`run.local_workspace_root`)
 
-Those paths are resolved from the current settings, not from ambient `cwd`
-assumptions. The ActivitySim and BEAM mutable directories can also be overridden
-explicitly for controlled operator setup; a restart does not use a workspace
-directory as proof of a completed step.
+During an active run, PILATES prepares simulator working directories inside `run.local_workspace_root/<run_id>/`:
 
-The archive root is the durable run directory that PILATES uses for the archived
-Consist store and artifact materialization. On HPC this is the shared-scratch
-side selected by `run.output_directory`, not the node-local mutable workspace.
-When the run uses a local Consist DB, `resolve_consist_db_paths()` places the
-local DB under `workspace/.consist/<filename>` and mirrors the archive copy
-under `archive/.consist/<filename>`. If local Consist DB tracking is disabled,
-PILATES uses the configured shared DB path instead.
+```text
+<local_workspace_root>/<run_id>/
+├── .consist/
+│   ├── provenance.duckdb          # Live DuckDB provenance index during execution
+│   └── consist.json               # Dual-write JSON provenance log
+├── urbansim/                      # Mounted UrbanSim input/output stores
+├── atlas/                         # Year-scoped ATLAS input and output folders
+├── activitysim/                   # Mounted /configs, /data, and /output directories
+└── beam/                          # BEAM scenario staging and iteration working dirs
+```
 
-Cold recovery roots configured through `run.recovery_archive_roots` are not active execution roots. They are post-run promotion destinations that receive a copy of the full archive run directory plus an updated run-local Consist DB whose artifacts record those promoted locations as `recovery_roots`.
+## Run Archive Layout (`run.output_directory`)
 
-Snapshot and recovery artifacts live under the archive-side `.consist` tree:
+As each step finishes, `pilates/runtime/run_output_archive.py` promotes validated outputs and provenance metadata into `run.output_directory`:
 
-- `.consist/snapshots/latest`
-- `.consist/snapshots/history`
-- the DB sidecar WAL file when present
-- the snapshot metadata sidecar written next to the snapshot DB
-- `.consist/recovery_promotion.json` after a successful promotion to one or more recovery roots
+```text
+<output_directory>/
+├── config_snapshot.yaml           # Resolved configuration snapshot for the run
+├── workflow_state.yaml            # Current forecast year, iteration, and stage pointers
+├── run_state.yaml                 # Launcher lifecycle metadata and timestamps
+├── stage_outputs/
+│   ├── initialize/                # Base-year stores and initial skims
+│   ├── year_2010/
+│   │   ├── land_use/              # Promoted UrbanSim and ATLAS artifacts
+│   │   ├── demand_iter_0/         # Promoted ActivitySim tables
+│   │   └── supply_iter_0/         # Promoted BEAM skims, linkstats, and events
+│   └── postprocess/               # Final summary artifacts
+└── .consist/
+    ├── provenance.duckdb          # Canonical DuckDB database for analysis and recovery
+    ├── consist.json               # Human-readable JSON run log
+    ├── recovery_promotion.json    # Audit record of artifacts hydrated from recovery roots
+    └── snapshots/
+        └── latest/                # Snapshot of the latest consistent provenance state
+```
 
-## Adjacent Pages
+## Key Archive Files
 
-- Read [Scenario Lifecycle](../run/scenario_lifecycle.md) first.
-- Pair this with [Opening Archives](../analysis/opening_archives.md).
-- Use [Lawrencium](../run/lawrencium.md) for cluster-specific storage posture.
+| File / Directory | Role |
+| --- | --- |
+| `config_snapshot.yaml` | Captures the merged configuration (after overlays and CLI overrides) used to execute the run. |
+| `workflow_state.yaml` | Records the active `year`, replanning `iteration`, and latest artifact paths for resume and warm-start inspection. |
+| `.consist/provenance.duckdb` | Stores step execution records, Merkle input/config hashes, coupler artifact URIs, and ingested `dlt` tables. Query this file with [Analysis Overview](../analysis/overview.md) or [SQL and DuckDB](../analysis/sql_and_duckdb.md). |
+| `.consist/recovery_promotion.json` | Lists artifacts copied or linked from `run.recovery_archive_roots` when a step hits the cache. |
+| `stage_outputs/` | Contains the durable artifact files referenced by relative container URIs inside `.consist/provenance.duckdb`. |

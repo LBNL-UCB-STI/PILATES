@@ -1,25 +1,27 @@
 ---
 title: Configuration Reference
-summary: Reference for the current nested PILATES settings model and its workflow effects.
+summary: Field reference for PILATES YAML configuration sections, base inheritance, and model settings.
 ---
 
 # Configuration Reference
 
-## Top-Level Shape
+PILATES loads scenario configuration through `pilates.config.models.PilatesConfig`. The loader resolves `base:` inheritance, expands environment variables on path fields, validates types with Pydantic, and verifies that each model enabled in `run.models` has a corresponding configuration section.
 
-PILATES expects a YAML file that resolves to these top-level sections:
+## Top-Level Structure
 
-- optional `base` (or `extends`) pointing to a parent scenario YAML file
-- `run`
-- `shared`
-- `infrastructure`
-- optional model sections such as `urbansim`, `atlas`, `activitysim`, `beam`, and `postprocessing`
+A scenario YAML file supports these top-level keys:
 
-The active templates under `scenarios/` already use this shape. The config loader resolves `base:` inheritance recursively, validates the merged configuration with Pydantic, and rejects missing model sections when the selected models require them.
+- `base` (or `extends`): Optional path to a parent YAML scenario file.
+- `run`: Scenario identity, simulation horizon, frequencies, storage paths, restart policy, and Consist provenance controls.
+- `write_skims_to_omx`: Optional boolean (default `false`) enabling OMX skim export alongside Zarr skims.
+- `shared`: Regional geography, skims parameters, and shared DuckDB database settings.
+- `infrastructure`: Container manager (`docker` or `singularity`) and per-model image mappings.
+- `urbansim`, `atlas`, `activitysim`, `beam`, `postprocessing`: Model-specific sections required when the corresponding stage is enabled in `run.models`.
+- `workflow`: Optional workflow contract validation flags (`contract_validation: true`).
 
 ## Scenario Inheritance (`base:`)
 
-Scenario variants can inherit from a shared regional or baseline YAML using a top-level `base:` key (relative to the child YAML file's directory or the repository root):
+Child scenario files inherit from a parent YAML file via `base:` (resolved relative to the child YAML directory or repository root):
 
 ```yaml
 base: settings-sfbay-consist-usim-hpc-2019.yaml
@@ -29,76 +31,87 @@ run:
   output_run_name: sfbay-2019-canary
 ```
 
-Merge rules in `resolve_config_dict`:
+`resolve_config_dict` applies three merge rules:
 
-- Nested mappings merge recursively so thin overlays only need to specify the keys they override.
-- Lists, scalars, and explicit `null` values in the child file replace the inherited value from `base`.
-- Circular `base:` chains fail fast with a `ValueError`.
-- To inspect the fully merged YAML for any overlay from the command line, run `python -m pilates.config.models <path/to/scenario.yaml> --validate`.
+- Nested dictionaries merge key by key so child files specify only overridden fields.
+- Lists, scalars, and `null` values in the child file replace the parent value.
+- Circular `base:` references raise a `ValueError` during load.
 
-## `run`
+Validate and print the merged configuration from the command line:
 
-`run` holds the settings that shape the workflow and the runtime posture:
+```bash
+python -m pilates.config.models path/to/scenario.yaml --validate
+```
 
-- `region`, `scenario`, `start_year`, `end_year`
-- model frequencies such as `land_use_freq`, `travel_model_freq`, `vehicle_ownership_freq`, and `supply_demand_iters`
-- `models`, which selects the enabled model names
-- `output_directory` and `output_run_name`
-- `local_workspace_root`, which can point at a node-local mutable workspace
-- `recovery_archive_roots`, which can point at colder long-term archive destinations used after the run completes
-- archive and restart controls such as `enable_archive_copy` and `restart_strict`
-- bootstrap and Consist DB controls such as `bootstrap_cache_enabled`, `consist_db_local_run`, `consist_db_snapshot_*`, `consist_db_restore_*`, and `consist_db_seed_*`
-- Consist cache controls such as `consist_code_identity` and `consist_hashing_strategy`
+## `run` Section
 
-The loader expands environment variables in `output_directory`, `local_workspace_root`, and `recovery_archive_roots`. It also enforces `end_year >= start_year` and a basename-only `consist_db_filename`.
+### Scenario Horizon and Model Selection
 
-## `shared`
+| Field | Type / Default | Purpose |
+| --- | --- | --- |
+| `region` | `str` (required) | Regional identifier (`sfbay`, `seattle`, `austin`, `breathe`). |
+| `scenario` | `str` (required) | Scenario label recorded in run metadata and output naming. |
+| `start_year`, `end_year` | `int` (required) | Simulation start and end years (`end_year >= start_year`). |
+| `land_use_freq` | `int` (`1`) | Year step interval between land-use stages. |
+| `travel_model_freq` | `int` (`1`) | Year step interval between travel stages. |
+| `vehicle_ownership_freq` | `int \| null` | Year step interval for ATLAS vehicle ownership (`null` defaults to `travel_model_freq`). |
+| `supply_demand_iters` | `int` (`1`) | Number of ActivitySim/BEAM feedback iterations per travel year (`0` skips the loop). |
+| `max_year_intervals` | `int \| null` (`null`) | Optional cap on the number of outer year intervals executed in a single run. |
+| `use_stubs` | `bool` (`false`) | Replaces container execution with stubbed steps for testing. |
+| `models` | `RunModelsConfig` | Selects active model backends: `land_use` (`urbansim`), `vehicle_ownership` (`atlas`), `activity_demand` (`activitysim`), and `travel` (`beam` or `polaris`). |
 
-`shared` contains inputs that are shared across multiple models:
+### Storage Paths and Restart Policy
 
-- `geography`, including `FIPS`, `local_crs`, `zones`, and `alternative_zones`
-- `skims`, including skim filenames, highway path names, transit paths, and periods
-- `database`, which selects the shared database file and whether it is enabled
+| Field | Type / Default | Purpose |
+| --- | --- | --- |
+| `output_directory` | `str` (`output/runs`) | Parent directory for durable archive run directories. Supports environment variable expansion. |
+| `output_run_name` | `str \| null` (`null`) | Custom prefix included in the generated `pilates-run--<region>--<name>--<timestamp>` directory. |
+| `local_workspace_root` | `str \| null` (`null`) | Parent directory for the mutable run workspace. When `null`, the workspace lives inside the archive run directory. Supports environment variable expansion. |
+| `recovery_archive_roots` | `list[str]` (`[]`) | Cold storage destinations (such as project NFS) for post-run promotion via `promote_run_archive`. |
+| `enable_archive_copy` | `bool` (`true`) | Copies logged artifacts from the mutable workspace into the archive run directory during execution. |
+| `restart_strict` | `bool` (`false`) | Fails fast after bootstrap on restart if required local workspace artifacts remain missing. |
 
-The config and test suite pin the active Seattle and SF Bay zone sources, CRS values, and warmstart linkstats paths.
+### Consist Provenance and Caching Controls
 
-## `infrastructure`
+| Field | Type / Default | Purpose |
+| --- | --- | --- |
+| `bootstrap_cache_enabled` | `bool` (`false`) | Enables Consist cache lookups during the pre-scenario bootstrap staging steps. |
+| `consist_db_local_run` | `bool` (`true`) | Stores the active DuckDB provenance database inside the run directory (`.consist/<consist_db_filename>`) instead of writing to `shared.database.path`. |
+| `consist_db_filename` | `str` (`provenance.duckdb`) | Basename for the run-local DuckDB file (must not contain path separators). |
+| `consist_db_snapshot_enabled` | `bool` (`true`) | Snapshots the active provenance DB to `.consist/snapshots/` during execution and shutdown. |
+| `consist_db_snapshot_interval_seconds` | `int` (`3600`) | Minimum elapsed seconds between periodic DB snapshots (`0` snapshots at every check). |
+| `consist_db_snapshot_on_outer_iteration` | `bool` (`true`) | Writes a DB snapshot at the end of each outer simulation year. |
+| `consist_db_snapshot_keep_last` | `int` (`5`) | Number of timestamped snapshots retained under `.consist/snapshots/history/`. |
+| `consist_db_restore_on_start` | `bool` (`true`) | Restores the run-local DB from the latest archived snapshot when restarting an existing run. |
+| `consist_db_restore_strict` | `bool` (`false`) | Raises an error if DB snapshot restore fails during restart startup. |
+| `consist_db_seed_from_shared_on_start` | `bool` (`false`) | Seeds a new run-local DB from `shared.database.path` at startup so historical runs are available for cache hits and `prior_run` admission checks. |
+| `consist_db_seed_strict` | `bool` (`false`) | Raises an error if seeding from `shared.database.path` fails. |
+| `consist_code_identity` | `str` (`repo_git`) | Consist code-versioning mode (`repo_git`, `callable_module`, or `callable_source`). |
+| `consist_hashing_strategy` | `str` (`fast`) | Artifact digest strategy (`fast` metadata-aware hashing or `full` byte hashing). |
 
-`infrastructure` selects the container manager and the image references:
+## `shared` Section
 
-- `container_manager` is `docker` or `singularity`
-- `singularity_images` maps model names to image URIs
-- `docker_images` maps model names to image tags
-- `docker_config` controls Docker logging and image-pull behavior
+- `geography`: Regional `FIPS` map, `local_crs` projection string, primary `zones` definition (`zone_type`, `source`), and optional `alternative_zones` map.
+- `skims`: Skim filenames (`skims_fname`, `taz_skims_fname`, `beam_Wait_skims_fname`), `skims_zone_type`, highway and transit path labels, and time `periods`.
+- `database`: Shared provenance catalog configuration (`enabled: bool`, `path: str`, `strict_Read: bool`). The loader expands environment variables in `database.path`.
 
-## Model Sections
+## `infrastructure` Section
 
-- `urbansim` describes the land-use container paths and templates.
-- `atlas` describes the vehicle-ownership container paths and command template.
-- `activitysim` describes the demand model folders, sampling, replanning, and output tables.
-- `beam` describes the travel-model config, output directories, memory, and warmstart inputs.
-  Its optional `artifact_formats` policy is applied only to the derived,
-  canonical BEAM launch tree. Defaults are `activitysim_skims: zarr`,
-  `exchange: parquet`, `events: parquet`, and `linkstats: parquet`.
-  Set a legacy value explicitly only when the corresponding BEAM input or
-  downstream consumer requires it. PILATES still derives an OMX skim artifact
-  for UrbanSim or ATLAS when those models require one; OMX is not the primary
-  ActivitySim interchange format.
-- `postprocessing` describes downstream validation and output folders.
+- `container_manager`: Container runtime (`docker` or `singularity`).
+- `docker_images`: Map of model names (`urbansim`, `atlas`, `activitysim`, `beam`, `polaris`) to Docker image tags.
+- `singularity_images`: Map of model names to Singularity/Apptainer `.sif` paths or URIs.
+- `docker_config`: Controls `enable_logging` (`true`) and `pull_latest` (`false`).
 
-## Consist-Relevant Fields
+## Model Sections (`models`)
 
-These settings affect cache identity or run persistence, not the model science itself:
+- `urbansim`: Land-use container settings, data directories (`local_data_input_folder`, `local_mutable_data_folder`, `local_output_folder`), `form_to_btype`, and optional `admission.initial_datastore` validation policy.
+- `atlas`: Vehicle-ownership container settings (`host_input_folder`, `host_mutable_input_folder`, `host_output_folder`, `beamac`, `num_processes`, `nsample`). Setting `beamac > 0` requires `run.region: sfbay` and `shared.skims.skims_zone_type: taz`.
+- `activitysim`: Demand model folders (`local_input_folder`, `local_configs_folder`, `local_mutable_data_folder`, `local_mutable_configs_folder`, `local_output_folder`), `households_sample_size`, `chunk_size`, `num_processes`, `replan_hh_samp_size`, `canonical_zones_source`, and optional `admission.initial_skims` validation policy.
+- `beam`: Travel simulation configuration (`local_input_folder`, `local_mutable_data_folder`, `local_output_folder`, `memory`, `warmstart_linkstats`, `able_to_replan`, `max_iters`), optional `admission.linkstats` policy, and `artifact_formats` for derived BEAM outputs (defaults: `activitysim_skims: zarr`, `exchange: parquet`, `events: parquet`, `linkstats: parquet`). When UrbanSim or ATLAS requires OMX skims, PILATES derives an OMX skim file alongside the Zarr skims store.
+- `postprocessing`: Output validation settings (`enabled`, `fail_on_error`, `local_output_folder`, `validation_output_subfolder`).
 
-- `run.consist_code_identity`
-- `run.consist_hashing_strategy`
-- `run.bootstrap_cache_enabled`
-- `run.enable_archive_copy`
-- `run.recovery_archive_roots`
-- the Consist DB snapshot/restore/seed fields
+## Related Pages
 
-## Adjacent Pages
-
-- Start with [Configuration Basics](../start-here/configuration_basics.md) if you are new.
-- Pair this with [CLI](cli.md) for invocation behavior.
-- Use [Restart and Resume](restart_and_resume.md) for restart policy and checkpoint behavior.
+- Read [Configuration Basics](../start-here/configuration_basics.md) for the high-level layout and workspace split.
+- Check [CLI](cli.md) for command-line flags and config validation commands.
+- See [Scenario Lifecycle](scenario_lifecycle.md) for startup, bootstrap, and restart mechanics.

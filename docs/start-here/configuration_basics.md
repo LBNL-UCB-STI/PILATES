@@ -1,72 +1,71 @@
 ---
 title: Configuration Basics
-summary: Mental model for how PILATES config is organized before the full reference.
+summary: Conceptual structure of PILATES YAML settings, base inheritance, CLI versus YAML controls, and workspace paths.
 ---
 
 # Configuration Basics
 
-## What Belongs Where
+PILATES reads a single YAML configuration file (or a child overlay inheriting via `base:`), validates it with Pydantic, and builds an immutable runtime plan before any model stage executes.
 
-- `run` holds the simulation run identity and runtime posture.
-- `shared` holds inputs shared across models, such as geography, skims, and the database path.
-- `infrastructure` holds the container/runtime selection.
-- Model sections such as `urbansim`, `atlas`, `activitysim`, and `beam` hold model-specific paths and command templates.
-- `postprocessing` holds downstream output and validation settings.
+## Top-Level Sections
 
-## Files Versus CLI
+Each scenario file organizes settings into five areas:
 
-- The YAML file selects the region, years, enabled models, output roots, and runtime flags.
-- The command line selects which YAML file to load and whether to resume from a stage file.
-- `python run.py -c ...` is the normal invocation for choosing a settings file.
-- `-S/--stage` points at an existing state file for restart or resume.
+- `base` (optional): Path to a parent YAML scenario file whose values provide the baseline for the current file.
+- `run`: Scenario identity, simulation years, model frequencies, enabled models, storage directories, restart behavior, and Consist database settings.
+- `shared`: Inputs shared across models, including regional `geography` (`FIPS`, `local_crs`, `zones`), `skims` definitions, and the shared `database` path.
+- `infrastructure`: Container runtime (`docker` or `singularity`) and per-model image tags or `.sif` paths.
+- Model and pipeline sections (`urbansim`, `atlas`, `activitysim`, `beam`, `postprocessing`): Model-specific input/output paths, container mounts, memory limits, and command parameters.
 
-Those runtime flags are initialized once during launcher startup and then reused through the enabled workflow surface. PILATES no longer expects each subsystem to rebuild its own view of which stages, steps, or restart contracts are active.
+## Scenario Inheritance (`base:`)
 
-## Runtime State And The Two Workspaces
+Scenario files in `scenarios/` use `base: <parent.yaml>` inheritance so a variant specifies only the keys that differ from its regional baseline:
 
-Two runtime concepts show up in nearly every other doc, and it helps to name
-them before reading further:
+```yaml
+base: settings-sfbay-newconfig-local.yaml
 
-- **`WorkflowState`** is the persisted record of where a run is in its
-  year/stage/iteration progression. It is reconstructed from
-  `run_state.yaml` inside the archive run directory and is what restart
-  resumes from. You will not normally edit it by hand.
-- **Archive run directory vs. mutable workspace.** PILATES separates the
-  *durable record* of a run (the archive — what gets promoted, queried, and
-  shared) from the *fast scratch space* models actually read and write
-  during execution (the mutable workspace).
-  - On a single laptop they typically point at the same filesystem, and you
-    can ignore the distinction.
-  - On a cluster you usually want the archive on a durable shared filesystem
-    and the workspace on faster local or scratch storage. See
-    [HPC Overview](../run/hpc_overview.md) for the recommended split.
+run:
+  scenario: sfbay-high-density
+  output_run_name: sfbay-high-density
+  end_year: 2020
+```
 
-## The Practical Config Split
+During config loading, `resolve_config_dict` merges nested dictionaries from the parent and child files, while child scalars, lists, and `null` values replace parent values. Inspect and validate the merged configuration for any overlay from the command line:
 
-- `run.output_directory` sets the parent directory where the launcher creates the archive run directory for each run.
-- `run.local_workspace_root` sets the parent directory for the mutable workspace when you want it to differ from the archive side. Leave it unset to colocate workspace and archive (typical on a laptop).
-- `run.recovery_archive_roots` sets optional colder post-run archive destinations for promotion after the run finishes.
-- `run.output_run_name` is part of the generated run-directory name.
-- `run.enable_archive_copy`, `run.bootstrap_cache_enabled`, `run.restart_strict`, and the Consist DB snapshot fields change runtime behavior, not model science.
-- `run.models` decides which model sections must be present and which stages the launcher enables.
+```bash
+python -m pilates.config.models path/to/scenario.yaml --validate
+```
 
-## What Most Users Edit First
+## YAML Settings Versus CLI Flags
 
-Most scenario variants in `scenarios/` use top-level `base: <parent.yaml>` inheritance so a new scenario only needs to specify the fields that differ from its regional baseline. Most first-run edits are in the `run` section:
+Keep scenario parameters in YAML and execution selection on the command line:
 
-- where the archive run directory should live
-- whether the mutable workspace should live somewhere else
-- which models are enabled
-- the run name prefix
+- **YAML file**: Defines region, start and end years, enabled models, workspace and archive paths, container images, and provenance database options.
+- **CLI flags (`python run.py`)**: Selects the YAML file to run (`-c/--config`), passes an existing `run_state.yaml` path for restart (`-S/--stage`), or permits resuming from an earlier simulation year (`--allow-rewind-resume`).
 
-Most readers do not need to duplicate or change deeper model sections until the active template already loads and starts. You can inspect the fully merged configuration of any `base:` overlay with `python -m pilates.config.models <path/to/scenario.yaml> --validate`.
+The launcher initializes runtime flags once at startup and passes the resulting workflow plan to every stage.
 
-## Validation And Normalization
+## Archive Directory Versus Mutable Workspace
 
-PILATES loads config with Pydantic validation. The current loader expands environment variables in `run.output_directory`, `run.local_workspace_root`, `run.recovery_archive_roots`, and the database path. It also enforces basic guardrails such as `end_year >= start_year`, a basename-only `consist_db_filename`, and the `atlas.beamac` restriction that appears in the loader.
+PILATES separates durable run records from high-churn working files across two directory trees, plus an optional post-run recovery tier:
 
-## Adjacent Pages
+- **Archive run directory (`run.output_directory`)**: Parent directory where the launcher creates `<output_directory>/pilates-run--<region>--<name>--<timestamp>/`. This directory stores `run_state.yaml` (`WorkflowState`), `.consist/provenance.duckdb`, configuration snapshots, and archived step outputs.
+- **Mutable workspace (`run.local_workspace_root`)**: Parent directory where models read and write staged inputs and live intermediate files during execution. Leave `local_workspace_root` unset on a local workstation to colocate the workspace inside the archive directory; set it to node-local scratch on HPC clusters.
+- **Cold recovery roots (`run.recovery_archive_roots`)**: Optional list of long-term storage paths (such as project NFS) used by `pilates.runtime.promote_run_archive` after a cluster run finishes.
 
-- Read [First Run Walkthrough](first_run_walkthrough.md) for the concrete path.
-- Use [Configuration Reference](../run/configuration_reference.md) for the complete field list.
-- Use [Scenario Lifecycle](../run/scenario_lifecycle.md) to connect config to runtime behavior.
+## Fields You Edit First
+
+To set up a new run or adapt a template to your machine, start with `run`:
+
+- `run.output_directory` and `run.local_workspace_root` for storage paths.
+- `run.scenario` and `run.output_run_name` for run naming.
+- `run.start_year`, `run.end_year`, and `run.supply_demand_iters` for simulation horizon and iteration count.
+- `run.models` (`land_use`, `vehicle_ownership`, `activity_demand`, `travel`) to enable or disable individual models.
+
+The loader expands environment variables (such as `${USER}` and `${SLURM_JOB_ID}`) in `run.output_directory`, `run.local_workspace_root`, `run.recovery_archive_roots`, and `shared.database.path`. It also enforces `end_year >= start_year`, requires `consist_db_filename` to be a basename without path separators, and restricts `atlas.beamac > 0` to `sfbay` runs with `skims_zone_type: taz`.
+
+## Next Steps
+
+- Follow [Getting Started](getting_started.md) for the step-by-step first local run walkthrough.
+- Consult [Configuration Reference](../run/configuration_reference.md) for the complete field-by-field reference.
+- Read [Scenario Lifecycle](../run/scenario_lifecycle.md) to see how configuration drives startup, bootstrap, and year-loop execution.
