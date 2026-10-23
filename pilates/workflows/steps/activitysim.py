@@ -63,6 +63,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.binding import (
     ArtifactBindingRule,
+    activitysim_population_source_selection_rules,
     build_resolved_binding,
     resolve_artifact_roles,
 )
@@ -1271,6 +1272,13 @@ activitysim_preprocess = StepDefinition(
     output_paths=activitysim_preprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
+    binding_rules=(
+        *activitysim_population_source_selection_rules(),
+        ArtifactBindingRule(
+            semantic_key=FINAL_SKIMS_OMX,
+            required=False,
+        ),
+    ),
 )
 activitysim_run = StepDefinition(
     name="activitysim_run",
@@ -1281,6 +1289,7 @@ activitysim_run = StepDefinition(
     output_paths=_activitysim_run_native_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
+    optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
 )
 activitysim_postprocess = StepDefinition(
     name="activitysim_postprocess",
@@ -1291,5 +1300,26 @@ activitysim_postprocess = StepDefinition(
     output_paths=activitysim_postprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
+    binding_rules=(
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_CURRENT_H5,
+            required=False,
+            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_BASE_H5,
+            required=False,
+            allow_fallback=True,
+            fallback_provider="activitysim_input_datastore",
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_SOURCE_H5,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+            fallback_provider="activitysim_population_source",
+        ),
+    ),
+    optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     preflight_identity=True,
 )

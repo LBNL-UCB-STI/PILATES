@@ -12,6 +12,7 @@ from consist.core.resolved_binding import ArtifactIdentity
 from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows import binding
 from pilates.workflows.artifact_keys import (
+    LINKSTATS,
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_SOURCE_H5,
@@ -292,7 +293,7 @@ def test_beam_preprocess_binding_rules_prefer_linkstats_over_warmstart() -> None
         r for r in rules if r.semantic_key == binding.LINKSTATS_WARMSTART
     )
     assert linkstats_rule.preferred_keys == (
-        binding.LINKSTATS,
+        LINKSTATS,
         binding.LINKSTATS_WARMSTART,
     )
 

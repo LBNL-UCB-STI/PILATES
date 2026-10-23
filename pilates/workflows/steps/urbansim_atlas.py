@@ -38,13 +38,17 @@ from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
+    OMX_SKIMS,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
+    USIM_H5_UPDATED,
     USIM_INPUT_ARCHIVE_PREFIX,
     USIM_INPUT_MERGED_PREFIX,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.binding import build_resolved_binding
+from pilates.workflows.binding import ArtifactBindingRule, build_resolved_binding
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
@@ -1097,6 +1101,7 @@ URBANSIM_RUN = StepDefinition(
     output_paths=_urbansim_run_native_output_paths,
     execution_options=_urbansim_run_execution_options,
     cache_options=_strict_requested_output_cache_options,
+    optional_output_keys=(USIM_FORECAST_OUTPUT,),
 )
 
 URBANSIM_POSTPROCESS = StepDefinition(
@@ -1120,6 +1125,31 @@ ATLAS_PREPROCESS = StepDefinition(
     output_paths=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
+    binding_rules=(
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_CURRENT_H5,
+            required=True,
+            allow_fallback=True,
+            preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED),
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_BASE_H5,
+            required=True,
+            allow_fallback=True,
+            preferred_keys=(
+                USIM_DATASTORE_BASE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_H5_UPDATED,
+            ),
+        ),
+        ArtifactBindingRule(
+            semantic_key=OMX_SKIMS,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
+        ),
+    ),
+    optional_output_keys=("atlas_accessibility_csv",),
 )
 
 ATLAS_RUN = StepDefinition(

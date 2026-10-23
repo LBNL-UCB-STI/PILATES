@@ -38,7 +38,8 @@ Checklist](model_contract_checklist.md) before relying on an integration.
   `scripts/new_model_scaffold.py`).
 - **Native step module (`pilates/workflows/steps/<model>.py`)**: decorated
   Consist callables, semantic input resolver (`ResolvedStepInputs`), typed
-  output projector, `InputContract`, and `StepDefinition` exports.
+  output projector, `InputContract`, and `StepDefinition` exports (including any
+  step-specific `binding_rules` and `optional_output_keys`).
 - **Step surface & catalog (`pilates/workflows/steps/__init__.py`, `pilates/workflows/catalog.py`)**:
   export the new `StepDefinition` objects in `STEP_DEFINITIONS` and add policy-only
   `WorkflowStepSpec` entries.
@@ -52,7 +53,8 @@ Checklist](model_contract_checklist.md) before relying on an integration.
 
 - `pilates/workflows/step_execution.py` (central `execute_step` bridge, cache
   options, action refresh, and output archival/republication)
-- `pilates/workflows/step_definition.py` and `pilates/workflows/resolved_inputs.py`
+- `pilates/workflows/step_definition.py`, `pilates/workflows/binding.py`, and
+  `pilates/workflows/resolved_inputs.py`
 - `pilates/runtime/` (orchestrator, runtime context, archive/hydration helpers)
 - `pilates/workspace.py` and `workflow_state.py`
 - Unrelated model packages (`pilates/urbansim/`, `pilates/atlas/`,

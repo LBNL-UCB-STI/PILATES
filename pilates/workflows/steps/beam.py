@@ -79,12 +79,14 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
+    BEAM_VEHICLES_IN,
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
 from pilates.workflows.binding import (
+    ArtifactBindingRule,
     artifact_rules_for_step_name,
     resolve_artifact_roles,
 )
@@ -2166,6 +2168,40 @@ beam_preprocess = StepDefinition(
     output_paths=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_beam_preprocess_output_cache,
+    binding_rules=(
+        ArtifactBindingRule(
+            semantic_key=BEAM_PLANS_IN,
+            required=True,
+            preferred_keys=("beam_plans_asim_out", BEAM_PLANS_IN),
+        ),
+        ArtifactBindingRule(
+            semantic_key=BEAM_HOUSEHOLDS_IN,
+            required=True,
+            preferred_keys=("households_asim_out", BEAM_HOUSEHOLDS_IN),
+        ),
+        ArtifactBindingRule(
+            semantic_key=BEAM_PERSONS_IN,
+            required=True,
+            preferred_keys=("persons_asim_out", BEAM_PERSONS_IN),
+        ),
+        ArtifactBindingRule(
+            semantic_key=LINKSTATS_WARMSTART,
+            required=False,
+            preferred_keys=(LINKSTATS, LINKSTATS_WARMSTART),
+        ),
+        ArtifactBindingRule(
+            semantic_key=ATLAS_VEHICLES2_OUTPUT,
+            required=False,
+            allow_fallback=False,
+        ),
+        ArtifactBindingRule(
+            semantic_key=BEAM_PLANS_OUT,
+            required=False,
+            preferred_keys=(BEAM_PLANS_OUT,),
+            allow_fallback=False,
+        ),
+    ),
+    optional_output_keys=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
 )
 beam_run = StepDefinition(
     name="beam_run",
@@ -2188,6 +2224,7 @@ beam_postprocess = StepDefinition(
     execution_options=_native_execution_options,
     archive_outputs=False,
     cache_options=_beam_postprocess_output_cache,
+    optional_output_keys=(FINAL_SKIMS_OMX,),
 )
 beam_full_skim = StepDefinition(
     name="beam_full_skim",
@@ -2198,4 +2235,5 @@ beam_full_skim = StepDefinition(
     output_paths=_beam_full_skim_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache,
+    optional_output_keys=(FINAL_SKIMS_OMX,),
 )

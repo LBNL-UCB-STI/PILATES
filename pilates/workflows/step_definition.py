@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, Literal, Mapping, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Mapping, TypeVar
 
 from consist import CacheOptions, ExecutionOptions, OutputSet
 
 from pilates.workflows.output_projection import TypedOutputProjector
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+
+if TYPE_CHECKING:
+    from pilates.workflows.binding import ArtifactBindingRule
 
 OutputT = TypeVar("OutputT")
 
@@ -71,5 +74,7 @@ class StepDefinition(Generic[OutputT]):
     output_sets: Callable[..., Mapping[str, OutputSet]] | None = None
     execution_options: Callable[..., ExecutionOptions] | None = None
     cache_options: Callable[..., CacheOptions] | None = None
+    binding_rules: tuple[ArtifactBindingRule, ...] = ()
+    optional_output_keys: tuple[str, ...] = ()
     preflight_identity: bool = False
     archive_outputs: bool = True

@@ -318,14 +318,12 @@ def _build_step_runtime_surface(
     step_spec = workflow_step_spec_for_step_name(step_name)
     if step_spec is None:
         raise KeyError(f"Unknown workflow step '{step_name}'.")
-    contracts = workflow_step_contracts_by_name(settings=settings)
-    contract = contracts.get(step_name, {})
     binding_rules = artifact_rules_for_step_name(step_name, settings=settings)
 
-    required_inputs = tuple(contract.get("input_keys", ()))
-    optional_inputs = tuple(contract.get("optional_input_keys", ()))
-    required_outputs = tuple(contract.get("output_keys", ()))
-    optional_outputs = tuple(contract.get("optional_output_keys", ()))
+    required_inputs = step_spec.input_keys
+    optional_inputs = step_spec.optional_input_keys
+    required_outputs = step_spec.output_keys
+    optional_outputs = step_spec.optional_output_keys
     # Runtime overlays are intentionally resolved through a tiny registry module
     # so `surface.py` stays a projection engine instead of accumulating
     # step-specific conditionals over time.
