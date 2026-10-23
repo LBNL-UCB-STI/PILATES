@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from pilates.beam.launch_paths import BeamLaunchPathReference
+from pilates.config.models import PriorRunExpectation
 
 
 def _reference(path: Path) -> BeamLaunchPathReference:
@@ -36,9 +37,11 @@ def _settings(mode: str | None) -> SimpleNamespace:
         if mode is None
         else SimpleNamespace(
             mode=mode,
-            expected_run_id="baseline-run",
-            artifact_key="linkstats_warmstart",
-            expected_bytes_path=None,
+            expectation=PriorRunExpectation(
+                expected_run_id="baseline-run",
+                artifact_key="linkstats_warmstart",
+                expected_bytes_path=None,
+            ),
         )
     )
     return SimpleNamespace(

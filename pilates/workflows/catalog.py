@@ -15,32 +15,16 @@ from typing import (
     TYPE_CHECKING,
 )
 
-from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
-from pilates.workflows.artifact_keys import (
-    BEAM_VEHICLES_IN,
-    FINAL_SKIMS_OMX,
-    LINKSTATS_WARMSTART,
-)
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 
 if TYPE_CHECKING:
+    from pilates.workflows.binding import ArtifactBindingRule
     from pilates.workflows.step_definition import StepDefinition
 
 
 @dataclass(frozen=True)
 class WorkflowStepProvenanceSpec:
     builder_key: str
-
-
-_OPTIONAL_OUTPUT_KEYS_BY_STEP: Dict[str, Tuple[str, ...]] = {
-    "urbansim_run": ("usim_forecast_output",),
-    "atlas_preprocess": ("atlas_accessibility_csv",),
-    "activitysim_run": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    "activitysim_postprocess": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    "beam_preprocess": (LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
-    "beam_postprocess": (FINAL_SKIMS_OMX,),
-    "beam_full_skim": (FINAL_SKIMS_OMX,),
-}
 
 
 @dataclass(frozen=True)
@@ -112,7 +96,11 @@ class WorkflowStepSpec:
 
     @property
     def optional_output_keys(self) -> Tuple[str, ...]:
-        return _OPTIONAL_OUTPUT_KEYS_BY_STEP.get(self.step_name, ())
+        return tuple(self.definition.optional_output_keys)
+
+    @property
+    def binding_rules(self) -> Tuple["ArtifactBindingRule", ...]:
+        return tuple(self.definition.binding_rules)
 
 
 @dataclass(frozen=True)

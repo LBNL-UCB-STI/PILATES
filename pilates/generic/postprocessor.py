@@ -3,8 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Generic, Optional, TYPE_CHECKING, TypeVar
 
-from pilates.generic.model import Model
-
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
     from workflow_state import WorkflowState
@@ -14,9 +12,7 @@ PostprocessInputsT = TypeVar("PostprocessInputsT")
 PostprocessOutputsT = TypeVar("PostprocessOutputsT")
 
 
-class GenericPostprocessor(
-    Model, ABC, Generic[PostprocessInputsT, PostprocessOutputsT]
-):
+class GenericPostprocessor(ABC, Generic[PostprocessInputsT, PostprocessOutputsT]):
     """Base class for postprocessors with model-specific input and output types."""
 
     def __init__(
@@ -24,7 +20,8 @@ class GenericPostprocessor(
         model_name: str,
         state: "WorkflowState",
     ):
-        super().__init__(model_name, state)
+        self.model_name = model_name
+        self.state = state
         self.required_input_data: list[str] = []
 
     def postprocess(

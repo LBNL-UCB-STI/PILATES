@@ -26,7 +26,6 @@ def _make_settings():
     activitysim.chunk_size = 100
     activitysim.num_processes = 2
     activitysim.file_format = "csv"
-    activitysim.warm_start_activities = False
     activitysim.replan_iters = 0
     activitysim.replan_hh_samp_size = 0
     activitysim.replan_after = 0
@@ -178,9 +177,12 @@ def test_beam_linkstats_admission_affects_identity_and_expected_bytes_input(tmp_
     settings.beam.admission = BeamAdmissionConfig(
         linkstats=BeamLinkstatsAdmissionConfig(
             mode="strict",
-            expected_run_id="baseline-run",
-            artifact_key="linkstats_warmstart",
-            expected_bytes_path=str(expected_bytes),
+            expectation={
+                "kind": "prior_run",
+                "expected_run_id": "baseline-run",
+                "artifact_key": "linkstats_warmstart",
+                "expected_bytes_path": str(expected_bytes),
+            },
         )
     )
     beam_root = tmp_path / "beam" / "input"

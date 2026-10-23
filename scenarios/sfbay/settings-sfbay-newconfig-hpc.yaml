@@ -334,7 +334,6 @@ activitysim:
     enabled: false
     use_processed_data: false
     year: 2018
-  warm_start_activities: false
   replan_iters: 0
   replan_hh_samp_size: 0
   replan_after: non_mandatory_tour_scheduling

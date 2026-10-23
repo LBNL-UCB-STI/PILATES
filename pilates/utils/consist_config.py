@@ -20,6 +20,7 @@ from consist.types import HasConsistFacet
 from pilates.config.models import (
     FullSkimsCreatorConfig,
     PilatesConfig,
+    PriorRunExpectation,
     admission_policy_fingerprint,
 )
 from pilates.utils.settings_helper import get as get_setting
@@ -285,7 +286,6 @@ def build_activitysim_identity_config(settings: PilatesConfig) -> Dict[str, Any]
         "chunk_size": cfg.chunk_size,
         "num_processes": cfg.num_processes,
         "file_format": cfg.file_format,
-        "warm_start_activities": cfg.warm_start_activities,
         "replan_iters": cfg.replan_iters,
         "replan_hh_samp_size": cfg.replan_hh_samp_size,
         "replan_after": cfg.replan_after,
@@ -410,9 +410,12 @@ def build_beam_identity_inputs(
     linkstats_admission = (
         admission_config.linkstats if admission_config is not None else None
     )
+    expectation = (
+        linkstats_admission.expectation if linkstats_admission is not None else None
+    )
     expected_bytes_path = (
-        linkstats_admission.expected_bytes_path
-        if linkstats_admission is not None
+        expectation.expected_bytes_path
+        if isinstance(expectation, PriorRunExpectation)
         else None
     )
     if expected_bytes_path:

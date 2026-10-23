@@ -212,7 +212,7 @@ def test_urbansim_declared_digest_admission_rejects_noncanonical_identity(identi
         _settings_with_urbansim_admission(identity=identity)
 
 
-def test_beam_linkstats_admission_normalizes_nested_and_legacy_expected_bytes_path():
+def test_beam_linkstats_admission_normalizes_nested_expected_bytes_path():
     nested = BeamLinkstatsAdmissionConfig(
         mode="strict",
         expectation={
@@ -222,17 +222,8 @@ def test_beam_linkstats_admission_normalizes_nested_and_legacy_expected_bytes_pa
             "expected_bytes_path": "/archive/nested-linkstats.csv.gz",
         },
     )
-    legacy = BeamLinkstatsAdmissionConfig(
-        mode="strict",
-        expected_run_id="baseline-run",
-        artifact_key="linkstats_warmstart",
-        expected_bytes_path="/archive/legacy-linkstats.csv.gz",
-    )
 
     assert nested.expectation.expected_bytes_path == "/archive/nested-linkstats.csv.gz"
-    assert nested.expected_bytes_path == "/archive/nested-linkstats.csv.gz"
-    assert legacy.expectation.expected_bytes_path == "/archive/legacy-linkstats.csv.gz"
-    assert legacy.expected_bytes_path == "/archive/legacy-linkstats.csv.gz"
     assert admission_policy_fingerprint(nested) == {
         "mode": "strict",
         "kind": "prior_run",

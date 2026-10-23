@@ -18,7 +18,7 @@ from pilates.workflows.input_authority import (
     requires_prior_beam_skim_handoff,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.steps import activitysim, urbansim_atlas
+from pilates.workflows.steps import activitysim, atlas, urbansim
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.urbansim.runner import UrbanSimLaunchContext
 from pilates.beam.beam_input_staging import copy_vehicles_from_atlas
@@ -168,7 +168,7 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
         staticmethod(lambda *_args: {}),
     )
     monkeypatch.setattr(activitysim, "resolve_artifact_roles", resolve_activitysim)
-    monkeypatch.setattr(urbansim_atlas, "_resolve_native_inputs", resolve_urbansim)
+    monkeypatch.setattr(urbansim, "_resolve_native_inputs", resolve_urbansim)
 
     activitysim._activitysim_preprocess_resolver(
         settings=settings,
@@ -176,15 +176,15 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
         workspace=workspace,
         coupler=object(),
     )
-    urbansim_atlas._resolve_urbansim_run_inputs(
+    urbansim._resolve_urbansim_run_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
         coupler=object(),
     )
 
-    monkeypatch.setattr(urbansim_atlas, "_resolve_native_inputs", resolve_atlas)
-    urbansim_atlas._resolve_atlas_preprocess_inputs(
+    monkeypatch.setattr(atlas, "_resolve_native_inputs", resolve_atlas)
+    atlas._resolve_atlas_preprocess_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -404,8 +404,8 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         "ActivitysimPreprocessor",
         lambda *_args: _ActivitysimPreprocessor(),
     )
-    monkeypatch.setattr(urbansim_atlas, "UrbansimRunner", _UrbansimRunner)
-    monkeypatch.setattr(urbansim_atlas, "AtlasPreprocessor", _AtlasPreprocessor)
+    monkeypatch.setattr(urbansim, "UrbansimRunner", _UrbansimRunner)
+    monkeypatch.setattr(atlas, "AtlasPreprocessor", _AtlasPreprocessor)
 
     population = Path("/bound/population.h5")
     skims = Path("/bound/final-skims.omx")
@@ -418,7 +418,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         prepared_inputs={"usim_datastore_h5": population},
     )
     monkeypatch.setattr(
-        urbansim_atlas,
+        urbansim,
         "stage_urbansim_run_workspace",
         lambda **_kwargs: staged,
     )
@@ -429,7 +429,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         state=state,
         workspace=workspace,
     )
-    urbansim_atlas._native_urbansim_run(
+    urbansim._native_urbansim_run(
         population,
         skims,
         settings=settings,
@@ -437,7 +437,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         workspace=workspace,
         urbansim_launch_context=urbansim_launch_context,
     )
-    urbansim_atlas._native_atlas_preprocess(
+    atlas._native_atlas_preprocess(
         population,
         skims,
         settings=settings,

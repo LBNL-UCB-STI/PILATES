@@ -50,19 +50,13 @@ from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (
-    ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_PLANS_OUT,
-    FINAL_SKIMS_OMX,
-    LINKSTATS,
     LINKSTATS_WARMSTART,
-    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_FORECAST_OUTPUT,
-    USIM_H5_UPDATED,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_JOBS_TABLE,
@@ -724,125 +718,29 @@ FALLBACK_PROVIDER_INVENTORY: tuple[FallbackProviderInventoryEntry, ...] = (
 )
 
 
-def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
-    return {
-        "urbansim_preprocess": (
-            ArtifactBindingRule(
-                semantic_key=OMX_SKIMS,
-                required=False,
-                allow_fallback=True,
-                preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
-            ),
-        ),
-        "activitysim_preprocess": (
-            *activitysim_population_source_selection_rules(),
-            ArtifactBindingRule(
-                semantic_key=FINAL_SKIMS_OMX,
-                required=False,
-            ),
-        ),
-        "activitysim_postprocess": (
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_CURRENT_H5,
-                required=False,
-                preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_BASE_H5,
-                required=False,
-                allow_fallback=True,
-                fallback_provider="activitysim_input_datastore",
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_POPULATION_SOURCE_H5,
-                required=False,
-                allow_fallback=True,
-                preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-                fallback_provider="activitysim_population_source",
-            ),
-        ),
-        "atlas_preprocess": (
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_CURRENT_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED),
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_BASE_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(
-                    USIM_DATASTORE_BASE_H5,
-                    USIM_DATASTORE_CURRENT_H5,
-                    USIM_H5_UPDATED,
-                ),
-            ),
-            ArtifactBindingRule(
-                semantic_key=OMX_SKIMS,
-                required=False,
-                allow_fallback=True,
-                preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
-            ),
-        ),
-        "beam_preprocess": (
-            ArtifactBindingRule(
-                semantic_key=BEAM_PLANS_IN,
-                required=True,
-                preferred_keys=("beam_plans_asim_out", BEAM_PLANS_IN),
-            ),
-            ArtifactBindingRule(
-                semantic_key=BEAM_HOUSEHOLDS_IN,
-                required=True,
-                preferred_keys=("households_asim_out", BEAM_HOUSEHOLDS_IN),
-            ),
-            ArtifactBindingRule(
-                semantic_key=BEAM_PERSONS_IN,
-                required=True,
-                preferred_keys=("persons_asim_out", BEAM_PERSONS_IN),
-            ),
-            ArtifactBindingRule(
-                semantic_key=LINKSTATS_WARMSTART,
-                required=False,
-                preferred_keys=(LINKSTATS, LINKSTATS_WARMSTART),
-            ),
-            ArtifactBindingRule(
-                semantic_key=ATLAS_VEHICLES2_OUTPUT,
-                required=False,
-                allow_fallback=False,
-            ),
-            ArtifactBindingRule(
-                semantic_key=BEAM_PLANS_OUT,
-                required=False,
-                preferred_keys=(BEAM_PLANS_OUT,),
-                allow_fallback=False,
-            ),
-        ),
-    }
-
-
 def artifact_rules_for_step_name(
     step_name: str,
     *,
     settings: Any = None,
 ) -> tuple[ArtifactBindingRule, ...]:
-    """Return catalog-derived native selection rules with local overrides."""
-    from pilates.workflows.catalog import workflow_step_contracts_by_name
+    """Return catalog-derived native selection rules with step-defined overrides."""
+    del settings
+    from pilates.workflows.catalog import workflow_step_spec_for_step_name
 
-    contract = workflow_step_contracts_by_name(settings=settings).get(step_name)
-    if contract is None:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
         return ()
     rules = {
         key: ArtifactBindingRule(semantic_key=key, required=True)
-        for key in contract.get("input_keys", ())
+        for key in spec.input_keys
     }
     rules.update(
         {
             key: ArtifactBindingRule(semantic_key=key, required=False)
-            for key in contract.get("optional_input_keys", ())
+            for key in spec.optional_input_keys
         }
     )
-    for override in _pilot_binding_overrides().get(step_name, ()):
+    for override in spec.binding_rules:
         existing = rules.get(override.semantic_key)
         rules[override.semantic_key] = ArtifactBindingRule(
             semantic_key=override.semantic_key,

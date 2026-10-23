@@ -6,15 +6,17 @@ import logging
 import os
 import shlex
 from collections.abc import Mapping, Sequence
-from typing import Optional, List, Union, Any, Generic, TypeVar
+from typing import Optional, List, TYPE_CHECKING, Union, Any, Generic, TypeVar
 
 from pilates.config import PilatesConfig
-from pilates.generic.model import Model
 
 from abc import ABC
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.settings_helper import get as get_setting
+
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
 
 
 logger = logging.getLogger(__name__)
@@ -27,13 +29,20 @@ RunnerLaunchContextT = TypeVar("RunnerLaunchContextT")
 
 
 class GenericRunner(
-    Model,
     ABC,
     Generic[RunnerInputsT, RunnerOutputsT, RunnerLaunchContextT],
 ):
     """
     Base class for model runners with model-specific input and output types.
     """
+
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+    ):
+        self.model_name = model_name
+        self.state = state
 
     @staticmethod
     def get_model_and_image(settings: PilatesConfig, model_type: str):

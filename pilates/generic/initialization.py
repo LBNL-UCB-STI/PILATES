@@ -1,10 +1,9 @@
-from typing import Optional, Iterator, Tuple, Dict, Any
+from typing import Optional, Iterator, Tuple, Dict, Any, TYPE_CHECKING
 
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.config import PilatesConfig
-from pilates.generic.model import Model
 from pilates.generic.records import RecordStore, sanitize_artifact_key
 from pilates.urbansim.preprocessor import (
     UrbansimPreprocessor,
@@ -17,6 +16,9 @@ from pilates.workflows._profile import ensure_runtime_flags_initialized
 
 import os
 import logging
+
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -277,13 +279,21 @@ def _accumulate_copy_result(
     return True
 
 
-class Initialization(Model):
+class Initialization:
     """
     A dedicated class to handle the initialization of mutable data and
     record creation. This class consolidates input data copying for
     all models into one single initialization job. It does not conform to the
     GenericPreprocessor interface.
     """
+
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+    ):
+        self.model_name = model_name
+        self.state = state
 
     def run(self, settings: PilatesConfig, workspace: Workspace) -> RecordStore:
         """

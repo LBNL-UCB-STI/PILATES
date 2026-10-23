@@ -33,8 +33,8 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.steps import urbansim_atlas
-from pilates.workflows.steps.urbansim_atlas import URBANSIM_POSTPROCESS, URBANSIM_RUN
+from pilates.workflows.steps import urbansim
+from pilates.workflows.steps.urbansim import URBANSIM_POSTPROCESS, URBANSIM_RUN
 
 
 _EXAMPLE_INPUT_CONTRACT = InputContract(
@@ -399,7 +399,7 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         required_roles=(USIM_DATASTORE_H5,),
         source_by_role={USIM_DATASTORE_H5: "coupler"},
         metadata={
-            "urbansim_launch_context": urbansim_atlas.UrbanSimLaunchContext(
+            "urbansim_launch_context": urbansim.UrbanSimLaunchContext(
                 mutable_data_dir=forecast_h5.parent,
                 output_datastore=forecast_h5,
             )
@@ -599,7 +599,7 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
         def postprocess(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-    monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
+    monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
     monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
     monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")

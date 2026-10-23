@@ -76,7 +76,6 @@ def _make_settings(
             chunk_size=1000,
             num_processes=4,
             file_format="parquet",
-            warm_start_activities=False,
             replan_iters=0,
             replan_hh_samp_size=0,
             replan_after="non_mandatory_tour_scheduling",
