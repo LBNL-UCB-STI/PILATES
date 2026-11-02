@@ -12,12 +12,14 @@ import json
 import logging
 import os
 from pathlib import Path
-import struct
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
-import numpy as np
-
-from consist.core.admission import admission_file_identity
+from consist.admission import admission_file_identity
+from consist.digest import (
+    FLOAT32_MATRICES_V1_POLICY,
+    compute_omx_logical_matrices_sha256 as _consist_compute_omx_logical_matrices_sha256,
+    normalize_logical_matrices_identity as _consist_normalize_logical_matrices_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,77 +39,15 @@ def normalize_logical_matrices_identity(raw_val: str | None) -> str | None:
     if raw_val is None:
         return None
     val = raw_val.strip()
-    if val.startswith("sha256:logical_matrices:"):
-        digest = val.removeprefix("sha256:logical_matrices:")
-    elif val.startswith("sha256:"):
-        digest = val.removeprefix("sha256:")
-    else:
-        digest = val
-    if len(digest) == 64 and all(c in "0123456789abcdefABCDEF" for c in digest):
-        return f"sha256:logical_matrices:{digest.lower()}"
-    return val
-
-
-def canonicalize_float32_array(arr: np.ndarray) -> bytes:
-    """Return little-endian float32 bytes with canonical IEEE-754 bit patterns.
-
-    Canonical bit rules matching BEAM SkimsProvenanceMetadata:
-    - Any NaN (quiet or signaling, +/-) -> canonical quiet NaN 0x7fc00000
-    - Negative zero (-0.0f) and positive zero (+0.0f) -> +0.0f (0x00000000)
-    - Stored in C-contiguous row-major little-endian order.
-    """
-    f32 = np.ascontiguousarray(arr, dtype="<f4")
-    u32 = f32.view("<u4").copy()
-    u32[f32 == 0.0] = 0
-    u32[np.isnan(f32)] = 0x7FC00000
-    return u32.tobytes()
-
-
-def _update_string(hasher: Any, s: str) -> None:
-    """Update hasher with length-prefixed UTF-8 string matching BEAM SkimsProvenanceMetadata."""
-    raw = s.encode("utf-8")
-    hasher.update(struct.pack("<I", len(raw)))
-    hasher.update(raw)
-
-
-def compute_logical_matrices_sha256(
-    zone_numbers: Sequence[int] | np.ndarray,
-    sorted_matrices: Sequence[tuple[str, np.ndarray]],
-) -> str:
-    """Compute the canonical logical matrices SHA-256 digest over skim arrays.
-
-    Matches BEAM's ``SkimsProvenanceMetadata.computeLogicalMatricesSha256``:
-    1. Zone coordinate lookup (name 'lookup/zone_number', dtype '<i4', shape '(N,)', little-endian signed int32)
-    2. Matrices sorted lexicographically by name:
-       For each matrix:
-         - updateString(matrixName)
-         - updateString('<f4')
-         - updateString(f"({rows},{cols})")
-         - canonical float32 bytes (NaNs -> 0x7fc00000, -0.0f -> 0.0f)
-
-    Returns
-    -------
-    str
-        64-character lowercase hexadecimal digest.
-    """
-    hasher = hashlib.sha256()
-
-    zone_arr = np.ascontiguousarray(zone_numbers, dtype="<i4")
-    n_zones = len(zone_arr)
-
-    _update_string(hasher, "lookup/zone_number")
-    _update_string(hasher, "<i4")
-    _update_string(hasher, f"({n_zones},)")
-    hasher.update(zone_arr.tobytes())
-
-    for matrix_name, matrix_arr in sorted_matrices:
-        _update_string(hasher, matrix_name)
-        _update_string(hasher, "<f4")
-        shape_str = f"({matrix_arr.shape[0]},{matrix_arr.shape[1]})"
-        _update_string(hasher, shape_str)
-        hasher.update(canonicalize_float32_array(matrix_arr))
-
-    return hasher.hexdigest()
+    candidate = (
+        val.removeprefix("sha256:")
+        if val.startswith("sha256:") and not val.startswith("sha256:logical_matrices:")
+        else val
+    )
+    try:
+        return _consist_normalize_logical_matrices_identity(candidate)
+    except ValueError:
+        return val
 
 
 def compute_omx_logical_matrices_sha256(
@@ -117,58 +57,10 @@ def compute_omx_logical_matrices_sha256(
 
     Can be called with either a file path or an open h5py.File handle.
     """
-    import h5py
-
-    if isinstance(omx_path_or_handle, (str, Path)):
-        with h5py.File(omx_path_or_handle, "r") as h5f:
-            return _compute_omx_logical_matrices_sha256_from_h5(h5f)
-    return _compute_omx_logical_matrices_sha256_from_h5(omx_path_or_handle)
-
-
-def _compute_omx_logical_matrices_sha256_from_h5(h5f: Any) -> str:
-    data_group = h5f.get("data") or h5f.get("DATA")
-    if data_group is None or not hasattr(data_group, "keys"):
-        raise ValueError("OMX file does not contain a /data group.")
-
-    matrix_names = sorted(str(k) for k in data_group.keys())
-    if not matrix_names:
-        raise ValueError("OMX file /data group contains no matrices.")
-
-    first_ds = data_group[matrix_names[0]]
-    zone_count = int(first_ds.shape[0])
-
-    zone_vector: np.ndarray | None = None
-    lookup_group = h5f.get("lookup") or h5f.get("LOOKUP")
-    if lookup_group is not None and hasattr(lookup_group, "keys"):
-        for lkey in ("zone_number", "TAZ", "zone_id"):
-            if lkey in lookup_group:
-                zone_vector = np.asarray(lookup_group[lkey][...])
-                break
-        if zone_vector is None:
-            for lkey in sorted(lookup_group.keys()):
-                zone_vector = np.asarray(lookup_group[lkey][...])
-                break
-
-    if zone_vector is None and "original_zone_ids" in h5f.attrs:
-        raw_zones = h5f.attrs["original_zone_ids"]
-        if hasattr(raw_zones, "tolist"):
-            zone_vector = np.asarray(raw_zones.tolist())
-        elif isinstance(raw_zones, (list, tuple)):
-            zone_vector = np.asarray(raw_zones)
-
-    if zone_vector is None:
-        zone_vector = np.arange(1, zone_count + 1, dtype=np.int32)
-    else:
-        try:
-            zone_vector = zone_vector.astype(np.int32)
-        except (ValueError, TypeError):
-            zone_vector = np.arange(1, zone_count + 1, dtype=np.int32)
-
-    sorted_matrices = [
-        (name, np.asarray(data_group[name][...], dtype=np.float32))
-        for name in matrix_names
-    ]
-    return compute_logical_matrices_sha256(zone_vector, sorted_matrices)
+    return _consist_compute_omx_logical_matrices_sha256(
+        omx_path_or_handle,
+        policy=FLOAT32_MATRICES_V1_POLICY,
+    )
 
 
 def _decode_attr_value(val: Any) -> Any:

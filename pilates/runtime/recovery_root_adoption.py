@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from consist.digest import file_sha256
 from pilates.runtime.archive_paths import archive_roots
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
@@ -44,14 +44,6 @@ def record_archive_copy(
         _last_copied_details[dest] = (key, src, dest, is_dir, signature)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _phase2_recovery_root_family(key: str) -> Optional[str]:
     family = canonical_artifact_key_from_raw_key(key)
     if family.startswith("usim_input_archive_"):
@@ -71,7 +63,7 @@ def _content_hash_for_recovery_copy(artifact: Any, dest: str) -> str:
         artifact_hash = getattr(artifact, "hash", None)
         if artifact_hash:
             return str(artifact_hash)
-    return _sha256_file(Path(dest))
+    return file_sha256(Path(dest))
 
 
 def adopt_recovery_root_copy(

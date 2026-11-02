@@ -3287,6 +3287,9 @@ class _OuterScenarioStub:
         self._events.append("scenario_exit")
         return False
 
+    def capture_coupler_snapshot(self, **_kwargs):
+        return {}
+
 
 class _OuterAdmissionState:
     def __init__(self, *, data_initialized: bool, run_models: bool) -> None:

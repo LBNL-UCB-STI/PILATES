@@ -24,13 +24,12 @@ class ConsistCapabilityReport:
     def format_error(self) -> str:
         details = ", ".join(self.missing) if self.missing else "unknown"
         return (
-            "PILATES requires a Consist build with semantic run matching and "
+            "PILATES requires consist>=0.4.0 with semantic run matching and "
             "H5 recovery-policy support. Missing capability/capabilities: "
-            f"{details}. Use the Consist feature release that includes "
-            "Tracker.find_matching_run(...), "
+            f"{details}. Install consist>=0.4.0 (or a local editable "
+            "Consist checkout that provides Tracker.find_matching_run(...), "
             "Tracker.register_run_output_recovery_copies(...), and H5 "
-            "container recovery-policy kwargs, or install the local editable "
-            "Consist checkout that provides them."
+            "container recovery-policy kwargs)."
         )
 
 

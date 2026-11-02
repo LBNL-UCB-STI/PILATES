@@ -960,13 +960,15 @@ def test_link_or_copy_static_file_falls_back_on_exdev(
 ) -> None:
     import errno
     import os
-    from pilates.beam.launch_config import _link_or_copy_static_file
+    from pilates.beam.launch_config import build_beam_launch_config
 
-    src_file = tmp_path / "data" / "large_network.dat"
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    _write_base_config(source_root)
+
+    src_file = source_root / "r5" / "network" / "large_network.dat"
     src_file.parent.mkdir(parents=True, exist_ok=True)
     src_file.write_bytes(b"payload_data")
-
-    dst_fallback = tmp_path / "stage_fallback" / "large_network.dat"
 
     # Simulate cross-device link failure on os.link
     def mock_link_fail(src, dst):
@@ -974,10 +976,22 @@ def test_link_or_copy_static_file_falls_back_on_exdev(
 
     monkeypatch.setattr(os, "link", mock_link_fail)
 
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={},
+    )
+
     # When os.link raises EXDEV, it must fall back directly to copy rather than symlink,
     # preventing broken container bind mounts and root-escape validation errors.
-    result = _link_or_copy_static_file(src_file, dst_fallback)
-    assert result == "copy"
+    dst_fallback = launch_config.root / "r5" / "network" / "large_network.dat"
     assert not dst_fallback.is_symlink()
     assert dst_fallback.is_file()
     assert os.stat(dst_fallback).st_ino != os.stat(src_file).st_ino

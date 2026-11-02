@@ -257,8 +257,8 @@ def test_absent_policy_does_not_call_consist(
     from pilates.urbansim import admission
 
     monkeypatch.setattr(
-        admission,
-        "_check_declared_digest",
+        admission.consist.admission,
+        "check_admission_reference_expected_identity",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not check")),
     )
 

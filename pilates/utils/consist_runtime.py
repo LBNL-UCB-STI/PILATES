@@ -195,7 +195,7 @@ def log_h5_container(
     """
     Log an HDF5 container using the Tracker API when available.
 
-    Falls back to log_input/log_output if the Tracker method is unavailable.
+    Falls back to log_input/log_output if no active Tracker is set.
     """
     resolved_enabled = _is_enabled(enabled)
     if key and "schema" not in meta:
@@ -210,7 +210,7 @@ def log_h5_container(
             else log_input(path, key=key, enabled=False, **meta)
         )
     tracker = current_tracker()
-    if tracker is None or not hasattr(tracker, "log_h5_container"):
+    if tracker is None:
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
@@ -231,7 +231,7 @@ def log_h5_table(
     Log a single HDF5 dataset using the Tracker API when available.
 
     Requires table_path for schema profiling. Falls back to log_input/log_output
-    if the Tracker method is unavailable.
+    if no active Tracker is set.
     """
     resolved_enabled = _is_enabled(enabled)
     if key and "schema" not in meta:
@@ -246,7 +246,7 @@ def log_h5_table(
             else log_input(path, key=key, enabled=False, **meta)
         )
     tracker = current_tracker()
-    if tracker is None or not hasattr(tracker, "log_h5_table"):
+    if tracker is None:
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
@@ -375,10 +375,7 @@ def current_run_id() -> Optional[str]:
 
 def set_tracker(tracker: Optional[TrackerLike]) -> None:
     """Set a global tracker for Consist API entrypoints."""
-    if hasattr(consist, "set_current_tracker"):
-        consist.set_current_tracker(tracker)
-    else:
-        consist.use_tracker(tracker).__enter__()
+    consist.set_current_tracker(tracker)
 
 
 def current_tracker() -> Optional[TrackerLike]:

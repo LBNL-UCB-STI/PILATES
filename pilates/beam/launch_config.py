@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-import os
 from pathlib import Path
 import shutil
 from typing import Any, Mapping
@@ -21,7 +20,6 @@ from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
 from pilates.beam.admission import copy_linkstats_provenance_sidecar
 from pilates.beam.config_hocon import (
     beam_config_env_overrides,
-    missing_beam_config_keys,
     resolve_beam_config_value,
 )
 from pilates.workflows.artifact_keys import (
@@ -36,37 +34,6 @@ _BEAM_CONTAINER_OUTPUT_DIR = "/app/output"
 logger = logging.getLogger(__name__)
 
 
-def _link_or_copy_static_file(source: str | Path, dest: str | Path) -> str:
-    """Link static input files into the staged launch tree; copy mutable configs.
-
-    Files with extension ``.conf`` (case-insensitive) are copied to ensure that
-    any in-place modifications to HOCON configuration files never mutate the
-    underlying source repository or shared input tree. All other static files are
-    hardlinked where possible. If cross-device linking fails (e.g. ``EXDEV``
-    across filesystems), it falls back directly to copying rather than symlinking,
-    preventing broken container bind mounts and root-escape validation errors.
-    """
-
-    src = Path(source)
-    dst = Path(dest)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.unlink(missing_ok=True)
-
-    if src.suffix.lower() == ".conf":
-        shutil.copy2(src, dst)
-        return "copy"
-
-    try:
-        os.link(src, dst)
-        return "hardlink"
-    except OSError:
-        pass
-
-    dst.unlink(missing_ok=True)
-    shutil.copy2(src, dst)
-    return "copy"
-
-
 _ARTIFACT_FORMAT_POLICY_KEYS = {
     "activitysim_skims": "beam.router.skim.activity-sim-skimmer.fileOutputFormat",
     "exchange": "beam.exchange.scenario.fileFormat",
@@ -78,6 +45,12 @@ _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY = (
 )
 _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY = (
     "beam.urbansim.backgroundODSkimsCreator.calculationTimeoutHours"
+)
+_POLICY_OVERRIDE_KEYS: tuple[str, ...] = (
+    "beam.inputDirectory",
+    _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
+    _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
+    *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
 )
 
 
@@ -179,12 +152,6 @@ def materialize_beam_launch_config(
         "beam.inputDirectory": str(derived_root),
         **dict(overrides.values),
     }
-    if allow_missing_override_keys:
-        _require_declared_non_policy_overrides(
-            settings=settings,
-            source_primary=primary_config,
-            override_keys=tuple(materialized_values),
-        )
     adapter = BeamConfigAdapter(
         root_dirs=[source_root],
         primary_config=primary_config,
@@ -195,38 +162,21 @@ def materialize_beam_launch_config(
         source_root=source_root,
         identity=identity,
     )
-    orig_copytree = shutil.copytree
-
-    def _hardlink_copytree(
-        src: Any,
-        dst: Any,
-        symlinks: bool = False,
-        ignore: Any = None,
-        copy_function: Any = _link_or_copy_static_file,
-        ignore_dangling_symlinks: bool = False,
-        dirs_exist_ok: bool = True,
-    ) -> Any:
-        return orig_copytree(
-            src,
-            dst,
-            symlinks=symlinks,
-            ignore=ignore,
-            copy_function=_link_or_copy_static_file,
-            ignore_dangling_symlinks=ignore_dangling_symlinks,
-            dirs_exist_ok=dirs_exist_ok,
-        )
-
-    try:
-        shutil.copytree = _hardlink_copytree
-        canonical_config = adapter.materialize(
-            list(source_roots),
-            BeamConfigOverrides(values=materialized_values),
-            output_dir=output_dir,
-            identity=identity,
-            strict=not allow_missing_override_keys,
-        )
-    finally:
-        shutil.copytree = orig_copytree
+    canonical_config = adapter.materialize(
+        list(source_roots),
+        BeamConfigOverrides(
+            values=materialized_values,
+            allow_missing_keys=(
+                _POLICY_OVERRIDE_KEYS
+                if allow_missing_override_keys
+                else ("beam.inputDirectory",)
+            ),
+        ),
+        output_dir=output_dir,
+        identity=identity,
+        strict=True,
+        copy_mode="hardlink_or_copy",
+    )
 
     derived_primary_config = derived_root / settings.beam.config
     if canonical_config.primary_config != derived_primary_config:
@@ -248,32 +198,6 @@ def materialize_beam_launch_config(
             source, destination, fallback_source_path=staged_input.source
         )
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
-
-
-def _require_declared_non_policy_overrides(
-    *,
-    settings: Any,
-    source_primary: Path,
-    override_keys: tuple[str, ...],
-) -> None:
-    """Preserve strict validation when a legacy format key must be introduced."""
-
-    del settings
-    policy_keys = frozenset(
-        (
-            _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
-            _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
-            *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
-        )
-    )
-    non_policy_keys = tuple(
-        key
-        for key in override_keys
-        if key != "beam.inputDirectory" and key not in policy_keys
-    )
-    missing = missing_beam_config_keys(source_primary, keys=non_policy_keys)
-    if missing:
-        raise KeyError(f"Override key not found: {missing[0]}")
 
 
 def build_beam_launch_config(

@@ -122,44 +122,6 @@ def load_resolved_beam_config_tree(
     return json.loads(hocon_converter.to_json(config))
 
 
-def has_beam_config_key(
-    config_path: Path,
-    *,
-    key: str,
-) -> bool:
-    """Return True if ``key`` is declared in ``config_path`` (or its includes)."""
-
-    config_factory, _, _, non_existent_key = _require_pyhocon()
-    try:
-        config = config_factory.parse_file(str(config_path), resolve=False)
-    except Exception as exc:
-        raise BeamConfigHoconError(
-            f"Failed to parse staged BEAM config {config_path}: {exc}"
-        ) from exc
-    return config.get(key, non_existent_key) is not non_existent_key
-
-
-def missing_beam_config_keys(
-    config_path: Path,
-    *,
-    keys: tuple[str, ...],
-) -> list[str]:
-    """Return any keys from ``keys`` that are not declared in ``config_path``."""
-
-    if not keys:
-        return []
-    config_factory, _, _, non_existent_key = _require_pyhocon()
-    try:
-        config = config_factory.parse_file(str(config_path), resolve=False)
-    except Exception as exc:
-        raise BeamConfigHoconError(
-            f"Failed to parse staged BEAM config {config_path}: {exc}"
-        ) from exc
-    return [
-        key for key in keys if config.get(key, non_existent_key) is non_existent_key
-    ]
-
-
 def resolve_beam_config_value(
     config_path: Path,
     *,

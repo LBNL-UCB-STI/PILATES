@@ -80,7 +80,9 @@ def test_strict_linkstats_admission_writes_report_before_rejecting(
             canonical_json=lambda: '{"outcome":"mismatched"}',
         )
 
-    monkeypatch.setattr(admission.consist, "check_admission_reference", _check)
+    monkeypatch.setattr(
+        admission.consist.admission, "check_admission_reference", _check
+    )
 
     with pytest.raises(admission.BeamInputAdmissionError, match="mismatched"):
         admission.preflight_staged_linkstats_admission(
@@ -114,7 +116,7 @@ def test_warn_linkstats_admission_records_and_continues(
     staged.write_bytes(b"observed")
     tracker = _Tracker(tmp_path)
     monkeypatch.setattr(
-        admission.consist,
+        admission.consist.admission,
         "check_admission_reference",
         lambda *_args, **_kwargs: SimpleNamespace(
             outcome="unverified",
@@ -145,7 +147,7 @@ def test_linkstats_admission_merges_existing_child_run_reports(
     tracker = _Tracker(tmp_path)
     metadata_logger = _Tracker(tmp_path)
     monkeypatch.setattr(
-        admission.consist,
+        admission.consist.admission,
         "check_admission_reference",
         lambda *_args, **_kwargs: SimpleNamespace(
             outcome="verified",
@@ -176,7 +178,7 @@ def test_linkstats_admission_is_disabled_without_an_expectation(
     staged = tmp_path / "warmstart.csv.gz"
     staged.write_bytes(b"observed")
     monkeypatch.setattr(
-        admission.consist,
+        admission.consist.admission,
         "check_admission_reference",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not check")),
     )
@@ -201,7 +203,7 @@ def test_linkstats_admission_reports_are_isolated_by_run_directory(
     staged = tmp_path / "warmstart.csv.gz"
     staged.write_bytes(b"observed")
     monkeypatch.setattr(
-        admission.consist,
+        admission.consist.admission,
         "check_admission_reference",
         lambda *_args, **_kwargs: SimpleNamespace(
             outcome="verified",

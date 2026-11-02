@@ -66,7 +66,7 @@ def _check_declared_logical_matrices_expectation(
     *,
     execution_path: Path,
     expectation: DeclaredDigestExpectation,
-) -> tuple[consist.AdmissionReport, dict[str, Any] | None]:
+) -> tuple[consist.admission.AdmissionReport, dict[str, Any] | None]:
     """Evaluate a DeclaredDigestExpectation using semantic logical matrices identity."""
     try:
         physical_target_path = str(execution_path.resolve())
@@ -74,7 +74,7 @@ def _check_declared_logical_matrices_expectation(
         physical_target_path = str(execution_path)
 
     if not execution_path.is_file():
-        report = consist.AdmissionReport(
+        report = consist.admission.AdmissionReport(
             outcome="unreadable",
             input_role=_ASIM_INITIAL_SKIMS_ROLE,
             artifact_key=None,
@@ -104,7 +104,7 @@ def _check_declared_logical_matrices_expectation(
             observed_hex = compute_omx_logical_matrices_sha256(execution_path)
             observed_logical_identity = f"sha256:logical_matrices:{observed_hex}"
         except Exception as exc:
-            report = consist.AdmissionReport(
+            report = consist.admission.AdmissionReport(
                 outcome="unreadable",
                 input_role=_ASIM_INITIAL_SKIMS_ROLE,
                 artifact_key=None,
@@ -137,7 +137,7 @@ def _check_declared_logical_matrices_expectation(
             f"does not match declared expectation {expectation.identity}."
         )
 
-    report = consist.AdmissionReport(
+    report = consist.admission.AdmissionReport(
         outcome=outcome,
         input_role=_ASIM_INITIAL_SKIMS_ROLE,
         artifact_key=None,
@@ -238,22 +238,22 @@ def _check_declared_digest_expectation(
     *,
     execution_path: Path,
     expectation: DeclaredDigestExpectation,
-) -> tuple[consist.AdmissionReport, dict[str, Any] | None]:
+) -> tuple[consist.admission.AdmissionReport, dict[str, Any] | None]:
     """Evaluate a DeclaredDigestExpectation and optional provenance sidecar."""
     if expectation.identity.startswith("sha256:logical_matrices:"):
         return _check_declared_logical_matrices_expectation(
             execution_path=execution_path,
             expectation=expectation,
         )
-    reference = consist.AdmissionReference(
+    reference = consist.admission.AdmissionReference(
         artifact_key=None,
         input_role=_ASIM_INITIAL_SKIMS_ROLE,
         execution_path=execution_path,
     )
-    report = consist.check_admission_reference_expected_identity(
+    report = consist.admission.check_admission_reference_expected_identity(
         reference=reference,
-        expectation=consist.DeclaredDigestExpectation(
-            identity=consist.FileIdentity.parse(expectation.identity),
+        expectation=consist.admission.DeclaredDigestExpectation(
+            identity=consist.admission.FileIdentity.parse(expectation.identity),
             source_label=expectation.source_label,
             source_uri=expectation.source_uri,
         ),
@@ -357,7 +357,7 @@ def preflight_activitysim_initial_skims_admission(
     report_dir: Path,
     existing_admission_reports: Mapping[str, object] | None = None,
     explicit_skims_path: Path | None = None,
-) -> consist.AdmissionReport | None:
+) -> consist.admission.AdmissionReport | None:
     """Check initial ActivitySim OMX skims against configured admission policy."""
     policy = _initial_skims_admission_config(settings)
     if policy is None:
@@ -377,7 +377,7 @@ def preflight_activitysim_initial_skims_admission(
             expectation=expectation,
         )
     elif isinstance(expectation, PriorRunExpectation):
-        consist_exp = consist.PriorRunExpectation(
+        consist_exp = consist.admission.PriorRunExpectation(
             expected_run_id=expectation.expected_run_id,
             artifact_key=expectation.artifact_key,
             expected_direction=expectation.direction or "any",
@@ -385,12 +385,12 @@ def preflight_activitysim_initial_skims_admission(
             expected_bytes_path=expectation.expected_bytes_path,
             input_role=_ASIM_INITIAL_SKIMS_ROLE,
         )
-        reference = consist.AdmissionReference(
+        reference = consist.admission.AdmissionReference(
             artifact_key=expectation.artifact_key,
             input_role=_ASIM_INITIAL_SKIMS_ROLE,
             execution_path=execution_path,
         )
-        report = consist.check_admission_reference_prior_run_expectation(
+        report = consist.admission.check_admission_reference_prior_run_expectation(
             tracker=tracker,
             reference=reference,
             expectation=consist_exp,
@@ -444,7 +444,7 @@ def _persist_admission_report(
     *,
     report_dir: Path,
     metadata_logger: AdmissionMetadataLogger | None,
-    report: consist.AdmissionReport,
+    report: consist.admission.AdmissionReport,
     skim_inspection: Mapping[str, Any] | None,
     sidecar_provenance: Mapping[str, Any] | None,
     existing_admission_reports: Mapping[str, object] | None,
