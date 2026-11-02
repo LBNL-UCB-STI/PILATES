@@ -679,17 +679,7 @@ def _artifact_family(artifact: Any, *, model: str) -> Optional[str]:
 def _resolve_grouped_hybrid_creator(tracker: Any) -> Optional[Any]:
     view_factory = getattr(tracker, "view_factory", None)
     creator = getattr(view_factory, "create_grouped_hybrid_view", None)
-    if callable(creator):
-        return creator
-    try:
-        from consist.core.views import ViewFactory
-    except Exception:
-        return None
-    try:
-        fallback = getattr(ViewFactory(tracker), "create_grouped_hybrid_view", None)
-    except Exception:
-        return None
-    return fallback if callable(fallback) else None
+    return creator if callable(creator) else None
 
 
 def _build_artifact_predicates(tracker: Any, params: list[str]) -> list[dict[str, Any]]:

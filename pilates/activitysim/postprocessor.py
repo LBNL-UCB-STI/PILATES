@@ -1,9 +1,9 @@
-import hashlib
 import logging
 import re
 import shutil
 from pathlib import Path
 
+from consist.digest import file_sha256
 import pandas as pd
 import zipfile
 import os
@@ -115,14 +115,6 @@ def _write_household_table(table: pd.DataFrame, path: Path) -> None:
     )
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _household_index(table: pd.DataFrame, *, path: Path) -> pd.DataFrame:
     """Normalize a household table to a unique integer household_id index."""
 
@@ -197,7 +189,7 @@ def restore_atlas_household_cars(
 
     output_households["cars"] = cars.astype("int64").reindex(output_households.index)
     _write_household_table(output_households, households_output_path)
-    digest = _sha256_file(households_output_path)
+    digest = file_sha256(households_output_path)
     logger.info(
         "Restored ATLAS-authoritative cars into ActivitySim households output: "
         "output=%s input=%s households=%s",

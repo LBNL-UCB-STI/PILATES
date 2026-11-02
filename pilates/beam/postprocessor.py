@@ -2592,7 +2592,12 @@ def verify_skim_zone_order(
                 mapping_items = sorted(
                     f.mapping("TAZ").items(), key=lambda item: item[1]
                 )
-                skim_order = [str(item[0]) for item in mapping_items]
+                skim_order = [
+                    item[0].decode("utf-8")
+                    if isinstance(item[0], (bytes, bytearray))
+                    else str(item[0])
+                    for item in mapping_items
+                ]
                 logger.info(f"Extracted {len(skim_order)} zone IDs from OMX mapping.")
             else:
                 raise ValueError("OMX file does not contain 'TAZ' mapping.")

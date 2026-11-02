@@ -135,21 +135,18 @@ def _run_status(run: Any) -> str:
 
 
 def _collect_runs(tracker: Any, *, limit: int = 200000) -> list[Any]:
-    if hasattr(tracker, "run_set"):
+    run_set = getattr(tracker, "run_set", None)
+    if callable(run_set):
         try:
-            return list(tracker.run_set(label="run-index", limit=limit))
-        except TypeError:
-            try:
-                return list(tracker.run_set("run-index", limit=limit))
-            except Exception:
-                pass
+            return list(run_set(label="run-index", limit=limit))
         except Exception:
             pass
 
     queries = getattr(tracker, "queries", None)
-    if queries is not None and hasattr(queries, "find_runs"):
+    find_runs = getattr(queries, "find_runs", None)
+    if callable(find_runs):
         try:
-            return list(queries.find_runs(limit=limit))
+            return list(find_runs(limit=limit))
         except Exception:
             return []
     return []

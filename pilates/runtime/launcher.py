@@ -960,8 +960,7 @@ def main(
                 coupler=coupler,
             )
             if not is_restart_run:
-                if callable(getattr(tagged_scenario, "capture_coupler_snapshot", None)):
-                    tagged_scenario.capture_coupler_snapshot(phase="init")
+                tagged_scenario.capture_coupler_snapshot(phase="init")
             else:
                 restart_runtime.restore_restart_coupler_snapshot(
                     scenario=tagged_scenario,

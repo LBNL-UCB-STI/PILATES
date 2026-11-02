@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
-import hashlib
 import json
 import logging
 import os
@@ -13,6 +12,8 @@ from pathlib import Path
 import shutil
 import tempfile
 from typing import Any, Iterable, Optional, Sequence
+
+from consist.digest import file_sha256
 
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.failure_hints import log_consist_cli_instructions
@@ -493,14 +494,6 @@ def _artifact_relative_path(tracker: Any, artifact: Any) -> Optional[Path]:
     return Path(relative)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _run_output_content_hashes(
     tracker: Any,
     *,
@@ -516,7 +509,7 @@ def _run_output_content_hashes(
         source_path = source_run_dir / relative_path
         if not source_path.is_file():
             continue
-        content_hashes[str(key)] = _sha256_file(source_path)
+        content_hashes[str(key)] = file_sha256(source_path)
     return content_hashes
 
 

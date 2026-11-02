@@ -506,32 +506,16 @@ def restore_restart_coupler_snapshot(
             if baseline_coupler is not None and coupler_obj is not None:
                 coupler_obj.clear()
                 coupler_obj.update(baseline_coupler)
-            try:
-                restored = scenario.restore_coupler_snapshot(
-                    phase="post",
-                    scenario_run_id=sid,
-                    clear_existing=False,
-                    fallback_to_completed_outputs=True,
-                    target_root=target_root,
-                    source_root=source_root,
-                    remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
-                    prune_unrecoverable=True,
-                )
-            except TypeError:
-                try:
-                    restored = scenario.restore_coupler_snapshot(
-                        phase="post",
-                        scenario_run_id=sid,
-                        clear_existing=False,
-                        fallback_to_completed_outputs=True,
-                    )
-                except (TypeError, AttributeError):
-                    try:
-                        restored = scenario.restore_coupler_snapshot(phase="post")
-                    except AttributeError:
-                        restored = {}
-            except AttributeError:
-                restored = {}
+            restored = scenario.restore_coupler_snapshot(
+                phase="post",
+                scenario_run_id=sid,
+                clear_existing=False,
+                fallback_to_completed_outputs=True,
+                target_root=target_root,
+                source_root=source_root,
+                remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
+                prune_unrecoverable=True,
+            )
             if restored:
                 break
             pruned_for_sid = (
@@ -547,21 +531,13 @@ def restore_restart_coupler_snapshot(
                 for pruned_key in getattr(restored, "pruned_keys", ()):
                     coupler_obj.pop(pruned_key, None)
     else:
-        try:
-            restored = scenario.restore_coupler_snapshot(
-                phase="post",
-                target_root=target_root,
-                source_root=source_root,
-                remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
-                prune_unrecoverable=True,
-            )
-        except TypeError:
-            try:
-                restored = scenario.restore_coupler_snapshot(phase="post")
-            except AttributeError:
-                restored = {}
-        except AttributeError:
-            restored = {}
+        restored = scenario.restore_coupler_snapshot(
+            phase="post",
+            target_root=target_root,
+            source_root=source_root,
+            remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
+            prune_unrecoverable=True,
+        )
 
     logger.info(
         "Restored restart coupler snapshot with %d artifacts: %s",

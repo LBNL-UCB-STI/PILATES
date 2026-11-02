@@ -114,14 +114,14 @@ def has_staged_linkstats_admission_policy(*, settings: PilatesConfig) -> bool:
 
 def _check_declared_digest_linkstats_expectation(
     *,
-    runtime_reference: consist.AdmissionReference,
+    runtime_reference: consist.admission.AdmissionReference,
     expectation: DeclaredDigestExpectation,
-) -> tuple[consist.AdmissionReport, dict[str, object] | None]:
+) -> tuple[consist.admission.AdmissionReport, dict[str, object] | None]:
     """Evaluate a DeclaredDigestExpectation and optional provenance sidecar."""
-    report = consist.check_admission_reference_expected_identity(
+    report = consist.admission.check_admission_reference_expected_identity(
         reference=runtime_reference,
-        expectation=consist.DeclaredDigestExpectation(
-            identity=consist.FileIdentity.parse(expectation.identity),
+        expectation=consist.admission.DeclaredDigestExpectation(
+            identity=consist.admission.FileIdentity.parse(expectation.identity),
             source_label=expectation.source_label,
             source_uri=expectation.source_uri,
         ),
@@ -190,7 +190,7 @@ def preflight_staged_linkstats_admission(
     settings: PilatesConfig,
     launch_reference: BeamLaunchPathReference,
     report_dir: Path,
-) -> consist.AdmissionReport | None:
+) -> consist.admission.AdmissionReport | None:
     """Check staged linkstats against an explicit baseline when configured.
 
     An absent expectation is deliberately a no-op: it preserves ordinary BEAM
@@ -204,7 +204,7 @@ def preflight_staged_linkstats_admission(
     sidecar_payload: dict[str, object] | None = None
 
     if isinstance(expectation, DeclaredDigestExpectation):
-        runtime_reference = consist.AdmissionReference(
+        runtime_reference = consist.admission.AdmissionReference(
             artifact_key=None,
             input_role=_LINKSTATS_ROLE,
             config_key=launch_reference.config_key,
@@ -220,7 +220,7 @@ def preflight_staged_linkstats_admission(
             expectation=expectation,
         )
     elif isinstance(expectation, PriorRunExpectation):
-        runtime_reference = consist.AdmissionReference(
+        runtime_reference = consist.admission.AdmissionReference(
             artifact_key=str(expectation.artifact_key),
             input_role=_LINKSTATS_ROLE,
             config_key=launch_reference.config_key,
@@ -234,10 +234,10 @@ def preflight_staged_linkstats_admission(
         source_tracker_db = expectation.source_tracker_db
         expected_direction = expectation.expected_direction
         if source_tracker_db is not None or expected_direction != "any":
-            report = consist.check_admission_reference_prior_run_expectation(
+            report = consist.admission.check_admission_reference_prior_run_expectation(
                 tracker=tracker,
                 reference=runtime_reference,
-                expectation=consist.PriorRunExpectation(
+                expectation=consist.admission.PriorRunExpectation(
                     expected_run_id=str(expectation.expected_run_id),
                     artifact_key=str(expectation.artifact_key),
                     expected_direction=expected_direction,
@@ -247,7 +247,7 @@ def preflight_staged_linkstats_admission(
                 ),
             )
         else:
-            report = consist.check_admission_reference(
+            report = consist.admission.check_admission_reference(
                 tracker,
                 reference=runtime_reference,
                 expected_run_id=str(expectation.expected_run_id),
@@ -303,7 +303,7 @@ def _persist_admission_report(
     report_dir: Path,
     metadata_logger: AdmissionMetadataTracker,
     existing_admission_reports: Mapping[str, object],
-    report: consist.AdmissionReport,
+    report: consist.admission.AdmissionReport,
     sidecar_provenance: Mapping[str, object] | None = None,
 ) -> None:
     """Write deterministic sidecar and run metadata before policy can reject."""
