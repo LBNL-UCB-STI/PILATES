@@ -13,7 +13,6 @@ import pandas as pd
 import requests
 import geopandas as gpd
 from shapely import wkt
-from tqdm import tqdm
 import matplotlib.pyplot as plt
 import yaml
 
@@ -3623,9 +3622,7 @@ def _update_jobs_table(
         )
         blocks_gdf = blocks_gdf.to_crs(local_crs)
 
-        for block_id in tqdm(
-            blocks_to_reassign, desc="Redistributing jobs from blocks:"
-        ):
+        for block_id in blocks_to_reassign:
             candidate_mask = (blocks_gdf.index.values != block_id) & (
                 blocks_gdf["square_meters_land"] > 0
             )

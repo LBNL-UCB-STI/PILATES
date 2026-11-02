@@ -15,7 +15,6 @@ import pandas as pd
 import logging
 import requests
 from shapely.geometry import Polygon
-from tqdm import tqdm
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -217,11 +216,7 @@ def get_block_geoms(
         logger.info("Downloading {} geoms from Census TIGERweb API!".format(zone_type))
 
         # get block geoms from census tigerweb API
-        for county in tqdm(
-            county_codes,
-            total=len(county_codes),
-            desc="Getting block geoms for {0} counties".format(len(county_codes)),
-        ):
+        for county in county_codes:
             county_gdf = get_county_block_geoms(state_fips, county, "block")
             all_block_geoms.append(county_gdf)
 
