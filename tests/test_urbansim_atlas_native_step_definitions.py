@@ -1341,7 +1341,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
                 trusted,
                 key=USIM_DATASTORE_H5,
                 direction="input",
-                content_hash=trusted.hash,
+                content_hash="f" * 64,
                 force_hash_override=True,
             )
 
