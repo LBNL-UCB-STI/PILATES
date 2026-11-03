@@ -23,7 +23,6 @@ from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
 from pilates.workflows.coupler_namespace import coupler_storage_value
 from consist import Artifact, RunResult, Tracker
-from consist.api import archive_run_output_files
 from consist.protocols import ArtifactRecordLike
 from pilates.workflows.steps import (
     beam_full_skim,
@@ -121,28 +120,20 @@ def _archive_beam_run_outputs_native(
     outputs: Mapping[str, Any],
 ) -> None:
     """Archive beam step output files and directory artifacts to recovery_root."""
-    from pilates.runtime.run_output_archive import _snapshot_directory_artifact
-
-    file_keys: list[str] = []
-    dir_keys: list[str] = []
+    selected_keys: list[str] = []
     for key, artifact in outputs.items():
         if isinstance(artifact, (Artifact, ArtifactRecordLike)):
             if artifact.driver == "artifact_set":
                 continue
-            if (
-                isinstance(artifact.meta, dict)
-                and artifact.meta.get("directory_artifact") is True
-            ):
-                dir_keys.append(key)
-                continue
-            file_keys.append(key)
+            selected_keys.append(key)
 
+    resolved_recovery_root = recovery_root.resolve()
     if isinstance(tracker, Tracker):
         persisted_outputs = tracker.get_run_outputs(run_id)
         ws_mount = tracker.mounts.get("workspace")
         if ws_mount:
             ws_path = Path(ws_mount).resolve()
-            for key in [*file_keys, *dir_keys]:
+            for key in selected_keys:
                 artifact = persisted_outputs.get(key) or outputs.get(key)
                 if isinstance(artifact, Artifact):
                     tracker.set_artifact_recovery_roots(
@@ -155,55 +146,65 @@ def _archive_beam_run_outputs_native(
                         and isinstance(artifact.meta, dict)
                     ):
                         existing_artifact.meta.update(artifact.meta)
-        resolved_recovery_root = recovery_root.resolve()
-        for key in dir_keys:
-            artifact = persisted_outputs.get(key) or outputs.get(key)
-            if isinstance(artifact, Artifact):
-                _snapshot_directory_artifact(
-                    tracker=tracker,
-                    artifact=artifact,
-                    recovery_root=resolved_recovery_root,
-                )
-                existing_artifact = outputs.get(key)
-                if (
-                    isinstance(existing_artifact, Artifact)
-                    and isinstance(existing_artifact.meta, dict)
-                    and isinstance(artifact.meta, dict)
-                ):
-                    existing_artifact.meta.update(artifact.meta)
 
-    if file_keys or not dir_keys:
-        report = archive_run_output_files(
-            run_id=run_id,
-            recovery_root=recovery_root,
-            tracker=tracker,
-            keys=file_keys if file_keys else None,
-            preserve_existing=True,
-            verify=True,
+    try:
+        archived = tracker.archive_run_outputs(
+            run_id,
+            resolved_recovery_root,
+            keys=selected_keys if selected_keys else None,
+            mode="copy",
             append=True,
         )
-        if not report.complete:
-            failures = [
-                f"{key}: copy={f.copy_status}, verify={f.verification_status}, msg={f.message}"
-                for key, f in report.items()
-                if not (
-                    f.metadata_committed
-                    and f.verification_status in {"verified", "not_requested"}
-                )
-            ]
-            raise RuntimeError(
-                "Archiving beam_run outputs failed verification or copy: "
-                + "; ".join(failures)
-            )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Archiving beam_run outputs failed verification or copy: {exc}"
+        ) from exc
 
-        for key, archived_file in report.items():
-            existing_artifact = outputs.get(key)
-            if (
-                isinstance(existing_artifact, Artifact)
-                and isinstance(existing_artifact.meta, dict)
-                and isinstance(archived_file.artifact.meta, dict)
+    archived_outputs = archived.outputs
+    keys_to_verify = (
+        selected_keys
+        if selected_keys
+        else (
+            list(archived_outputs.keys())
+            if isinstance(archived_outputs, Mapping)
+            else []
+        )
+    )
+    failures: list[str] = []
+    for key in keys_to_verify:
+        refreshed = (
+            archived_outputs.get(key) if isinstance(archived_outputs, Mapping) else None
+        )
+        raw_roots = (
+            refreshed.meta.get("recovery_roots")
+            if isinstance(refreshed, (Artifact, ArtifactRecordLike))
+            and isinstance(refreshed.meta, Mapping)
+            else None
+        )
+        normalized_roots = {
+            Path(os.fspath(root)).expanduser().resolve()
+            for root in (raw_roots if isinstance(raw_roots, (list, tuple, set)) else ())
+            if isinstance(root, (str, os.PathLike)) and str(root).strip()
+        }
+        if resolved_recovery_root not in normalized_roots:
+            failures.append(
+                f"{key}: recovery_root {resolved_recovery_root} not committed in artifact.meta['recovery_roots']"
+            )
+            continue
+        existing_artifact = outputs.get(key)
+        if isinstance(existing_artifact, Artifact) and isinstance(refreshed, Artifact):
+            if isinstance(existing_artifact.meta, dict) and isinstance(
+                refreshed.meta, dict
             ):
-                existing_artifact.meta.update(archived_file.artifact.meta)
+                existing_artifact.meta.update(refreshed.meta)
+            if existing_artifact.abs_path is None and refreshed.abs_path is not None:
+                existing_artifact.abs_path = refreshed.abs_path
+
+    if failures:
+        raise RuntimeError(
+            "Archiving beam_run outputs failed verification or copy: "
+            + "; ".join(failures)
+        )
 
 
 def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:

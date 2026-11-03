@@ -224,6 +224,8 @@ def test_activitysim_native_steps_declare_zarr_directly_without_output_set(
     assert Path(zarr_output_paths[ZARR_SKIMS].path) == (
         tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     )
+    assert zarr_output_paths[ZARR_SKIMS].driver == "zarr"
+    assert zarr_output_paths[ZARR_SKIMS].meta == {"directory_artifact": True}
 
 
 def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(

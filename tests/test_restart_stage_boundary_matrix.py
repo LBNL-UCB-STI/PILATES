@@ -208,36 +208,104 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
 
 
 def test_archive_beam_run_outputs_native_enforces_verification(tmp_path: Path):
-    """Archiving beam_run outputs with verify=True raises loudly on verification failure."""
-    from unittest.mock import patch
+    """Archiving beam_run outputs raises loudly when recovery_root verification fails."""
+    from consist import Artifact
 
-    tracker = SimpleNamespace()
-    outputs = {"linkstats": SimpleNamespace(driver="parquet", meta={})}
-
-    failure_item = SimpleNamespace(
-        copy_status="ok",
-        verification_status="corrupted",
-        metadata_committed=False,
-        message="hash mismatch",
+    unverified_artifact = Artifact(
+        key="linkstats",
+        container_uri="workspace://beam/linkstats.csv.gz",
+        driver="csv",
+        meta={},
     )
-    mock_report = SimpleNamespace(
-        complete=False,
-        items=lambda: [("linkstats", failure_item)],
+    tracker = SimpleNamespace(
+        archive_run_outputs=lambda *_args, **_kwargs: SimpleNamespace(
+            paths={},
+            outputs={"linkstats": unverified_artifact},
+        )
     )
+    outputs = {"linkstats": unverified_artifact}
 
-    with patch(
-        "pilates.workflows.stages.supply_demand_beam.archive_run_output_files",
-        return_value=mock_report,
+    with pytest.raises(
+        RuntimeError, match="Archiving beam_run outputs failed verification"
     ):
-        with pytest.raises(
-            RuntimeError, match="Archiving beam_run outputs failed verification"
-        ):
-            beam_stage._archive_beam_run_outputs_native(
-                run_id="run-123",
-                tracker=tracker,
-                recovery_root=tmp_path / "recovery",
-                outputs=outputs,
-            )
+        beam_stage._archive_beam_run_outputs_native(
+            run_id="run-123",
+            tracker=tracker,
+            recovery_root=tmp_path / "recovery",
+            outputs=outputs,
+        )
+
+
+def test_archive_beam_run_outputs_native_handles_nested_scalar_and_enclosing_directory_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Archiving BEAM outputs succeeds when scalar files sit inside directory_artifact trees."""
+    from consist import Tracker
+    from consist.types import OutputArtifactSpec
+
+    workspace_root = tmp_path / "workspace"
+    iter_dir = workspace_root / "beam" / "year-2020-iteration-0" / "ITERS" / "it.0"
+    iter_dir.mkdir(parents=True, exist_ok=True)
+    raw_skim = iter_dir / "0.skimsOD_Aggregated.csv.gz"
+    raw_skim.write_text("origin,destination,travel_time\n1,2,10\n", encoding="utf-8")
+    final_omx = workspace_root / "beam" / "year-2020-iteration-0" / "skims.omx"
+    final_omx.write_bytes(b"omx-bytes")
+    root_dir = workspace_root / "beam" / "year-2020-iteration-0"
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+    )
+
+    def _produce_postprocess() -> None:
+        return None
+
+    run_result = tracker.run(
+        fn=_produce_postprocess,
+        name="beam_postprocess_archive_test",
+        output_paths={
+            "beam_skims_raw": raw_skim,
+            "final_skims_omx": final_omx,
+            "beam_iteration_output_dir": OutputArtifactSpec(
+                path=iter_dir,
+                meta={"directory_artifact": True},
+            ),
+            "beam_output_root_dir": OutputArtifactSpec(
+                path=root_dir,
+                meta={"directory_artifact": True},
+            ),
+        },
+    )
+
+    recovery_root = tmp_path / "recovery" / run_result.run.id
+    beam_stage._archive_beam_run_outputs_native(
+        run_id=run_result.run.id,
+        tracker=tracker,
+        recovery_root=recovery_root,
+        outputs=run_result.outputs,
+    )
+
+    expected_roots = {str(workspace_root.resolve()), str(recovery_root.resolve())}
+    for key, expected_path in (
+        ("beam_skims_raw", raw_skim),
+        ("final_skims_omx", final_omx),
+        ("beam_iteration_output_dir", iter_dir),
+        ("beam_output_root_dir", root_dir),
+    ):
+        art = run_result.outputs[key]
+        assert Path(art.abs_path).resolve() == expected_path.resolve()
+        roots = {str(Path(r).resolve()) for r in (art.meta.get("recovery_roots") or [])}
+        assert expected_roots.issubset(roots)
+    assert (
+        recovery_root
+        / "beam"
+        / "year-2020-iteration-0"
+        / "ITERS"
+        / "it.0"
+        / "0.skimsOD_Aggregated.csv.gz"
+    ).is_file()
+    assert (recovery_root / "beam" / "year-2020-iteration-0" / "skims.omx").is_file()
 
 
 def test_interrupted_postprocess_restart_proceeds_directly_through_step_execution(

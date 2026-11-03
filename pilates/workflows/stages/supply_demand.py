@@ -6,7 +6,6 @@ from typing import Callable, Optional
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import ScenarioWithCoupler
-from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.utils.formatting import formatted_print
 from workflow_state import WorkflowState
 
@@ -110,7 +109,6 @@ def run_supply_demand_stage(
                 inputs=activity_demand_inputs,
                 context=context,
             )
-            flush_archive_queue(timeout=300, fail_on_timeout=False)
             if on_activity_demand_boundary is not None:
                 on_activity_demand_boundary(i)
         elif settings.run.models.activity_demand is not None:
@@ -135,8 +133,6 @@ def run_supply_demand_stage(
                 inputs=traffic_inputs,
                 context=context,
             )
-        # Year/iteration boundary durability checkpoint for restart artifacts.
-        flush_archive_queue(timeout=300, fail_on_timeout=False)
 
         if on_iteration_boundary is not None:
             on_iteration_boundary(i)

@@ -175,9 +175,6 @@ class EnabledWorkflowSurface:
             else self._required_enabled_step_names
         )
 
-    def is_bootstrap_owned_artifact_key(self, key: str) -> bool:
-        return str(key) in self.bootstrap_owned_artifact_keys
-
     def is_restart_prebootstrap_deferred_artifact_key(self, key: str) -> bool:
         return str(key) in self.restart_prebootstrap_deferred_artifact_keys
 

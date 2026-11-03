@@ -1,20 +1,11 @@
 import os
 import logging
-import atexit
-import fnmatch
-import queue
-import shutil
-import threading
-import time
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
-    Dict,
     Mapping,
     Optional,
     TYPE_CHECKING,
-    Union,
 )
 
 from pilates.utils import consist_runtime as cr
@@ -28,39 +19,10 @@ from pilates.workflows.coupler_namespace import (
 )
 from pilates.runtime.archive_paths import (
     archive_roots as _archive_roots,
-    resolve_archive_path as _resolve_archive_path,
     resolve_workspace_uri_path as _resolve_workspace_uri_path,
 )
-from pilates.runtime import recovery_root_adoption
 
 logger = logging.getLogger(__name__)
-
-_ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
-_ARCHIVE_ALLOWED_DIR_PATTERNS = (
-    "urbansim_bootstrap_data_root",
-    "beam_mutable_data_dir",
-    "beam_output_dir",
-    "beam_region_input_dir",
-    "beam_input_config_references_archived",
-    "zarr_skims",
-    "zarr_skims_*",
-    "raw_od_skims_zarr_*",
-    "asim_output_dir",
-    "asim_mutable_data_dir",
-    "activitysim_bootstrap_data_root",
-    "activitysim_bootstrap_configs_root",
-    "atlas_input_year_dir",
-    "atlas_input_year_dir_*",
-)
-_archive_queue: Optional["queue.Queue[Optional[str]]"] = None
-_archive_thread: Optional[threading.Thread] = None
-_archive_lock = threading.Lock()
-_archive_pending_tasks: Dict[
-    str, tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]
-] = {}
-_archive_queued_destinations: set[str] = set()
-_archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
-_archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
 
 
 def _is_noop_artifact(candidate: Any) -> bool:
@@ -70,11 +32,6 @@ def _is_noop_artifact(candidate: Any) -> bool:
     candidate_name = getattr(candidate_type, "__name__", "").lower()
     candidate_module = getattr(candidate_type, "__module__", "").lower()
     return "noopartifact" in candidate_name or ".noop" in candidate_module
-
-
-def _archive_enabled() -> bool:
-    value = os.environ.get(_ARCHIVE_ENABLE_ENV, "")
-    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
@@ -148,303 +105,6 @@ def _materialize_artifact_to_existing_path(
     return None
 
 
-def _archive_dir_allowed(key: str) -> bool:
-    return any(
-        fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS
-    )
-
-
-def _resolve_archive_copy_target(
-    *,
-    key: str,
-    path: Optional[Union[str, os.PathLike]],
-    workspace: Optional["Workspace"] = None,
-) -> Optional[tuple[str, str, bool, Optional[tuple[int, int, bool]]]]:
-    """
-    Resolve and validate an archive copy request.
-
-    Both async enqueueing and synchronous copies use the same target selection
-    and guardrails so path guessing stays centralized.
-    """
-    if path is None:
-        return None
-
-    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
-    if not resolved or "://" in resolved:
-        return None
-    if not os.path.exists(resolved):
-        logger.warning(
-            "[Archive] Output path does not exist: %s (key=%s)", resolved, key
-        )
-        return None
-
-    is_dir = os.path.isdir(resolved)
-    if is_dir and not _archive_dir_allowed(key):
-        logger.warning(
-            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
-            resolved,
-            key,
-        )
-        return None
-
-    roots = _archive_roots()
-    if roots is None:
-        return None
-    local_root, archive_root = roots
-    dest = _resolve_archive_path(resolved, local_root, archive_root)
-    if dest is None or dest == resolved:
-        return None
-    signature = _archive_path_signature(resolved, is_dir)
-    return resolved, dest, is_dir, signature
-
-
-def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int, bool]]:
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return None
-    return (int(stat.st_size), int(stat.st_mtime_ns), bool(is_dir))
-
-
-def _archive_log_method(key: str) -> Callable[..., None]:
-    del key
-    return logger.info
-
-
-def _emit_artifact_lifecycle_event(*_args: Any, **_kwargs: Any) -> None:
-    """Compatibility hook retained after lifecycle audit emission removal."""
-    return None
-
-
-def _register_phase2_recovery_root_copies() -> int:
-    return recovery_root_adoption.adopt_pending_recovery_root_copies(
-        find_artifact=lambda key, path: _find_current_run_output_artifact(
-            key=key,
-            path=path,
-        ),
-        emit_lifecycle_event=_emit_artifact_lifecycle_event,
-    )
-
-
-def _copy_archive_payload(
-    *,
-    key: str,
-    src: str,
-    dest: str,
-    is_dir: bool,
-    signature: Optional[tuple[int, int, bool]],
-) -> None:
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    if is_dir:
-        shutil.copytree(src, dest, dirs_exist_ok=True)
-    else:
-        shutil.copy2(src, dest)
-    if signature is not None:
-        with _archive_lock:
-            if _archive_inflight_signature.get(dest) == signature:
-                _archive_inflight_signature.pop(dest, None)
-            _archive_last_copied_signature[dest] = signature
-    recovery_root_adoption.record_archive_copy(
-        key=key,
-        src=src,
-        dest=dest,
-        is_dir=is_dir,
-        signature=signature,
-    )
-    _archive_log_method(key)("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
-
-
-def _archive_worker() -> None:
-    while True:
-        task = _archive_queue.get() if _archive_queue is not None else None
-        if task is None:
-            if _archive_queue is not None:
-                _archive_queue.task_done()
-            break
-        dest = task
-        with _archive_lock:
-            _archive_queued_destinations.discard(dest)
-            payload = _archive_pending_tasks.pop(dest, None)
-            if payload is not None:
-                signature = payload[-1]
-                if signature is not None:
-                    _archive_inflight_signature[dest] = signature
-        if payload is None:
-            if _archive_queue is not None:
-                _archive_queue.task_done()
-            continue
-        key, src, dest, is_dir, signature = payload
-        try:
-            _copy_archive_payload(
-                key=key,
-                src=src,
-                dest=dest,
-                is_dir=is_dir,
-                signature=signature,
-            )
-        except Exception as exc:
-            if signature is not None:
-                with _archive_lock:
-                    if _archive_inflight_signature.get(dest) == signature:
-                        _archive_inflight_signature.pop(dest, None)
-            logger.warning(
-                "[Archive] Failed to copy %s -> %s (key=%s): %s",
-                src,
-                dest,
-                key,
-                exc,
-            )
-        finally:
-            if _archive_queue is not None:
-                _archive_queue.task_done()
-
-
-def _ensure_archive_worker() -> None:
-    if not _archive_enabled():
-        return
-    with _archive_lock:
-        global _archive_queue, _archive_thread
-        if _archive_queue is None:
-            _archive_queue = queue.Queue()
-        if _archive_thread is None or not _archive_thread.is_alive():
-            _archive_thread = threading.Thread(
-                target=_archive_worker, name="pilates-archiver", daemon=True
-            )
-            _archive_thread.start()
-
-
-def _enqueue_archive_copy(
-    key: str,
-    path: Optional[Union[str, os.PathLike]],
-    workspace: Optional["Workspace"] = None,
-) -> None:
-    if not _archive_enabled():
-        return
-    prepared = _resolve_archive_copy_target(key=key, path=path, workspace=workspace)
-    if prepared is None:
-        return
-    resolved, dest, is_dir, signature = prepared
-    should_queue = False
-    if signature is not None:
-        with _archive_lock:
-            pending_task = _archive_pending_tasks.get(dest)
-            pending_signature = pending_task[-1] if pending_task is not None else None
-            if pending_signature == signature:
-                logger.debug(
-                    "[Archive] Skipping duplicate enqueue (pending): %s (key=%s)",
-                    resolved,
-                    key,
-                )
-                return
-            if _archive_inflight_signature.get(dest) == signature:
-                logger.debug(
-                    "[Archive] Skipping duplicate enqueue (in-flight): %s (key=%s)",
-                    resolved,
-                    key,
-                )
-                return
-            if _archive_last_copied_signature.get(dest) == signature:
-                logger.debug(
-                    "[Archive] Skipping duplicate enqueue (already copied): %s (key=%s)",
-                    resolved,
-                    key,
-                )
-                return
-            _archive_pending_tasks[dest] = (key, resolved, dest, is_dir, signature)
-            if dest not in _archive_queued_destinations:
-                _archive_queued_destinations.add(dest)
-                should_queue = True
-    else:
-        with _archive_lock:
-            _archive_pending_tasks[dest] = (key, resolved, dest, is_dir, signature)
-            if dest not in _archive_queued_destinations:
-                _archive_queued_destinations.add(dest)
-                should_queue = True
-    _ensure_archive_worker()
-    if should_queue and _archive_queue is not None:
-        _archive_log_method(key)(
-            "[Archive] Enqueued %s -> %s (key=%s)", resolved, dest, key
-        )
-        _archive_queue.put(dest)
-    else:
-        logger.debug(
-            "[Archive] Coalesced pending enqueue %s -> %s (key=%s)",
-            resolved,
-            dest,
-            key,
-        )
-
-
-def enqueue_archive_copy(
-    *,
-    key: str,
-    path: Optional[Union[str, os.PathLike]],
-    workspace: Optional["Workspace"] = None,
-) -> None:
-    """
-    Public wrapper to enqueue archive copy work for a file or allowlisted directory.
-
-    Parameters
-    ----------
-    key : str
-        Artifact key associated with ``path``.
-    path : str or PathLike, optional
-        Local or workspace URI path to enqueue.
-    workspace : Workspace, optional
-        Workspace used to resolve ``workspace://`` paths.
-    """
-    _enqueue_archive_copy(key, path, workspace=workspace)
-
-
-def flush_archive_queue(
-    timeout: Optional[float] = None,
-    *,
-    fail_on_timeout: bool = False,
-) -> bool:
-    if _archive_queue is None:
-        _register_phase2_recovery_root_copies()
-        return True
-    pending = _archive_queue.unfinished_tasks
-    logger.info("[Archive] Flushing queue (pending=%s)", pending)
-    if timeout is None:
-        _archive_queue.join()
-        logger.info("[Archive] Flush complete")
-        _register_phase2_recovery_root_copies()
-        return True
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _archive_queue.unfinished_tasks == 0:
-            logger.info("[Archive] Flush complete")
-            _register_phase2_recovery_root_copies()
-            return True
-        time.sleep(0.1)
-    message = f"[Archive] Flush timed out (pending={_archive_queue.unfinished_tasks})"
-    if fail_on_timeout:
-        raise TimeoutError(message)
-    logger.warning(message)
-    return False
-
-
-def stop_archive_worker(timeout: Optional[float] = None) -> None:
-    if _archive_queue is None:
-        return
-    if _archive_thread is None:
-        return
-    logger.info("[Archive] Stopping worker")
-    _archive_queue.put(None)
-    if timeout is None:
-        _archive_thread.join()
-        logger.info("[Archive] Worker stopped")
-        return
-    _archive_thread.join(timeout=timeout)
-    if _archive_thread.is_alive():
-        logger.warning("[Archive] Worker stop timed out")
-    else:
-        logger.info("[Archive] Worker stopped")
-
-
-atexit.register(stop_archive_worker)
-
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
@@ -490,36 +150,6 @@ def artifact_to_path(
         if "://" not in path:
             return os.path.join(workspace.full_path, path)
     return path
-
-
-def _normalize_artifact_path_for_match(path: Optional[str]) -> Optional[str]:
-    if not path:
-        return None
-    resolved = _resolve_workspace_uri_path(path)
-    if not resolved:
-        return None
-    if "://" in resolved:
-        return resolved
-    return os.path.abspath(resolved)
-
-
-def _find_current_run_output_artifact(*, key: str, path: str) -> Optional[Any]:
-    tracker = cr.current_tracker()
-    current_consist = getattr(tracker, "current_consist", None) if tracker else None
-    if current_consist is None:
-        return None
-
-    target_path = _normalize_artifact_path_for_match(path)
-    if target_path is None:
-        return None
-
-    for artifact in list(getattr(current_consist, "outputs", []) or []):
-        if getattr(artifact, "key", None) != key:
-            continue
-        artifact_path = _normalize_artifact_path_for_match(artifact_to_path(artifact))
-        if artifact_path == target_path:
-            return artifact
-    return None
 
 
 def resolve_existing_path(

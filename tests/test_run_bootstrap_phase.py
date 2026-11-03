@@ -442,44 +442,11 @@ def test_bootstrap_executed_probe_does_not_archive_workspace_snapshots(
     assert tracker.archive_calls == []
 
 
-def test_bootstrap_fallback_rerun_does_not_archive_workspace_snapshots(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
-    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
-    archive_root = tmp_path / "archive"
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
-    tracker = ArchiveAwareTracker(
-        responses=[
-            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
-            {
-                "cache_hit": False,
-                "execute_fn": True,
-                "run_id": "bootstrap_fallback",
-            },
-        ]
-    )
-
-    run_module.run_bootstrap_phase(
-        tracker=tracker,
-        settings=_settings(cache_enabled=True),
-        state=_state(),
-        workspace=DummyWorkspace(str(tmp_path / "bootstrap-run")),
-        scenario_id="seattle-baseline",
-        seed=12345,
-    )
-
-    assert tracker.archive_calls == []
-
-
 def test_log_bootstrap_result_summary_includes_cache_miss_fields(caplog):
     bootstrap_result = {
         "bootstrap_cache_hit": True,
         "cache_probe_hit": True,
         "replay_hydration_complete": True,
-        "fallback_rerun_triggered": False,
         "run_reference": {"probe_run_id": "bootstrap_probe"},
         "staged_artifact_summary": {"copied_records_total": 2},
         "cache_miss_explanation": {
@@ -501,7 +468,6 @@ def test_log_bootstrap_result_summary_preserves_injected_logger(caplog):
         "bootstrap_cache_hit": False,
         "cache_probe_hit": False,
         "replay_hydration_complete": False,
-        "fallback_rerun_triggered": False,
         "run_reference": {"probe_run_id": "bootstrap_probe"},
         "staged_artifact_summary": {"copied_records_total": 2},
         "cache_miss_explanation": None,
@@ -516,27 +482,6 @@ def test_log_bootstrap_result_summary_preserves_injected_logger(caplog):
 
     assert "Bootstrap phase complete: cache_hit=False probe_hit=False" in caplog.text
     assert caplog.records[0].name == injected_logger.name
-
-
-def test_find_missing_bootstrap_workspace_artifacts_respects_surface_bootstrap_owned_keys(
-    tmp_path,
-):
-    workspace = DummyWorkspace(str(tmp_path / "bootstrap"))
-    surface = SimpleNamespace(
-        is_bootstrap_owned_artifact_key=lambda key: key.startswith("beam_")
-    )
-
-    missing = bootstrap_runtime._find_missing_bootstrap_workspace_artifacts(
-        settings=_settings(cache_enabled=True),
-        workspace=workspace,
-        surface=surface,
-    )
-
-    assert {item["key"] for item in missing} == {
-        "beam_mutable_data_dir",
-        "beam_region_input_dir",
-        "beam_primary_config_file",
-    }
 
 
 def test_run_bootstrap_phase_propagates_code_identity_to_probe(monkeypatch):
@@ -673,8 +618,6 @@ def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatc
     assert result["bootstrap_cache_hit"] is True
     assert result["cache_probe_hit"] is True
     assert result["replay_hydration_complete"] is True
-    assert result["fallback_rerun"] is False
-    assert result["fallback_rerun_triggered"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 0
     assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
 
@@ -701,18 +644,6 @@ def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
         start_year=2017,
         current_major_stage=WorkflowState.Stage.supply_demand_loop,
     )
-    surface = SimpleNamespace(
-        is_bootstrap_owned_artifact_key=lambda key: (
-            key.startswith("activitysim_config_settings_yaml_")
-            or key
-            in {
-                "beam_mutable_data_dir",
-                "beam_region_input_dir",
-                "beam_primary_config_file",
-                "usim_datastore_base_h5",
-            }
-        )
-    )
 
     result = run_module.run_bootstrap_phase(
         tracker=tracker,
@@ -721,7 +652,6 @@ def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
         workspace=workspace,
         scenario_id="seattle-baseline",
         seed=12345,
-        surface=surface,
     )
 
     assert result["bootstrap_cache_hit"] is True
@@ -736,53 +666,173 @@ def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
     }
     assert all(
         isinstance(output, OutputArtifactSpec)
-        and output.meta == {"directory_artifact": True}
+        and output.meta
+        == {
+            "directory_artifact": True,
+            "directory_allow_extra_files": True,
+        }
         for output in output_paths.values()
     )
 
 
-def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fallback_rerun(
+def test_run_bootstrap_phase_allows_extra_downstream_files_but_reruns_on_seeded_file_mutation(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    from consist.core.tracker import Tracker
+
+    settings = _settings(cache_enabled=True)
+    workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
+    exec_count = 0
+
+    class RealizingInitialization(DummyInitialization):
+        def run(self, _settings, ws):
+            nonlocal exec_count
+            exec_count += 1
+            DummyTracker._realize_output_paths(
+                bootstrap_runtime._bootstrap_output_paths(
+                    settings=settings, workspace=ws
+                )
+            )
+            seeded_asim = Path(ws.get_asim_mutable_data_dir()) / "seeded_land_use.csv"
+            seeded_asim.parent.mkdir(parents=True, exist_ok=True)
+            seeded_asim.write_text("zone_id\n1\n", encoding="utf-8")
+            return super().run(_settings, ws)
+
+    monkeypatch.setattr(run_module, "Initialization", RealizingInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
-    tracker = DummyTracker(
-        responses=[
-            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
-            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_fallback"},
-        ],
-    )
-    workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
-    state = SimpleNamespace(
-        start_year=2017,
-        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+    tracker = Tracker(
+        run_dir=Path(workspace.full_path),
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
     )
 
-    result = run_module.run_bootstrap_phase(
+    cold = run_module.run_bootstrap_phase(
         tracker=tracker,
-        settings=_restart_settings(),
-        state=state,
+        settings=settings,
+        state=_state(),
         workspace=workspace,
         scenario_id="seattle-baseline",
         seed=12345,
     )
+    assert cold["bootstrap_cache_hit"] is False
+    assert exec_count == 1
 
-    assert len(tracker.calls) == 2
-    fallback_options = tracker.calls[1]["cache_options"]
-    assert isinstance(fallback_options, CacheOptions)
-    assert fallback_options.cache_mode == "off"
-    assert result["bootstrap_cache_hit"] is True
-    assert result["cache_probe_hit"] is True
-    assert result["replay_hydration_complete"] is False
-    assert result["fallback_rerun"] is True
-    assert result["fallback_rerun_triggered"] is True
-    assert result["staged_artifact_summary"]["copied_records_total"] == 2
-    assert result["run_reference"] == {
-        "probe_run_id": "bootstrap_probe",
-        "materialization_run_id": "bootstrap_fallback",
-    }
+    downstream_asim = Path(workspace.get_asim_mutable_data_dir()) / "households.csv"
+    downstream_asim.write_text("household_id\n10\n", encoding="utf-8")
+    downstream_beam = (
+        Path(workspace.get_beam_mutable_data_dir()) / "downstream_plans.csv"
+    )
+    downstream_beam.write_text("person_id\n10\n", encoding="utf-8")
+
+    warm_with_extras = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+    assert warm_with_extras["bootstrap_cache_hit"] is True
+    assert exec_count == 1
+
+    seeded_asim = Path(workspace.get_asim_mutable_data_dir()) / "seeded_land_use.csv"
+    seeded_asim.write_text("zone_id\ncorrupted\n", encoding="utf-8")
+
+    recovered_after_modify = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+    assert recovered_after_modify["bootstrap_cache_hit"] is False
+    assert exec_count == 2
+    assert seeded_asim.read_text(encoding="utf-8") == "zone_id\n1\n"
+
+    seeded_asim.unlink()
+    recovered_after_delete = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+    assert recovered_after_delete["bootstrap_cache_hit"] is False
+    assert exec_count == 3
+    assert seeded_asim.read_text(encoding="utf-8") == "zone_id\n1\n"
+
+
+def test_run_bootstrap_phase_native_directory_validation_reruns_when_file_deleted(
+    monkeypatch,
+    tmp_path,
+):
+    from consist.core.tracker import Tracker
+
+    settings = _settings(cache_enabled=True)
+    workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
+    exec_count = 0
+
+    class RealizingInitialization(DummyInitialization):
+        def run(self, _settings, ws):
+            nonlocal exec_count
+            exec_count += 1
+            DummyTracker._realize_output_paths(
+                bootstrap_runtime._bootstrap_output_paths(
+                    settings=settings, workspace=ws
+                )
+            )
+            return super().run(_settings, ws)
+
+    monkeypatch.setattr(run_module, "Initialization", RealizingInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    tracker = Tracker(
+        run_dir=Path(workspace.full_path),
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+
+    cold = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+    assert cold["bootstrap_cache_hit"] is False
+    assert exec_count == 1
+
+    warm = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+    assert warm["bootstrap_cache_hit"] is True
+    assert exec_count == 1
+
+    beam_config = Path(workspace.get_beam_mutable_data_dir()) / "test" / "beam.conf"
+    beam_config.unlink()
+    assert not beam_config.exists()
+
+    recovered = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+    assert recovered["bootstrap_cache_hit"] is False
+    assert exec_count == 2
+    assert beam_config.exists()
 
 
 def test_run_bootstrap_phase_reports_cache_hit_replay_metadata(monkeypatch, tmp_path):
@@ -813,47 +863,6 @@ def test_run_bootstrap_phase_reports_cache_hit_replay_metadata(monkeypatch, tmp_
     assert result["bootstrap_cache_hit"] is True
     assert result["cache_probe_hit"] is True
     assert result["replay_hydration_complete"] is True
-    assert result["fallback_rerun"] is False
-    assert result["fallback_rerun_triggered"] is False
-
-
-def test_run_bootstrap_phase_cache_hit_missing_replay_outputs_triggers_fallback_rerun(
-    monkeypatch,
-    tmp_path,
-):
-    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
-    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
-
-    tracker = DummyTracker(
-        responses=[
-            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
-            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_fallback"},
-        ],
-    )
-    workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
-
-    result = run_module.run_bootstrap_phase(
-        tracker=tracker,
-        settings=_settings(cache_enabled=True),
-        state=_state(),
-        workspace=workspace,
-        scenario_id="seattle-baseline",
-        seed=12345,
-    )
-
-    assert len(tracker.calls) == 2
-    fallback_options = tracker.calls[1]["cache_options"]
-    assert isinstance(fallback_options, CacheOptions)
-    assert result["bootstrap_cache_hit"] is True
-    assert result["cache_probe_hit"] is True
-    assert result["replay_hydration_complete"] is False
-    assert result["fallback_rerun"] is True
-    assert result["fallback_rerun_triggered"] is True
-    assert result["staged_artifact_summary"]["copied_records_total"] == 2
-    assert result["run_reference"] == {
-        "probe_run_id": "bootstrap_probe",
-        "materialization_run_id": "bootstrap_fallback",
-    }
 
 
 def test_run_bootstrap_phase_cache_hit_hydrates_declared_output_paths_without_fallback(
@@ -887,8 +896,6 @@ def test_run_bootstrap_phase_cache_hit_hydrates_declared_output_paths_without_fa
     assert result["bootstrap_cache_hit"] is True
     assert result["cache_probe_hit"] is True
     assert result["replay_hydration_complete"] is True
-    assert result["fallback_rerun"] is False
-    assert result["fallback_rerun_triggered"] is False
 
 
 def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
@@ -3399,8 +3406,6 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
         "_rewind_uncommitted_activitysim_restart_to_provider_boundary",
         lambda **_kwargs: None,
     )
-    monkeypatch.setattr(run_module, "flush_archive_queue", lambda **_kwargs: None)
-    monkeypatch.setattr(run_module, "stop_archive_worker", lambda **_kwargs: None)
     monkeypatch.setattr(
         run_module,
         "log_promotion_instructions_on_success",
@@ -3476,8 +3481,6 @@ def test_main_strict_bootstrap_admission_rejects_before_seeding_or_model_executi
         "run_land_use_stage",
         lambda **_kwargs: events.append("model_execution"),
     )
-    monkeypatch.setattr(run_module, "flush_archive_queue", lambda **_kwargs: None)
-    monkeypatch.setattr(run_module, "stop_archive_worker", lambda **_kwargs: None)
 
     with pytest.raises(RuntimeError, match="strict rejection"):
         run_module.main()
@@ -3530,8 +3533,6 @@ def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
         "_rewind_uncommitted_activitysim_restart_to_provider_boundary",
         lambda **_kwargs: None,
     )
-    monkeypatch.setattr(run_module, "flush_archive_queue", lambda **_kwargs: None)
-    monkeypatch.setattr(run_module, "stop_archive_worker", lambda **_kwargs: None)
     monkeypatch.setattr(
         run_module,
         "log_promotion_instructions_on_success",

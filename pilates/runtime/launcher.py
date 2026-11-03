@@ -41,10 +41,6 @@ from pilates.utils.consist_db_snapshot import (
     restore_local_consist_db_from_snapshot,
     seed_local_consist_db_from_shared,
 )
-from pilates.utils.coupler_helpers import (
-    flush_archive_queue,
-    stop_archive_worker,
-)
 from pilates.atlas.inputs import (
     atlas_static_input_relpaths,
 )
@@ -249,7 +245,6 @@ def run_bootstrap_phase(
     workspace: Workspace,
     scenario_id: str,
     seed: Optional[int],
-    surface: Optional[EnabledWorkflowSurface] = None,
 ) -> Dict[str, Any]:
     return bootstrap_runtime.run_bootstrap_phase(
         tracker=tracker,
@@ -258,7 +253,6 @@ def run_bootstrap_phase(
         workspace=workspace,
         scenario_id=scenario_id,
         seed=seed,
-        surface=surface,
         initialization_cls=Initialization,
         build_bootstrap_artifact_summary_fn=build_bootstrap_artifact_summary,
         build_step_consist_kwargs_fn=build_step_consist_kwargs,
@@ -626,7 +620,6 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
             workspace=workspace,
             scenario_id=scenario_id,
             seed=run_seed,
-            surface=surface,
         )
         _assert_bootstrap_output_invariant(bootstrap_result)
     else:
@@ -978,8 +971,6 @@ def main(
         try:
             try:
                 snapshot_ok = snapshot_manager.final_snapshot()
-                flush_archive_queue(timeout=300)
-                stop_archive_worker(timeout=30)
                 if not snapshot_ok:
                     mirror_consist_db_to_archive(
                         local_consist_db_path,

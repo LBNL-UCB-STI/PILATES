@@ -271,7 +271,7 @@ def _activitysim_output_facet_meta(
         family = "zarr_skims"
     if family is None:
         return {}
-    return {
+    result: Dict[str, Any] = {
         "facet": {
             "artifact_family": family,
             **snapshot_meta,
@@ -281,3 +281,7 @@ def _activitysim_output_facet_meta(
         "facet_schema_version": "v1",
         "facet_index": True,
     }
+    if short_name == ZARR_SKIMS:
+        result["driver"] = "zarr"
+        result["meta"] = {"directory_artifact": True}
+    return result

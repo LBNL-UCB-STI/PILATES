@@ -134,7 +134,17 @@ def activitysim_run_output_paths(
     iteration = getattr(state, "iteration", None)
     if forecast_year is None or iteration is None:
         return {
-            key: path for key, path in expected_outputs.items() if key in output_keys
+            key: (
+                OutputArtifactSpec(
+                    path=path,
+                    driver="zarr",
+                    meta={"directory_artifact": True},
+                )
+                if key == ZARR_SKIMS
+                else path
+            )
+            for key, path in expected_outputs.items()
+            if key in output_keys
         }
 
     return {

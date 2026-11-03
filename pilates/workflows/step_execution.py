@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
+from pathlib import Path
 from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 
-from consist import CacheOptions, ExecutionOptions, RunResult, StepIdentity
+from consist import (
+    CacheOptions,
+    ExecutionOptions,
+    OutputPolicyOptions,
+    RunCompletionArchivePolicy,
+    RunResult,
+    StepIdentity,
+)
 
-from pilates.runtime.run_output_archive import archive_completed_run
-from pilates.utils.coupler_helpers import set_coupler_from_artifact
+from pilates.runtime.archive_paths import archive_roots
 from pilates.workflows.contracts import StepDefinition
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 
@@ -51,6 +59,42 @@ def _resolve_cache_options(
     if cache_options.code_identity is not None:
         return cache_options
     return replace(cache_options, code_identity=configured_code_identity)
+
+
+def _configured_step_archive_root(
+    *,
+    definition: StepDefinition[Any],
+    stage: str,
+    year: int | None,
+    iteration: int | None,
+    phase: str | None,
+) -> Path | None:
+    if not definition.archive_outputs:
+        return None
+    if os.environ.get("PILATES_ENABLE_ARCHIVE_COPY", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return None
+    roots = archive_roots()
+    if roots is None:
+        return None
+    local_root, archive_root = roots
+    if os.path.normcase(os.path.normpath(local_root)) == os.path.normcase(
+        os.path.normpath(archive_root)
+    ):
+        return None
+    parts = [
+        definition.name,
+        stage,
+        f"y{year}" if year is not None else None,
+        f"i{iteration}" if iteration is not None else None,
+        phase,
+    ]
+    scope = "__".join(part for part in parts if part)
+    return (Path(archive_root) / "consist-recovery" / scope).resolve()
 
 
 def execute_step(
@@ -150,15 +194,26 @@ def execute_step(
             state=state,
             workspace=workspace,
         ),
+        output_policy=OutputPolicyOptions(
+            output_missing="error",
+            run_completion_archive=(
+                RunCompletionArchivePolicy(archive_root=archive_root, mode="copy")
+                if (
+                    archive_root := _configured_step_archive_root(
+                        definition=definition,
+                        stage=stage,
+                        year=year,
+                        iteration=iteration,
+                        phase=phase,
+                    )
+                )
+                is not None
+                else None
+            ),
+        ),
         execution_options=options,
         step_identity=step_identity,
     )
-    if definition.archive_outputs:
-        archived_result = archive_completed_run(tracker=scenario.tracker, result=result)
-        if archived_result is not result:
-            for key, artifact in archived_result.outputs.items():
-                set_coupler_from_artifact(scenario.coupler, key, artifact)
-            result = archived_result
     return result, definition.project_outputs(
         result.outputs,
         settings=settings,

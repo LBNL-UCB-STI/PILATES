@@ -6,9 +6,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from consist.types import CacheOptions, OutputArtifactSpec
 
-from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.config import PilatesConfig
-from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -62,13 +60,10 @@ def _warn_on_bootstrap_fast_hashing(settings: PilatesConfig) -> None:
 def build_bootstrap_run_reference(
     *,
     probe_run_id: Optional[str] = None,
-    materialization_run_id: Optional[str] = None,
 ) -> Dict[str, str]:
     reference: Dict[str, str] = {}
     if probe_run_id:
         reference["probe_run_id"] = probe_run_id
-    if materialization_run_id:
-        reference["materialization_run_id"] = materialization_run_id
     return reference
 
 
@@ -85,12 +80,11 @@ def log_bootstrap_result_summary(
     if isinstance(cache_miss_explanation, dict):
         output_logger.info(
             "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
-            "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s "
+            "replay_hydration_complete=%s run_ref=%s summary=%s "
             "cache_miss_reason=%s cache_miss_candidate_run_id=%s",
             bootstrap_result.get("bootstrap_cache_hit"),
             bootstrap_result.get("cache_probe_hit"),
             bootstrap_result.get("replay_hydration_complete"),
-            bootstrap_result.get("fallback_rerun_triggered"),
             bootstrap_result.get("run_reference"),
             bootstrap_result.get("staged_artifact_summary"),
             cache_miss_explanation.get("reason"),
@@ -100,11 +94,10 @@ def log_bootstrap_result_summary(
 
     output_logger.info(
         "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
-        "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s",
+        "replay_hydration_complete=%s run_ref=%s summary=%s",
         bootstrap_result.get("bootstrap_cache_hit"),
         bootstrap_result.get("cache_probe_hit"),
         bootstrap_result.get("replay_hydration_complete"),
-        bootstrap_result.get("fallback_rerun_triggered"),
         bootstrap_result.get("run_reference"),
         bootstrap_result.get("staged_artifact_summary"),
     )
@@ -114,7 +107,6 @@ def _bootstrap_output_paths(
     *,
     settings: PilatesConfig,
     workspace: Workspace,
-    surface: Any = None,
 ) -> Dict[str, OutputArtifactSpec]:
     """Declare immutable snapshots of the bootstrap-owned workspace roots.
 
@@ -126,14 +118,16 @@ def _bootstrap_output_paths(
     declaring them again would duplicate bytes already owned by a root.
     """
 
-    del surface
     output_paths: Dict[str, OutputArtifactSpec] = {}
     run_models = getattr(getattr(settings, "run", None), "models", None)
 
     def declare_directory(key: str, path: str) -> None:
         output_paths[key] = OutputArtifactSpec(
             path=path,
-            meta={"directory_artifact": True},
+            meta={
+                "directory_artifact": True,
+                "directory_allow_extra_files": True,
+            },
         )
 
     get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
@@ -163,108 +157,6 @@ def _bootstrap_output_paths(
             declare_directory("beam_mutable_data_dir", get_beam_input_dir())
 
     return output_paths
-
-
-def _bootstrap_required_workspace_artifacts(
-    *,
-    settings: PilatesConfig,
-    workspace: Workspace,
-    surface: Any = None,
-) -> Dict[str, str]:
-    required: Dict[str, str] = {}
-
-    if get_activity_demand_model(settings) == "activitysim":
-        get_asim_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
-        if callable(get_asim_configs_dir):
-            asim_configs_dir = get_asim_configs_dir()
-            main_configs_dir = (
-                getattr(
-                    getattr(settings, "activitysim", None), "main_configs_dir", None
-                )
-                or "configs"
-            )
-            for dirname in required_asim_config_dirs(main_configs_dir):
-                required[f"activitysim_config_settings_yaml_{dirname}"] = os.path.join(
-                    asim_configs_dir,
-                    dirname,
-                    "settings.yaml",
-                )
-
-    if get_traffic_assignment_model(settings) == "beam":
-        get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
-        region = getattr(getattr(settings, "run", None), "region", None)
-        if callable(get_beam_input_dir) and region:
-            beam_input_dir = get_beam_input_dir()
-            required["beam_mutable_data_dir"] = beam_input_dir
-            required["beam_region_input_dir"] = os.path.join(beam_input_dir, region)
-            beam_config_name = getattr(getattr(settings, "beam", None), "config", None)
-            if beam_config_name:
-                required["beam_primary_config_file"] = os.path.join(
-                    beam_input_dir,
-                    region,
-                    beam_config_name,
-                )
-
-    get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
-    run_models = getattr(getattr(settings, "run", None), "models", None)
-    if callable(get_usim_data_dir) and run_models is not None:
-        if (
-            getattr(run_models, "land_use", None) == "urbansim"
-            or getattr(run_models, "activity_demand", None) == "activitysim"
-            or getattr(run_models, "vehicle_ownership", None) == "atlas"
-        ):
-            usim_data_dir = get_usim_data_dir()
-            required["usim_datastore_base_h5"] = os.path.join(
-                usim_data_dir,
-                get_usim_datastore_fname(settings, io="input"),
-            )
-
-    if surface is not None:
-        required = {
-            key: path
-            for key, path in required.items()
-            if surface.is_bootstrap_owned_artifact_key(key)
-        }
-
-    return required
-
-
-def _find_missing_bootstrap_workspace_artifacts(
-    *,
-    settings: PilatesConfig,
-    workspace: Workspace,
-    surface: Any = None,
-) -> list[Dict[str, str]]:
-    missing: list[Dict[str, str]] = []
-    for key, path in _bootstrap_required_workspace_artifacts(
-        settings=settings,
-        workspace=workspace,
-        surface=surface,
-    ).items():
-        if not path:
-            continue
-        normalized_path = os.path.realpath(path)
-        if os.path.exists(normalized_path):
-            continue
-        missing.append(
-            {
-                "key": key,
-                "path": normalized_path,
-                "reason": (
-                    "Bootstrap cache-hit validation requires this workspace "
-                    "artifact to exist locally after replay hydration."
-                ),
-            }
-        )
-    return missing
-
-
-def _format_missing_bootstrap_workspace_artifacts(
-    artifacts: list[Dict[str, str]],
-) -> str:
-    if not artifacts:
-        return "none"
-    return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
 
 
 def seed_bootstrap_artifacts_to_coupler(
@@ -307,7 +199,6 @@ def run_bootstrap_phase(
     workspace: Workspace,
     scenario_id: str,
     seed: Optional[int],
-    surface: Any = None,
     initialization_cls: type[Initialization] = Initialization,
     build_bootstrap_artifact_summary_fn: Callable[
         ..., Dict[str, Any]
@@ -341,35 +232,25 @@ def run_bootstrap_phase(
         *,
         cache_hit: bool,
         probe_run_id: Optional[str],
-        fallback_run_id: Optional[str] = None,
-        fallback_rerun: bool = False,
         replay_hydration_complete: Optional[bool] = None,
-        resolution_mode: str,
         cache_miss_explanation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         nonlocal staged_artifact_summary
         if not staged_artifact_summary:
             staged_artifact_summary = build_bootstrap_artifact_summary_fn(workspace)
         cache_probe_hit = bool(cache_hit)
-        fallback_rerun_triggered = bool(fallback_rerun)
         if replay_hydration_complete is None:
-            replay_hydration_complete = (
-                not fallback_rerun_triggered if cache_probe_hit else False
-            )
-        result = {
+            replay_hydration_complete = cache_probe_hit
+        return {
             "bootstrap_cache_hit": cache_hit,
             "cache_probe_hit": cache_probe_hit,
             "replay_hydration_complete": bool(replay_hydration_complete),
             "staged_artifact_summary": staged_artifact_summary,
             "run_reference": build_bootstrap_run_reference(
                 probe_run_id=probe_run_id,
-                materialization_run_id=fallback_run_id,
             ),
-            "fallback_rerun": fallback_rerun,
-            "fallback_rerun_triggered": fallback_rerun_triggered,
             "cache_miss_explanation": cache_miss_explanation,
         }
-        return result
 
     run_kwargs: Dict[str, Any] = {
         "fn": _execute_initialization,
@@ -388,7 +269,6 @@ def run_bootstrap_phase(
     bootstrap_output_paths = _bootstrap_output_paths(
         settings=settings,
         workspace=workspace,
-        surface=surface,
     )
     if bootstrap_output_paths:
         run_kwargs["output_paths"] = bootstrap_output_paths
@@ -426,7 +306,6 @@ def run_bootstrap_phase(
         return _finalize_bootstrap_result(
             cache_hit=False,
             probe_run_id=getattr(getattr(run_result, "run", None), "id", None),
-            resolution_mode="cache_disabled_execute",
         )
 
     cache_options = _bootstrap_cache_options(
@@ -448,47 +327,13 @@ def run_bootstrap_phase(
             workspace.full_path,
             probe_run_id,
         )
-        missing_workspace_artifacts = _find_missing_bootstrap_workspace_artifacts(
-            settings=settings,
-            workspace=workspace,
-            surface=surface,
-        )
-        if not missing_workspace_artifacts:
-            logger.info(
-                "BOOTSTRAP CACHE HIT replay hydration restored required workspace artifacts."
-            )
-            return _finalize_bootstrap_result(
-                cache_hit=True,
-                probe_run_id=probe_run_id,
-                replay_hydration_complete=True,
-                resolution_mode="cache_hit_replay_hydrated",
-            )
-
-        fallback_cache_options = _bootstrap_cache_options(
-            settings,
-            cache_options_cls=cache_options_cls,
-            cache_mode="off",
-        )
-        logger.warning(
-            "BOOTSTRAP CACHE HIT replay hydration left required workspace "
-            "artifacts missing: %s",
-            _format_missing_bootstrap_workspace_artifacts(missing_workspace_artifacts),
-        )
-        logger.warning(
-            "BOOTSTRAP fallback rerun triggered because replay hydration did not "
-            "restore required workspace invariants."
-        )
-        fallback_result = tracker.run(
-            **run_kwargs,
-            cache_options=fallback_cache_options,
+        logger.info(
+            "BOOTSTRAP CACHE HIT replay hydration restored required workspace artifacts."
         )
         return _finalize_bootstrap_result(
             cache_hit=True,
             probe_run_id=probe_run_id,
-            fallback_run_id=getattr(getattr(fallback_result, "run", None), "id", None),
-            fallback_rerun=True,
-            replay_hydration_complete=False,
-            resolution_mode="cache_hit_missing_workspace_invariants_fallback_rerun",
+            replay_hydration_complete=True,
         )
 
     run_meta = getattr(getattr(probe_result, "run", None), "meta", None)
@@ -510,7 +355,6 @@ def run_bootstrap_phase(
     return _finalize_bootstrap_result(
         cache_hit=False,
         probe_run_id=probe_run_id,
-        resolution_mode="cache_miss_execute",
         cache_miss_explanation=cache_miss_explanation,
     )
 

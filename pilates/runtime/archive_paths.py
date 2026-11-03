@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import logging
 import os
-import shutil
 from pathlib import Path
 from typing import Optional, Protocol, TYPE_CHECKING, TypeVar, Union
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
-
-logger = logging.getLogger(__name__)
 
 ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
 ARCHIVE_ROOT_ENV = "PILATES_ARCHIVE_RUN_DIR"
@@ -36,35 +32,6 @@ def archive_roots() -> Optional[tuple[str, str]]:
     return os.path.abspath(local_root), os.path.abspath(archive_root)
 
 
-def path_under_root(path: str, root: str) -> bool:
-    try:
-        return os.path.commonpath([path, root]) == root
-    except ValueError:
-        return False
-
-
-def resolve_archive_path(
-    path: str, local_root: str, archive_root: str
-) -> Optional[str]:
-    abs_path = os.path.abspath(path)
-    if path_under_root(abs_path, archive_root):
-        return None
-    if not path_under_root(abs_path, local_root):
-        return None
-    rel_path = os.path.relpath(abs_path, local_root)
-    return os.path.join(archive_root, rel_path)
-
-
-def resolve_local_path(path: str, local_root: str, archive_root: str) -> Optional[str]:
-    abs_path = os.path.abspath(path)
-    if path_under_root(abs_path, local_root):
-        return abs_path
-    if not path_under_root(abs_path, archive_root):
-        return None
-    rel_path = os.path.relpath(abs_path, archive_root)
-    return os.path.join(local_root, rel_path)
-
-
 def resolve_workspace_uri_path(
     path: str,
     workspace: Optional["Workspace"] = None,
@@ -82,28 +49,6 @@ def resolve_workspace_uri_path(
         return None
     local_root, _archive_root = roots
     return os.path.join(local_root, rel_path)
-
-
-def copy_archive_to_local(
-    *,
-    local_path: str,
-    archive_path: str,
-) -> Optional[str]:
-    try:
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        if os.path.isdir(archive_path):
-            shutil.copytree(archive_path, local_path, dirs_exist_ok=True)
-        else:
-            shutil.copy2(archive_path, local_path)
-        return local_path
-    except Exception as exc:
-        logger.warning(
-            "[Archive] Failed to materialize %s from archive %s: %s",
-            local_path,
-            archive_path,
-            exc,
-        )
-        return None
 
 
 def archive_fallback_path(

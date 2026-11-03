@@ -11,7 +11,9 @@ from consist import (
     CacheOptions,
     ExecutionOptions,
     OutputArtifactSpec,
+    OutputPolicyOptions,
     OutputSet,
+    RunCompletionArchivePolicy,
     RunResult,
     define_step,
 )
@@ -48,26 +50,7 @@ _EXAMPLE_INPUT_CONTRACT = InputContract(
 def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     monkeypatch, tmp_path: Path, cache_hit: bool
 ) -> None:
-    """A completed child run publishes its archived artifacts before projection."""
-
-    class Coupler:
-        def __init__(self) -> None:
-            self.values: dict[str, object] = {}
-
-        def set_from_artifact(self, key: str, artifact: object) -> None:
-            self.values[key] = artifact
-
-    class Tracker:
-        def __init__(self, archived_outputs: dict[str, object]) -> None:
-            self.archived_outputs = archived_outputs
-            self.archive_calls: list[tuple[str, str]] = []
-
-        def archive_run_outputs(
-            self, run_id: str, archive_root: str, *, mode: str
-        ) -> SimpleNamespace:
-            assert mode == "copy"
-            self.archive_calls.append((run_id, archive_root))
-            return SimpleNamespace(outputs=self.archived_outputs)
+    """A completed child run configures RunCompletionArchivePolicy before projection."""
 
     @define_step(model="example", outputs=["bundle"])
     def example(*, settings, state, workspace) -> None:
@@ -81,19 +64,14 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
         config_hash=None,
         git_hash=None,
     )
-    original_outputs = {
-        "bundle": Artifact(
-            key="bundle", container_uri="workspace://bundle", driver="other"
-        )
-    }
     archived_outputs = {
         "bundle": Artifact(
             key="bundle", container_uri="workspace://archived/bundle", driver="other"
         )
     }
-    run_result = RunResult(run=run, outputs=original_outputs, cache_hit=cache_hit)
-    coupler = Coupler()
-    scenario = SimpleNamespace(coupler=coupler, tracker=Tracker(archived_outputs))
+    run_result = RunResult(run=run, outputs=archived_outputs, cache_hit=cache_hit)
+    coupler = SimpleNamespace(values={"bundle": archived_outputs["bundle"]})
+    scenario = SimpleNamespace(coupler=coupler, tracker=SimpleNamespace())
     seen: dict[str, object] = {}
     scenario.run = lambda **kwargs: seen.update(kwargs) or run_result
     definition = StepDefinition(
@@ -127,9 +105,15 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     )
 
     assert seen["output_sets"] == output_sets
-    assert scenario.tracker.archive_calls == [
-        (run_id, str(archive_root / "consist-recovery" / run_id))
-    ]
+    assert seen["output_policy"] == OutputPolicyOptions(
+        output_missing="error",
+        run_completion_archive=RunCompletionArchivePolicy(
+            archive_root=(
+                archive_root / "consist-recovery" / "example__stage"
+            ).resolve(),
+            mode="copy",
+        ),
+    )
     assert result.outputs == archived_outputs
     assert result.cache_hit is cache_hit
     assert projected.received_outputs == archived_outputs
@@ -139,16 +123,6 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
 def test_execute_step_skips_archival_when_normalized_roots_are_equal(
     monkeypatch, tmp_path: Path
 ) -> None:
-    class Tracker:
-        def __init__(self) -> None:
-            self.archive_calls: list[tuple[str, str]] = []
-
-        def archive_run_outputs(
-            self, run_id: str, archive_root: str, *, mode: str
-        ) -> SimpleNamespace:
-            self.archive_calls.append((run_id, archive_root))
-            raise AssertionError("equal local and archive roots must not archive")
-
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
         return None
@@ -165,11 +139,12 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         )
     }
     result = RunResult(run=run, outputs=outputs)
-    tracker = Tracker()
+    seen: dict[str, object] = {}
     scenario = SimpleNamespace(
-        coupler=SimpleNamespace(update=lambda _: None), tracker=tracker
+        coupler=SimpleNamespace(update=lambda _: None),
+        tracker=SimpleNamespace(),
     )
-    scenario.run = lambda **_: result
+    scenario.run = lambda **kwargs: seen.update(kwargs) or result
     definition = StepDefinition(
         name="example",
         function=example,
@@ -196,7 +171,10 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         phase=None,
     )
 
-    assert tracker.archive_calls == []
+    assert seen["output_policy"] == OutputPolicyOptions(
+        output_missing="error",
+        run_completion_archive=None,
+    )
     assert received_result is result
     assert projected == outputs
 
@@ -205,10 +183,6 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
     monkeypatch, tmp_path: Path
 ) -> None:
     """A staging step can retain its local handoff without archive-copying it."""
-
-    class Tracker:
-        def archive_run_outputs(self, *_args, **_kwargs) -> SimpleNamespace:
-            raise AssertionError("staging outputs must not enter recovery archival")
 
     @define_step(model="example", outputs=["staging_root"])
     def example(*, settings, state, workspace) -> None:
@@ -229,11 +203,12 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
             )
         },
     )
+    seen: dict[str, object] = {}
     scenario = SimpleNamespace(
         coupler=SimpleNamespace(update=lambda _: None),
-        tracker=Tracker(),
+        tracker=SimpleNamespace(),
     )
-    scenario.run = lambda **_: result
+    scenario.run = lambda **kwargs: seen.update(kwargs) or result
     definition = StepDefinition(
         name="staging",
         function=example,
@@ -260,6 +235,10 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
         phase=None,
     )
 
+    assert seen["output_policy"] == OutputPolicyOptions(
+        output_missing="error",
+        run_completion_archive=None,
+    )
     assert received_result is result
     assert projected == result.outputs
 
@@ -334,25 +313,6 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
 ) -> None:
     """The active UrbanSim run uses central archival without publishing staging."""
 
-    class Coupler:
-        def __init__(self) -> None:
-            self.values: dict[str, object] = {}
-
-        def set_from_artifact(self, key: str, artifact: object) -> None:
-            self.values[key] = artifact
-
-    class ArchiveTracker:
-        def __init__(self, archived_outputs: dict[str, Artifact]) -> None:
-            self.archived_outputs = archived_outputs
-            self.archive_calls: list[tuple[str, str]] = []
-
-        def archive_run_outputs(
-            self, run_id: str, archive_root: str, *, mode: str
-        ) -> SimpleNamespace:
-            assert mode == "copy"
-            self.archive_calls.append((run_id, archive_root))
-            return SimpleNamespace(outputs=self.archived_outputs)
-
     local_root = tmp_path / "local"
     archive_root = tmp_path / "archive"
     workspace_root = tmp_path / "workspace"
@@ -369,22 +329,20 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         config_hash=None,
         git_hash=None,
     )
-    outputs = {
-        key: Artifact(key=key, container_uri=str(forecast_h5), driver="other")
-        for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
-    }
     archived_outputs = {
         key: Artifact(
             key=key,
             container_uri=f"workspace://archived/{forecast_h5.name}",
             driver="other",
         )
-        for key in outputs
+        for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
     }
-    coupler = Coupler()
-    tracker = ArchiveTracker(archived_outputs)
-    scenario = SimpleNamespace(coupler=coupler, tracker=tracker)
-    scenario.run = lambda **_kwargs: RunResult(run=run, outputs=outputs)
+    coupler = SimpleNamespace(values=dict(archived_outputs))
+    seen: dict[str, object] = {}
+    scenario = SimpleNamespace(coupler=coupler, tracker=SimpleNamespace())
+    scenario.run = lambda **kwargs: (
+        seen.update(kwargs) or RunResult(run=run, outputs=archived_outputs)
+    )
     settings = SimpleNamespace(
         urbansim=SimpleNamespace(output_file_template="output_{year}.h5")
     )
@@ -423,9 +381,20 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
     )
 
     assert URBANSIM_RUN.archive_outputs is True
-    assert tracker.archive_calls == [
-        (run_id, str(archive_root / "consist-recovery" / run_id))
-    ]
+    assert seen["output_policy"] == OutputPolicyOptions(
+        output_missing="error",
+        run_completion_archive=RunCompletionArchivePolicy(
+            archive_root=(
+                archive_root
+                / "consist-recovery"
+                / "urbansim_run__land_use__y2030__i0__run"
+            ).resolve(),
+            mode="copy",
+        ),
+    )
+    assert seen["output_paths"] == {
+        USIM_DATASTORE_H5: str(forecast_h5),
+    }
     assert result.outputs == archived_outputs
     assert projected.usim_datastore_h5 == forecast_h5
     assert set(coupler.values) == {USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT}
@@ -503,17 +472,22 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         )
 
     archived = captured["archived"]
-    recovery_root = archive_root / "consist-recovery" / str(result.run.id)
+    recovery_root = (
+        archive_root / "consist-recovery" / "archive_probe__test__y2030__i0__run"
+    )
     assert archived.paths["bundle"] == archived["bundle"]
     assert archived.paths["summary"] == archived["bundle"] / "summary.csv"
     assert archived.paths["skims"] == archived["bundle"] / "skims.zarr"
     assert archived.paths["bundle"].is_relative_to(recovery_root)
     assert (archived.paths["skims"] / "nested" / "0.0").read_bytes() == b"skim"
-    assert projected == result.outputs == archived.outputs
-    assert scenario.coupler.get("bundle") == archived.outputs["bundle"]
+    assert projected == result.outputs
+    assert {k: a.meta for k, a in result.outputs.items()} == {
+        k: a.meta for k, a in archived.outputs.items()
+    }
+    assert scenario.coupler.get("bundle") == result.outputs["bundle"]
     assert all(
         artifact.recovery_roots == [str(recovery_root.resolve())]
-        for artifact in archived.outputs.values()
+        for artifact in result.outputs.values()
     )
 
     parent = archived.outputs["bundle"]
@@ -528,6 +502,24 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
     assert all(
         artifact.recovery_roots == [str(recovery_root.resolve())]
         for artifact in [parent, *members, manifest]
+    )
+
+    with tracker.scenario("archive-probe-replay") as replay_scenario:
+        replay_result, _ = execute_step(
+            scenario=replay_scenario,
+            definition=definition,
+            settings=object(),
+            state=object(),
+            workspace=object(),
+            stage="test",
+            year=2030,
+            iteration=0,
+            phase="run",
+        )
+    assert replay_result.cache_hit is True
+    assert all(
+        artifact.recovery_roots == [str(recovery_root.resolve())]
+        for artifact in replay_result.outputs.values()
     )
 
     shutil.rmtree(tracker.run_artifact_dir(result.run))
@@ -629,7 +621,13 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
     source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
     assert source == population_source
     assert result.outputs[USIM_POPULATION_SOURCE_H5].recovery_roots == [
-        str((archive_root / "consist-recovery" / str(result.run.id)).resolve())
+        str(
+            (
+                archive_root
+                / "consist-recovery"
+                / "urbansim_postprocess__land_use__y2030__i0__postprocess"
+            ).resolve()
+        )
     ]
     source.unlink()
     tracker.hydrate_run_outputs(

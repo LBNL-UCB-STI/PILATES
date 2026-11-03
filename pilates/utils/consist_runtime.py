@@ -376,6 +376,19 @@ def log_meta(**meta: Any) -> None:
     return consist.log_meta(**meta)
 
 
+def set_output_meta(
+    key: str,
+    meta: Mapping[str, Any],
+    *,
+    merge: bool = True,
+) -> None:
+    if not _is_enabled():
+        return None
+    if current_run() is None:
+        return None
+    consist.set_output_meta(key, meta, merge=merge)
+
+
 def current_run() -> Optional[Any]:
     if not _is_enabled():
         return None

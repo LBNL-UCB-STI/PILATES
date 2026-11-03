@@ -65,7 +65,6 @@ from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
-    enqueue_archive_copy,
 )
 from pilates.utils.zone_utils import resolve_canonical_zone_source
 from pilates.workflows.coupler_namespace import (
@@ -539,48 +538,49 @@ def _project_beam_preprocess_outputs(
     if LINKSTATS_WARMSTART in prepared:
         prepared_linkstats = prepared[LINKSTATS_WARMSTART]
         sidecar_path = linkstats_provenance_sidecar_path(prepared_linkstats)
-        if not sidecar_path.is_file():
-            source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
-            source_path = artifact_to_path(source, workspace=workspace)
-            if not source_path and settings is not None and workspace is not None:
-                source_path = resolve_initial_linkstats_path(settings, workspace)
-            if source_path:
-                copy_linkstats_provenance_sidecar(source_path, prepared_linkstats)
-
-        if not sidecar_path.is_file() and LINKSTATS_WARMSTART in outputs:
-            artifact = outputs[LINKSTATS_WARMSTART]
-            meta = getattr(artifact, "meta", None)
-            cached_prov = (
-                meta.get("linkstats_provenance") if isinstance(meta, Mapping) else None
-            )
-            if isinstance(cached_prov, Mapping):
-                try:
-                    write_linkstats_provenance_sidecar(prepared_linkstats, cached_prov)
-                except Exception as exc:
-                    logger.debug(
-                        "Unable to materialize cached linkstats provenance sidecar to %s: %s",
-                        sidecar_path,
-                        exc,
-                    )
-
-        if sidecar_path.is_file() and LINKSTATS_WARMSTART in outputs:
-            artifact = outputs[LINKSTATS_WARMSTART]
+        artifact = outputs.get(LINKSTATS_WARMSTART)
+        try:
+            meta = artifact.meta if artifact is not None else None
+        except AttributeError:
+            meta = None
+        cached_prov = (
+            meta.get("linkstats_provenance") if isinstance(meta, Mapping) else None
+        )
+        if isinstance(cached_prov, Mapping):
             try:
-                payload = read_linkstats_provenance_sidecar(sidecar_path)
+                write_linkstats_provenance_sidecar(prepared_linkstats, cached_prov)
             except Exception as exc:
                 logger.debug(
-                    "Unable to read linkstats provenance sidecar from %s: %s",
+                    "Unable to materialize cached linkstats provenance sidecar to %s: %s",
                     sidecar_path,
                     exc,
                 )
-                payload = None
-            if payload is not None and isinstance(artifact, Artifact):
-                current_meta = (
-                    dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
-                )
-                if current_meta.get("linkstats_provenance") != payload:
-                    current_meta["linkstats_provenance"] = payload
-                    artifact.meta = current_meta
+        else:
+            if not sidecar_path.is_file():
+                source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
+                source_path = artifact_to_path(source, workspace=workspace)
+                if not source_path and settings is not None and workspace is not None:
+                    source_path = resolve_initial_linkstats_path(settings, workspace)
+                if source_path:
+                    copy_linkstats_provenance_sidecar(source_path, prepared_linkstats)
+
+            if sidecar_path.is_file() and isinstance(artifact, Artifact):
+                try:
+                    payload = read_linkstats_provenance_sidecar(sidecar_path)
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to read linkstats provenance sidecar from %s: %s",
+                        sidecar_path,
+                        exc,
+                    )
+                    payload = None
+                if payload is not None:
+                    current_meta = (
+                        dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
+                    )
+                    if current_meta.get("linkstats_provenance") != payload:
+                        current_meta["linkstats_provenance"] = payload
+                        artifact.meta = current_meta
 
     prepared_metadata: dict[str, dict[str, Any]] = {}
     if LINKSTATS_WARMSTART in prepared:
@@ -666,26 +666,20 @@ def _attach_skim_provenance_to_output_artifacts(
             if path is None:
                 continue
             sidecar_path = skim_provenance_sidecar_path(path)
+            try:
+                existing_meta = artifact.meta
+            except AttributeError:
+                existing_meta = None
+            cached_prov = (
+                existing_meta.get("skim_provenance")
+                if isinstance(existing_meta, Mapping)
+                else None
+            )
+            from_cached_meta = isinstance(cached_prov, Mapping)
             payload: Mapping[str, Any] | None = None
-            if sidecar_path.is_file():
-                try:
-                    payload = read_skim_provenance_sidecar(sidecar_path)
-                except Exception as exc:
-                    logger.debug(
-                        "Unable to attach skim provenance sidecar from %s: %s",
-                        sidecar_path,
-                        exc,
-                    )
-                    continue
-            else:
-                existing_meta = getattr(artifact, "meta", None)
-                cached_prov = (
-                    existing_meta.get("skim_provenance")
-                    if isinstance(existing_meta, Mapping)
-                    else None
-                )
-                if isinstance(cached_prov, Mapping) and Path(path).exists():
-                    payload = dict(cached_prov)
+            if from_cached_meta:
+                payload = dict(cached_prov)
+                if Path(path).exists():
                     try:
                         sidecar_path.parent.mkdir(parents=True, exist_ok=True)
                         tmp_path = (
@@ -703,6 +697,16 @@ def _attach_skim_provenance_to_output_artifacts(
                             sidecar_path,
                             exc,
                         )
+            elif sidecar_path.is_file():
+                try:
+                    payload = read_skim_provenance_sidecar(sidecar_path)
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to attach skim provenance sidecar from %s: %s",
+                        sidecar_path,
+                        exc,
+                    )
+                    continue
             if payload is None:
                 continue
             updates: dict[str, Any] = {"skim_provenance": dict(payload)}
@@ -727,6 +731,8 @@ def _attach_skim_provenance_to_output_artifacts(
                         artifact.meta = current_meta
                     except Exception:
                         artifact.__dict__["meta"] = current_meta
+                if from_cached_meta:
+                    continue
                 producer_info = payload.get("producer")
                 tracker_db_path = (
                     producer_info.get("tracker_db_path")
@@ -826,6 +832,11 @@ def _emit_skim_provenance_sidecars(
                 tracker_db_path=tracker_db_path,
             )
             provenance_by_key[key] = payload
+            meta_updates: dict[str, Any] = {"skim_provenance": dict(payload)}
+            identity = payload.get("identity")
+            if isinstance(identity, str) and identity.startswith("sha256:file:"):
+                meta_updates["admission_file_identity"] = identity
+            cr.set_output_meta(key, meta_updates, merge=True)
             if (
                 source_path is not None
                 and Path(source_path).exists()
@@ -1745,38 +1756,35 @@ def _native_beam_preprocess(
             ),
         ),
     )
-    for key, path in produced.prepared_inputs.items():
-        enqueue_archive_copy(key=key, path=path, workspace=workspace)
-        if key == LINKSTATS_WARMSTART:
-            dest_sidecar = linkstats_provenance_sidecar_path(path)
-            if dest_sidecar.is_file():
-                enqueue_archive_copy(
-                    key=f"{LINKSTATS_WARMSTART}_provenance",
-                    path=dest_sidecar,
-                    workspace=workspace,
-                )
-                try:
-                    prov_payload = read_linkstats_provenance_sidecar(dest_sidecar)
-                    if isinstance(prov_payload, Mapping):
-                        if hasattr(_consist_ctx, "run_metadata") and isinstance(
-                            _consist_ctx.run_metadata, dict
-                        ):
-                            _consist_ctx.run_metadata[
-                                "linkstats_warmstart_provenance"
-                            ] = dict(prov_payload)
-                        try:
-                            active_run = cr.current_run()
-                        except RuntimeError:
-                            active_run = None
-                        if active_run is not None and isinstance(active_run.meta, dict):
-                            active_run.meta["linkstats_warmstart_provenance"] = dict(
-                                prov_payload
-                            )
-                except Exception as exc:
-                    logger.debug(
-                        "Unable to attach linkstats warmstart provenance metadata: %s",
-                        exc,
+    if (path := produced.prepared_inputs.get(LINKSTATS_WARMSTART)) is not None:
+        dest_sidecar = linkstats_provenance_sidecar_path(path)
+        if dest_sidecar.is_file():
+            try:
+                prov_payload = read_linkstats_provenance_sidecar(dest_sidecar)
+                if isinstance(prov_payload, Mapping):
+                    prov_dict = dict(prov_payload)
+                    cr.set_output_meta(
+                        LINKSTATS_WARMSTART,
+                        {"linkstats_provenance": prov_dict},
+                        merge=True,
                     )
+                    if hasattr(_consist_ctx, "run_metadata") and isinstance(
+                        _consist_ctx.run_metadata, dict
+                    ):
+                        _consist_ctx.run_metadata["linkstats_warmstart_provenance"] = (
+                            prov_dict
+                        )
+                    try:
+                        active_run = cr.current_run()
+                    except RuntimeError:
+                        active_run = None
+                    if active_run is not None and isinstance(active_run.meta, dict):
+                        active_run.meta["linkstats_warmstart_provenance"] = prov_dict
+            except Exception as exc:
+                logger.debug(
+                    "Unable to attach linkstats warmstart provenance metadata: %s",
+                    exc,
+                )
     del _consist_ctx
 
 
@@ -1989,18 +1997,6 @@ def _native_beam_postprocess(
         context=_consist_ctx,
         skim_keys=(ZARR_SKIMS, FINAL_SKIMS_OMX),
     )
-    for key, path in produced_sources.items():
-        if key == ZARR_SKIMS:
-            continue
-        enqueue_archive_copy(key=key, path=path, workspace=workspace)
-        if key == FINAL_SKIMS_OMX:
-            sidecar_path = skim_provenance_sidecar_path(path)
-            if sidecar_path.is_file():
-                enqueue_archive_copy(
-                    key=f"{key}_provenance",
-                    path=sidecar_path,
-                    workspace=workspace,
-                )
     del _consist_ctx
 
 
@@ -2147,21 +2143,6 @@ def _native_beam_full_skim(
             context=_consist_ctx,
             skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
         )
-        for key in (BEAM_FULL_SKIMS, FINAL_SKIMS_OMX):
-            if key in source_paths and key in declared_outputs:
-                target_path = declared_outputs[key]
-                enqueue_archive_copy(
-                    key=key,
-                    path=target_path,
-                    workspace=workspace,
-                )
-                sidecar_path = skim_provenance_sidecar_path(target_path)
-                if sidecar_path.is_file():
-                    enqueue_archive_copy(
-                        key=f"{key}_provenance",
-                        path=sidecar_path,
-                        workspace=workspace,
-                    )
     del _consist_ctx
 
 
