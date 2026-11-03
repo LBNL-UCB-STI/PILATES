@@ -643,17 +643,19 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     assert all(
         prepared_result.outputs[key].recovery_roots
         == [
+            str(workspace_root.resolve()),
             str(
                 (
                     recovery_root
                     / "atlas_preprocess__vehicle_ownership__y2030__i1__preprocess"
                 ).resolve()
-            )
+            ),
         ]
         for key in prepared_keys
     )
     assert continuation_result.outputs["atlas_continuation_2030"].recovery_roots == [
-        str((recovery_root / "atlas_run__vehicle_ownership__y2030__i1__run").resolve())
+        str(workspace_root.resolve()),
+        str((recovery_root / "atlas_run__vehicle_ownership__y2030__i1__run").resolve()),
     ]
 
     year_root = Path(workspace.get_atlas_mutable_input_dir()) / "year2030"
