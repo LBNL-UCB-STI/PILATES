@@ -468,6 +468,874 @@ def is_omx_already_converted(omx_path: Path | str) -> bool:
         return False
 
 
+INTRAZONAL_PREFIXES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("SOV", "DIST"),
+        ("SOV", "TIME"),
+        ("SOVTOLL", "DIST"),
+        ("SOVTOLL", "TIME"),
+        ("WALK", "DIST"),
+        ("WALK", "TIME"),
+        ("BIKE", "DIST"),
+        ("BIKE", "TIME"),
+    }
+)
+
+
+def _read_optional_upstream_provenance_sidecar(
+    in_path: Path,
+) -> dict[str, Any] | None:
+    """Read upstream provenance sidecar if available so metadata is preserved."""
+    upstream_sidecar = skim_provenance_sidecar_path(in_path)
+    if not upstream_sidecar.is_file():
+        return None
+    try:
+        return read_skim_provenance_sidecar(upstream_sidecar)
+    except Exception as exc:
+        logger.debug(
+            "Unable to read upstream skim provenance sidecar %s: %s",
+            upstream_sidecar,
+            exc,
+        )
+        return None
+
+
+def _stamp_conversion_root_attrs(
+    src_h5: h5py.File,
+    dst_h5: h5py.File,
+    zone_count: int,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Copy root attributes from source OMX and stamp PILATES conversion metadata."""
+    for attr_key, attr_val in src_h5.attrs.items():
+        dst_h5.attrs[attr_key] = attr_val
+
+    if "OMX_VERSION" not in dst_h5.attrs:
+        dst_h5.attrs["OMX_VERSION"] = np.bytes_("0.2")
+    dst_h5.attrs["SHAPE"] = np.array([zone_count, zone_count], dtype=np.int32)
+    dst_h5.attrs[CONVERTED_ATTR_KEY] = np.int32(1)
+    dst_h5.attrs["pilates_conversion_version"] = FULL_SKIM_CONVERTER_VERSION
+    dst_h5.attrs["pilates_max_speed_mph"] = (
+        float(cfg.max_speed_mph) if cfg.max_speed_mph is not None else -1.0
+    )
+    dst_h5.attrs["pilates_transit_scale_factor"] = float(cfg.transit_scale_factor)
+    dst_h5.attrs["pilates_rh_pooled_time_multiplier"] = float(
+        cfg.rh_pooled_time_multiplier
+    )
+    dst_h5.attrs["pilates_rh_pooled_dist_multiplier"] = float(
+        cfg.rh_pooled_dist_multiplier
+    )
+    dst_h5.attrs["pilates_express_bus_disabled"] = np.int32(
+        1 if cfg.disable_express_bus else 0
+    )
+
+
+def _populate_omx_lookup_group(
+    src_h5: h5py.File,
+    dst_h5: h5py.File,
+    zone_count: int,
+) -> None:
+    """Populate /lookup with TAZ, zone_id, and zone_number vectors."""
+    dst_lookup = dst_h5.create_group("lookup")
+    src_lookup = src_h5.get("lookup") or src_h5.get("LOOKUP")
+    zone_vector: np.ndarray | None = None
+    if isinstance(src_lookup, h5py.Group):
+        for lkey in ("zone_number", "TAZ", "zone_id"):
+            if lkey in src_lookup:
+                zone_vector = np.asarray(src_lookup[lkey][...])
+                break
+        if zone_vector is None:
+            for lkey in src_lookup.keys():
+                zone_vector = np.asarray(src_lookup[lkey][...])
+                break
+    if zone_vector is None:
+        zone_vector = np.arange(1, zone_count + 1, dtype=np.int64)
+    dst_lookup.create_dataset("TAZ", data=zone_vector)
+    dst_lookup.create_dataset("zone_id", data=zone_vector)
+    dst_lookup.create_dataset("zone_number", data=zone_vector.astype(np.int32))
+
+
+def resolve_skim_layout(
+    src_h5: h5py.File,
+    dst_h5: h5py.File,
+    in_path: Path,
+    cfg: FullSkimConversionConfig,
+) -> tuple[h5py.Group, h5py.Group, list[str], int, tuple[str, ...], np.ndarray]:
+    """Validate source OMX layout, stamp root/lookup metadata, and prepare destination."""
+    src_data = src_h5.get("data") or src_h5.get("DATA")
+    if not isinstance(src_data, h5py.Group):
+        raise ValueError(f"Input OMX file {in_path} has no /data group.")
+
+    input_matrix_names = sorted(str(k) for k in src_data.keys())
+    if not input_matrix_names:
+        raise ValueError(f"Input OMX file {in_path} has 0 matrices in /data.")
+
+    first_shape = src_data[input_matrix_names[0]].shape
+    if len(first_shape) != 2 or first_shape[0] != first_shape[1]:
+        raise ValueError(
+            f"Expected square 2D skim matrices in {in_path}, got shape {first_shape}."
+        )
+    zone_count = int(first_shape[0])
+    time_periods = _infer_periods(input_matrix_names)
+
+    _stamp_conversion_root_attrs(src_h5, dst_h5, zone_count, cfg)
+    _populate_omx_lookup_group(src_h5, dst_h5, zone_count)
+
+    dst_data = dst_h5.create_group("data")
+    zero_matrix = np.zeros((zone_count, zone_count), dtype=np.float32)
+    return (
+        src_data,
+        dst_data,
+        input_matrix_names,
+        zone_count,
+        time_periods,
+        zero_matrix,
+    )
+
+
+def _build_reference_sov_matrices(
+    src_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build reference highway distance and time matrices across periods for backfilling."""
+    ref_sov_dist = zero_matrix.copy()
+    ref_sov_time = zero_matrix.copy()
+    pref_periods = [cfg.reference_dist_period, "MD", "AM"] + list(time_periods)
+    for p_cand in pref_periods:
+        d_key = f"SOV_DIST__{p_cand}"
+        if d_key in src_data:
+            cand_d = _sanitize_non_negative_float32(src_data[d_key][...])
+            ref_sov_dist = np.where(ref_sov_dist > 0, ref_sov_dist, cand_d).astype(
+                np.float32
+            )
+        t_key = f"SOV_TIME__{p_cand}"
+        if t_key in src_data:
+            cand_t = _sanitize_non_negative_float32(src_data[t_key][...])
+            ref_sov_time = np.where(ref_sov_time > 0, ref_sov_time, cand_t).astype(
+                np.float32
+            )
+
+    if cfg.impute_intrazonal_from_nearest_neighbors:
+        ref_sov_dist, _ = _impute_intrazonal_diagonal(
+            ref_sov_dist,
+            k=cfg.intrazonal_nearest_neighbors_k,
+            factor=cfg.intrazonal_factor,
+        )
+        ref_sov_time, _ = _impute_intrazonal_diagonal(
+            ref_sov_time,
+            k=cfg.intrazonal_nearest_neighbors_k,
+            factor=cfg.intrazonal_factor,
+        )
+    if cfg.max_speed_mph is not None and cfg.max_speed_mph > 0:
+        ref_sov_time, _ = _cap_travel_times_by_max_speed(
+            ref_sov_time,
+            ref_sov_dist,
+            cfg.max_speed_mph,
+        )
+    return ref_sov_dist, ref_sov_time
+
+
+def _backfill_off_diagonal_zero_cells(
+    raw_arr: np.ndarray,
+    prefix: str,
+    measure: str,
+    zone_count: int,
+    ref_sov_dist: np.ndarray,
+    ref_sov_time: np.ndarray,
+) -> np.ndarray:
+    """Backfill missing (NaN/0) off-diagonal cells in highway/walk/bike distance and time."""
+    off_diag_zero = (raw_arr <= 0) & (~np.eye(zone_count, dtype=bool))
+    if not np.any(off_diag_zero):
+        return raw_arr
+
+    if prefix in ("SOV", "SOVTOLL", "WALK", "BIKE") and measure == "DIST":
+        if np.any(ref_sov_dist > 0):
+            return np.where(off_diag_zero, ref_sov_dist, raw_arr).astype(np.float32)
+    elif prefix in ("SOV", "SOVTOLL") and measure == "TIME":
+        if np.any(ref_sov_time > 0):
+            return np.where(off_diag_zero, ref_sov_time, raw_arr).astype(np.float32)
+    elif prefix == "WALK" and measure == "TIME":
+        if np.any(ref_sov_dist > 0):
+            return np.where(
+                off_diag_zero,
+                ref_sov_dist * np.float32(20.0),
+                raw_arr,
+            ).astype(np.float32)
+    elif prefix == "BIKE" and measure == "TIME":
+        if np.any(ref_sov_dist > 0):
+            return np.where(
+                off_diag_zero,
+                ref_sov_dist * np.float32(6.0),
+                raw_arr,
+            ).astype(np.float32)
+    return raw_arr
+
+
+def _resolve_speed_cap_distance_matrix(
+    prefix: str,
+    period: str | None,
+    dst_data: h5py.Group,
+    src_data: h5py.Group,
+    ref_sov_dist: np.ndarray,
+) -> np.ndarray:
+    """Resolve the corresponding distance matrix to use for travel-time speed capping."""
+    dist_name = f"{prefix}_DIST__{period}" if period else f"{prefix}_DIST"
+    if dist_name in dst_data:
+        return np.asarray(dst_data[dist_name][...], dtype=np.float32)
+    if dist_name in src_data:
+        return _sanitize_non_negative_float32(src_data[dist_name][...])
+
+    fallback_dist_name = f"SOV_DIST__{period}" if period else "SOV_DIST"
+    if fallback_dist_name in dst_data:
+        return np.asarray(dst_data[fallback_dist_name][...], dtype=np.float32)
+    if fallback_dist_name in src_data:
+        return _sanitize_non_negative_float32(src_data[fallback_dist_name][...])
+    return ref_sov_dist
+
+
+def _transform_and_copy_single_input_matrix(
+    name: str,
+    src_data: h5py.Group,
+    dst_data: h5py.Group,
+    zone_count: int,
+    ref_sov_dist: np.ndarray,
+    ref_sov_time: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> tuple[int, int, int, int]:
+    """Sanitize, backfill, impute, cap speed, and scale a single source matrix."""
+    prefix, measure, period = _split_matrix_name(name)
+    if cfg.disable_express_bus and prefix in (
+        "WLK_EXP_WLK",
+        "DRV_EXP_WLK",
+        "WLK_EXP_DRV",
+    ):
+        return 0, 0, 0, 0
+
+    raw_arr = _sanitize_non_negative_float32(src_data[name][...])
+    raw_arr = _backfill_off_diagonal_zero_cells(
+        raw_arr, prefix, measure, zone_count, ref_sov_dist, ref_sov_time
+    )
+
+    imputed_inc = 0
+    if (
+        cfg.impute_intrazonal_from_nearest_neighbors
+        and (prefix, measure) in INTRAZONAL_PREFIXES
+    ):
+        raw_arr, did_impute = _impute_intrazonal_diagonal(
+            raw_arr,
+            k=cfg.intrazonal_nearest_neighbors_k,
+            factor=cfg.intrazonal_factor,
+        )
+        if did_impute:
+            imputed_inc = 1
+
+    speed_capped_matrix_inc = 0
+    speed_capped_cell_inc = 0
+    if (
+        cfg.max_speed_mph is not None
+        and cfg.max_speed_mph > 0
+        and prefix in ("SOV", "SOVTOLL")
+        and measure == "TIME"
+    ):
+        dist_arr = _resolve_speed_cap_distance_matrix(
+            prefix, period, dst_data, src_data, ref_sov_dist
+        )
+        raw_arr, n_capped = _cap_travel_times_by_max_speed(
+            raw_arr,
+            dist_arr,
+            cfg.max_speed_mph,
+        )
+        if n_capped > 0:
+            speed_capped_matrix_inc = 1
+            speed_capped_cell_inc = n_capped
+
+    scaled_inc = 0
+    if _should_scale_transit_matrix(prefix, measure):
+        raw_arr = (raw_arr * np.float32(cfg.transit_scale_factor)).astype(np.float32)
+        scaled_inc = 1
+
+    _write_matrix(
+        dst_data,
+        name,
+        raw_arr,
+        compression_level=cfg.gzip_compression_level,
+        attrs=dict(src_data[name].attrs),
+    )
+    return scaled_inc, imputed_inc, speed_capped_matrix_inc, speed_capped_cell_inc
+
+
+def accumulate_origin_destination_records(
+    src_data: h5py.Group,
+    dst_data: h5py.Group,
+    input_matrix_names: list[str],
+    zone_count: int,
+    time_periods: tuple[str, ...],
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> tuple[int, int, int, int]:
+    """Copy existing OMX matrices while applying sanitization, backfill, imputation, and scaling."""
+    ref_sov_dist, ref_sov_time = _build_reference_sov_matrices(
+        src_data, time_periods, zero_matrix, cfg
+    )
+    scaled_count = 0
+    imputed_count = 0
+    speed_capped_matrix_count = 0
+    speed_capped_cell_count = 0
+
+    for name in input_matrix_names:
+        s_inc, i_inc, m_inc, c_inc = _transform_and_copy_single_input_matrix(
+            name,
+            src_data,
+            dst_data,
+            zone_count,
+            ref_sov_dist,
+            ref_sov_time,
+            cfg,
+        )
+        scaled_count += s_inc
+        imputed_count += i_inc
+        speed_capped_matrix_count += m_inc
+        speed_capped_cell_count += c_inc
+
+    return (
+        scaled_count,
+        imputed_count,
+        speed_capped_matrix_count,
+        speed_capped_cell_count,
+    )
+
+
+def _read_matrix_or_default(
+    dst_data: h5py.Group,
+    name: str,
+    default: np.ndarray,
+) -> np.ndarray:
+    """Return float32 array for ``name`` in ``dst_data`` or ``default`` when absent."""
+    if name in dst_data:
+        return np.asarray(dst_data[name][...], dtype=np.float32)
+    return default
+
+
+def _synthesize_transit_wait_matrices(
+    dst_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Synthesize *_WAIT__<tp> = IWAIT + XWAIT for non-EXP transit modes."""
+    skipped_prefixes = {"WLK_EXP_WLK", "DRV_EXP_WLK", "WLK_EXP_DRV", "WLK_TRN_WLK"}
+    for prefix in TRANSIT_PREFIXES:
+        if prefix in skipped_prefixes:
+            continue
+        for tp in time_periods:
+            wait_name = f"{prefix}_WAIT__{tp}"
+            iwait_name = f"{prefix}_IWAIT__{tp}"
+            xwait_name = f"{prefix}_XWAIT__{tp}"
+            if wait_name not in dst_data and (
+                iwait_name in dst_data or xwait_name in dst_data
+            ):
+                iwait = _read_matrix_or_default(dst_data, iwait_name, zero_matrix)
+                xwait = _read_matrix_or_default(dst_data, xwait_name, zero_matrix)
+                _write_matrix(
+                    dst_data,
+                    wait_name,
+                    iwait + xwait,
+                    compression_level=cfg.gzip_compression_level,
+                )
+
+
+def _write_disabled_express_bus_matrices(
+    dst_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Write zeroed Express Bus (EXP) matrices when express bus is disabled."""
+    if not cfg.disable_express_bus:
+        return
+    for tp in time_periods:
+        for measure in WLK_EXP_WLK_MEASURES:
+            _write_matrix(
+                dst_data,
+                f"WLK_EXP_WLK_{measure}__{tp}",
+                zero_matrix,
+                compression_level=cfg.gzip_compression_level,
+            )
+        for prefix in ("DRV_EXP_WLK", "WLK_EXP_DRV"):
+            for measure in DRV_EXP_MEASURES:
+                _write_matrix(
+                    dst_data,
+                    f"{prefix}_{measure}__{tp}",
+                    zero_matrix,
+                    compression_level=cfg.gzip_compression_level,
+                )
+
+
+def _select_from_best_transit_mode(
+    dst_data: h5py.Group,
+    active_prefixes: list[str],
+    measure_suffix: str,
+    tp: str,
+    best_idx: np.ndarray,
+    has_valid: np.ndarray,
+    zero_matrix: np.ndarray,
+) -> np.ndarray:
+    """Select cell values from the lowest-TOTIVT transit mode per OD pair."""
+    stack = np.stack(
+        [
+            _read_matrix_or_default(
+                dst_data, f"{p}_{measure_suffix}__{tp}", zero_matrix
+            )
+            for p in active_prefixes
+        ],
+        axis=0,
+    )
+    chosen = np.take_along_axis(stack, best_idx[np.newaxis, :, :], axis=0)[0]
+    return np.where(has_valid, chosen, 0.0).astype(np.float32)
+
+
+def _synthesize_wlk_trn_wlk_matrices(
+    dst_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Synthesize WLK_TRN_WLK_* across available WLK_*_WLK modes."""
+    if not cfg.synthesize_wlk_trn_wlk:
+        return
+
+    candidate_wlk_prefixes = [
+        "WLK_LOC_WLK",
+        "WLK_LRF_WLK",
+        "WLK_HVY_WLK",
+        "WLK_COM_WLK",
+    ]
+    if not cfg.disable_express_bus:
+        candidate_wlk_prefixes.append("WLK_EXP_WLK")
+
+    for tp in time_periods:
+        active_prefixes = [
+            p for p in candidate_wlk_prefixes if f"{p}_TOTIVT__{tp}" in dst_data
+        ]
+        if not active_prefixes:
+            continue
+
+        totivt_stack = np.stack(
+            [
+                np.asarray(dst_data[f"{p}_TOTIVT__{tp}"][...], dtype=np.float32)
+                for p in active_prefixes
+            ],
+            axis=0,
+        )
+        masked_ivt = np.where(totivt_stack > 0, totivt_stack, np.inf)
+        best_idx = np.argmin(masked_ivt, axis=0)
+        has_valid = np.any(totivt_stack > 0, axis=0)
+
+        best_totivt = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "TOTIVT", tp, best_idx, has_valid, zero_matrix
+        )
+        best_iwait = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "IWAIT", tp, best_idx, has_valid, zero_matrix
+        )
+        best_xwait = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "XWAIT", tp, best_idx, has_valid, zero_matrix
+        )
+        best_wacc = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "WACC", tp, best_idx, has_valid, zero_matrix
+        )
+        best_waux = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "WAUX", tp, best_idx, has_valid, zero_matrix
+        )
+        best_wegr = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "WEGR", tp, best_idx, has_valid, zero_matrix
+        )
+        best_far = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "FAR", tp, best_idx, has_valid, zero_matrix
+        )
+        best_boards = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "BOARDS", tp, best_idx, has_valid, zero_matrix
+        )
+        trips_sum = np.sum(
+            [
+                _read_matrix_or_default(dst_data, f"{p}_TRIPS__{tp}", zero_matrix)
+                for p in active_prefixes
+            ],
+            axis=0,
+        ).astype(np.float32)
+        failures_min = _select_from_best_transit_mode(
+            dst_data, active_prefixes, "FAILURES", tp, best_idx, has_valid, zero_matrix
+        )
+
+        trn_matrices = {
+            "IVT": best_totivt,
+            "TOTIVT": best_totivt,
+            "IWAIT": best_iwait,
+            "XWAIT": best_xwait,
+            "WAIT": (best_iwait + best_xwait).astype(np.float32),
+            "WACC": best_wacc,
+            "WAUX": best_waux,
+            "WEGR": best_wegr,
+            "FAR": best_far,
+            "BOARDS": best_boards,
+            "TRIPS": trips_sum,
+            "FAILURES": failures_min,
+        }
+        for measure, arr in trn_matrices.items():
+            _write_matrix(
+                dst_data,
+                f"WLK_TRN_WLK_{measure}__{tp}",
+                arr,
+                compression_level=cfg.gzip_compression_level,
+            )
+
+
+def _copy_hov_matrices_for_period(
+    dst_data: h5py.Group,
+    tp: str,
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Copy HOV2/HOV3 from SOV and HOV2TOLL/HOV3TOLL from SOVTOLL for one period."""
+    sov_time = _read_matrix_or_default(dst_data, f"SOV_TIME__{tp}", zero_matrix)
+    sov_dist = _read_matrix_or_default(dst_data, f"SOV_DIST__{tp}", zero_matrix)
+    sov_btoll = _read_matrix_or_default(dst_data, f"SOV_BTOLL__{tp}", zero_matrix)
+    sov_vtoll = _read_matrix_or_default(dst_data, f"SOV_VTOLL__{tp}", zero_matrix)
+    default_sov_trips = np.where(sov_time > 0, 1.0, 0.0).astype(np.float32)
+    sov_trips = _read_matrix_or_default(dst_data, f"SOV_TRIPS__{tp}", default_sov_trips)
+    sov_failures = _read_matrix_or_default(dst_data, f"SOV_FAILURES__{tp}", zero_matrix)
+
+    sovtoll_time = _read_matrix_or_default(dst_data, f"SOVTOLL_TIME__{tp}", sov_time)
+    sovtoll_dist = _read_matrix_or_default(dst_data, f"SOVTOLL_DIST__{tp}", sov_dist)
+    sovtoll_btoll = _read_matrix_or_default(
+        dst_data, f"SOVTOLL_BTOLL__{tp}", zero_matrix
+    )
+    sovtoll_vtoll = _read_matrix_or_default(dst_data, f"SOVTOLL_VTOLL__{tp}", sov_btoll)
+    sovtoll_trips = _read_matrix_or_default(dst_data, f"SOVTOLL_TRIPS__{tp}", sov_trips)
+    sovtoll_failures = _read_matrix_or_default(
+        dst_data, f"SOVTOLL_FAILURES__{tp}", sov_failures
+    )
+
+    if f"SOVTOLL_TRIPS__{tp}" not in dst_data:
+        _write_matrix(
+            dst_data,
+            f"SOVTOLL_TRIPS__{tp}",
+            sovtoll_trips,
+            compression_level=cfg.gzip_compression_level,
+        )
+    if f"SOVTOLL_FAILURES__{tp}" not in dst_data:
+        _write_matrix(
+            dst_data,
+            f"SOVTOLL_FAILURES__{tp}",
+            sovtoll_failures,
+            compression_level=cfg.gzip_compression_level,
+        )
+
+    sov_bundle = (
+        ("TIME", sov_time),
+        ("DIST", sov_dist),
+        ("BTOLL", sov_btoll),
+        ("VTOLL", sov_vtoll),
+        ("TRIPS", sov_trips),
+        ("FAILURES", sov_failures),
+    )
+    for hov_prefix in ("HOV2", "HOV3"):
+        for measure, arr in sov_bundle:
+            _write_matrix(
+                dst_data,
+                f"{hov_prefix}_{measure}__{tp}",
+                arr,
+                compression_level=cfg.gzip_compression_level,
+            )
+
+    sovtoll_bundle = (
+        ("TIME", sovtoll_time),
+        ("DIST", sovtoll_dist),
+        ("BTOLL", sovtoll_btoll),
+        ("VTOLL", sovtoll_vtoll),
+        ("TRIPS", sovtoll_trips),
+        ("FAILURES", sovtoll_failures),
+    )
+    for hovtoll_prefix in ("HOV2TOLL", "HOV3TOLL"):
+        for measure, arr in sovtoll_bundle:
+            _write_matrix(
+                dst_data,
+                f"{hovtoll_prefix}_{measure}__{tp}",
+                arr,
+                compression_level=cfg.gzip_compression_level,
+            )
+
+
+def _copy_hov_matrices_from_sov(
+    dst_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Copy HOV2/HOV3 from SOV and HOV2TOLL/HOV3TOLL from SOVTOLL across all periods."""
+    if not cfg.copy_hov_from_sov:
+        return
+    for tp in time_periods:
+        _copy_hov_matrices_for_period(dst_data, tp, zero_matrix, cfg)
+
+
+def _synthesize_ridehail_for_period(
+    dst_data: h5py.Group,
+    tp: str,
+    zone_count: int,
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Synthesize Ridehail (RH_SOLO, RH_POOLED, RH_SHARED) matrices for one period."""
+    sov_time = _read_matrix_or_default(dst_data, f"SOV_TIME__{tp}", zero_matrix)
+    base_time = _read_matrix_or_default(dst_data, f"SOVTOLL_TIME__{tp}", sov_time)
+    sov_dist = _read_matrix_or_default(dst_data, f"SOV_DIST__{tp}", zero_matrix)
+    base_dist = _read_matrix_or_default(dst_data, f"SOVTOLL_DIST__{tp}", sov_dist)
+    default_trips = np.where(base_time > 0, 1.0, 0.0).astype(np.float32)
+    base_trips = _read_matrix_or_default(dst_data, f"SOV_TRIPS__{tp}", default_trips)
+
+    valid_od = (base_time > 0) | (base_dist > 0)
+    solo_wait = np.where(valid_od, cfg.rh_solo_wait_minutes, 0.0).astype(np.float32)
+    pooled_wait = np.where(valid_od, cfg.rh_pooled_wait_minutes, 0.0).astype(np.float32)
+    rejection_prob = np.full(
+        (zone_count, zone_count),
+        cfg.rh_rejection_prob,
+        dtype=np.float32,
+    )
+
+    solo_fare = np.where(
+        valid_od,
+        cfg.rh_solo_base_fare_cents
+        + cfg.rh_solo_per_mile_cents * base_dist
+        + cfg.rh_solo_per_minute_cents * base_time,
+        0.0,
+    ).astype(np.float32)
+    pooled_fare = (solo_fare * cfg.rh_pooled_fare_discount).astype(np.float32)
+    pooled_time = (base_time * cfg.rh_pooled_time_multiplier).astype(np.float32)
+    pooled_dist = (base_dist * cfg.rh_pooled_dist_multiplier).astype(np.float32)
+
+    solo_matrices = {
+        "TOTIVT": base_time,
+        "TIME": base_time,
+        "DDIST": base_dist,
+        "DIST": base_dist,
+        "WAIT": solo_wait,
+        "IWAIT": solo_wait,
+        "REJECTIONPROB": rejection_prob,
+        "FAR": solo_fare,
+        "TRIPS": base_trips,
+        "FAILURES": zero_matrix,
+    }
+    for measure, arr in solo_matrices.items():
+        _write_matrix(
+            dst_data,
+            f"RH_SOLO_{measure}__{tp}",
+            arr,
+            compression_level=cfg.gzip_compression_level,
+        )
+
+    pooled_matrices = {
+        "TOTIVT": pooled_time,
+        "TIME": pooled_time,
+        "DDIST": pooled_dist,
+        "DIST": pooled_dist,
+        "WAIT": pooled_wait,
+        "IWAIT": pooled_wait,
+        "REJECTIONPROB": rejection_prob,
+        "FAR": pooled_fare,
+        "TRIPS": base_trips,
+        "FAILURES": zero_matrix,
+    }
+    for rh_prefix in ("RH_POOLED", "RH_SHARED"):
+        for measure, arr in pooled_matrices.items():
+            _write_matrix(
+                dst_data,
+                f"{rh_prefix}_{measure}__{tp}",
+                arr,
+                compression_level=cfg.gzip_compression_level,
+            )
+
+
+def _synthesize_ridehail_matrices_from_sovtoll(
+    dst_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zone_count: int,
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Synthesize Ridehail (RH_SOLO, RH_POOLED, RH_SHARED) from SOVTOLL across periods."""
+    if not cfg.synthesize_ridehail_from_sovtoll:
+        return
+    for tp in time_periods:
+        _synthesize_ridehail_for_period(dst_data, tp, zone_count, zero_matrix, cfg)
+
+
+def _resolve_reference_dist_period(
+    time_periods: tuple[str, ...],
+    preferred_period: str,
+) -> str:
+    """Select reference period for static distance matrices."""
+    if preferred_period in time_periods:
+        return preferred_period
+    if "MD" in time_periods:
+        return "MD"
+    if "AM" in time_periods:
+        return "AM"
+    return time_periods[0]
+
+
+def _synthesize_static_distance_matrices(
+    dst_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Synthesize static 2D distance matrices (DIST, DISTBIKE, DISTWALK)."""
+    if not cfg.synthesize_static_dist_matrices:
+        return
+    ref_tp = _resolve_reference_dist_period(time_periods, cfg.reference_dist_period)
+    sov_dist_ref = _read_matrix_or_default(dst_data, f"SOV_DIST__{ref_tp}", zero_matrix)
+    walk_dist_ref = _read_matrix_or_default(
+        dst_data, f"WALK_DIST__{ref_tp}", sov_dist_ref
+    )
+    bike_dist_ref = _read_matrix_or_default(
+        dst_data, f"BIKE_DIST__{ref_tp}", walk_dist_ref
+    )
+
+    _write_matrix(
+        dst_data,
+        "DIST",
+        sov_dist_ref,
+        compression_level=cfg.gzip_compression_level,
+    )
+    _write_matrix(
+        dst_data,
+        "DISTWALK",
+        walk_dist_ref,
+        compression_level=cfg.gzip_compression_level,
+    )
+    _write_matrix(
+        dst_data,
+        "DISTBIKE",
+        bike_dist_ref,
+        compression_level=cfg.gzip_compression_level,
+    )
+
+
+def apply_impedance_overrides(
+    dst_data: h5py.Group,
+    time_periods: tuple[str, ...],
+    zone_count: int,
+    zero_matrix: np.ndarray,
+    cfg: FullSkimConversionConfig,
+) -> None:
+    """Synthesize derived transit, HOV, ridehail, and static distance matrices."""
+    _synthesize_transit_wait_matrices(dst_data, time_periods, zero_matrix, cfg)
+    _write_disabled_express_bus_matrices(dst_data, time_periods, zero_matrix, cfg)
+    _synthesize_wlk_trn_wlk_matrices(dst_data, time_periods, zero_matrix, cfg)
+    _copy_hov_matrices_from_sov(dst_data, time_periods, zero_matrix, cfg)
+    _synthesize_ridehail_matrices_from_sovtoll(
+        dst_data, time_periods, zone_count, zero_matrix, cfg
+    )
+    _synthesize_static_distance_matrices(dst_data, time_periods, zero_matrix, cfg)
+
+
+def _extract_upstream_str_field(
+    upstream_producer: Mapping[str, Any],
+    key: str,
+    explicit_value: str | None,
+) -> str | None:
+    """Resolve an optional string field from explicit arg or upstream producer metadata."""
+    if explicit_value:
+        return explicit_value
+    raw = upstream_producer.get(key)
+    return str(raw) if raw is not None else None
+
+
+def _extract_upstream_int_field(
+    upstream_producer: Mapping[str, Any],
+    key: str,
+    explicit_value: int | None,
+) -> int | None:
+    """Resolve an optional integer field from explicit arg or upstream producer metadata."""
+    if explicit_value is not None:
+        return explicit_value
+    raw = upstream_producer.get(key)
+    return int(raw) if raw is not None else None
+
+
+def write_omx_matrices_and_sidecars(
+    out_path: Path,
+    *,
+    emit_provenance_sidecar: bool,
+    upstream_prov: Mapping[str, Any] | None,
+    producer_step: str,
+    run_id: str | None,
+    scenario: str | None,
+    region: str | None,
+    year: int | None,
+    iteration: int | None,
+    tracker_db_path: Path | str | None,
+    cfg: FullSkimConversionConfig,
+    logical_matrices_identity: str,
+    input_matrix_count: int,
+    scaled_count: int,
+    imputed_count: int,
+    speed_capped_matrix_count: int,
+    speed_capped_cell_count: int,
+) -> Path | None:
+    """Emit provenance sidecar for the converted OMX when requested."""
+    if not emit_provenance_sidecar:
+        return None
+
+    raw_producer = (
+        upstream_prov.get("producer") if isinstance(upstream_prov, Mapping) else None
+    )
+    upstream_producer: Mapping[str, Any] = (
+        raw_producer if isinstance(raw_producer, Mapping) else {}
+    )
+
+    resolved_run_id = _extract_upstream_str_field(upstream_producer, "run_id", run_id)
+    resolved_scenario = _extract_upstream_str_field(
+        upstream_producer, "scenario", scenario
+    )
+    resolved_region = _extract_upstream_str_field(upstream_producer, "region", region)
+    resolved_year = _extract_upstream_int_field(upstream_producer, "year", year)
+    resolved_iteration = _extract_upstream_int_field(
+        upstream_producer, "iteration", iteration
+    )
+    resolved_tracker_db = tracker_db_path or upstream_producer.get("tracker_db_path")
+
+    extra_metadata: dict[str, Any] = {
+        "pilates_full_skim_converted": True,
+        "conversion_config": cfg.to_consist_facet(),
+        "pilates_converted_at": datetime.now(timezone.utc).isoformat(),
+        "logical_matrices_sha256": logical_matrices_identity,
+        "input_matrix_count": input_matrix_count,
+        "scaled_transit_matrix_count": scaled_count,
+        "intrazonal_imputed_matrix_count": imputed_count,
+        "speed_capped_matrix_count": speed_capped_matrix_count,
+        "speed_capped_cell_count": speed_capped_cell_count,
+    }
+    if isinstance(upstream_prov, Mapping):
+        extra_metadata["raw_beam_omx_identity"] = upstream_prov.get("identity")
+        extra_metadata["raw_beam_producer"] = dict(upstream_producer)
+
+    sidecar_path, _ = write_skim_provenance_sidecar(
+        out_path,
+        producer_step=producer_step,
+        run_id=resolved_run_id,
+        scenario=resolved_scenario,
+        region=resolved_region,
+        year=resolved_year,
+        iteration=resolved_iteration,
+        tracker_db_path=resolved_tracker_db,
+        extra_metadata=extra_metadata,
+    )
+    return sidecar_path
+
+
 def convert_beam_full_skims_to_activitysim_omx(
     input_omx_path: Path | str,
     output_omx_path: Path | str,
@@ -502,687 +1370,48 @@ def convert_beam_full_skims_to_activitysim_omx(
             "Refusing to re-scale transit skims; pass force=True to override."
         )
 
-    # Read upstream provenance sidecar if available so metadata is preserved
-    upstream_sidecar = skim_provenance_sidecar_path(in_path)
-    upstream_prov: dict[str, Any] | None = None
-    if upstream_sidecar.is_file():
-        try:
-            upstream_prov = read_skim_provenance_sidecar(upstream_sidecar)
-        except Exception as exc:
-            logger.debug(
-                "Unable to read upstream skim provenance sidecar %s: %s",
-                upstream_sidecar,
-                exc,
-            )
+    upstream_prov = _read_optional_upstream_provenance_sidecar(in_path)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_out_path = out_path.parent / f".tmp_{out_path.name}.{os.getpid()}"
     if tmp_out_path.exists():
         tmp_out_path.unlink()
 
-    intrazonal_prefixes = {
-        ("SOV", "DIST"),
-        ("SOV", "TIME"),
-        ("SOVTOLL", "DIST"),
-        ("SOVTOLL", "TIME"),
-        ("WALK", "DIST"),
-        ("WALK", "TIME"),
-        ("BIKE", "DIST"),
-        ("BIKE", "TIME"),
-    }
-
-    scaled_count = 0
-    imputed_count = 0
-    speed_capped_matrix_count = 0
-    speed_capped_cell_count = 0
-
     try:
         with h5py.File(in_path, "r") as src_h5, h5py.File(tmp_out_path, "w") as dst_h5:
-            # 1. Copy root attributes and stamp conversion metadata
-            for attr_key, attr_val in src_h5.attrs.items():
-                dst_h5.attrs[attr_key] = attr_val
+            (
+                src_data,
+                dst_data,
+                input_matrix_names,
+                zone_count,
+                time_periods,
+                zero_matrix,
+            ) = resolve_skim_layout(src_h5, dst_h5, in_path, cfg)
 
-            src_data = src_h5.get("data") or src_h5.get("DATA")
-            if src_data is None or not hasattr(src_data, "keys"):
-                raise ValueError(f"Input OMX file {in_path} has no /data group.")
-
-            input_matrix_names = sorted(str(k) for k in src_data.keys())
-            if not input_matrix_names:
-                raise ValueError(f"Input OMX file {in_path} has 0 matrices in /data.")
-
-            first_shape = src_data[input_matrix_names[0]].shape
-            if len(first_shape) != 2 or first_shape[0] != first_shape[1]:
-                raise ValueError(
-                    f"Expected square 2D skim matrices in {in_path}, got shape {first_shape}."
-                )
-            zone_count = int(first_shape[0])
-            time_periods = _infer_periods(input_matrix_names)
-
-            if "OMX_VERSION" not in dst_h5.attrs:
-                dst_h5.attrs["OMX_VERSION"] = np.bytes_("0.2")
-            dst_h5.attrs["SHAPE"] = np.array([zone_count, zone_count], dtype=np.int32)
-            dst_h5.attrs[CONVERTED_ATTR_KEY] = np.int32(1)
-            dst_h5.attrs["pilates_conversion_version"] = FULL_SKIM_CONVERTER_VERSION
-            dst_h5.attrs["pilates_max_speed_mph"] = (
-                float(cfg.max_speed_mph) if cfg.max_speed_mph is not None else -1.0
-            )
-            dst_h5.attrs["pilates_transit_scale_factor"] = float(
-                cfg.transit_scale_factor
-            )
-            dst_h5.attrs["pilates_rh_pooled_time_multiplier"] = float(
-                cfg.rh_pooled_time_multiplier
-            )
-            dst_h5.attrs["pilates_rh_pooled_dist_multiplier"] = float(
-                cfg.rh_pooled_dist_multiplier
-            )
-            dst_h5.attrs["pilates_express_bus_disabled"] = np.int32(
-                1 if cfg.disable_express_bus else 0
+            (
+                scaled_count,
+                imputed_count,
+                speed_capped_matrix_count,
+                speed_capped_cell_count,
+            ) = accumulate_origin_destination_records(
+                src_data,
+                dst_data,
+                input_matrix_names,
+                zone_count,
+                time_periods,
+                zero_matrix,
+                cfg,
             )
 
-            # 2. Populate /lookup with TAZ, zone_id, and zone_number
-            dst_lookup = dst_h5.create_group("lookup")
-            src_lookup = src_h5.get("lookup") or src_h5.get("LOOKUP")
-            zone_vector: np.ndarray | None = None
-            if src_lookup is not None and hasattr(src_lookup, "keys"):
-                for lkey in ("zone_number", "TAZ", "zone_id"):
-                    if lkey in src_lookup:
-                        zone_vector = np.asarray(src_lookup[lkey][...])
-                        break
-                if zone_vector is None:
-                    for lkey in src_lookup.keys():
-                        zone_vector = np.asarray(src_lookup[lkey][...])
-                        break
-            if zone_vector is None:
-                zone_vector = np.arange(1, zone_count + 1, dtype=np.int64)
-            dst_lookup.create_dataset("TAZ", data=zone_vector)
-            dst_lookup.create_dataset("zone_id", data=zone_vector)
-            dst_lookup.create_dataset("zone_number", data=zone_vector.astype(np.int32))
+            apply_impedance_overrides(
+                dst_data, time_periods, zone_count, zero_matrix, cfg
+            )
 
-            dst_data = dst_h5.create_group("data")
-            zero_matrix = np.zeros((zone_count, zone_count), dtype=np.float32)
-
-            # Build reference highway distance and time matrices across periods
-            # so any isolated NaN/zero cells in individual periods or unrouted
-            # long-distance walk/bike cells (>3 miles) can be backfilled cleanly.
-            ref_sov_dist = zero_matrix.copy()
-            ref_sov_time = zero_matrix.copy()
-            pref_periods = [cfg.reference_dist_period, "MD", "AM"] + list(time_periods)
-            for p_cand in pref_periods:
-                d_key = f"SOV_DIST__{p_cand}"
-                if d_key in src_data:
-                    cand_d = _sanitize_non_negative_float32(src_data[d_key][...])
-                    ref_sov_dist = np.where(
-                        ref_sov_dist > 0, ref_sov_dist, cand_d
-                    ).astype(np.float32)
-                t_key = f"SOV_TIME__{p_cand}"
-                if t_key in src_data:
-                    cand_t = _sanitize_non_negative_float32(src_data[t_key][...])
-                    ref_sov_time = np.where(
-                        ref_sov_time > 0, ref_sov_time, cand_t
-                    ).astype(np.float32)
-            if cfg.impute_intrazonal_from_nearest_neighbors:
-                ref_sov_dist, _ = _impute_intrazonal_diagonal(
-                    ref_sov_dist,
-                    k=cfg.intrazonal_nearest_neighbors_k,
-                    factor=cfg.intrazonal_factor,
-                )
-                ref_sov_time, _ = _impute_intrazonal_diagonal(
-                    ref_sov_time,
-                    k=cfg.intrazonal_nearest_neighbors_k,
-                    factor=cfg.intrazonal_factor,
-                )
-            if cfg.max_speed_mph is not None and cfg.max_speed_mph > 0:
-                ref_sov_time, _ = _cap_travel_times_by_max_speed(
-                    ref_sov_time,
-                    ref_sov_dist,
-                    cfg.max_speed_mph,
-                )
-
-            # 3. Copy existing matrices, applying NaN sanitization, highway/walk backfill,
-            #    intrazonal imputation, and transit scaling.
-            for name in input_matrix_names:
-                prefix, measure, _period = _split_matrix_name(name)
-                if cfg.disable_express_bus and prefix in (
-                    "WLK_EXP_WLK",
-                    "DRV_EXP_WLK",
-                    "WLK_EXP_DRV",
-                ):
-                    # Express bus will be written as zeros in step 5
-                    continue
-
-                raw_arr = _sanitize_non_negative_float32(src_data[name][...])
-
-                # Backfill any missing (NaN/0) off-diagonal cells in highway/walk/bike distance & time
-                off_diag_zero = (raw_arr <= 0) & (~np.eye(zone_count, dtype=bool))
-                if prefix in ("SOV", "SOVTOLL", "WALK", "BIKE") and measure == "DIST":
-                    if np.any(off_diag_zero) and np.any(ref_sov_dist > 0):
-                        raw_arr = np.where(off_diag_zero, ref_sov_dist, raw_arr).astype(
-                            np.float32
-                        )
-                elif prefix in ("SOV", "SOVTOLL") and measure == "TIME":
-                    if np.any(off_diag_zero) and np.any(ref_sov_time > 0):
-                        raw_arr = np.where(off_diag_zero, ref_sov_time, raw_arr).astype(
-                            np.float32
-                        )
-                elif prefix == "WALK" and measure == "TIME":
-                    if np.any(off_diag_zero) and np.any(ref_sov_dist > 0):
-                        raw_arr = np.where(
-                            off_diag_zero,
-                            ref_sov_dist * np.float32(20.0),
-                            raw_arr,
-                        ).astype(np.float32)
-                elif prefix == "BIKE" and measure == "TIME":
-                    if np.any(off_diag_zero) and np.any(ref_sov_dist > 0):
-                        raw_arr = np.where(
-                            off_diag_zero,
-                            ref_sov_dist * np.float32(6.0),
-                            raw_arr,
-                        ).astype(np.float32)
-
-                if (
-                    cfg.impute_intrazonal_from_nearest_neighbors
-                    and (prefix, measure) in intrazonal_prefixes
-                ):
-                    raw_arr, did_impute = _impute_intrazonal_diagonal(
-                        raw_arr,
-                        k=cfg.intrazonal_nearest_neighbors_k,
-                        factor=cfg.intrazonal_factor,
-                    )
-                    if did_impute:
-                        imputed_count += 1
-
-                if (
-                    cfg.max_speed_mph is not None
-                    and cfg.max_speed_mph > 0
-                    and prefix in ("SOV", "SOVTOLL")
-                    and measure == "TIME"
-                ):
-                    dist_name = (
-                        f"{prefix}_DIST__{_period}" if _period else f"{prefix}_DIST"
-                    )
-                    if dist_name in dst_data:
-                        dist_arr = np.asarray(
-                            dst_data[dist_name][...], dtype=np.float32
-                        )
-                    elif dist_name in src_data:
-                        dist_arr = _sanitize_non_negative_float32(
-                            src_data[dist_name][...]
-                        )
-                    else:
-                        fallback_dist_name = (
-                            f"SOV_DIST__{_period}" if _period else "SOV_DIST"
-                        )
-                        if fallback_dist_name in dst_data:
-                            dist_arr = np.asarray(
-                                dst_data[fallback_dist_name][...], dtype=np.float32
-                            )
-                        elif fallback_dist_name in src_data:
-                            dist_arr = _sanitize_non_negative_float32(
-                                src_data[fallback_dist_name][...]
-                            )
-                        else:
-                            dist_arr = ref_sov_dist
-
-                    raw_arr, n_capped = _cap_travel_times_by_max_speed(
-                        raw_arr,
-                        dist_arr,
-                        cfg.max_speed_mph,
-                    )
-                    if n_capped > 0:
-                        speed_capped_matrix_count += 1
-                        speed_capped_cell_count += n_capped
-
-                if _should_scale_transit_matrix(prefix, measure):
-                    raw_arr = (raw_arr * np.float32(cfg.transit_scale_factor)).astype(
-                        np.float32
-                    )
-                    scaled_count += 1
-
-                _write_matrix(
-                    dst_data,
-                    name,
-                    raw_arr,
-                    compression_level=cfg.gzip_compression_level,
-                    attrs=dict(src_data[name].attrs),
-                )
-
-            # 4. Synthesize *_WAIT__<tp> = IWAIT + XWAIT for non-EXP transit modes
-            for prefix in TRANSIT_PREFIXES:
-                if prefix in (
-                    "WLK_EXP_WLK",
-                    "DRV_EXP_WLK",
-                    "WLK_EXP_DRV",
-                    "WLK_TRN_WLK",
-                ):
-                    continue
-                for tp in time_periods:
-                    wait_name = f"{prefix}_WAIT__{tp}"
-                    iwait_name = f"{prefix}_IWAIT__{tp}"
-                    xwait_name = f"{prefix}_XWAIT__{tp}"
-                    if wait_name not in dst_data and (
-                        iwait_name in dst_data or xwait_name in dst_data
-                    ):
-                        iwait = (
-                            np.asarray(dst_data[iwait_name][...], dtype=np.float32)
-                            if iwait_name in dst_data
-                            else zero_matrix
-                        )
-                        xwait = (
-                            np.asarray(dst_data[xwait_name][...], dtype=np.float32)
-                            if xwait_name in dst_data
-                            else zero_matrix
-                        )
-                        _write_matrix(
-                            dst_data,
-                            wait_name,
-                            iwait + xwait,
-                            compression_level=cfg.gzip_compression_level,
-                        )
-
-            # 5. Express Bus (EXP) -> all zeros (unavailable)
-            if cfg.disable_express_bus:
-                for tp in time_periods:
-                    for measure in WLK_EXP_WLK_MEASURES:
-                        _write_matrix(
-                            dst_data,
-                            f"WLK_EXP_WLK_{measure}__{tp}",
-                            zero_matrix,
-                            compression_level=cfg.gzip_compression_level,
-                        )
-                    for prefix in ("DRV_EXP_WLK", "WLK_EXP_DRV"):
-                        for measure in DRV_EXP_MEASURES:
-                            _write_matrix(
-                                dst_data,
-                                f"{prefix}_{measure}__{tp}",
-                                zero_matrix,
-                                compression_level=cfg.gzip_compression_level,
-                            )
-
-            # 6. Synthesize WLK_TRN_WLK_* across available WLK_*_WLK modes
-            if cfg.synthesize_wlk_trn_wlk:
-                candidate_wlk_prefixes = [
-                    "WLK_LOC_WLK",
-                    "WLK_LRF_WLK",
-                    "WLK_HVY_WLK",
-                    "WLK_COM_WLK",
-                ]
-                if not cfg.disable_express_bus:
-                    candidate_wlk_prefixes.append("WLK_EXP_WLK")
-
-                for tp in time_periods:
-                    active_prefixes = [
-                        p
-                        for p in candidate_wlk_prefixes
-                        if f"{p}_TOTIVT__{tp}" in dst_data
-                    ]
-                    if not active_prefixes:
-                        continue
-
-                    totivt_stack = np.stack(
-                        [
-                            np.asarray(
-                                dst_data[f"{p}_TOTIVT__{tp}"][...], dtype=np.float32
-                            )
-                            for p in active_prefixes
-                        ],
-                        axis=0,
-                    )
-                    masked_ivt = np.where(totivt_stack > 0, totivt_stack, np.inf)
-                    best_idx = np.argmin(masked_ivt, axis=0)
-                    has_valid = np.any(totivt_stack > 0, axis=0)
-
-                    def _select_from_best(measure_suffix: str) -> np.ndarray:
-                        stack = np.stack(
-                            [
-                                (
-                                    np.asarray(
-                                        dst_data[f"{p}_{measure_suffix}__{tp}"][...],
-                                        dtype=np.float32,
-                                    )
-                                    if f"{p}_{measure_suffix}__{tp}" in dst_data
-                                    else zero_matrix
-                                )
-                                for p in active_prefixes
-                            ],
-                            axis=0,
-                        )
-                        chosen = np.take_along_axis(
-                            stack, best_idx[np.newaxis, :, :], axis=0
-                        )[0]
-                        return np.where(has_valid, chosen, 0.0).astype(np.float32)
-
-                    best_totivt = _select_from_best("TOTIVT")
-                    best_iwait = _select_from_best("IWAIT")
-                    best_xwait = _select_from_best("XWAIT")
-                    best_wacc = _select_from_best("WACC")
-                    best_waux = _select_from_best("WAUX")
-                    best_wegr = _select_from_best("WEGR")
-                    best_far = _select_from_best("FAR")
-                    best_boards = _select_from_best("BOARDS")
-
-                    trips_sum = np.sum(
-                        [
-                            (
-                                np.asarray(
-                                    dst_data[f"{p}_TRIPS__{tp}"][...], dtype=np.float32
-                                )
-                                if f"{p}_TRIPS__{tp}" in dst_data
-                                else zero_matrix
-                            )
-                            for p in active_prefixes
-                        ],
-                        axis=0,
-                    ).astype(np.float32)
-                    failures_min = _select_from_best("FAILURES")
-
-                    trn_matrices = {
-                        "IVT": best_totivt,
-                        "TOTIVT": best_totivt,
-                        "IWAIT": best_iwait,
-                        "XWAIT": best_xwait,
-                        "WAIT": (best_iwait + best_xwait).astype(np.float32),
-                        "WACC": best_wacc,
-                        "WAUX": best_waux,
-                        "WEGR": best_wegr,
-                        "FAR": best_far,
-                        "BOARDS": best_boards,
-                        "TRIPS": trips_sum,
-                        "FAILURES": failures_min,
-                    }
-                    for measure, arr in trn_matrices.items():
-                        _write_matrix(
-                            dst_data,
-                            f"WLK_TRN_WLK_{measure}__{tp}",
-                            arr,
-                            compression_level=cfg.gzip_compression_level,
-                        )
-
-            # 7. Copy HOV2 / HOV3 from SOV and HOV2TOLL / HOV3TOLL from SOVTOLL
-            if cfg.copy_hov_from_sov:
-                for tp in time_periods:
-                    sov_time = (
-                        np.asarray(dst_data[f"SOV_TIME__{tp}"][...], dtype=np.float32)
-                        if f"SOV_TIME__{tp}" in dst_data
-                        else zero_matrix
-                    )
-                    sov_dist = (
-                        np.asarray(dst_data[f"SOV_DIST__{tp}"][...], dtype=np.float32)
-                        if f"SOV_DIST__{tp}" in dst_data
-                        else zero_matrix
-                    )
-                    sov_btoll = (
-                        np.asarray(dst_data[f"SOV_BTOLL__{tp}"][...], dtype=np.float32)
-                        if f"SOV_BTOLL__{tp}" in dst_data
-                        else zero_matrix
-                    )
-                    sov_vtoll = (
-                        np.asarray(dst_data[f"SOV_VTOLL__{tp}"][...], dtype=np.float32)
-                        if f"SOV_VTOLL__{tp}" in dst_data
-                        else zero_matrix
-                    )
-                    sov_trips = (
-                        np.asarray(dst_data[f"SOV_TRIPS__{tp}"][...], dtype=np.float32)
-                        if f"SOV_TRIPS__{tp}" in dst_data
-                        else np.where(sov_time > 0, 1.0, 0.0).astype(np.float32)
-                    )
-                    sov_failures = (
-                        np.asarray(
-                            dst_data[f"SOV_FAILURES__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOV_FAILURES__{tp}" in dst_data
-                        else zero_matrix
-                    )
-
-                    sovtoll_time = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_TIME__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_TIME__{tp}" in dst_data
-                        else sov_time
-                    )
-                    sovtoll_dist = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_DIST__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_DIST__{tp}" in dst_data
-                        else sov_dist
-                    )
-                    sovtoll_btoll = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_BTOLL__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_BTOLL__{tp}" in dst_data
-                        else zero_matrix
-                    )
-                    sovtoll_vtoll = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_VTOLL__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_VTOLL__{tp}" in dst_data
-                        else sov_btoll
-                    )
-                    sovtoll_trips = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_TRIPS__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_TRIPS__{tp}" in dst_data
-                        else sov_trips
-                    )
-                    sovtoll_failures = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_FAILURES__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_FAILURES__{tp}" in dst_data
-                        else sov_failures
-                    )
-
-                    if f"SOVTOLL_TRIPS__{tp}" not in dst_data:
-                        _write_matrix(
-                            dst_data,
-                            f"SOVTOLL_TRIPS__{tp}",
-                            sovtoll_trips,
-                            compression_level=cfg.gzip_compression_level,
-                        )
-                    if f"SOVTOLL_FAILURES__{tp}" not in dst_data:
-                        _write_matrix(
-                            dst_data,
-                            f"SOVTOLL_FAILURES__{tp}",
-                            sovtoll_failures,
-                            compression_level=cfg.gzip_compression_level,
-                        )
-
-                    for hov_prefix in ("HOV2", "HOV3"):
-                        for measure, arr in (
-                            ("TIME", sov_time),
-                            ("DIST", sov_dist),
-                            ("BTOLL", sov_btoll),
-                            ("VTOLL", sov_vtoll),
-                            ("TRIPS", sov_trips),
-                            ("FAILURES", sov_failures),
-                        ):
-                            _write_matrix(
-                                dst_data,
-                                f"{hov_prefix}_{measure}__{tp}",
-                                arr,
-                                compression_level=cfg.gzip_compression_level,
-                            )
-
-                    for hovtoll_prefix in ("HOV2TOLL", "HOV3TOLL"):
-                        for measure, arr in (
-                            ("TIME", sovtoll_time),
-                            ("DIST", sovtoll_dist),
-                            ("BTOLL", sovtoll_btoll),
-                            ("VTOLL", sovtoll_vtoll),
-                            ("TRIPS", sovtoll_trips),
-                            ("FAILURES", sovtoll_failures),
-                        ):
-                            _write_matrix(
-                                dst_data,
-                                f"{hovtoll_prefix}_{measure}__{tp}",
-                                arr,
-                                compression_level=cfg.gzip_compression_level,
-                            )
-
-            # 8. Synthesize Ridehail (RH_SOLO, RH_POOLED, RH_SHARED) from SOVTOLL
-            if cfg.synthesize_ridehail_from_sovtoll:
-                for tp in time_periods:
-                    base_time = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_TIME__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_TIME__{tp}" in dst_data
-                        else (
-                            np.asarray(
-                                dst_data[f"SOV_TIME__{tp}"][...], dtype=np.float32
-                            )
-                            if f"SOV_TIME__{tp}" in dst_data
-                            else zero_matrix
-                        )
-                    )
-                    base_dist = (
-                        np.asarray(
-                            dst_data[f"SOVTOLL_DIST__{tp}"][...], dtype=np.float32
-                        )
-                        if f"SOVTOLL_DIST__{tp}" in dst_data
-                        else (
-                            np.asarray(
-                                dst_data[f"SOV_DIST__{tp}"][...], dtype=np.float32
-                            )
-                            if f"SOV_DIST__{tp}" in dst_data
-                            else zero_matrix
-                        )
-                    )
-                    base_trips = (
-                        np.asarray(dst_data[f"SOV_TRIPS__{tp}"][...], dtype=np.float32)
-                        if f"SOV_TRIPS__{tp}" in dst_data
-                        else np.where(base_time > 0, 1.0, 0.0).astype(np.float32)
-                    )
-
-                    valid_od = (base_time > 0) | (base_dist > 0)
-                    solo_wait = np.where(
-                        valid_od, cfg.rh_solo_wait_minutes, 0.0
-                    ).astype(np.float32)
-                    pooled_wait = np.where(
-                        valid_od, cfg.rh_pooled_wait_minutes, 0.0
-                    ).astype(np.float32)
-                    rejection_prob = np.full(
-                        (zone_count, zone_count),
-                        cfg.rh_rejection_prob,
-                        dtype=np.float32,
-                    )
-
-                    solo_fare = np.where(
-                        valid_od,
-                        cfg.rh_solo_base_fare_cents
-                        + cfg.rh_solo_per_mile_cents * base_dist
-                        + cfg.rh_solo_per_minute_cents * base_time,
-                        0.0,
-                    ).astype(np.float32)
-                    pooled_fare = (solo_fare * cfg.rh_pooled_fare_discount).astype(
-                        np.float32
-                    )
-
-                    pooled_time = (base_time * cfg.rh_pooled_time_multiplier).astype(
-                        np.float32
-                    )
-                    pooled_dist = (base_dist * cfg.rh_pooled_dist_multiplier).astype(
-                        np.float32
-                    )
-
-                    solo_matrices = {
-                        "TOTIVT": base_time,
-                        "TIME": base_time,
-                        "DDIST": base_dist,
-                        "DIST": base_dist,
-                        "WAIT": solo_wait,
-                        "IWAIT": solo_wait,
-                        "REJECTIONPROB": rejection_prob,
-                        "FAR": solo_fare,
-                        "TRIPS": base_trips,
-                        "FAILURES": zero_matrix,
-                    }
-                    for measure, arr in solo_matrices.items():
-                        _write_matrix(
-                            dst_data,
-                            f"RH_SOLO_{measure}__{tp}",
-                            arr,
-                            compression_level=cfg.gzip_compression_level,
-                        )
-
-                    pooled_matrices = {
-                        "TOTIVT": pooled_time,
-                        "TIME": pooled_time,
-                        "DDIST": pooled_dist,
-                        "DIST": pooled_dist,
-                        "WAIT": pooled_wait,
-                        "IWAIT": pooled_wait,
-                        "REJECTIONPROB": rejection_prob,
-                        "FAR": pooled_fare,
-                        "TRIPS": base_trips,
-                        "FAILURES": zero_matrix,
-                    }
-                    for rh_prefix in ("RH_POOLED", "RH_SHARED"):
-                        for measure, arr in pooled_matrices.items():
-                            _write_matrix(
-                                dst_data,
-                                f"{rh_prefix}_{measure}__{tp}",
-                                arr,
-                                compression_level=cfg.gzip_compression_level,
-                            )
-
-            # 9. Synthesize static 2D distance matrices (DIST, DISTBIKE, DISTWALK)
-            if cfg.synthesize_static_dist_matrices:
-                ref_tp = (
-                    cfg.reference_dist_period
-                    if cfg.reference_dist_period in time_periods
-                    else (
-                        "MD"
-                        if "MD" in time_periods
-                        else ("AM" if "AM" in time_periods else time_periods[0])
-                    )
-                )
-                sov_dist_ref = (
-                    np.asarray(dst_data[f"SOV_DIST__{ref_tp}"][...], dtype=np.float32)
-                    if f"SOV_DIST__{ref_tp}" in dst_data
-                    else zero_matrix
-                )
-                walk_dist_ref = (
-                    np.asarray(dst_data[f"WALK_DIST__{ref_tp}"][...], dtype=np.float32)
-                    if f"WALK_DIST__{ref_tp}" in dst_data
-                    else sov_dist_ref
-                )
-                bike_dist_ref = (
-                    np.asarray(dst_data[f"BIKE_DIST__{ref_tp}"][...], dtype=np.float32)
-                    if f"BIKE_DIST__{ref_tp}" in dst_data
-                    else walk_dist_ref
-                )
-
-                _write_matrix(
-                    dst_data,
-                    "DIST",
-                    sov_dist_ref,
-                    compression_level=cfg.gzip_compression_level,
-                )
-                _write_matrix(
-                    dst_data,
-                    "DISTWALK",
-                    walk_dist_ref,
-                    compression_level=cfg.gzip_compression_level,
-                )
-                _write_matrix(
-                    dst_data,
-                    "DISTBIKE",
-                    bike_dist_ref,
-                    compression_level=cfg.gzip_compression_level,
-                )
-
-            # 10. Compute canonical logical matrices SHA-256 and stamp root attribute
             logical_matrices_hex = compute_omx_logical_matrices_sha256(dst_h5)
             logical_matrices_identity = (
                 f"sha256:logical_matrices:{logical_matrices_hex}"
             )
             dst_h5.attrs["logical_matrices_sha256"] = logical_matrices_identity
-
             output_matrix_count = len(dst_data.keys())
 
         tmp_out_path.replace(out_path)
@@ -1191,77 +1420,25 @@ def convert_beam_full_skims_to_activitysim_omx(
             tmp_out_path.unlink()
         raise
 
-    sidecar_path: Path | None = None
-    if emit_provenance_sidecar:
-        upstream_producer = (
-            upstream_prov.get("producer")
-            if isinstance(upstream_prov, Mapping)
-            and isinstance(upstream_prov.get("producer"), Mapping)
-            else {}
-        )
-        resolved_run_id = run_id or (
-            str(upstream_producer["run_id"])
-            if upstream_producer.get("run_id") is not None
-            else None
-        )
-        resolved_scenario = scenario or (
-            str(upstream_producer["scenario"])
-            if upstream_producer.get("scenario") is not None
-            else None
-        )
-        resolved_region = region or (
-            str(upstream_producer["region"])
-            if upstream_producer.get("region") is not None
-            else None
-        )
-        resolved_year = (
-            year
-            if year is not None
-            else (
-                int(upstream_producer["year"])
-                if upstream_producer.get("year") is not None
-                else None
-            )
-        )
-        resolved_iteration = (
-            iteration
-            if iteration is not None
-            else (
-                int(upstream_producer["iteration"])
-                if upstream_producer.get("iteration") is not None
-                else None
-            )
-        )
-        resolved_tracker_db = tracker_db_path or upstream_producer.get(
-            "tracker_db_path"
-        )
-
-        extra_metadata: dict[str, Any] = {
-            "pilates_full_skim_converted": True,
-            "conversion_config": cfg.to_consist_facet(),
-            "pilates_converted_at": datetime.now(timezone.utc).isoformat(),
-            "logical_matrices_sha256": logical_matrices_identity,
-            "input_matrix_count": len(input_matrix_names),
-            "scaled_transit_matrix_count": scaled_count,
-            "intrazonal_imputed_matrix_count": imputed_count,
-            "speed_capped_matrix_count": speed_capped_matrix_count,
-            "speed_capped_cell_count": speed_capped_cell_count,
-        }
-        if isinstance(upstream_prov, Mapping):
-            extra_metadata["raw_beam_omx_identity"] = upstream_prov.get("identity")
-            extra_metadata["raw_beam_producer"] = dict(upstream_producer)
-
-        sidecar_path, _ = write_skim_provenance_sidecar(
-            out_path,
-            producer_step=producer_step,
-            run_id=resolved_run_id,
-            scenario=resolved_scenario,
-            region=resolved_region,
-            year=resolved_year,
-            iteration=resolved_iteration,
-            tracker_db_path=resolved_tracker_db,
-            extra_metadata=extra_metadata,
-        )
+    sidecar_path = write_omx_matrices_and_sidecars(
+        out_path,
+        emit_provenance_sidecar=emit_provenance_sidecar,
+        upstream_prov=upstream_prov,
+        producer_step=producer_step,
+        run_id=run_id,
+        scenario=scenario,
+        region=region,
+        year=year,
+        iteration=iteration,
+        tracker_db_path=tracker_db_path,
+        cfg=cfg,
+        logical_matrices_identity=logical_matrices_identity,
+        input_matrix_count=len(input_matrix_names),
+        scaled_count=scaled_count,
+        imputed_count=imputed_count,
+        speed_capped_matrix_count=speed_capped_matrix_count,
+        speed_capped_cell_count=speed_capped_cell_count,
+    )
 
     logger.info(
         "[FullSkimConverter] Converted %s (%d matrices) -> %s (%d matrices, transit_scale=%s, max_speed_mph=%s, capped_cells=%d, logical_sha256=%s)",

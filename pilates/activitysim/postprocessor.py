@@ -26,6 +26,7 @@ from pilates.activitysim.runner import (
     asim_staged_input_paths,
 )
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -1008,6 +1009,218 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             **postprocess_kwargs,
         )
 
+    @staticmethod
+    def _build_content_hash_map(raw_outputs: ActivitySimRunOutputs) -> Dict[str, str]:
+        hash_map: Dict[str, str] = {}
+        for short_name, path in raw_outputs.raw_outputs.items():
+            record_hash = raw_outputs.raw_output_hashes.get(short_name)
+            if record_hash:
+                hash_map[os.path.abspath(str(path))] = record_hash
+        source_input_paths = raw_outputs.source_input_paths
+        source_input_hashes = raw_outputs.source_input_hashes
+        if not source_input_paths and not source_input_hashes:
+            logger.debug(
+                "ActivitySim postprocess raw outputs are missing source input metadata; "
+                "archived input content hashes may be unavailable."
+            )
+        for short_name, source_path in source_input_paths.items():
+            record_hash = source_input_hashes.get(short_name)
+            if not record_hash or not source_path:
+                continue
+            hash_map[os.path.abspath(str(source_path))] = record_hash
+        return hash_map
+
+    @staticmethod
+    def _resolve_atlas_households_input_path(
+        settings: PilatesConfig,
+        raw_outputs: ActivitySimRunOutputs,
+        households_asim_input_path: Optional[str],
+    ) -> Optional[Path]:
+        if not _atlas_owns_vehicle_ownership(settings):
+            return None
+        if households_asim_input_path is None:
+            raise ValueError(
+                "ActivitySim postprocess requires households_asim_input_path when "
+                "ATLAS owns vehicle ownership."
+            )
+        household_output_key = next(
+            (
+                raw_key
+                for raw_key in raw_outputs.raw_outputs
+                if normalize_asim_output_key(re.sub(r"_asim_out_temp$", "", raw_key))
+                == "households_asim_out"
+            ),
+            None,
+        )
+        if household_output_key is None:
+            raise ValueError(
+                "ActivitySim postprocess requires a households_asim_out raw output "
+                "when ATLAS owns vehicle ownership."
+            )
+        return Path(households_asim_input_path)
+
+    @staticmethod
+    def _archive_iteration_asim_inputs(
+        workspace: Workspace,
+        raw_outputs: ActivitySimRunOutputs,
+        inputs_folder_path: str,
+        content_hash_map: Dict[str, str],
+        processed_outputs: Dict[str, str],
+        processed_output_hashes: Dict[str, str],
+    ) -> None:
+        asim_data_dir = workspace.get_asim_mutable_data_dir()
+        input_files_to_archive = [
+            "households.csv",
+            "persons.csv",
+            "land_use.csv",
+        ]
+        zarr_used_as_input = bool(raw_outputs.source_input_paths.get(ZARR_SKIMS))
+        if not zarr_used_as_input:
+            input_files_to_archive.append("skims.omx")
+
+        for input_file in input_files_to_archive:
+            source_path = os.path.join(asim_data_dir, input_file)
+            if os.path.exists(source_path):
+                target_path = os.path.join(inputs_folder_path, input_file)
+                shutil.copy(source_path, target_path)
+                content_hash = content_hash_map.get(os.path.abspath(source_path))
+
+                archived_key = f"asim_input_{input_file.replace('.', '_')}_archived"
+                processed_outputs[archived_key] = target_path
+                if content_hash:
+                    processed_output_hashes[archived_key] = content_hash
+                logger.info(f"Archived ActivitySim input: {input_file}")
+            else:
+                logger.debug(f"Input file not found, skipping archive: {source_path}")
+
+    def _update_urbansim_datastore_if_enabled(
+        self,
+        settings: PilatesConfig,
+        workspace: Workspace,
+        raw_outputs: ActivitySimRunOutputs,
+        iteration_folder_path: str,
+        forecast_year: int,
+        population_source_h5_path: Optional[str],
+        current_input_h5_path: Optional[str],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if not self.state.is_enabled(WorkflowState.Stage.land_use):
+            return None, None
+        if not population_source_h5_path:
+            raise ValueError(
+                "ActivitySim postprocess requires population_source_h5_path when land use is enabled."
+            )
+        if not current_input_h5_path:
+            raise ValueError(
+                "ActivitySim postprocess requires current_input_h5_path when land use is enabled."
+            )
+
+        asim_output_dict = _load_asim_outputs(
+            settings,
+            workspace,
+            self.state,
+            fallback_dir=iteration_folder_path,
+        )
+        source_file_paths = [str(path) for path in raw_outputs.raw_outputs.values()]
+        tables_updated_by_asim = ["households", "persons"]
+        asim_output_dict = _prepare_updated_tables(
+            settings,
+            self.state,
+            asim_output_dict,
+            tables_updated_by_asim,
+            population_source_store_path=population_source_h5_path,
+            prefix=forecast_year,
+        )
+
+        next_usim_input_path, usim_record = create_usim_input_data(
+            settings,
+            self.state,
+            asim_output_dict,
+            tables_updated_by_asim,
+            source_file_paths,
+            current_input_store_path=current_input_h5_path,
+            population_source_store_path=population_source_h5_path,
+            target_store_path=_next_iter_usim_input_store_path(
+                settings,
+                workspace,
+                self.state,
+            ),
+        )
+        if not usim_record:
+            return None, None
+        usim_datastore_key = (
+            usim_record.short_name
+            if isinstance(usim_record, FileRecord)
+            else get_setting(usim_record, "short_name", None)
+        )
+        return next_usim_input_path, usim_datastore_key
+
+    @staticmethod
+    def _archive_single_asim_raw_output(
+        short_name: str,
+        path: Any,
+        raw_outputs: ActivitySimRunOutputs,
+        iteration_folder_path: str,
+        atlas_households_input_path: Optional[Path],
+        content_hash_map: Dict[str, str],
+        processed_outputs: Dict[str, str],
+        processed_output_hashes: Dict[str, str],
+    ) -> None:
+        source = os.path.abspath(str(path))
+        clean_name = re.sub(r"_asim_out_temp$", "", short_name)
+        output_key = normalize_asim_output_key(clean_name)
+        target = os.path.join(
+            iteration_folder_path,
+            _postprocess_output_stem(output_key) + ".parquet",
+        )
+        content_hash = raw_outputs.raw_output_hashes.get(short_name)
+        restore_atlas_cars = (
+            atlas_households_input_path is not None
+            and output_key == "households_asim_out"
+        )
+        if restore_atlas_cars and atlas_households_input_path is not None:
+            if os.path.abspath(source) != os.path.abspath(target):
+                if not os.path.exists(source):
+                    if not os.path.exists(target):
+                        logger.debug("ASim output missing, skipping copy: %s", source)
+                        return
+                else:
+                    shutil.copy2(source, target)
+            content_hash = restore_atlas_household_cars(
+                households_output_path=Path(target),
+                households_input_path=atlas_households_input_path,
+            )
+            processed_outputs[output_key] = target
+            processed_output_hashes[output_key] = content_hash
+            return
+
+        if os.path.abspath(source) == os.path.abspath(target):
+            processed_outputs[output_key] = target
+            if content_hash:
+                processed_output_hashes[output_key] = content_hash
+            return
+
+        if os.path.exists(target):
+            logger.debug("ASim output already archived: %s", target)
+            processed_outputs[output_key] = target
+            if content_hash is None:
+                content_hash = content_hash_map.get(source) or content_hash_map.get(
+                    os.path.abspath(target)
+                )
+            if content_hash:
+                processed_output_hashes[output_key] = content_hash
+            return
+
+        if not os.path.exists(source):
+            logger.debug("ASim output missing, skipping move: %s", source)
+            return
+
+        shutil.move(source, target)
+        if content_hash is None:
+            content_hash = content_hash_map.get(source)
+        processed_outputs[output_key] = target
+        if content_hash:
+            processed_output_hashes[output_key] = content_hash
+
     def _postprocess(
         self,
         raw_outputs: ActivitySimRunOutputs,
@@ -1032,7 +1245,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             ActivitySimPostprocessOutputs: Postprocessed output data.
         """
         settings = self.state.full_settings
-        year = getattr(self.state, "year", getattr(self.state, "current_year", None))
+        year = get_setting(
+            self.state, "year", get_setting(self.state, "current_year", None)
+        )
         forecast_year = resolve_forecast_year(self.state)
         if forecast_year is None:
             raise RuntimeError(
@@ -1048,15 +1263,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         iteration_folder_name = "year-{0}-iteration-{1}".format(
             year, replanning_iteration_number
         )
-
         iteration_folder_path = os.path.join(
             workspace.get_asim_output_dir(), iteration_folder_name
         )
         if not os.path.exists(os.path.abspath(iteration_folder_path)):
             os.makedirs(iteration_folder_path, exist_ok=True)
 
-        # Archive ActivitySim inputs for this iteration
-        # This ensures Consist can find input files at stable paths for hybrid views
         inputs_folder_name = "inputs-year-{0}-iteration-{1}".format(
             forecast_year, replanning_iteration_number
         )
@@ -1068,199 +1280,44 @@ class ActivitysimPostprocessor(GenericPostprocessor):
 
         processed_outputs: Dict[str, str] = {}
         processed_output_hashes: Dict[str, str] = {}
-        usim_datastore_h5: Optional[str] = None
-        usim_datastore_key: Optional[str] = None
 
-        def _build_content_hash_map() -> Dict[str, str]:
-            hash_map: Dict[str, str] = {}
-            for short_name, path in raw_outputs.raw_outputs.items():
-                record_hash = raw_outputs.raw_output_hashes.get(short_name)
-                if record_hash:
-                    hash_map[os.path.abspath(str(path))] = record_hash
-            source_input_paths = raw_outputs.source_input_paths
-            source_input_hashes = raw_outputs.source_input_hashes
-            if not source_input_paths and not source_input_hashes:
-                logger.debug(
-                    "ActivitySim postprocess raw outputs are missing source input metadata; "
-                    "archived input content hashes may be unavailable."
-                )
-            for short_name, source_path in source_input_paths.items():
-                record_hash = source_input_hashes.get(short_name)
-                if not record_hash or not source_path:
-                    continue
-                hash_map[os.path.abspath(str(source_path))] = record_hash
-            return hash_map
+        atlas_households_input_path = self._resolve_atlas_households_input_path(
+            settings, raw_outputs, households_asim_input_path
+        )
+        content_hash_map = self._build_content_hash_map(raw_outputs)
 
-        atlas_households_input_path: Optional[Path] = None
-        if _atlas_owns_vehicle_ownership(settings):
-            if households_asim_input_path is None:
-                raise ValueError(
-                    "ActivitySim postprocess requires households_asim_input_path when "
-                    "ATLAS owns vehicle ownership."
-                )
-            household_output_key = next(
-                (
-                    raw_key
-                    for raw_key in raw_outputs.raw_outputs
-                    if normalize_asim_output_key(
-                        re.sub(r"_asim_out_temp$", "", raw_key)
-                    )
-                    == "households_asim_out"
-                ),
-                None,
-            )
-            if household_output_key is None:
-                raise ValueError(
-                    "ActivitySim postprocess requires a households_asim_out raw output "
-                    "when ATLAS owns vehicle ownership."
-                )
-            atlas_households_input_path = Path(households_asim_input_path)
+        self._archive_iteration_asim_inputs(
+            workspace,
+            raw_outputs,
+            inputs_folder_path,
+            content_hash_map,
+            processed_outputs,
+            processed_output_hashes,
+        )
 
-        content_hash_map = _build_content_hash_map()
-
-        def _resolve_content_hash(source_path: str) -> Optional[str]:
-            if not source_path:
-                return None
-            return content_hash_map.get(os.path.abspath(source_path))
-
-        # Archive input files from activitysim/data/
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        input_files_to_archive = [
-            "households.csv",
-            "persons.csv",
-            "land_use.csv",
-        ]
-        zarr_used_as_input = bool(raw_outputs.source_input_paths.get(ZARR_SKIMS))
-        if not zarr_used_as_input:
-            input_files_to_archive.append("skims.omx")
-
-        for input_file in input_files_to_archive:
-            source_path = os.path.join(asim_data_dir, input_file)
-            if os.path.exists(source_path):
-                target_path = os.path.join(inputs_folder_path, input_file)
-                shutil.copy(source_path, target_path)
-                content_hash = _resolve_content_hash(source_path)
-
-                archived_key = f"asim_input_{input_file.replace('.', '_')}_archived"
-                processed_outputs[archived_key] = target_path
-                if content_hash:
-                    processed_output_hashes[archived_key] = content_hash
-                logger.info(f"Archived ActivitySim input: {input_file}")
-            else:
-                logger.debug(f"Input file not found, skipping archive: {source_path}")
-
-        if self.state.is_enabled(WorkflowState.Stage.land_use):
-            if not population_source_h5_path:
-                raise ValueError(
-                    "ActivitySim postprocess requires population_source_h5_path when land use is enabled."
-                )
-            if not current_input_h5_path:
-                raise ValueError(
-                    "ActivitySim postprocess requires current_input_h5_path when land use is enabled."
-                )
-
-            # 1. Load raw ActivitySim outputs from files
-            # The raw_outputs RecordStore contains the paths to these files.
-            # TODO: update this to only grad tables_updated_by_asim
-            asim_output_dict = _load_asim_outputs(
+        usim_datastore_h5, usim_datastore_key = (
+            self._update_urbansim_datastore_if_enabled(
                 settings,
                 workspace,
-                self.state,
-                fallback_dir=iteration_folder_path,
-            )
-
-            # The raw output files are implicitly the source for all derived products in this post-processing step.
-            source_file_paths = [str(path) for path in raw_outputs.raw_outputs.values()]
-
-            # 2. Prepare tables for integration with UrbanSim
-            tables_updated_by_asim = ["households", "persons"]
-            asim_output_dict = _prepare_updated_tables(
-                settings,
-                self.state,
-                asim_output_dict,
-                tables_updated_by_asim,
-                population_source_store_path=population_source_h5_path,
-                prefix=forecast_year,
-            )
-
-            # 3. Create UrbanSim input data for the next iteration
-            # This function will handle its own provenance logging.
-            next_usim_input_path, usim_record = create_usim_input_data(
-                settings,
-                self.state,
-                asim_output_dict,
-                tables_updated_by_asim,
-                source_file_paths,
-                current_input_store_path=current_input_h5_path,
-                population_source_store_path=population_source_h5_path,
-                target_store_path=_next_iter_usim_input_store_path(
-                    settings,
-                    workspace,
-                    self.state,
-                ),
-            )
-            if usim_record:
-                usim_datastore_h5 = next_usim_input_path
-                usim_datastore_key = getattr(usim_record, "short_name", None)
-
-        # Record raw outputs as inputs to this post-processing run
-        for short_name, path in raw_outputs.raw_outputs.items():
-            source = os.path.abspath(str(path))
-            clean_name = re.sub(r"_asim_out_temp$", "", short_name)
-            output_key = normalize_asim_output_key(clean_name)
-            target = os.path.join(
+                raw_outputs,
                 iteration_folder_path,
-                _postprocess_output_stem(output_key) + ".parquet",
+                forecast_year,
+                population_source_h5_path,
+                current_input_h5_path,
             )
-            content_hash = raw_outputs.raw_output_hashes.get(short_name)
-            restore_atlas_cars = (
-                atlas_households_input_path is not None
-                and output_key == "households_asim_out"
+        )
+
+        for short_name, path in raw_outputs.raw_outputs.items():
+            self._archive_single_asim_raw_output(
+                short_name,
+                path,
+                raw_outputs,
+                iteration_folder_path,
+                atlas_households_input_path,
+                content_hash_map,
+                processed_outputs,
+                processed_output_hashes,
             )
-            if restore_atlas_cars:
-                if os.path.abspath(source) != os.path.abspath(target):
-                    if not os.path.exists(source):
-                        if not os.path.exists(target):
-                            logger.debug(
-                                "ASim output missing, skipping copy: %s", source
-                            )
-                            continue
-                    else:
-                        # Keep the resolved ActivitySim-run input immutable.  The
-                        # postprocess output is the derived artifact that gains
-                        # ATLAS-authoritative cars.
-                        shutil.copy2(source, target)
-                content_hash = restore_atlas_household_cars(
-                    households_output_path=Path(target),
-                    households_input_path=atlas_households_input_path,
-                )
-                processed_outputs[output_key] = target
-                processed_output_hashes[output_key] = content_hash
-                continue
-            if os.path.abspath(source) == os.path.abspath(target):
-                processed_outputs[output_key] = target
-                if content_hash:
-                    processed_output_hashes[output_key] = content_hash
-                continue
-            if os.path.exists(target):
-                logger.debug("ASim output already archived: %s", target)
-                processed_outputs[output_key] = target
-                if content_hash is None:
-                    content_hash = _resolve_content_hash(
-                        source
-                    ) or _resolve_content_hash(target)
-                if content_hash:
-                    processed_output_hashes[output_key] = content_hash
-                continue
-            if not os.path.exists(source):
-                logger.debug("ASim output missing, skipping move: %s", source)
-                continue
-            shutil.move(source, target)
-            if content_hash is None:
-                content_hash = _resolve_content_hash(source)
-            processed_outputs[output_key] = target
-            if content_hash:
-                processed_output_hashes[output_key] = content_hash
 
         return ActivitySimPostprocessOutputs(
             usim_datastore_h5=Path(usim_datastore_h5) if usim_datastore_h5 else None,

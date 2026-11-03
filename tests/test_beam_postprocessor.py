@@ -2,13 +2,17 @@ import pytest
 import xarray as xr
 import numpy as np
 import yaml
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import json
 import pandas as pd
 
 from pilates.beam.postprocessor import (
     BeamPostprocessor,
+    _consolidate_tnc_data_zarr,
     _merge_beam_skims_to_zarr,
+    _postprocess_tnc_zarr,
+    _process_all_tnc_logic_zarr,
     split_events_parquet_by_type,
     write_zarr_skim_as_omx_new,
 )
@@ -751,3 +755,622 @@ class TestBeamPostprocessor:
         mock_verify_skim_zone_order.assert_called_once_with(
             mock_settings, beam_iteration_zarr_1_based_int_ids, mock_workspace
         )
+
+
+class TestTncZarrCharacterization:
+    """Characterization tests pinning exact array outputs for TNC/Zarr postprocessing."""
+
+    def test_postprocess_tnc_zarr_rh_modes_pins_exact_arrays(self):
+        coords = {
+            "otaz": [0, 1],
+            "dtaz": [0, 1],
+            "time_period": ["AM", "PM"],
+        }
+        dims = ("otaz", "dtaz", "time_period")
+
+        # Shape: (otaz=2, dtaz=2, time_period=2)
+        trips = np.zeros((2, 2, 2), dtype=np.float32)
+        trips[0, 0, 0] = 2.0
+        trips[0, 1, 0] = 0.0
+        trips[1, 0, 0] = 0.0
+        trips[1, 1, 0] = 0.0
+        trips[0, 0, 1] = 1.0
+        trips[0, 1, 1] = 3.0
+
+        failures = np.zeros((2, 2, 2), dtype=np.float32)
+        failures[0, 0, 0] = 2.0
+        failures[0, 1, 0] = 0.0
+        failures[0, 0, 1] = 0.0
+        failures[0, 1, 1] = 0.0
+
+        rej_prob = np.zeros((2, 2, 2), dtype=np.float32)
+
+        iwait = np.zeros((2, 2, 2), dtype=np.float32)
+        iwait[0, 0, 0] = 400.0
+        iwait[0, 0, 1] = 200.0
+        iwait[0, 1, 1] = 600.0
+
+        sov_dist = np.full((2, 2, 2), 10.0, dtype=np.float32)
+        sov_dist[1, 1, 1] = 0.0
+        ddist = np.full((2, 2, 2), np.nan, dtype=np.float32)
+        # Observed DDIST at (0,0,0)=12.0 (w=2), (0,0,1)=12.0 (w=1), (0,1,1)=12.0 (w=3) -> ratio = 1.2
+        ddist[0, 0, 0] = 12.0
+        ddist[0, 0, 1] = 12.0
+        ddist[0, 1, 1] = 12.0
+
+        sov_time = np.full((2, 2, 2), 100.0, dtype=np.float32)
+        totivt = np.full((2, 2, 2), np.nan, dtype=np.float32)
+        # Observed TOTIVT ratio = 0.5 < min_ratio (0.8) -> clamped to 0.8
+        totivt[0, 0, 0] = 50.0
+        totivt[0, 0, 1] = 50.0
+        totivt[0, 1, 1] = 50.0
+
+        far = np.array(
+            [
+                [[15.0, -5.0], [99.0, 25.0]],
+                [[np.nan, 10.0], [0.0, 0.0]],
+            ],
+            dtype=np.float32,
+        )
+
+        skims_ds = xr.Dataset(
+            {
+                "SOV_DIST": (dims, sov_dist.copy()),
+                "SOV_TIME": (dims, sov_time.copy()),
+                "RH_SOLO_TRIPS": (dims, trips.copy()),
+                "RH_SOLO_FAILURES": (dims, failures.copy()),
+                "RH_SOLO_REJECTIONPROB": (dims, rej_prob.copy()),
+                "RH_SOLO_IWAIT": (dims, iwait.copy()),
+                "RH_SOLO_DDIST": (dims, ddist.copy()),
+                "RH_SOLO_TOTIVT": (dims, totivt.copy()),
+                "RH_SOLO_FAR": (dims, far.copy()),
+            },
+            coords=coords,
+        )
+
+        _postprocess_tnc_zarr(
+            skims_ds=skims_ds,
+            timePeriods=["AM", "PM"],
+            settings=SimpleNamespace(),
+            completed_failed_dict={"RH_SOLO": (trips, failures)},
+            use_rh_modes=True,
+        )
+
+        # REJECTIONPROB: origin 0 in AM has 2 completed, 2 failed -> 0.5 across row 0
+        expected_rej = np.zeros((2, 2, 2), dtype=np.float32)
+        expected_rej[0, :, 0] = 0.5
+        np.testing.assert_allclose(
+            skims_ds["RH_SOLO_REJECTIONPROB"].values, expected_rej
+        )
+
+        # IWAIT: in AM, origin 0 has completed at (0,0)=2 with iwait=400; (0,1) has 0 completed -> filled with 400
+        expected_iwait = iwait.copy()
+        expected_iwait[0, 1, 0] = 400.0
+        np.testing.assert_allclose(skims_ds["RH_SOLO_IWAIT"].values, expected_iwait)
+
+        # DDIST: ratio is 1.2; non-observed cells with SOV_DIST > 0 become 10.0 * 1.2 = 12.0; (1,1,1) where SOV_DIST==0 becomes 0.0
+        expected_ddist = np.full((2, 2, 2), 12.0, dtype=np.float32)
+        expected_ddist[1, 1, 1] = 0.0
+        np.testing.assert_allclose(skims_ds["RH_SOLO_DDIST"].values, expected_ddist)
+
+        # TOTIVT: observed cells stay 50.0; unobserved cells with SOV_TIME > 0 use clamped ratio 0.8 -> 80.0
+        expected_totivt = np.full((2, 2, 2), 80.0, dtype=np.float32)
+        expected_totivt[0, 0, 0] = 50.0
+        expected_totivt[0, 0, 1] = 50.0
+        expected_totivt[0, 1, 1] = 50.0
+        np.testing.assert_allclose(skims_ds["RH_SOLO_TOTIVT"].values, expected_totivt)
+
+        # FAR: zeroed where trips+failures==0, negative clamped to 0.0
+        expected_far = np.zeros((2, 2, 2), dtype=np.float32)
+        expected_far[0, 0, 0] = 15.0
+        expected_far[0, 1, 1] = 25.0
+        np.testing.assert_allclose(skims_ds["RH_SOLO_FAR"].values, expected_far)
+
+    def test_postprocess_tnc_zarr_provider_modes_pins_exact_arrays(self):
+        coords = {
+            "otaz": [0, 1],
+            "dtaz": [0, 1],
+            "time_period": ["AM"],
+        }
+        dims = ("otaz", "dtaz", "time_period")
+
+        trips = np.array([[[3.0], [1.0]], [[0.0], [0.0]]], dtype=np.float32)
+        failures = np.array([[[1.0], [3.0]], [[0.0], [0.0]]], dtype=np.float32)
+        rej_prob = np.zeros((2, 2, 1), dtype=np.float32)
+        iwait = np.array([[[100.0], [300.0]], [[0.0], [0.0]]], dtype=np.float32)
+
+        skims_ds = xr.Dataset(
+            {
+                "TNC_SINGLE_UBER_TRIPS": (dims, trips.copy()),
+                "TNC_SINGLE_UBER_FAILURES": (dims, failures.copy()),
+                "TNC_SINGLE_UBER_REJECTIONPROB": (dims, rej_prob.copy()),
+                "TNC_SINGLE_UBER_IWAIT": (dims, iwait.copy()),
+            },
+            coords=coords,
+        )
+
+        _postprocess_tnc_zarr(
+            skims_ds=skims_ds,
+            timePeriods=["AM"],
+            settings=SimpleNamespace(),
+            completed_failed_dict={"TNC_SINGLE_UBER": (trips, failures)},
+            use_rh_modes=False,
+        )
+
+        # Origin 0 has 4 completed and 4 failed -> 0.5 across row 0
+        expected_rej = np.array([[[0.5], [0.5]], [[0.0], [0.0]]], dtype=np.float32)
+        np.testing.assert_allclose(
+            skims_ds["TNC_SINGLE_UBER_REJECTIONPROB"].values, expected_rej
+        )
+        np.testing.assert_allclose(skims_ds["TNC_SINGLE_UBER_IWAIT"].values, iwait)
+
+    def test_consolidate_tnc_data_zarr_pins_weighted_consolidation(self):
+        coords = {
+            "otaz": [0, 1],
+            "dtaz": [0, 1],
+            "time_period": ["AM"],
+        }
+        dims = ("otaz", "dtaz", "time_period")
+        skims_ds = xr.Dataset(
+            {
+                "SOV_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+            },
+            coords=coords,
+        )
+
+        uber_trips_am = np.array([[2.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+        lyft_trips_am = np.array([[6.0, 4.0], [0.0, 0.0]], dtype=np.float32)
+        uber_failures_am = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32)
+        lyft_failures_am = np.array([[2.0, 1.0], [0.0, 0.0]], dtype=np.float32)
+        uber_iwait_am = np.array([[10.0, 50.0], [-5.0, 0.0]], dtype=np.float32)
+        lyft_iwait_am = np.array([[30.0, 20.0], [0.0, 0.0]], dtype=np.float32)
+
+        class _FakePartialOmx:
+            def __init__(self, matrices):
+                self._matrices = matrices
+
+            def list_matrices(self):
+                return list(self._matrices.keys())
+
+            def __contains__(self, key):
+                return key in self._matrices
+
+            def __getitem__(self, key):
+                return self._matrices[key]
+
+        partial_omx = _FakePartialOmx(
+            {
+                "TNC_SINGLE_UBER_TRIPS__AM": uber_trips_am,
+                "TNC_SINGLE_LYFT_TRIPS__AM": lyft_trips_am,
+                "TNC_SINGLE_UBER_FAILURES__AM": uber_failures_am,
+                "TNC_SINGLE_LYFT_FAILURES__AM": lyft_failures_am,
+                "TNC_SINGLE_UBER_IWAIT__AM": uber_iwait_am,
+                "TNC_SINGLE_LYFT_IWAIT__AM": lyft_iwait_am,
+            }
+        )
+
+        completed_failed_dict_providers = {
+            "TNC_SINGLE_UBER": (
+                uber_trips_am[:, :, np.newaxis],
+                uber_failures_am[:, :, np.newaxis],
+            ),
+            "TNC_SINGLE_LYFT": (
+                lyft_trips_am[:, :, np.newaxis],
+                lyft_failures_am[:, :, np.newaxis],
+            ),
+        }
+
+        consolidated_modes = _consolidate_tnc_data_zarr(
+            partialSkims=partial_omx,
+            skims_ds=skims_ds,
+            timePeriods=["AM"],
+            completed_failed_dict_providers=completed_failed_dict_providers,
+            settings=SimpleNamespace(),
+        )
+
+        assert consolidated_modes == {"RH_SOLO"}
+        np.testing.assert_allclose(
+            skims_ds["RH_SOLO_TRIPS"].values[:, :, 0],
+            uber_trips_am + lyft_trips_am,
+        )
+        np.testing.assert_allclose(
+            skims_ds["RH_SOLO_FAILURES"].values[:, :, 0],
+            uber_failures_am + lyft_failures_am,
+        )
+        # At (0,0): (10*2 + 30*6) / (2+6) = 200 / 8 = 25.0
+        # At (0,1): (20*4) / 4 = 20.0
+        # At (1,0): uber_iwait_am is -5.0 -> clamped to 0.0 -> 0.0
+        expected_iwait = np.array([[25.0, 20.0], [0.0, 0.0]], dtype=np.float32)
+        np.testing.assert_allclose(
+            skims_ds["RH_SOLO_IWAIT"].values[:, :, 0],
+            expected_iwait,
+        )
+
+    def test_process_all_tnc_logic_zarr_consolidated_and_unconsolidated(self):
+        coords = {
+            "otaz": [0, 1],
+            "dtaz": [0, 1],
+            "time_period": ["AM"],
+        }
+        dims = ("otaz", "dtaz", "time_period")
+
+        partial_trips = np.array([[[2.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        partial_failures = np.array([[[2.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        partial_iwait = np.array([[[5.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        partial_ddist = np.array([[[12.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+
+        partial_ds = xr.Dataset(
+            {
+                "TNC_SINGLE_TRIPS": (dims, partial_trips.copy()),
+                "TNC_SINGLE_FAILURES": (dims, partial_failures.copy()),
+                "TNC_SINGLE_IWAIT": (dims, partial_iwait.copy()),
+                "TNC_SINGLE_DDIST": (dims, partial_ddist.copy()),
+            },
+            coords=coords,
+        )
+
+        init_rh_trips = np.zeros((2, 2, 1), dtype=np.float32)
+        init_rh_trips[0, 0, 0] = 4.0
+
+        skims_ds = xr.Dataset(
+            {
+                "SOV_DIST": (dims, np.full((2, 2, 1), 10.0, dtype=np.float32)),
+                "SOV_TIME": (dims, np.full((2, 2, 1), 100.0, dtype=np.float32)),
+                "RH_SOLO_TRIPS": (dims, init_rh_trips),
+                "RH_SOLO_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_REJECTIONPROB": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_IWAIT": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_DDIST": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+            },
+            coords=coords,
+        )
+
+        processed = _process_all_tnc_logic_zarr(
+            partial_skims_ds=partial_ds,
+            skims_ds=skims_ds,
+            timePeriods=["AM"],
+            settings={"consolidate_tnc_fleets": True},
+            completed_failed_dict_all={
+                "TNC_SINGLE": (partial_trips.copy(), partial_failures.copy())
+            },
+            previous_weight=0.5,
+        )
+
+        assert processed == {"TNC_SINGLE", "RH_SOLO"}
+        # Trip counts merged with previous_weight=0.5: ceil(0.5 * 4.0 + 2.0) = 4.0
+        np.testing.assert_allclose(
+            skims_ds["RH_SOLO_TRIPS"].values,
+            np.array([[[4.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32),
+        )
+        # IWAIT is NOT scaled by 100x for TNC/RH in _transform_measure (stays 5.0) and is filled across row 0
+        np.testing.assert_allclose(
+            skims_ds["RH_SOLO_IWAIT"].values,
+            np.array([[[5.0], [5.0]], [[0.0], [0.0]]], dtype=np.float32),
+        )
+        # REJECTIONPROB across row 0: 4 completed, 2 failed -> 2 / 6 = 1/3
+        np.testing.assert_allclose(
+            skims_ds["RH_SOLO_REJECTIONPROB"].values,
+            np.array([[[1.0 / 3.0], [1.0 / 3.0]], [[0.0], [0.0]]], dtype=np.float32),
+            rtol=1e-6,
+        )
+
+        # Also verify unconsolidated path (consolidate_tnc_fleets=False)
+        skims_ds_unconsolidated = xr.Dataset(
+            {
+                "TNC_SINGLE_TRIPS": (dims, partial_trips.copy()),
+                "TNC_SINGLE_FAILURES": (dims, partial_failures.copy()),
+                "TNC_SINGLE_REJECTIONPROB": (
+                    dims,
+                    np.zeros((2, 2, 1), dtype=np.float32),
+                ),
+                "TNC_SINGLE_IWAIT": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+            },
+            coords=coords,
+        )
+        processed_unconsolidated = _process_all_tnc_logic_zarr(
+            partial_skims_ds=partial_ds,
+            skims_ds=skims_ds_unconsolidated,
+            timePeriods=["AM"],
+            settings={"consolidate_tnc_fleets": False},
+            completed_failed_dict_all={
+                "TNC_SINGLE": (partial_trips.copy(), partial_failures.copy())
+            },
+            previous_weight=0.5,
+        )
+        assert processed_unconsolidated == {"TNC_SINGLE"}
+        np.testing.assert_allclose(
+            skims_ds_unconsolidated["TNC_SINGLE_IWAIT"].values,
+            np.array([[[5.0], [5.0]], [[0.0], [0.0]]], dtype=np.float32),
+        )
+        np.testing.assert_allclose(
+            skims_ds_unconsolidated["TNC_SINGLE_REJECTIONPROB"].values,
+            np.array([[[0.5], [0.5]], [[0.0], [0.0]]], dtype=np.float32),
+        )
+
+    @patch("pilates.utils.zone_utils.load_canonical_zones")
+    @patch("pilates.beam.postprocessor.verify_skim_zone_order")
+    def test_merge_beam_skims_to_zarr_3d_pipeline_pins_exact_outputs(
+        self,
+        mock_verify_skim_zone_order,
+        mock_load_canonical_zones,
+        tmp_path,
+    ):
+        mock_load_canonical_zones.return_value = pd.DataFrame(
+            {"zone_key": ["z0", "z1"]}, index=["z0", "z1"]
+        )
+        mock_verify_skim_zone_order.return_value = ["z0", "z1"]
+
+        coords = {
+            "otaz": [0, 1],
+            "dtaz": [0, 1],
+            "time_period": ["AM"],
+        }
+        dims = ("otaz", "dtaz", "time_period")
+
+        all_skims_path = tmp_path / "all_skims.zarr"
+        iter_skims_path = tmp_path / "iter_skims.zarr"
+        out_skims_path = tmp_path / "out_skims.zarr"
+
+        main_ds = xr.Dataset(
+            {
+                "SOV_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "SOV_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "SOV_TIME": (dims, np.full((2, 2, 1), 10.0, dtype=np.float32)),
+                "SOV_DIST": (dims, np.full((2, 2, 1), 5.0, dtype=np.float32)),
+                "HOV2_TIME": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "HOV2_DIST": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "HOV2_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "HOV2_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_TRN_WLK_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_TRN_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_TOTIVT": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_TOTIVT": (
+                    dims,
+                    np.full((2, 2, 1), 999.0, dtype=np.float32),
+                ),
+                "RH_SOLO_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_IWAIT": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_REJECTIONPROB": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+            },
+            coords=coords,
+            attrs={"zone_id_order": ["z0", "z1"]},
+        )
+        main_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_format=2)
+
+        sov_trips = np.ones((2, 2, 1), dtype=np.float32)
+        sov_time = np.full((2, 2, 1), 20.0, dtype=np.float32)
+        sov_dist = np.full((2, 2, 1), 8.0, dtype=np.float32)
+        wlk_trn_trips = np.array([[[60.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        wlk_trips = np.array([[[2.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        wlk_totivt = np.array([[[15.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        tnc_trips = np.array([[[3.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        tnc_failures = np.array([[[1.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+        tnc_iwait = np.array([[[4.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32)
+
+        iter_ds = xr.Dataset(
+            {
+                "SOV_TRIPS": (dims, sov_trips),
+                "SOV_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "SOV_TIME": (dims, sov_time),
+                "SOV_DIST": (dims, sov_dist),
+                "WLK_TRN_WLK_TRIPS": (dims, wlk_trn_trips),
+                "WLK_TRN_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_TRIPS": (dims, wlk_trips),
+                "WLK_LOC_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_TOTIVT": (dims, wlk_totivt),
+                # WLK_COM_WLK has 0 trips where WLK_TRN_WLK has 60 (>=50) trips -> should be zeroed at (0,0,0)
+                "WLK_COM_WLK_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_TOTIVT": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "TNC_SINGLE_TRIPS": (dims, tnc_trips),
+                "TNC_SINGLE_FAILURES": (dims, tnc_failures),
+                "TNC_SINGLE_IWAIT": (dims, tnc_iwait),
+            },
+            coords=coords,
+            attrs={"zone_id_order": ["z0", "z1"]},
+        )
+        iter_ds.to_zarr(iter_skims_path, mode="w", consolidated=True, zarr_format=2)
+
+        settings = {
+            "shared": {"skims": {"periods": ["AM"]}},
+            "consolidate_tnc_fleets": True,
+            "beam": {
+                "skim_previous_weight": 0.5,
+                "transit_skim_scale_factor": 100.0,
+            },
+        }
+
+        _merge_beam_skims_to_zarr(
+            all_skims_path=str(all_skims_path),
+            iteration_skims_path=str(iter_skims_path),
+            beam_output_dir="",
+            settings=settings,
+            workspace=MagicMock(),
+            override=str(iter_skims_path),
+            output_skims_path=str(out_skims_path),
+        )
+
+        merged = xr.open_zarr(out_skims_path, consolidated=False)
+        try:
+            # SOV_TIME updated to 20.0 and copied to HOV2_TIME
+            np.testing.assert_allclose(merged["SOV_TIME"].values, sov_time)
+            np.testing.assert_allclose(merged["HOV2_TIME"].values, sov_time)
+            # WLK_LOC_WLK_TOTIVT scaled by 100x at (0,0,0) -> 1500.0
+            np.testing.assert_allclose(
+                merged["WLK_LOC_WLK_TOTIVT"].values,
+                np.array([[[1500.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32),
+            )
+            # WLK_COM_WLK has 0 trips at (0,0,0) where WLK_TRN_WLK has 60 (>=50) -> zeroed at (0,0,0), unchanged (999.0) elsewhere
+            np.testing.assert_allclose(
+                merged["WLK_COM_WLK_TOTIVT"].values,
+                np.array([[[0.0], [999.0]], [[999.0], [999.0]]], dtype=np.float32),
+            )
+            # RH_SOLO_IWAIT unscaled (4.0) and filled across row 0
+            np.testing.assert_allclose(
+                merged["RH_SOLO_IWAIT"].values,
+                np.array([[[4.0], [4.0]], [[0.0], [0.0]]], dtype=np.float32),
+            )
+            # RH_SOLO_REJECTIONPROB is 1 / (3 + 1) = 0.25 across row 0
+            np.testing.assert_allclose(
+                merged["RH_SOLO_REJECTIONPROB"].values,
+                np.array([[[0.25], [0.25]], [[0.0], [0.0]]], dtype=np.float32),
+            )
+        finally:
+            merged.close()
+
+    @patch("pilates.beam.tnc_zarr_pipeline.omx.open_file")
+    @patch("pilates.utils.zone_utils.load_canonical_zones")
+    @patch("pilates.beam.postprocessor.verify_skim_zone_order")
+    def test_merge_beam_skims_to_zarr_omx_override_branch_pins_exact_outputs(
+        self,
+        mock_verify_skim_zone_order,
+        mock_load_canonical_zones,
+        mock_omx_open_file,
+        tmp_path,
+    ):
+        mock_load_canonical_zones.return_value = pd.DataFrame(
+            {"zone_key": ["z0", "z1"]}, index=["z0", "z1"]
+        )
+        mock_verify_skim_zone_order.return_value = ["z0", "z1"]
+
+        coords = {
+            "otaz": [0, 1],
+            "dtaz": [0, 1],
+            "time_period": ["AM"],
+        }
+        dims = ("otaz", "dtaz", "time_period")
+
+        all_skims_path = tmp_path / "all_skims.zarr"
+        iter_skims_omx_path = tmp_path / "iter_skims.omx"
+        iter_skims_omx_path.write_bytes(b"")
+        out_skims_path = tmp_path / "out_skims_omx.zarr"
+
+        main_ds = xr.Dataset(
+            {
+                "SOV_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "SOV_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "SOV_TIME": (dims, np.full((2, 2, 1), 10.0, dtype=np.float32)),
+                "SOV_DIST": (dims, np.full((2, 2, 1), 5.0, dtype=np.float32)),
+                "HOV2_TIME": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "HOV2_DIST": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "HOV2_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "HOV2_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_TRN_WLK_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_TRN_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_LOC_WLK_TOTIVT": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "WLK_COM_WLK_TOTIVT": (
+                    dims,
+                    np.full((2, 2, 1), 999.0, dtype=np.float32),
+                ),
+                "RH_SOLO_TRIPS": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_FAILURES": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_IWAIT": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+                "RH_SOLO_REJECTIONPROB": (dims, np.zeros((2, 2, 1), dtype=np.float32)),
+            },
+            coords=coords,
+            attrs={"zone_id_order": ["z0", "z1"]},
+        )
+        main_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_format=2)
+
+        class _FakeClosableOmx:
+            def __init__(self, matrices):
+                self._matrices = matrices
+                self.closed = False
+
+            def list_matrices(self):
+                return list(self._matrices.keys())
+
+            def __contains__(self, key):
+                return key in self._matrices
+
+            def __getitem__(self, key):
+                return self._matrices[key]
+
+            def close(self):
+                self.closed = True
+
+        fake_omx = _FakeClosableOmx(
+            {
+                "SOV_TRIPS__AM": np.ones((2, 2), dtype=np.float32),
+                "SOV_FAILURES__AM": np.zeros((2, 2), dtype=np.float32),
+                "SOV_TIME__AM": np.full((2, 2), 20.0, dtype=np.float32),
+                "SOV_DIST__AM": np.full((2, 2), 8.0, dtype=np.float32),
+                "WLK_TRN_WLK_TRIPS__AM": np.array(
+                    [[60.0, 0.0], [0.0, 0.0]], dtype=np.float32
+                ),
+                "WLK_TRN_WLK_FAILURES__AM": np.zeros((2, 2), dtype=np.float32),
+                "WLK_LOC_WLK_TRIPS__AM": np.array(
+                    [[2.0, 0.0], [0.0, 0.0]], dtype=np.float32
+                ),
+                "WLK_LOC_WLK_FAILURES__AM": np.zeros((2, 2), dtype=np.float32),
+                "WLK_LOC_WLK_TOTIVT__AM": np.array(
+                    [[15.0, 0.0], [0.0, 0.0]], dtype=np.float32
+                ),
+                "WLK_COM_WLK_TRIPS__AM": np.zeros((2, 2), dtype=np.float32),
+                "WLK_COM_WLK_FAILURES__AM": np.zeros((2, 2), dtype=np.float32),
+                "WLK_COM_WLK_TOTIVT__AM": np.zeros((2, 2), dtype=np.float32),
+                "TNC_SINGLE_UBER_TRIPS__AM": np.array(
+                    [[3.0, 0.0], [0.0, 0.0]], dtype=np.float32
+                ),
+                "TNC_SINGLE_UBER_FAILURES__AM": np.array(
+                    [[1.0, 0.0], [0.0, 0.0]], dtype=np.float32
+                ),
+                "TNC_SINGLE_UBER_IWAIT__AM": np.array(
+                    [[4.0, 0.0], [0.0, 0.0]], dtype=np.float32
+                ),
+            }
+        )
+        mock_omx_open_file.return_value = fake_omx
+
+        settings = {
+            "shared": {"skims": {"periods": ["AM"]}},
+            "consolidate_tnc_fleets": True,
+            "beam": {
+                "skim_previous_weight": 0.5,
+                "transit_skim_scale_factor": 100.0,
+            },
+        }
+
+        _merge_beam_skims_to_zarr(
+            all_skims_path=str(all_skims_path),
+            iteration_skims_path=str(iter_skims_omx_path),
+            beam_output_dir="",
+            settings=settings,
+            workspace=MagicMock(),
+            override=str(iter_skims_omx_path),
+            output_skims_path=str(out_skims_path),
+        )
+
+        assert fake_omx.closed is True
+        merged = xr.open_zarr(out_skims_path, consolidated=False)
+        try:
+            expected_sov_time = np.full((2, 2, 1), 20.0, dtype=np.float32)
+            np.testing.assert_allclose(merged["SOV_TIME"].values, expected_sov_time)
+            np.testing.assert_allclose(merged["HOV2_TIME"].values, expected_sov_time)
+            np.testing.assert_allclose(
+                merged["WLK_LOC_WLK_TOTIVT"].values,
+                np.array([[[1500.0], [0.0]], [[0.0], [0.0]]], dtype=np.float32),
+            )
+            np.testing.assert_allclose(
+                merged["WLK_COM_WLK_TOTIVT"].values,
+                np.array([[[0.0], [999.0]], [[999.0], [999.0]]], dtype=np.float32),
+            )
+            np.testing.assert_allclose(
+                merged["RH_SOLO_IWAIT"].values,
+                np.array([[[4.0], [4.0]], [[0.0], [0.0]]], dtype=np.float32),
+            )
+            np.testing.assert_allclose(
+                merged["RH_SOLO_REJECTIONPROB"].values,
+                np.array([[[0.25], [0.25]], [[0.0], [0.0]]], dtype=np.float32),
+            )
+        finally:
+            merged.close()
