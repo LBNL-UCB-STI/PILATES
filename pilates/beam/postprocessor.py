@@ -23,7 +23,6 @@ try:
 except Exception:
     print("FAILED TO LOAD XARRAY or ZARR")
 
-from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
@@ -175,17 +174,6 @@ def find_latest_beam_iteration(beam_output_dir):
     if not os.path.isdir(target_iter_dir):
         return None, None
     return target_iter_dir, max_it_num
-
-
-def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
-    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
-    if iteration_dir is None:
-        return None
-    od_skims_path = os.path.join(
-        iteration_dir, "{0}.skimsActivitySimOD_current.{1}".format(it_num, suffix)
-    )
-    logger.info("expecting skims at {0}".format(od_skims_path))
-    return od_skims_path
 
 
 def _sanitize_event_type(event_type: str) -> str:
@@ -340,26 +328,6 @@ def _select_last_events_parquet_record(
     return best_sub
 
 
-def find_produced_linkstats(beam_output_dir, suffix="csv.gz"):
-    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
-    if iteration_dir is None:
-        return None
-    od_skims_path = os.path.join(
-        iteration_dir, "{0}.linkstats.{1}".format(it_num, suffix)
-    )
-    logger.info("expecting linkstats at {0}".format(od_skims_path))
-    return od_skims_path
-
-
-def find_produced_plans(beam_output_dir, suffix="csv.gz"):
-    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
-    if iteration_dir is None:
-        return None
-    od_skims_path = os.path.join(iteration_dir, "{0}.plans.{1}".format(it_num, suffix))
-    logger.info("expecting output plans at {0}".format(od_skims_path))
-    return od_skims_path
-
-
 def find_beam_iterations(beam_output_dir):
     iter_dirs = [
         os.path.join(root, dir)
@@ -407,15 +375,6 @@ def find_iteration_file(
     else:
         logger.debug(f"Could not find file at {path}")
         return None
-
-
-def find_produced_origin_skims(beam_output_dir):
-    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
-    if iteration_dir is None:
-        return None
-    ridehail_skims_path = os.path.join(iteration_dir, f"{it_num}.skimsRidehail.csv.gz")
-    logger.info("expecting skims at {0}".format(ridehail_skims_path))
-    return ridehail_skims_path
 
 
 def copy_skims_for_unobserved_modes(mapping, skims_ds):
@@ -917,19 +876,6 @@ def _postprocess_tnc_zarr(
             logger.debug(f"Updated FAR for {mode}")
 
     logger.info("Completed TNC/RH-specific post-processing.")
-
-
-def clear_skim_cache(asim_local_output_dir):
-    skims_path = os.path.join(asim_local_output_dir, "cache")
-    if os.path.exists(skims_path):
-        logger.info(
-            "Deleting skims cache at {0}. Eventually we should modify it in place".format(
-                skims_path
-            )
-        )
-        shutil.rmtree(skims_path)
-    else:
-        logger.warning("Did not find skim cache to delete")
 
 
 def _accumulate_all_completed_failed_trips_zarr(partial_skims_ds, timePeriods):
@@ -2311,212 +2257,6 @@ def write_zarr_skim_as_omx_new(
                 logger.error(f"Error closing Zarr dataset: {e}")
 
 
-def write_zarr_skim_as_omx(
-    all_skims_path, settings: PilatesConfig, new_skim_name, exclude_tables=None
-):
-    """
-    Write the skims from the Zarr format to an OMX format.
-
-    Parameters
-    ----------
-    all_skims_path : str
-        Path to the main skims Zarr store.
-    settings : PilatesConfig
-        Settings dictionary, needed for 'region' and 'beam_local_input_folder'.
-    new_skim_name : str
-        Name of the new OMX skim file to be created (e.g., 'skims.omx').
-    exclude_tables : list, optional
-        A list of variable names (strings) from the Zarr dataset
-        to exclude from being written to the OMX file. Defaults to None.
-
-    Returns
-    -------
-    str or None
-        The path to the newly created OMX file if successful, otherwise None.
-    """
-    logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
-
-    region = get_setting(settings, "run.region")
-    beam_input_dir = get_setting(settings, "beam.local_input_folder")
-
-    if not region or not beam_input_dir:
-        logger.error(
-            "Settings 'region' or 'beam_local_input_folder' are not defined. Cannot determine output path."
-        )
-        return None
-
-    target_skims_path = os.path.join(beam_input_dir, region, new_skim_name)
-
-    if exclude_tables is None:
-        exclude_tables = []
-
-    skims_ds = None  # Initialize Zarr dataset variable
-    new_omx_file = None  # Initialize OMX file variable
-
-    try:
-        # Open the Zarr dataset
-        skims_ds = xr.open_zarr(all_skims_path)
-        logger.info(f"Opened Zarr skims file: {all_skims_path}")
-
-        # --- Get Zone IDs from stored attributes ---
-        zone_ids = None
-        if "original_zone_ids" in skims_ds.attrs:
-            zone_ids = np.array(skims_ds.attrs["original_zone_ids"])
-            logger.info(
-                f"Using original zone IDs from Zarr attributes: {len(zone_ids)} zones"
-            )
-        elif "otaz" in skims_ds.coords:
-            # Fallback: check if zones are still original
-            if skims_ds["otaz"].attrs.get("preprocessed") != "zero-based-contiguous":
-                zone_ids = skims_ds.coords["otaz"].values
-                logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
-            else:
-                logger.error(
-                    "Zarr uses zero-based zones but no original zone mapping found!"
-                )
-                # Try to reconstruct from settings
-                zone_ids = zone_order(
-                    settings, get_setting(settings, "run.start_year", 2015)
-                )
-                logger.warning(
-                    f"Reconstructed zone IDs from settings: {len(zone_ids)} zones"
-                )
-        else:
-            logger.warning("No zone coordinate found in Zarr file.")
-
-        time_periods = []
-        if "time_period" in skims_ds.coords:
-            # Ensure time periods are strings for OMX keys
-            time_periods = [str(s) for s in skims_ds.time_period.values]
-            logger.info(
-                f"Found {len(time_periods)} time periods in Zarr: {time_periods}"
-            )
-        else:
-            logger.warning(
-                "Zarr skims file does not have 'time_period' coordinate. 3D variables cannot be written with period suffixes."
-            )
-
-        # --- Prepare output file ---
-        logger.info(f"Target output OMX path: {target_skims_path}")
-        if os.path.exists(target_skims_path):
-            logger.info(f"Deleting existing file: {target_skims_path}")
-            try:
-                os.remove(target_skims_path)
-            except OSError as e:
-                logger.error(
-                    f"Error deleting existing file {target_skims_path}: {e}. Aborting."
-                )
-                return None
-
-        # Create the new OMX file using 'w' mode as we just deleted it
-        new_omx_file = omx.open_file(target_skims_path, "w")
-        logger.info(f"Created new OMX file: {target_skims_path}")
-
-        # Export the original PILATES ActivitySim OMX lookup convention: 1..N.
-        omx_zone_ids = np.arange(1, int(skims_ds.sizes["otaz"]) + 1, dtype=int)
-        if len(omx_zone_ids) > 0:
-            try:
-                new_omx_file.create_mapping("zone_id", omx_zone_ids, overwrite=True)
-                logger.info(
-                    "Created 'zone_id' mapping in OMX file with sequential 1-based IDs for %d zones.",
-                    len(omx_zone_ids),
-                )
-            except Exception as e:
-                logger.error(f"Error creating zone mapping in OMX file: {e}.")
-
-        # --- Handle Data Scaling ---
-        scaled_measures = {
-            "TOTIVT",
-            "IVT",
-            "WACC",
-            "IWAIT",
-            "XWAIT",
-            "WAUX",
-            "WEGR",
-            "DTIM",
-            "FERRYIVT",
-            "KEYIVT",
-            "FAR",
-        }
-
-        # --- Write Matrices from Zarr to OMX ---
-        logger.info("Writing matrices to OMX file...")
-        written_count = 0
-        for key in skims_ds.data_vars:
-            if key in exclude_tables:
-                logger.info(f"Skipping excluded variable: {key}")
-                continue
-
-            try:
-                data_array = skims_ds[key]
-                data = data_array.values
-
-                # Check if this measure needs descaling
-                measure_name = key.split("_")[-1] if "_" in key else key
-                needs_descaling = (
-                    measure_name in scaled_measures
-                    and not key.startswith(("TNC_", "RH_"))
-                )
-
-                if data_array.ndim == 2:
-                    # Write 2D matrix
-                    data_to_write = np.nan_to_num(data).astype(np.float32)
-                    if needs_descaling:
-                        data_to_write = data_to_write / 100.0
-                        logger.debug(f"Descaled 2D matrix '{key}' by 100x")
-                    new_omx_file[key] = data_to_write
-                    written_count += 1
-
-                elif data_array.ndim == 3:
-                    # Write slices for each time period
-                    for t_idx, tp in enumerate(time_periods):
-                        new_key = f"{key}__{tp}"
-                        slice_data = data[:, :, t_idx]
-                        data_to_write = np.nan_to_num(slice_data).astype(np.float32)
-                        if needs_descaling:
-                            data_to_write = data_to_write / 100.0
-                            logger.debug(f"Descaled 3D slice '{new_key}' by 100x")
-                        new_omx_file[new_key] = data_to_write
-
-                        # Add attributes
-                        strsplit = key.rsplit("_", 1)
-                        new_omx_file[new_key].attrs["measure"] = strsplit[-1]
-                        new_omx_file[new_key].attrs["timePeriod"] = tp
-                        if len(strsplit) == 2:
-                            new_omx_file[new_key].attrs["mode"] = strsplit[0]
-                        written_count += 1
-
-            except Exception as e:
-                logger.error(f"Error writing variable '{key}' to OMX: {e}")
-
-        logger.info(
-            f"Finished writing {written_count} matrices to OMX file {target_skims_path}."
-        )
-        return target_skims_path
-
-    except Exception as e:
-        logger.critical(
-            f"An unexpected error occurred during Zarr to OMX conversion: {e}"
-        )
-        return None  # Indicate failure
-
-    finally:
-        # Ensure files are closed
-        if new_omx_file:
-            try:
-                new_omx_file.close()
-                logger.info("Closed OMX file.")
-            except Exception as e:
-                logger.error(f"Error closing OMX file {target_skims_path}: {e}")
-
-        if skims_ds:
-            try:
-                skims_ds.close()
-                logger.info("Closed Zarr dataset.")
-            except Exception as e:
-                logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
-
-
 def verify_skim_zone_order(
     settings, skim_file_path: str, workspace: "Workspace"
 ) -> List[str]:
@@ -3450,41 +3190,6 @@ def _process_all_tnc_logic(
         )
 
     return processed_vars
-
-
-def validate_zone_alignment(zarr_path, land_use_df):
-    """Validate that zarr zones align with land_use zones."""
-    ds = xr.open_zarr(zarr_path)
-
-    # Get zones from zarr
-    zarr_zones = ds.coords["otaz"].values
-
-    # Get zones from land_use
-    if f"_original_{land_use_df.index.name}" in land_use_df:
-        land_use_zones = land_use_df[f"_original_{land_use_df.index.name}"].values
-    else:
-        land_use_zones = land_use_df.index.values
-
-    # Check if they match
-    if not np.array_equal(zarr_zones, land_use_zones):
-        logger.warning(
-            f"Zone mismatch! Zarr has {len(zarr_zones)} zones, land_use has {len(land_use_zones)}"
-        )
-        logger.warning(f"First 10 zarr zones: {zarr_zones[:10]}")
-        logger.warning(f"First 10 land_use zones: {land_use_zones[:10]}")
-
-        # Check if same zones, different order
-        if set(zarr_zones) == set(land_use_zones):
-            logger.info("Same zones but different order - reindexing will be required")
-        else:
-            missing_in_zarr = set(land_use_zones) - set(zarr_zones)
-            missing_in_land_use = set(zarr_zones) - set(land_use_zones)
-            if missing_in_zarr:
-                logger.error(f"Zones in land_use but not zarr: {missing_in_zarr}")
-            if missing_in_land_use:
-                logger.error(f"Zones in zarr but not land_use: {missing_in_land_use}")
-        return False
-    return True
 
 
 def beam_postprocess_zarr_skims_output_path(
