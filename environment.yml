@@ -55,7 +55,7 @@ dependencies:
     - pyhocon==0.3.61
 
     # Provenance tracking
-    - consist[ingest,ibis,git] @ git+https://github.com/LBNL-UCB-STI/consist.git@4042ddea9c01c0909bf334e668cd5f9f8f143bb0
+    - consist[ingest,ibis,git] @ git+https://github.com/LBNL-UCB-STI/consist.git@661af023b8cfff83c307fc043404c6d3428eef16
     - ruff>=0.15.5
 
     # Local packages (install consist library in editable mode)
