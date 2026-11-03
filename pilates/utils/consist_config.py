@@ -12,8 +12,9 @@ These helpers centralize how PILATES maps its Pydantic settings to Consist so
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Tuple
 
 from consist.types import HasConsistFacet
 
@@ -57,130 +58,35 @@ class ConsistConfigBuilder(Protocol):
         """Facet schema version for the step model identifier."""
 
 
-class ActivitySimConfigBuilder:
+@dataclass(frozen=True)
+class _FunctionConsistConfigBuilder:
+    identity_config_fn: Callable[[PilatesConfig], Dict[str, Any]]
+    facet_fn: Callable[[PilatesConfig], Dict[str, Any]]
+    default_schema_version: str
+    step_schema_versions: Mapping[str, str] = field(default_factory=dict)
+    identity_inputs_fn: Optional[
+        Callable[[PilatesConfig, str], List[IdentityInput]]
+    ] = None
+
     @property
     def requires_workspace_path(self) -> bool:
-        return True
+        return self.identity_inputs_fn is not None
 
     def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_activitysim_identity_config(settings)
+        return self.identity_config_fn(settings)
 
     def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_activitysim_facet(settings)
+        return self.facet_fn(settings)
 
     def build_identity_inputs(
         self, settings: PilatesConfig, workspace_path: str
     ) -> List[IdentityInput]:
-        return build_activitysim_identity_inputs(settings, workspace_path)
+        if self.identity_inputs_fn is None:
+            return []
+        return self.identity_inputs_fn(settings, workspace_path)
 
     def get_facet_schema_version(self, model: str) -> str:
-        return {
-            "activitysim_preprocess": "activitysim_preprocess_v1",
-            "activitysim_run": "activitysim_run_v1",
-            "activitysim_postprocess": "activitysim_postprocess_v1",
-        }.get(model, "activitysim_v1")
-
-
-class BeamConfigBuilder:
-    @property
-    def requires_workspace_path(self) -> bool:
-        return True
-
-    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_beam_identity_config(settings)
-
-    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_beam_facet(settings)
-
-    def build_identity_inputs(
-        self, settings: PilatesConfig, workspace_path: str
-    ) -> List[IdentityInput]:
-        return build_beam_identity_inputs(settings, workspace_path)
-
-    def get_facet_schema_version(self, model: str) -> str:
-        return {
-            "beam_preprocess": "beam_preprocess_v1",
-            "beam_run": "beam_run_v1",
-            "beam_postprocess": "beam_postprocess_v1",
-            "beam_full_skim": "beam_full_skim_v1",
-        }.get(model, "beam_v1")
-
-
-class UrbanSimConfigBuilder:
-    @property
-    def requires_workspace_path(self) -> bool:
-        return False
-
-    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_urbansim_identity_config(settings)
-
-    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_urbansim_facet(settings)
-
-    def build_identity_inputs(
-        self, settings: PilatesConfig, workspace_path: str
-    ) -> List[IdentityInput]:
-        return []
-
-    def get_facet_schema_version(self, model: str) -> str:
-        return {
-            "urbansim_preprocess": "urbansim_preprocess_v1",
-            "urbansim_run": "urbansim_run_v1",
-            "urbansim_postprocess": "urbansim_postprocess_v1",
-        }.get(model, "urbansim_v1")
-
-
-class AtlasConfigBuilder:
-    @property
-    def requires_workspace_path(self) -> bool:
-        return False
-
-    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_atlas_identity_config(settings)
-
-    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_atlas_facet(settings)
-
-    def build_identity_inputs(
-        self, settings: PilatesConfig, workspace_path: str
-    ) -> List[IdentityInput]:
-        return []
-
-    def get_facet_schema_version(self, model: str) -> str:
-        return {
-            "atlas_preprocess": "atlas_preprocess_v1",
-            "atlas_run": "atlas_run_v1",
-            "atlas_postprocess": "atlas_postprocess_v1",
-        }.get(model, "atlas_v1")
-
-
-class PostprocessingConfigBuilder:
-    @property
-    def requires_workspace_path(self) -> bool:
-        return False
-
-    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_postprocessing_identity_config(settings)
-
-    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
-        return build_postprocessing_facet(settings)
-
-    def build_identity_inputs(
-        self, settings: PilatesConfig, workspace_path: str
-    ) -> List[IdentityInput]:
-        return []
-
-    def get_facet_schema_version(self, model: str) -> str:
-        return "postprocessing_v1"
-
-
-_CONFIG_BUILDERS: Dict[str, ConsistConfigBuilder] = {
-    "activitysim": ActivitySimConfigBuilder(),
-    "beam": BeamConfigBuilder(),
-    "urbansim": UrbanSimConfigBuilder(),
-    "atlas": AtlasConfigBuilder(),
-    "postprocessing": PostprocessingConfigBuilder(),
-}
+        return self.step_schema_versions.get(model, self.default_schema_version)
 
 
 def build_scenario_consist_kwargs(settings: PilatesConfig) -> Dict[str, Any]:
@@ -501,3 +407,55 @@ def build_postprocessing_identity_config(settings: PilatesConfig) -> Dict[str, A
 
 def build_postprocessing_facet(settings: PilatesConfig) -> Dict[str, Any]:
     return build_postprocessing_identity_config(settings)
+
+
+_CONFIG_BUILDERS: Dict[str, ConsistConfigBuilder] = {
+    "activitysim": _FunctionConsistConfigBuilder(
+        identity_config_fn=build_activitysim_identity_config,
+        facet_fn=build_activitysim_facet,
+        identity_inputs_fn=build_activitysim_identity_inputs,
+        default_schema_version="activitysim_v1",
+        step_schema_versions={
+            "activitysim_preprocess": "activitysim_preprocess_v1",
+            "activitysim_run": "activitysim_run_v1",
+            "activitysim_postprocess": "activitysim_postprocess_v1",
+        },
+    ),
+    "beam": _FunctionConsistConfigBuilder(
+        identity_config_fn=build_beam_identity_config,
+        facet_fn=build_beam_facet,
+        identity_inputs_fn=build_beam_identity_inputs,
+        default_schema_version="beam_v1",
+        step_schema_versions={
+            "beam_preprocess": "beam_preprocess_v1",
+            "beam_run": "beam_run_v1",
+            "beam_postprocess": "beam_postprocess_v1",
+            "beam_full_skim": "beam_full_skim_v1",
+        },
+    ),
+    "urbansim": _FunctionConsistConfigBuilder(
+        identity_config_fn=build_urbansim_identity_config,
+        facet_fn=build_urbansim_facet,
+        default_schema_version="urbansim_v1",
+        step_schema_versions={
+            "urbansim_preprocess": "urbansim_preprocess_v1",
+            "urbansim_run": "urbansim_run_v1",
+            "urbansim_postprocess": "urbansim_postprocess_v1",
+        },
+    ),
+    "atlas": _FunctionConsistConfigBuilder(
+        identity_config_fn=build_atlas_identity_config,
+        facet_fn=build_atlas_facet,
+        default_schema_version="atlas_v1",
+        step_schema_versions={
+            "atlas_preprocess": "atlas_preprocess_v1",
+            "atlas_run": "atlas_run_v1",
+            "atlas_postprocess": "atlas_postprocess_v1",
+        },
+    ),
+    "postprocessing": _FunctionConsistConfigBuilder(
+        identity_config_fn=build_postprocessing_identity_config,
+        facet_fn=build_postprocessing_facet,
+        default_schema_version="postprocessing_v1",
+    ),
+}

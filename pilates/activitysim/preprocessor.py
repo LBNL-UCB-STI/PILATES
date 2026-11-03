@@ -235,88 +235,6 @@ def _should_refresh_skims_copy(source_path: str, dest_path: str) -> bool:
     return False
 
 
-# Mapping of PILATES setting parameter names to ActivitySim config parameter names.
-# This allows dynamic updates to ActivitySim's settings.yaml.
-asim_param_map = {"random_seed": "rng_base_seed"}
-# Mapping of PILATES setting parameter names to their Pydantic paths within the PILATES config.
-# Used to retrieve the current value of a parameter from the PILATES settings.
-ASIM_PYDANTIC_PATH_MAP = {"random_seed": "activitysim.random_seed"}
-
-
-def update_asim_config(
-    settings: PilatesConfig,
-    full_path: str,
-    param: str,
-    valueOverride: Optional[str] = None,
-) -> None:
-    """
-    Updates a specific parameter in the ActivitySim configuration file (`settings.yaml`).
-
-    This function reads the ActivitySim `settings.yaml` file, locates the specified
-    parameter, and updates its value. If the parameter is not found, it will be
-    added to the end of the file.
-
-    Args:
-        settings (PilatesConfig): The current PILATES settings object.
-        full_path (str): The full path to the ActivitySim configuration directory.
-        param (str): The name of the parameter to update (e.g., "random_seed").
-        valueOverride (Optional[str]): An optional value to override the setting with.
-            If None, the value will be retrieved from the PILATES settings using
-            `ASIM_PYDANTIC_PATH_MAP`.
-    """
-    config_header = asim_param_map[param]
-    if valueOverride is None:
-        # Get the Pydantic path for the parameter from the mapping
-        pydantic_path = ASIM_PYDANTIC_PATH_MAP.get(param)
-        if not pydantic_path:
-            logger.warning(
-                f"Parameter '{param}' has no defined Pydantic path. Cannot update asim config."
-            )
-            return
-        # Retrieve the configuration value from PILATES settings
-        config_value = get_setting(settings, pydantic_path)
-    else:
-        config_value = valueOverride
-
-    # Do not update if the value from settings is None
-    if config_value is None:
-        logger.debug(
-            f"Skipping asim config update for '{param}' because value is None."
-        )
-        return
-
-    # Construct the full path to the ActivitySim settings.yaml file
-    path_list = [
-        full_path,
-        get_setting(settings, "activitysim.local_mutable_configs_folder"),
-        get_setting(settings, "activitysim.main_configs_dir", "configs"),
-        "settings.yaml",
-    ]
-
-    asim_config_path = os.path.join(*path_list)
-    modified = False
-    # Read the existing config file
-    with open(asim_config_path, "r") as file:
-        data = file.readlines()
-    # Write back the modified content
-    with open(asim_config_path, "w") as file:
-        for line in data:
-            if config_header in line:
-                if not modified:
-                    # Preserve indentation
-                    indent = line.split(config_header)[0]
-                    file.writelines(
-                        indent + config_header + ": " + str(config_value) + "\n"
-                    )
-                modified = True
-            else:
-                file.writelines(line)
-        # If the parameter was not found, add it to the end of the file
-        if not modified:
-            file.writelines("\n")
-            file.writelines(config_header + ": " + str(config_value) + "\n")
-
-
 def _ensure_required_asim_config_dirs(
     *,
     configs_dest_dir: str,
@@ -2058,59 +1976,6 @@ def skim_validations(
     plot_skims(settings, zone, PuT_time, order, 6, 3, "WLK_LOC_WLK_TIME", "in minutes")
 
 
-def _process_raw_h5_for_asim(
-    raw_blocks,
-    raw_persons,
-    raw_households,
-    raw_jobs,
-    settings,
-    year,
-    asim_zone_id_col,
-    workspace,
-):
-    """
-    Process raw H5 dataframes for ActivitySim.
-    """
-    # Add zone id to blocks table
-    from pilates.utils.zone_utils import get_block_to_zone_mapping
-
-    block_to_zone_map = get_block_to_zone_mapping(settings, year, workspace)
-    raw_blocks[asim_zone_id_col] = raw_blocks.index.map(block_to_zone_map)
-
-    # Update tables
-    households, unassigned_households = _update_households_table(
-        raw_households, raw_blocks, asim_zone_id_col
-    )
-    persons = _update_persons_table(
-        raw_persons,
-        households,
-        unassigned_households,
-        raw_blocks,
-        asim_zone_id_col,
-        settings=settings,
-    )
-    num_reassigned_jobs, jobs = _update_jobs_table(
-        raw_jobs,
-        raw_blocks,
-        settings,
-        settings.shared.geography.local_crs,
-        asim_zone_id_col,
-        workspace,
-    )
-    geoid_to_zone_mapping_updated, blocks = _update_blocks_table(
-        settings, year, raw_blocks, households, jobs, asim_zone_id_col, workspace
-    )
-
-    return (
-        blocks,
-        persons,
-        households,
-        jobs,
-        num_reassigned_jobs,
-        geoid_to_zone_mapping_updated,
-    )
-
-
 class ActivitysimPreprocessor(GenericPreprocessor):
     """
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
@@ -3061,118 +2926,6 @@ def _copy_data_to_mutable_location(
     return input_records, output_records
 
 
-def copy_beam_geoms(
-    settings: PilatesConfig,
-    beam_geoms_location: str,
-    asim_geoms_location: str,
-    beam_shape_location: Optional[str],
-    workspace: "Workspace",
-) -> Tuple[RecordStore, RecordStore]:
-    """
-    Copies and processes BEAM geometry files for ActivitySim.
-
-    This function reads BEAM geometry data, maps zone IDs according to the
-    configured zone type, and saves the processed geometries for ActivitySim.
-    It also handles an optional BEAM shapefile, updating its zone IDs if present.
-
-    Args:
-        settings (PilatesConfig): The current PILATES settings object.
-        beam_geoms_location (str): The file path to the input BEAM geometries CSV.
-        asim_geoms_location (str): The destination file path for the processed
-            ActivitySim geometries CSV.
-        beam_shape_location (Optional[str]): The optional file path to the BEAM
-            zones shapefile. If provided, its zone IDs will be updated.
-        workspace (Workspace): The current workspace object.
-
-    Returns:
-        Tuple[RecordStore, RecordStore]: A tuple containing two RecordStore objects:
-            - `input_records`: Records of the original BEAM geometry files.
-            - `output_records`: Records of the processed ActivitySim geometry files.
-    """
-    zone_type_column = {"block_group": "BLKGRP", "taz": "TAZ", "block": "BLK"}
-    beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={"GEOID": str})
-    beam_geoms_in = FileRecord(
-        file_path=beam_geoms_location,
-        short_name="beam_geoms_reference",
-        description="BEAM geometry file",
-    )
-    zone_type = get_setting(settings, "shared.geography.zones.zone_type").lower()
-    zone_id_col = zone_type_column[zone_type]
-    from pilates.utils.zone_utils import get_block_to_zone_mapping
-
-    mapping = get_block_to_zone_mapping(
-        settings, get_setting(settings, "run.start_year"), workspace
-    )
-
-    if zone_id_col not in beam_geoms_file.columns:
-        if zone_type == "block":
-            logger.info("Mapping block IDs")
-            beam_geoms_file["TAZ"] = (
-                beam_geoms_file["GEOID"].astype(str).replace(mapping)
-            )
-
-        elif zone_type == "block_group":
-            logger.info("Mapping block group IDs to TAZ ids")
-            beam_geoms_file["TAZ"] = (
-                beam_geoms_file["GEOID"].astype(str).replace(mapping)
-            )
-
-        elif zone_type == "taz":
-            from_col = get_setting(
-                settings,
-                "shared.skims.geoms_index_col",
-                default=get_setting(settings, "geoms_index_col", "zone_id"),
-            )
-            to_col = "TAZ"
-            logger.info("Renaming TAZ column from {0} to {1}".format(from_col, to_col))
-            beam_geoms_file.rename(columns={from_col: to_col}, inplace=True)
-        else:
-            logger.error(f"Unrecognized zone type {zone_type}, ASim may fail")
-
-    beam_geoms_file.to_csv(asim_geoms_location)
-    asim_geoms_out = FileRecord(
-        file_path=asim_geoms_location,
-        short_name="asim_geoms",
-        description="ASIM geometry file",
-    )
-
-    inputs = [beam_geoms_in]
-    outputs = [asim_geoms_out]
-
-    if beam_shape_location is not None:
-        logger.info(
-            "Mapping BEAM geometry geoid column {0} to zone_id column {1}".format(
-                get_setting(settings, "beam.skim_zone_geoid_col"),
-                get_setting(settings, "beam.skim_zone_source_id_col"),
-            )
-        )
-        beam_shape_in = FileRecord(
-            file_path=beam_shape_location,
-            short_name="beam_shape",
-            description="BEAM zones shapefile",
-        )
-        inputs.append(beam_shape_in)
-        zones = gpd.read_file(beam_shape_location)
-        zones[get_setting(settings, "beam.skim_zone_source_id_col")] = (
-            zones[get_setting(settings, "beam.skim_zone_geoid_col")]
-            .astype(str)
-            .map(mapping)
-        )
-        logger.info(
-            "Re-saving BEAM geometry shapefile with updated zone_id to {0}".format(
-                beam_shape_location
-            )
-        )
-        zones.to_file(beam_shape_location)
-        beam_shape_out = FileRecord(
-            file_path=beam_shape_location,
-            short_name="beam_shape",
-            description="BEAM zones shapefile",
-        )
-        outputs.append(beam_shape_out)
-    return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
-
-
 def _update_persons_table(
     persons: pd.DataFrame,
     households: pd.DataFrame,
@@ -4035,61 +3788,6 @@ def _create_land_use_table(
     return zones
 
 
-def _detect_activitysim_h5_prefix(
-    store: pd.HDFStore,
-    *,
-    required_tables: Tuple[str, ...],
-    preferred_prefixes: Tuple[Optional[Union[str, int]], ...] = (),
-) -> Optional[str]:
-    normalized_keys = {key.strip("/") for key in store.keys()}
-    candidate_prefixes: List[str] = []
-    for prefix in preferred_prefixes:
-        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
-        if normalized not in candidate_prefixes:
-            candidate_prefixes.append(normalized)
-    for key in normalized_keys:
-        if "/" not in key:
-            continue
-        prefix = key.split("/", 1)[0]
-        if prefix not in candidate_prefixes:
-            candidate_prefixes.append(prefix)
-
-    for prefix in candidate_prefixes:
-        if all(
-            (f"{prefix}/{table_name}" if prefix else table_name) in normalized_keys
-            for table_name in required_tables
-        ):
-            return prefix
-    return None
-
-
-def _activitysim_h5_preferred_prefixes(
-    state: "WorkflowState",
-) -> Tuple[Optional[Union[str, int]], ...]:
-    """
-    Prefer the forecast-year slice inside a bound UrbanSim population datastore.
-
-    The population-source H5 handed off from UrbanSim/ATLAS can contain multiple
-    year-scoped table families. ActivitySim should consume the semantic target
-    population for the interval, which is represented by ``forecast_year`` when
-    available, not the workflow start year.
-    """
-    ordered_prefixes: List[Optional[Union[str, int]]] = []
-    for prefix in (
-        getattr(state, "forecast_year", None),
-        getattr(state, "year", None),
-        "",
-    ):
-        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
-        if normalized == "":
-            candidate: Optional[Union[str, int]] = ""
-        else:
-            candidate = normalized
-        if candidate not in ordered_prefixes:
-            ordered_prefixes.append(candidate)
-    return tuple(ordered_prefixes)
-
-
 def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: "WorkflowState",
@@ -4263,15 +3961,6 @@ def create_asim_data_from_h5(
         )
 
     return output_records
-
-
-def _activitysim_h5_table_path(
-    prefix: Optional[Union[str, int]], table_name: str
-) -> str:
-    normalized_prefix = str(prefix).strip("/") if prefix not in (None, "") else ""
-    if normalized_prefix:
-        return f"/{normalized_prefix}/{table_name}"
-    return f"/{table_name}"
 
 
 def _activitysim_preprocess_h5_input_key(

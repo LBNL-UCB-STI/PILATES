@@ -110,19 +110,12 @@ def execute_step(
         if definition.execution_options is not None
         else ExecutionOptions(input_binding="paths")
     )
-    options = ExecutionOptions(
-        load_inputs=options.load_inputs,
-        input_binding=options.input_binding,
-        input_paths=options.input_paths,
-        input_materialization=options.input_materialization,
-        input_materialization_mode=options.input_materialization_mode,
-        executor=options.executor,
-        container=options.container,
+    options = replace(
+        options,
         runtime_kwargs={
             **(options.runtime_kwargs or {}),
             **base_runtime_kwargs,
         },
-        inject_context=options.inject_context,
     )
     result = scenario.run(
         fn=definition.function,

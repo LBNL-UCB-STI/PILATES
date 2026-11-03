@@ -135,19 +135,21 @@ def get_county_block_geoms(
             "Reached max_pages limit in get_county_block_geoms, possible infinite loop avoided."
         )
 
-    df = pd.DataFrame()
+    rows: list[dict[str, Any]] = []
     for feature in all_features:
-        tmp = pd.DataFrame([feature["attributes"]])
         try:
-            tmp["geometry"] = Polygon(
-                feature["geometry"]["rings"][0], feature["geometry"]["rings"][1:]
+            rings = feature["geometry"]["rings"]
+            rows.append(
+                {
+                    **feature["attributes"],
+                    "geometry": Polygon(rings[0], rings[1:]),
+                }
             )
-            df = pd.concat((df, tmp))
         except Exception as e:
             logger.error(
                 f"Error parsing features: {e}. Geometry: {feature['geometry']}"
             )
-    gdf = gpd.GeoDataFrame(df, crs="EPSG:4326")
+    gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
     return _ensure_geoid_column(gdf)
 
 
@@ -293,18 +295,27 @@ def get_taz_from_block_geoms(
     # distance between block and zone centroids
     unassigned_mask = ~blocks_gdf["GEOID"].isin(block_to_taz_results["GEOID"])
 
-    if any(unassigned_mask):
-        blocks_gdf["geometry"] = blocks_gdf["geometry"].centroid
-        zones_gdf["geometry"] = zones_gdf["geometry"].centroid
-
-        all_dists = blocks_gdf.loc[unassigned_mask, "geometry"].apply(
-            lambda x: zones_gdf["geometry"].distance(x)
+    if unassigned_mask.any():
+        unassigned_centroids = blocks_gdf.loc[
+            unassigned_mask, ["GEOID", "geometry"]
+        ].copy()
+        unassigned_centroids["geometry"] = unassigned_centroids.geometry.centroid
+        zone_centroids = (
+            zones_gdf[[zone_col_name, "geometry"]].copy()
+            if zone_col_name in zones_gdf.columns
+            else zones_gdf[["geometry"]].reset_index()
         )
+        zone_centroids["geometry"] = zone_centroids.geometry.centroid
 
-        nearest = all_dists.idxmin(axis=1).reset_index()
-        nearest.columns = ["blocks_idx", zone_col_name]
-        nearest.set_index("blocks_idx", inplace=True)
-        nearest["GEOID"] = blocks_gdf.reindex(nearest.index)["GEOID"]
+        nearest = (
+            gpd.sjoin_nearest(
+                unassigned_centroids,
+                zone_centroids,
+                how="left",
+            )
+            .loc[:, ["GEOID", zone_col_name]]
+            .drop_duplicates("GEOID", keep="first")
+        )
 
         block_to_taz_results = pd.concat(
             (block_to_taz_results, nearest[["GEOID", zone_col_name]])

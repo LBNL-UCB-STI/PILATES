@@ -17,20 +17,6 @@ from pilates.workflows.artifact_keys import (
 )
 
 
-def test_activitysim_h5_table_path_normalizes_prefixes() -> None:
-    assert (
-        asim_preprocessor._activitysim_h5_table_path("", "households") == "/households"
-    )
-    assert (
-        asim_preprocessor._activitysim_h5_table_path("2017", "households")
-        == "/2017/households"
-    )
-    assert (
-        asim_preprocessor._activitysim_h5_table_path("/2017/", "households")
-        == "/2017/households"
-    )
-
-
 def test_activitysim_preprocess_h5_input_key_uses_start_year_suffix() -> None:
     assert (
         asim_preprocessor._activitysim_preprocess_h5_input_key(
@@ -107,35 +93,6 @@ def test_log_activitysim_usim_input_tables_logs_expected_keys(monkeypatch) -> No
     ]
     assert all(call[3] == "input" for call in calls)
     assert all(call[4]["profile_file_schema"] is True for call in calls)
-
-
-def test_activitysim_h5_preferred_prefixes_prefers_forecast_year() -> None:
-    state = SimpleNamespace(forecast_year=2019, year=2018)
-
-    assert asim_preprocessor._activitysim_h5_preferred_prefixes(state) == (
-        "2019",
-        "2018",
-        "",
-    )
-
-
-def test_detect_activitysim_h5_prefix_prefers_forecast_year_tables(tmp_path) -> None:
-    h5_path = tmp_path / "model_data_2019.h5"
-    with pd.HDFStore(h5_path, mode="w") as store:
-        for prefix in ("2018", "2019"):
-            for table_name in ("households", "persons", "jobs", "blocks"):
-                store.put(f"/{prefix}/{table_name}", pd.DataFrame({"value": [1]}))
-
-    with pd.HDFStore(h5_path, mode="r") as store:
-        prefix = asim_preprocessor._detect_activitysim_h5_prefix(
-            store,
-            required_tables=("households", "persons", "jobs", "blocks"),
-            preferred_prefixes=asim_preprocessor._activitysim_h5_preferred_prefixes(
-                SimpleNamespace(forecast_year=2019, year=2018)
-            ),
-        )
-
-    assert prefix == "2019"
 
 
 def test_resolve_usim_population_table_paths_prefers_target_year(tmp_path) -> None:

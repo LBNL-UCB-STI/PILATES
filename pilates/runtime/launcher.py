@@ -18,7 +18,7 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Mapping, Sequence, cast
+from typing import Optional, Dict, Any, List, Mapping, cast
 
 from consist.models.run import Run
 from pilates.config import PilatesConfig
@@ -141,72 +141,20 @@ class PreparedRunContext:
     run_publisher: Optional[ConsistRunPublisher]
 
 
-def _resolve_scenario_id(settings: PilatesConfig) -> str:
-    return scenario_runtime.resolve_scenario_id(settings)
-
-
-def _resolve_seed(settings: PilatesConfig) -> Optional[int]:
-    return scenario_runtime.resolve_seed(settings)
-
-
-def _set_run_failure_context(**kwargs: Any) -> None:
-    set_run_failure_context(**kwargs)
-
-
-def _format_restart_command(
-    *,
-    settings: Optional[Any],
-    archive_state_path: Optional[str],
-) -> Optional[str]:
-    return format_restart_command(
-        settings=settings,
-        archive_state_path=archive_state_path,
-    )
-
-
-def _format_hpc_restart_command(
-    *,
-    settings: Optional[Any],
-    archive_state_path: Optional[str],
-) -> Optional[str]:
-    return format_hpc_restart_command(
-        settings=settings,
-        archive_state_path=archive_state_path,
-    )
+_ScenarioParentLinkProxy = scenario_runtime.ScenarioParentLinkProxy
+_format_restart_command = format_restart_command
+_format_hpc_restart_command = format_hpc_restart_command
+_resolve_cache_epoch = scenario_runtime.resolve_cache_epoch
+_build_schema_steps = scenario_runtime.build_schema_steps
+_filter_schema_steps_for_enabled_models = (
+    scenario_runtime.filter_schema_steps_for_enabled_models
+)
+_log_local_storage_info = log_local_storage_info_if_enabled
+_assert_bootstrap_output_invariant = bootstrap_runtime.assert_bootstrap_output_invariant
 
 
 def _log_restart_instructions_on_failure() -> None:
     log_restart_instructions_on_failure(logger=logger)
-
-
-def _merge_tag_list(existing: Any, additions: Sequence[str]) -> List[str]:
-    return scenario_runtime.merge_tag_list(existing, additions)
-
-
-def _merge_epoch_facet(
-    *,
-    existing: Any,
-    scenario_id: str,
-    seed: Optional[int],
-    model: Optional[str],
-    year: Optional[int],
-    iteration: Optional[int],
-) -> Dict[str, Any]:
-    return scenario_runtime.merge_epoch_facet(
-        existing=existing,
-        scenario_id=scenario_id,
-        seed=seed,
-        model=model,
-        year=year,
-        iteration=iteration,
-    )
-
-
-_ScenarioParentLinkProxy = scenario_runtime.ScenarioParentLinkProxy
-
-
-def _resolve_cache_epoch(settings: PilatesConfig) -> int:
-    return scenario_runtime.resolve_cache_epoch(settings)
 
 
 def _snapshot_activitysim_boundary(
@@ -257,23 +205,6 @@ def _configure_run_storage_environment(
     os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = "1" if enable_archive_copy else "0"
 
 
-def _build_schema_steps() -> List[Callable[..., Any]]:
-    return scenario_runtime.build_schema_steps()
-
-
-def _filter_schema_steps_for_enabled_models(
-    steps: List[Callable[..., Any]],
-    *,
-    include_optional: bool = True,
-    surface: EnabledWorkflowSurface,
-) -> List[Callable[..., Any]]:
-    return scenario_runtime.filter_schema_steps_for_enabled_models(
-        steps,
-        include_optional=include_optional,
-        surface=surface,
-    )
-
-
 def _get_consist_schemas() -> Optional[list[type[Any]]]:
     try:
         from pilates.database.schema.registry import get_consist_schemas
@@ -305,14 +236,10 @@ def _build_scenario_runtime_contract(
         validate_workflow_step_contracts_fn=validate_workflow_step_contracts,
         build_schema_steps_fn=_build_schema_steps,
         filter_schema_steps_for_enabled_models_fn=_filter_schema_steps_for_enabled_models,
-        merge_epoch_facet_fn=_merge_epoch_facet,
+        merge_epoch_facet_fn=scenario_runtime.merge_epoch_facet,
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
         surface=surface,
     )
-
-
-def _log_local_storage_info() -> None:
-    log_local_storage_info_if_enabled()
 
 
 def run_bootstrap_phase(
@@ -336,16 +263,10 @@ def run_bootstrap_phase(
         initialization_cls=Initialization,
         build_bootstrap_artifact_summary_fn=build_bootstrap_artifact_summary,
         build_step_consist_kwargs_fn=build_step_consist_kwargs,
-        merge_tag_list_fn=_merge_tag_list,
-        merge_epoch_facet_fn=_merge_epoch_facet,
+        merge_tag_list_fn=scenario_runtime.merge_tag_list,
+        merge_epoch_facet_fn=scenario_runtime.merge_epoch_facet,
         cache_options_cls=CacheOptions,
     )
-
-
-def _assert_bootstrap_output_invariant(
-    bootstrap_result: Optional[Dict[str, Any]],
-) -> None:
-    bootstrap_runtime.assert_bootstrap_output_invariant(bootstrap_result)
 
 
 def _restart_required_local_artifacts(
@@ -383,13 +304,6 @@ def _find_missing_restart_local_artifacts(
     )
 
 
-def _read_archive_run_state_year(state_path: str) -> Optional[int]:
-    return restart_runtime.read_archive_run_state_year(
-        state_path,
-        read_current_stage_fn=WorkflowState.read_current_stage,
-    )
-
-
 def _enforce_resume_rewind_guardrail(
     *,
     state: WorkflowState,
@@ -400,7 +314,12 @@ def _enforce_resume_rewind_guardrail(
         state=state,
         archive_state_path=archive_state_path,
         allow_rewind_resume=allow_rewind_resume,
-        read_archive_run_state_year_fn=_read_archive_run_state_year,
+        read_archive_run_state_year_fn=lambda state_path: (
+            restart_runtime.read_archive_run_state_year(
+                state_path,
+                read_current_stage_fn=WorkflowState.read_current_stage,
+            )
+        ),
     )
 
 
@@ -483,7 +402,7 @@ def _prepare_run_context(
     if state is None:
         state = WorkflowState.from_settings(settings)
     surface = build_enabled_workflow_surface(settings, state=state)
-    _set_run_failure_context(settings=settings, state=state)
+    set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
 
@@ -499,8 +418,8 @@ def _prepare_run_context(
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         run_name = f"pilates-run--{region}--{custom_label}--{timestamp}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
-    scenario_id = _resolve_scenario_id(settings)
-    run_seed = _resolve_seed(settings)
+    scenario_id = scenario_runtime.resolve_scenario_id(settings)
+    run_seed = scenario_runtime.resolve_seed(settings)
     logger.info(
         "Resolved run tagging metadata: scenario_id=%s seed=%s",
         scenario_id,
@@ -514,7 +433,7 @@ def _prepare_run_context(
         archive_run_dir,
         local_run_dir,
     )
-    _set_run_failure_context(
+    set_run_failure_context(
         archive_run_dir=archive_run_dir,
         local_run_dir=local_run_dir,
     )
@@ -619,7 +538,7 @@ def _prepare_run_context(
         )
     archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
     local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
-    _set_run_failure_context(archive_state_path=archive_state_path)
+    set_run_failure_context(archive_state_path=archive_state_path)
     if is_restart_run:
         _enforce_resume_rewind_guardrail(
             state=state,
@@ -926,7 +845,7 @@ def main(
             scenario_kwargs.get("step_tags"),
             scenario_kwargs.get("step_facet"),
         )
-        scenario_tags = _merge_tag_list(
+        scenario_tags = scenario_runtime.merge_tag_list(
             ["pilates_simulation"],
             [f"scenario_id:{scenario_id}"]
             + ([f"seed:{run_seed}"] if run_seed is not None else []),

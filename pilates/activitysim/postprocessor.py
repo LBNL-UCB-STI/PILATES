@@ -5,7 +5,6 @@ from pathlib import Path
 
 from consist.digest import file_sha256
 import pandas as pd
-import zipfile
 import os
 from typing import Tuple, Optional, Dict, Any
 
@@ -692,35 +691,6 @@ def _prepare_updated_tables(
     return asim_output_dict
 
 
-def create_beam_input_data(
-    settings,
-    state: WorkflowState,
-    workspace: Workspace,
-    asim_output_dict,
-    source_file_paths: list,
-) -> Tuple[str, Optional[FileRecord]]:
-    forecast_year = state.forecast_year
-    asim_output_data_dir = workspace.get_asim_output_dir()
-    archive_name = "asim_outputs_{0}.zip".format(forecast_year)
-    outpath = os.path.join(asim_output_data_dir, archive_name)
-    logger.info("Merging results back into UrbanSim format and storing as .zip!")
-
-    with zipfile.ZipFile(outpath, "w") as csv_zip:
-        # copy asim outputs into archive
-        for table_name in asim_output_dict.keys():
-            logger.info("Zipping {0} asim table to output archive!".format(table_name))
-            csv_zip.writestr(table_name + ".csv", asim_output_dict[table_name].to_csv())
-    logger.info("Done creating .zip archive!")
-
-    output_record = FileRecord(
-        file_path=outpath,
-        year=forecast_year,
-        description="Zipped ActivitySim outputs for BEAM",
-        short_name="asim_outputs_zip",
-    )
-    return outpath, output_record
-
-
 def create_usim_input_data(
     settings,
     state: WorkflowState,
@@ -942,69 +912,6 @@ def create_usim_input_data(
     )
 
     return input_store_path, output_record
-
-
-def update_usim_inputs_after_warm_start(
-    settings,
-    state: WorkflowState,
-    workspace: Workspace,
-    model_run_hash: Optional[str] = None,
-):
-    """
-    TODO: Combine this method with create_usim_input_data() above
-    """
-    # load usim data
-    usim_data_dir = workspace.get_usim_mutable_data_dir()
-    datastore_name = get_usim_datastore_fname(settings, io="input")
-    input_store_path = os.path.join(usim_data_dir, datastore_name)
-    if not os.path.exists(input_store_path):
-        raise ValueError("No input data found at {0}".format(input_store_path))
-
-    # load warm start data
-    warm_start_dir = workspace.get_asim_output_dir()
-    warm_start_persons_path = os.path.join(warm_start_dir, "warm_start_persons.csv")
-    warm_start_households_path = os.path.join(
-        warm_start_dir, "warm_start_households.csv"
-    )
-
-    # --- Perform Transformation ---
-    usim_datastore = pd.HDFStore(input_store_path)
-    p = usim_datastore["persons"]
-    hh = usim_datastore["households"]
-
-    warm_start_persons = pd.read_csv(
-        warm_start_persons_path,
-        index_col="person_id",
-        dtype={"workplace_taz": str, "school_taz": str},
-    )
-    warm_start_households = pd.read_csv(
-        warm_start_households_path,
-        index_col="household_id",
-    )
-
-    # replace persons and households with warm start data
-    assert p.shape[0] == warm_start_persons.shape[0]
-    assert hh.shape[0] == warm_start_households.shape[0]
-
-    p.loc[:, "work_zone_id"] = _align_overlay_series(
-        warm_start_persons.loc[:, "workplace_taz"].reindex(p.index),
-        p["work_zone_id"].dtype,
-    )
-    p.loc[:, "school_zone_id"] = _align_overlay_series(
-        warm_start_persons.loc[:, "school_taz"].reindex(p.index),
-        p["school_zone_id"].dtype,
-    )
-    hh.loc[:, "cars"] = _align_overlay_series(
-        warm_start_households["auto_ownership"].reindex(hh.index),
-        hh["cars"].dtype,
-    )
-
-    usim_datastore["persons"] = p
-    usim_datastore["households"] = hh
-
-    usim_datastore.close()
-
-    return
 
 
 class ActivitysimPostprocessor(GenericPostprocessor):
