@@ -8,7 +8,7 @@ import zlib
 import numpy as np
 import pandas as pd
 
-from pilates.atlas.inputs import atlas_selected_scenario
+from pilates.atlas.static_inputs import atlas_selected_scenario
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig

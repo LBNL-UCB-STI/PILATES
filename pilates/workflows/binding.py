@@ -147,10 +147,6 @@ def build_resolved_binding(
     return builder.freeze()
 
 
-def _ordered_unique(*groups: Sequence[str]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(key for group in groups for key in group))
-
-
 def _workflow_stage_enabled(state: Any, stage_name: str) -> bool:
     is_enabled = getattr(state, "is_enabled", None)
     stage_enum = getattr(state, "Stage", None)
@@ -295,58 +291,6 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
             preferred_keys=(USIM_POPULATION_BLOCKS_TABLE,),
             fallback_provider="activitysim_population_source",
             pass_mode="metadata_only",
-        ),
-    )
-
-
-def activitysim_datastore_selection_rules() -> tuple[ArtifactBindingRule, ...]:
-    """
-    Backward-compatible wrapper for callers that still use the old helper name.
-    Resolves to the UrbanSim datastore for the requested planner-year.
-    """
-    return (
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_POPULATION_SOURCE_H5,
-                USIM_FORECAST_OUTPUT,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ),
-            fallback_provider="urbansim_inputs_for_year",
-        ),
-    )
-
-
-def urbansim_datastore_selection_rules(
-    *,
-    fallback_provider: str = "urbansim_inputs_for_year",
-) -> tuple[ArtifactBindingRule, ...]:
-    """
-    Shared current/base datastore selection policy for UrbanSim input assembly.
-    """
-    return (
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_BASE_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_DATASTORE_BASE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-            ),
-            fallback_provider=fallback_provider,
-        ),
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ),
-            fallback_provider=fallback_provider,
         ),
     )
 

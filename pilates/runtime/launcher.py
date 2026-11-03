@@ -41,7 +41,7 @@ from pilates.utils.consist_db_snapshot import (
     restore_local_consist_db_from_snapshot,
     seed_local_consist_db_from_shared,
 )
-from pilates.atlas.inputs import (
+from pilates.atlas.static_inputs import (
     atlas_static_input_relpaths,
 )
 from pilates.activitysim.preprocessor import required_asim_config_dirs
@@ -884,12 +884,9 @@ def main(
             # Iterates through forecast years. For each year, runs sequential stages:
             # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
             #
-            # Step Pattern (used for all stages):
-            #   1. build_*_inputs(...)      - Collect inputs from previous outputs + coupler
-            #   2. build_*_outputs(...)     - Declare what we expect to produce
-            #   3. make_*_step(...)         - Create step function with coupler refs
-            #   4. build_step_config(...)   - Create config (year, iteration, inputs, outputs, kwargs)
-            #   5. scenario.run(...)        - Execute via Consist (handles caching + provenance)
+            # Each stage executes its declared StepDefinition entries via
+            # StepDefinition.resolve_inputs(...) and execute_step(...) on the active
+            # Consist scenario.
             #
             for year in state:
                 formatted_print(f"STARTING YEAR {year}")

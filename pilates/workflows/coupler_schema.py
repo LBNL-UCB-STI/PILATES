@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 from consist.utils import collect_step_schema
 
-from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.atlas.static_inputs import atlas_static_input_relpaths
 from pilates.config.models import PilatesConfig
 from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.coupler_namespace import namespaced_alias_for_key

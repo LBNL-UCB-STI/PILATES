@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from pilates.atlas.inputs import (
+from pilates.atlas.static_inputs import (
     atlas_run_years,
     atlas_selected_scenario,
     atlas_static_input_keys,

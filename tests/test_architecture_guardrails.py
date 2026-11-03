@@ -23,13 +23,20 @@ DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "_remap_outputs_workspace_paths",
     "_remap_workspace_local_path",
     "_resolve_historical_workspace_artifact_path",
+    "activitysim_datastore_selection_rules",
+    "build_activitysim_inputs",
+    "build_atlas_inputs",
+    "build_urbansim_inputs",
     "canonicalize_artifact_mapping",
     "emit_artifact_lifecycle_audit_event",
     "emit_consist_audit_event",
     "hydrate_missing_restart_artifacts",
     "hydrate_rewind_runner_inputs",
+    "log_coupler_value",
+    "resolve_artifact_from_value",
     "resolve_artifact_key",
     "restart_exact_rewind_contract",
+    "urbansim_datastore_selection_rules",
 }
 
 
@@ -178,6 +185,15 @@ def test_artifact_key_migrations_stays_deleted() -> None:
     migrations_path = REPO_ROOT / "pilates/workflows/artifact_key_migrations.py"
 
     assert not migrations_path.exists()
+
+
+def test_legacy_model_inputs_modules_stay_deleted() -> None:
+    for rel_path in (
+        "pilates/activitysim/inputs.py",
+        "pilates/urbansim/inputs.py",
+        "pilates/atlas/inputs.py",
+    ):
+        assert not (REPO_ROOT / rel_path).exists()
 
 
 def test_deleted_restart_and_audit_symbols_stay_out_of_production_code() -> None:

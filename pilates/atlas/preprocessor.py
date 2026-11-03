@@ -16,7 +16,10 @@ import pandas as pd
 
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
-from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
+from pilates.atlas.static_inputs import (
+    atlas_selected_scenario,
+    atlas_static_input_relpaths,
+)
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
 from pilates.utils.path_utils import find_project_root

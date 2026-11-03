@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
-from pilates.atlas.inputs import (
+from pilates.atlas.static_inputs import (
     atlas_run_years,
     atlas_static_input_keys_for_interval,
 )
