@@ -88,6 +88,7 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
                 num_processes=num_processes,
             )
         ),
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _stage: None,
     )
 

@@ -15,13 +15,15 @@ from pilates.utils.consist_types import (
 )
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
-    set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
-from pilates.workflows.coupler_namespace import coupler_storage_value
+from pilates.workflows.coupler_namespace import (
+    coupler_storage_value,
+    set_coupler_from_artifact,
+)
 from consist import Artifact, RunResult, Tracker
 from consist.protocols import ArtifactRecordLike
 from pilates.workflows.steps import (

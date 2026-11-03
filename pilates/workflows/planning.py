@@ -11,7 +11,6 @@ from pilates.atlas.inputs import (
     atlas_static_input_keys_for_interval,
 )
 from pilates.config.models import PilatesConfig, load_config
-from pilates.utils.io import apply_runtime_flags, compute_model_enabled_flags
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
@@ -136,16 +135,8 @@ class StaticExecutionPlan:
         }
 
 
-def _attach_enabled_flags(settings: PilatesConfig) -> Dict[str, bool]:
-    enabled_flags = compute_model_enabled_flags(settings)
-    apply_runtime_flags(settings, enabled_flags)
-    return enabled_flags
-
-
 def load_settings_for_planning(config_path: str) -> PilatesConfig:
-    settings = load_config(config_path)
-    _attach_enabled_flags(settings)
-    return settings
+    return load_config(config_path)
 
 
 def _atlas_sub_years(year: int, forecast_year: int) -> List[int]:

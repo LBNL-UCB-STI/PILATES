@@ -228,3 +228,53 @@ def test_archive_materialization_flag_stays_out_of_production_code() -> None:
         f"not resolve_existing_path(..., materialize_from_archive=True). "
         f"Violations: {violations}"
     )
+
+
+def _is_type_checking_guard(test: ast.expr) -> bool:
+    if isinstance(test, ast.Name) and test.id == "TYPE_CHECKING":
+        return True
+    if isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING":
+        return True
+    return False
+
+
+def _collect_runtime_imports(tree: ast.AST) -> list[tuple[int, str]]:
+    imports: list[tuple[int, str]] = []
+
+    def _visit(node: ast.AST) -> None:
+        if isinstance(node, ast.If) and _is_type_checking_guard(node.test):
+            for orelse_node in node.orelse:
+                _visit(orelse_node)
+            return
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append((node.lineno, node.module))
+            return
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.append((node.lineno, alias.name))
+            return
+        for child in ast.iter_child_nodes(node):
+            _visit(child)
+
+    _visit(tree)
+    return imports
+
+
+def test_config_and_utils_do_not_import_runtime_or_workflows() -> None:
+    forbidden_prefixes = ("pilates.runtime", "pilates.workflows")
+    violations: list[str] = []
+
+    for subdir in ("config", "utils"):
+        for path in sorted((PILATES_ROOT / subdir).rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            rel = _relative(path)
+            tree = _parse(path)
+            for lineno, module in _collect_runtime_imports(tree):
+                if module.startswith(forbidden_prefixes):
+                    violations.append(f"{rel}:{lineno}:{module}")
+
+    assert not violations, (
+        "pilates/config/ and pilates/utils/ must not import from pilates.runtime "
+        f"or pilates.workflows at runtime. Violations: {violations}"
+    )

@@ -79,6 +79,7 @@ class WorkflowState:
         # still pass the legacy field can load. Numba warmup is node-local
         # acceleration state, not durable workflow state.
         del asim_compiled
+        self._activitysim_compile_epoch: Optional[Path] = None
 
         # Store settings for access by methods that need them
         supply_demand_iters = 1

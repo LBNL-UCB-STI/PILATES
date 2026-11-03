@@ -4,7 +4,7 @@ import pytest
 from consist.types import H5ChildSpec
 
 from pilates.utils import consist_runtime as cr
-from pilates.utils.coupler_helpers import set_coupler_from_artifact
+from pilates.workflows.coupler_namespace import set_coupler_from_artifact
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,

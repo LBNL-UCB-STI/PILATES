@@ -262,7 +262,8 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
 
     # Compute and attach model enabled flags to the settings object.
     enabled_flags = compute_model_enabled_flags(settings)
-    apply_runtime_flags(settings, enabled_flags)
+    if not isinstance(settings, PilatesConfig):
+        apply_runtime_flags(settings, enabled_flags)
 
     # Raise errors/warnings for conflicting settings to ensure valid simulation configurations.
     household_sample_size = get_setting(

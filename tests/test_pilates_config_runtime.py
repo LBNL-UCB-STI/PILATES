@@ -64,6 +64,10 @@ def _minimal_config() -> dict:
 def test_runtime_properties_forward_to_typed_runtime_container():
     settings = PilatesConfig(**_minimal_config())
 
+    assert settings.runtime.flags_initialized is True
+    assert settings.land_use_enabled is True
+    assert settings.activity_demand_enabled is False
+
     settings.land_use_enabled = True
     settings.activity_demand_enabled = False
     settings.state_file_loc = "/tmp/state.yaml"
@@ -75,6 +79,21 @@ def test_runtime_properties_forward_to_typed_runtime_container():
     assert settings.runtime.options.state_file_loc == "/tmp/state.yaml"
     assert settings.runtime.options.settings_file == "settings.yaml"
     assert settings.runtime.options.allow_rewind_resume is True
+
+
+def test_runtime_flags_derive_live_and_preserve_explicit_overrides():
+    settings = PilatesConfig(**_minimal_config())
+
+    assert settings.land_use_enabled is True
+    settings.run.models.land_use = None
+    assert settings.land_use_enabled is False
+
+    # Explicit override via property or runtime.flags pins the flag
+    settings.land_use_enabled = True
+    settings.run.models.land_use = None
+    assert settings.land_use_enabled is True
+    settings.runtime.flags.activity_demand_enabled = True
+    assert settings.activity_demand_enabled is True
 
 
 def test_final_skim_export_setting_is_typed_and_defaults_off():

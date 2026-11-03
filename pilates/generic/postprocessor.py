@@ -22,7 +22,6 @@ class GenericPostprocessor(ABC, Generic[PostprocessInputsT, PostprocessOutputsT]
     ):
         self.model_name = model_name
         self.state = state
-        self.required_input_data: list[str] = []
 
     def postprocess(
         self,

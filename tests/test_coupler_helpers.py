@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from pilates.utils import coupler_helpers
+from pilates.workflows.coupler_namespace import set_coupler_from_artifact
 
 
 def test_artifact_to_path_ignores_uri(tmp_path) -> None:
@@ -64,7 +65,7 @@ class HistoricalArtifact:
 
 def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
     coupler = CouplerWithSetFromArtifact()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler, "usim_datastore_h5", "artifact", fallback="fallback"
     )
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", "artifact")]
@@ -72,7 +73,7 @@ def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
 
 def test_set_coupler_from_artifact_falls_back_to_set() -> None:
     coupler = CouplerWithSetOnly()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler, "usim_datastore_h5", None, fallback="/tmp/path.h5"
     )
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
@@ -80,7 +81,7 @@ def test_set_coupler_from_artifact_falls_back_to_set() -> None:
 
 def test_set_coupler_from_artifact_resolves_alias_key() -> None:
     coupler = CouplerWithSetOnly()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler, "asim_households_in", None, fallback="/tmp/households.csv"
     )
     assert coupler.calls == [("set", "households_asim_in", "/tmp/households.csv")]
@@ -88,7 +89,7 @@ def test_set_coupler_from_artifact_resolves_alias_key() -> None:
 
 def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> None:
     coupler = CouplerWithNamespaceView()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler,
         "linkstats_warmstart",
         None,
@@ -110,7 +111,7 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
     coupler = CouplerWithNamespaceView()
     artifact = SimpleNamespace(id="artifact-1")
 
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler,
         "usim_h5_updated",
         artifact,

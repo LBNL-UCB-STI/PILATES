@@ -6,6 +6,13 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from pilates.utils.usim_h5 import (
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+)
+
 
 # UrbanSim
 USIM_DATASTORE_CURRENT_H5 = "usim_datastore_h5"
@@ -18,10 +25,6 @@ USIM_DATASTORE_H5 = USIM_DATASTORE_CURRENT_H5
 USIM_H5_UPDATED = "usim_h5_updated"
 USIM_FORECAST_OUTPUT = "usim_forecast_output"
 USIM_POPULATION_SOURCE_H5 = "usim_population_source_h5"
-USIM_POPULATION_HOUSEHOLDS_TABLE = "usim_population_households_table"
-USIM_POPULATION_PERSONS_TABLE = "usim_population_persons_table"
-USIM_POPULATION_JOBS_TABLE = "usim_population_jobs_table"
-USIM_POPULATION_BLOCKS_TABLE = "usim_population_blocks_table"
 USIM_INPUT_NEXT = "usim_input_next"
 USIM_INPUT_MERGED_PREFIX = "usim_input_merged_"
 USIM_INPUT_ARCHIVE_PREFIX = "usim_input_archive_"

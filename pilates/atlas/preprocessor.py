@@ -299,7 +299,6 @@ class AtlasPreprocessor(GenericPreprocessor):
         state: "WorkflowState",
     ):
         super().__init__(model_name, state)
-        self.required_input_data = ["usim_datastore_h5"]
 
     def copy_data_to_mutable_location(
         self,

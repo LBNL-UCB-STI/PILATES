@@ -8,12 +8,12 @@ from typing import Any, Union
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import (
-    set_coupler_from_artifact,
-)
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.coupler_namespace import resolve_coupler_value
+from pilates.workflows.coupler_namespace import (
+    resolve_coupler_value,
+    set_coupler_from_artifact,
+)
 from pilates.workflows.steps import (
     atlas_postprocess,
     atlas_preprocess,

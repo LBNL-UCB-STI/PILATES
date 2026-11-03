@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
-from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.consist_types import ArtifactLike, CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 from pilates.workflows.artifact_keys import (
@@ -354,3 +355,137 @@ def namespaced_view_target(key: str) -> Optional[Tuple[str, str]]:
     if not namespace:
         return None
     return namespace, local_key_for_namespace(key, namespace)
+
+
+def resolve_input_precedence(
+    *,
+    key: str,
+    coupler: Optional[CouplerProtocol],
+    explicit_inputs: Optional[Mapping[str, Any]] = None,
+    fallback_inputs: Optional[Mapping[str, Any]] = None,
+) -> ResolvedCouplerValue:
+    """
+    Resolve one input key using canonical precedence.
+
+    Precedence is: explicit input -> coupler value -> fallback input.
+    """
+    if explicit_inputs is not None and key in explicit_inputs:
+        value = explicit_inputs.get(key)
+        if value is not None:
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_artifact_key_from_raw_key(key),
+                storage_key=None,
+                value=value,
+                source="explicit",
+            )
+
+    resolved = resolve_coupler_value(coupler, key)
+    if resolved.value is not None:
+        return resolved
+
+    if fallback_inputs is not None and key in fallback_inputs:
+        value = fallback_inputs.get(key)
+        if value is not None:
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_artifact_key_from_raw_key(key),
+                storage_key=None,
+                value=value,
+                source="fallback",
+            )
+
+    return ResolvedCouplerValue(
+        requested_key=key,
+        canonical_key=canonical_artifact_key_from_raw_key(key),
+        storage_key=None,
+        value=None,
+        source="missing",
+    )
+
+
+def set_coupler_from_artifact(
+    coupler: CouplerProtocol,
+    key: str,
+    artifact: Optional[Any],
+    fallback: Optional[str] = None,
+) -> None:
+    """
+    Set a coupler key from an artifact, falling back to a raw path if needed.
+    """
+    if artifact is None and fallback is None:
+        return
+    canonical_key = resolve_artifact_key(key)
+    value = artifact
+    if _is_noop_artifact_placeholder(value) and fallback is not None:
+        value = fallback
+    elif value is None:
+        value = fallback
+
+    def _preserve_artifact_identity(candidate: Any) -> bool:
+        if candidate is None or isinstance(candidate, (str, os.PathLike)):
+            return False
+        if _is_noop_artifact_placeholder(candidate):
+            return False
+        if isinstance(candidate, ArtifactLike):
+            return True
+        try:
+            if candidate.id is not None:
+                return True
+        except AttributeError:
+            pass
+        try:
+            if candidate.uri is not None:
+                return True
+        except AttributeError:
+            pass
+        try:
+            if candidate.container_uri is not None:
+                return True
+        except AttributeError:
+            pass
+        try:
+            if candidate.hash is not None:
+                return True
+        except AttributeError:
+            pass
+        return False
+
+    def _set_value(target: Any, target_key: str) -> None:
+        try:
+            target.set_from_artifact(target_key, value)
+            return
+        except AttributeError:
+            pass
+        try:
+            target.set(target_key, value)
+        except AttributeError:
+            pass
+
+    target = namespaced_view_target(canonical_key)
+    if target is not None and not _preserve_artifact_identity(value):
+        namespace, local_key = target
+        try:
+            view = coupler.view(namespace)
+        except AttributeError:
+            view = None
+        except Exception:
+            logger.debug(
+                "Failed to publish key %s via coupler view namespace %s",
+                canonical_key,
+                namespace,
+                exc_info=True,
+            )
+            view = None
+        if view is not None:
+            try:
+                _set_value(view, local_key)
+            except Exception:
+                logger.debug(
+                    "Failed to publish key %s via coupler view namespace %s",
+                    canonical_key,
+                    namespace,
+                    exc_info=True,
+                )
+
+    _set_value(coupler, canonical_key)

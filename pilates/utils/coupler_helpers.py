@@ -9,29 +9,13 @@ from typing import (
 )
 
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import ArtifactLike, CouplerProtocol
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.workflows.coupler_namespace import (
-    ResolvedCouplerValue,
-    canonical_artifact_key_from_raw_key,
-    namespaced_view_target,
-    resolve_coupler_value,
-)
-from pilates.runtime.archive_paths import (
+from pilates.utils.archive_paths import (
     archive_roots as _archive_roots,
     resolve_workspace_uri_path as _resolve_workspace_uri_path,
 )
+from pilates.utils.consist_types import ArtifactLike
 
 logger = logging.getLogger(__name__)
-
-
-def _is_noop_artifact(candidate: Any) -> bool:
-    if candidate is None:
-        return False
-    candidate_type = type(candidate)
-    candidate_name = getattr(candidate_type, "__name__", "").lower()
-    candidate_module = getattr(candidate_type, "__module__", "").lower()
-    return "noopartifact" in candidate_name or ".noop" in candidate_module
 
 
 def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
@@ -246,53 +230,6 @@ def resolve_artifact_from_value(
         return value
 
 
-def resolve_input_precedence(
-    *,
-    key: str,
-    coupler: Optional[CouplerProtocol],
-    explicit_inputs: Optional[Mapping[str, Any]] = None,
-    fallback_inputs: Optional[Mapping[str, Any]] = None,
-) -> ResolvedCouplerValue:
-    """
-    Resolve one input key using canonical precedence.
-
-    Precedence is: explicit input -> coupler value -> fallback input.
-    """
-    if explicit_inputs is not None and key in explicit_inputs:
-        value = explicit_inputs.get(key)
-        if value is not None:
-            return ResolvedCouplerValue(
-                requested_key=key,
-                canonical_key=canonical_artifact_key_from_raw_key(key),
-                storage_key=None,
-                value=value,
-                source="explicit",
-            )
-
-    resolved = resolve_coupler_value(coupler, key)
-    if resolved.value is not None:
-        return resolved
-
-    if fallback_inputs is not None and key in fallback_inputs:
-        value = fallback_inputs.get(key)
-        if value is not None:
-            return ResolvedCouplerValue(
-                requested_key=key,
-                canonical_key=canonical_artifact_key_from_raw_key(key),
-                storage_key=None,
-                value=value,
-                source="fallback",
-            )
-
-    return ResolvedCouplerValue(
-        requested_key=key,
-        canonical_key=canonical_artifact_key_from_raw_key(key),
-        storage_key=None,
-        value=None,
-        source="missing",
-    )
-
-
 def log_coupler_value(
     *,
     key: str,
@@ -352,76 +289,3 @@ def log_coupler_value(
         container_uri,
         db_hit,
     )
-
-
-def set_coupler_from_artifact(
-    coupler: CouplerProtocol,
-    key: str,
-    artifact: Optional[Any],
-    fallback: Optional[str] = None,
-) -> None:
-    """
-    Set a coupler key from an artifact, falling back to a raw path if needed.
-
-    Parameters
-    ----------
-    coupler : CouplerProtocol
-        Consist coupler or compatible interface.
-    key : str
-        Coupler key to set.
-    artifact : object
-        Artifact-like object returned by logging helpers.
-    fallback : str, optional
-        Path to set if artifact is None.
-    """
-    if artifact is None and fallback is None:
-        return
-    canonical_key = resolve_artifact_key(key)
-    value = artifact
-    if _is_noop_artifact(value) and fallback is not None:
-        value = fallback
-    elif value is None:
-        value = fallback
-
-    def _preserve_artifact_identity(candidate: Any) -> bool:
-        if candidate is None or isinstance(candidate, (str, os.PathLike)):
-            return False
-        if _is_noop_artifact(candidate):
-            return False
-        return any(
-            getattr(candidate, attr_name, None) is not None
-            for attr_name in ("id", "uri", "container_uri", "hash")
-        )
-
-    def _set_value(target: Any, target_key: str) -> None:
-        set_from_artifact = getattr(target, "set_from_artifact", None)
-        if callable(set_from_artifact):
-            set_from_artifact(target_key, value)
-            return
-        set_value = getattr(target, "set", None)
-        if callable(set_value):
-            set_value(target_key, value)
-
-    # Preferred path: if available, also publish through model namespace view.
-    target = namespaced_view_target(canonical_key)
-    view_fn = getattr(coupler, "view", None)
-    if (
-        target is not None
-        and callable(view_fn)
-        and not _preserve_artifact_identity(value)
-    ):
-        namespace, local_key = target
-        try:
-            view = view_fn(namespace)
-            _set_value(view, local_key)
-        except Exception:
-            logger.debug(
-                "Failed to publish key %s via coupler view namespace %s",
-                canonical_key,
-                namespace,
-                exc_info=True,
-            )
-
-    # Transitional compatibility: keep unscoped key writes so existing consumers
-    # and historical runs remain valid while namespaced lookups are adopted.
-    _set_value(coupler, canonical_key)

@@ -25,7 +25,6 @@ class GenericPreprocessor(ABC, Generic[PreprocessInputsT, PreprocessOutputsT]):
     ):
         self.model_name = model_name
         self.state = state
-        self.required_input_data: list[str] = []
 
     @abstractmethod
     def copy_data_to_mutable_location(

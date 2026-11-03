@@ -6,8 +6,8 @@ These tests document and enforce the ownership split used by the workflow:
 1. Native step resolvers select inputs through their committed resolver paths,
    not direct coupler calls in stage assembly.
 2. ``pilates/workflows/coupler_namespace.py`` owns direct namespace-aware
-   coupler reads.
-3. ``pilates/utils/coupler_helpers.py`` owns direct coupler publication and
+   coupler reads and coupler publication helpers.
+3. ``pilates/utils/coupler_helpers.py`` owns pure artifact/path resolution and
    materialization helpers.
 
 The goal is to prevent drift back to ad hoc coupler access patterns that make
@@ -46,14 +46,18 @@ COUPLER_METHODS = {
 ALLOWED_DIRECT_CALL_FILES = {
     Path("pilates/runtime/bootstrap.py"),
     Path("pilates/workflows/coupler_namespace.py"),
-    Path("pilates/utils/coupler_helpers.py"),
 }
 
 
 ALLOWED_DIRECT_CALLS_BY_FILE = {
     Path("pilates/runtime/bootstrap.py"): {"set"},
-    Path("pilates/workflows/coupler_namespace.py"): {"get", "keys", "view"},
-    Path("pilates/utils/coupler_helpers.py"): {"set", "set_from_artifact", "view"},
+    Path("pilates/workflows/coupler_namespace.py"): {
+        "get",
+        "keys",
+        "set",
+        "set_from_artifact",
+        "view",
+    },
 }
 
 

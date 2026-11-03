@@ -832,7 +832,6 @@ class BeamPostprocessor(GenericPostprocessor):
         state: "WorkflowState",
     ):
         super().__init__(model_name, state)
-        self.required_input_data = ["zarr_skims", "raw_od_skims"]
         self.skim_format = get_setting(
             self.state.full_settings, "shared.skims.fname", "skimsActivitySimOD_current"
         )

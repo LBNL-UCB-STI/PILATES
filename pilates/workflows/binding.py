@@ -40,13 +40,11 @@ from consist.types import BindingResult
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import (
-    resolve_input_precedence,
-)
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import uses_input_datastore
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.workflows.coupler_namespace import resolve_input_precedence
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (

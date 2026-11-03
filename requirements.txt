@@ -37,7 +37,7 @@ sqlmodel
 pyhocon==0.3.61
 
 # Workflow and provenance tracking
-consist[ingest,ibis,git] @ git+https://github.com/LBNL-UCB-STI/consist.git@661af023b8cfff83c307fc043404c6d3428eef16
+consist[ingest,ibis,git] @ git+https://github.com/LBNL-UCB-STI/consist.git@7cb70d59b34e3cf0153cbbc91dfe644dd1faf1d1
 pytest-cov
 ruff==0.16.0
 pre-commit>=3.0.0

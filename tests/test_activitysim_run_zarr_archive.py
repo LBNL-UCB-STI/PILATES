@@ -102,6 +102,7 @@ def test_omx_preparation_rejects_missing_or_invalid_zarr_before_body(
         full_settings=_preparation_settings(),
         current_year=2018,
         current_inner_iter=0,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)
@@ -251,6 +252,7 @@ def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tm
         full_settings=settings,
         current_year=2018,
         current_inner_iter=0,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)
@@ -299,6 +301,7 @@ def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
         full_settings=settings,
         current_year=2018,
         current_inner_iter=0,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)

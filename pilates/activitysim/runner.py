@@ -154,40 +154,6 @@ class ActivitySimPreparationResult:
 
 
 @dataclass(frozen=True, slots=True)
-class _ActivitySimCompileEpoch:
-    """One process-local private Numba cache for a live workflow state."""
-
-    state: "WorkflowState"
-    cache_dir: Path
-
-
-class ActivitySimCompileEpochRegistry:
-    """Keep successful private compile epochs out of workflow identity.
-
-    Entries intentionally retain the live workflow state object and compare by
-    object identity. A workspace pathname cannot prove that this Python process
-    prepared the cache, while a live state object identifies one invocation.
-    """
-
-    def __init__(self) -> None:
-        self._epochs: list[_ActivitySimCompileEpoch] = []
-
-    def get(self, state: "WorkflowState") -> Path | None:
-        for epoch in self._epochs:
-            if epoch.state is state:
-                return epoch.cache_dir
-        return None
-
-    def record(self, state: "WorkflowState", cache_dir: Path) -> None:
-        if self.get(state) is not None:
-            raise RuntimeError("ActivitySim compile epoch already recorded for state")
-        self._epochs.append(_ActivitySimCompileEpoch(state=state, cache_dir=cache_dir))
-
-
-_ACTIVITYSIM_COMPILE_EPOCHS = ActivitySimCompileEpochRegistry()
-
-
-@dataclass(frozen=True, slots=True)
 class ActivitySimConfigStagingPlan:
     """Runtime-only source roots copied into an ActivitySim launch tree."""
 
@@ -695,7 +661,7 @@ class ActivitysimRunner(GenericRunner):
                 generated_zarr_path=None,
             )
 
-        existing_epoch = _ACTIVITYSIM_COMPILE_EPOCHS.get(self.state)
+        existing_epoch = self.state._activitysim_compile_epoch
         if existing_epoch is not None:
             logger.info("ActivitySim Numba warmup: reused private epoch")
             epoch_context = replace(launch_context, shared_cache_dir=existing_epoch)
@@ -747,9 +713,11 @@ class ActivitysimRunner(GenericRunner):
             body_skim_mode = "zarr"
             body_zarr_input_path = str(generated_zarr_path)
         if existing_epoch is None:
-            _ACTIVITYSIM_COMPILE_EPOCHS.record(
-                self.state, epoch_context.shared_cache_dir
-            )
+            if self.state._activitysim_compile_epoch is not None:
+                raise RuntimeError(
+                    "ActivitySim compile epoch already recorded for state"
+                )
+            self.state._activitysim_compile_epoch = epoch_context.shared_cache_dir
         return ActivitySimPreparationResult(
             launch_context=epoch_context,
             skim_mode=body_skim_mode,
