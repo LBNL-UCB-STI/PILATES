@@ -13,7 +13,15 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Mapping, Optional, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    Mapping,
+    Optional,
+    cast,
+)
 
 from pilates.utils.consist_types import (
     ArtifactLike,
@@ -54,8 +62,10 @@ def create_tracker(
     resolved_enabled = _is_enabled(enabled)
     set_enabled(resolved_enabled)
     if "hashing_strategy" not in tracker_kwargs:
-        run_cfg = getattr(settings, "run", None)
-        configured_strategy = getattr(run_cfg, "consist_hashing_strategy", "fast")
+        try:
+            configured_strategy = settings.run.consist_hashing_strategy
+        except AttributeError:
+            configured_strategy = "fast"
         if configured_strategy not in {"fast", "full"}:
             configured_strategy = "fast"
         tracker_kwargs["hashing_strategy"] = configured_strategy
@@ -143,9 +153,10 @@ def artifact_fingerprint(value: Any) -> Optional[str]:
     fingerprint surface. Missing fingerprints remain ``None``; callers should
     not probe legacy or wrapper-specific fields.
     """
-    if value is None:
+    try:
+        fingerprint = value.hash
+    except AttributeError:
         return None
-    fingerprint = getattr(value, "hash", None)
     if not fingerprint:
         return None
     return str(fingerprint)
@@ -250,10 +261,9 @@ def log_h5_table(
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
-    artifact = tracker.log_h5_table(
+    return tracker.log_h5_table(
         path, key=key, table_path=table_path, direction=direction, **meta
     )
-    return _ensure_legacy_table_path_meta(artifact, table_path=table_path)
 
 
 def log_artifacts(
@@ -312,7 +322,10 @@ def _retry_without_schema_meta(
     if "schema" not in meta or not _schema_warn_only_enabled():
         raise exc
     schema = meta.get("schema")
-    schema_name = getattr(schema, "__name__", str(schema))
+    try:
+        schema_name = str(schema.__name__)
+    except AttributeError:
+        schema_name = str(schema)
     reduced_meta = {
         k: v
         for k, v in meta.items()
@@ -340,11 +353,20 @@ def _with_declared_schema_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
     schema = meta.get("schema")
     if schema is None:
         return dict(meta)
+    try:
+        schema_name = str(schema.__name__)
+    except AttributeError:
+        schema_name = str(schema)
+    try:
+        raw_table_name = schema.__tablename__
+    except AttributeError:
+        raw_table_name = None
     updated = dict(meta)
+    updated.setdefault("declared_schema_class", schema_name)
     updated.setdefault(
-        "declared_schema_class", getattr(schema, "__name__", str(schema))
+        "declared_schema_table",
+        str(raw_table_name) if raw_table_name is not None else None,
     )
-    updated.setdefault("declared_schema_table", getattr(schema, "__tablename__", None))
     return updated
 
 
@@ -390,8 +412,8 @@ def _is_noop_tracker(tracker: Optional[Any]) -> bool:
     if tracker is None:
         return False
     tracker_type = type(tracker)
-    name = getattr(tracker_type, "__name__", "").lower()
-    module = getattr(tracker_type, "__module__", "").lower()
+    name = tracker_type.__name__.lower()
+    module = tracker_type.__module__.lower()
     return "nooptracker" in name or ".noop" in module
 
 
@@ -439,49 +461,20 @@ def _resolve_artifact_path(value: Any) -> Optional[str]:
     if isinstance(value, str):
         return _normalize_path(value)
     if isinstance(value, ArtifactLike):
-        return os.fspath(getattr(value, "path"))
+        return os.fspath(value.path)
     return None
-
-
-def _ensure_legacy_table_path_meta(
-    artifact: Optional[ArtifactLike], *, table_path: str
-) -> Optional[ArtifactLike]:
-    """
-    Backward-compatibility shim for callers/tests that read table_path from meta.
-
-    Newer Consist builds may keep table_path as a first-class field without
-    duplicating it in artifact.meta.
-    """
-    if artifact is None:
-        return None
-    artifact_meta = getattr(artifact, "meta", None)
-    if isinstance(artifact_meta, dict):
-        artifact_meta.setdefault("table_path", table_path)
-        return artifact
-    if hasattr(artifact, "model_copy"):
-        try:
-            normalized_meta = {}
-            if isinstance(artifact_meta, Mapping):
-                normalized_meta = dict(artifact_meta)
-            normalized_meta.setdefault("table_path", table_path)
-            return artifact.model_copy(update={"meta": normalized_meta})
-        except Exception:
-            return artifact
-    try:
-        setattr(artifact, "meta", {"table_path": table_path})
-    except Exception:
-        pass
-    return artifact
 
 
 def dispose_tracker(tracker: Optional[TrackerLike]) -> None:
     """Safely dispose the underlying SQLAlchemy engine / DuckDB file handles."""
     if tracker is None:
         return
-    db = getattr(tracker, "db", None)
-    engine = getattr(db, "engine", None)
-    if engine is not None and hasattr(engine, "dispose"):
+    try:
+        dispose = tracker.db.engine.dispose  # type: ignore[attr-defined]
+    except AttributeError:
+        return
+    if callable(dispose):
         try:
-            engine.dispose()
+            dispose()
         except Exception:
             logger.warning("Failed to dispose tracker database engine", exc_info=True)

@@ -127,10 +127,6 @@ def test_mapping_env_var_path_fallback_works(monkeypatch, tmp_path):
 
 
 def test_epoch_views_uses_overridden_family_spec(monkeypatch):
-    monkeypatch.setattr(
-        epoch_views_module, "_resolve_grouped_hybrid_creator", lambda _t: None
-    )
-
     captured_schema_args: dict[str, Any] = {}
 
     def _fake_resolve_schema_id(self, *, model: str, run_id: str, artifact_family: str):

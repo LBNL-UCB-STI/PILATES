@@ -1048,20 +1048,17 @@ def _activitysim_preprocess_callable(
             preflight_activitysim_initial_skims_admission,
         )
         from pilates.utils import consist_runtime as cr
+        from pilates.utils.admission_helpers import (
+            extract_admission_reports,
+            resolve_tracker_report_dir,
+        )
 
         if has_initial_skims_admission_policy(settings):
-            active_run = cr.current_run()
             active_tracker = cr.current_tracker()
-            existing_reports: Mapping[str, object] | None = None
-            if active_run is not None and isinstance(active_run.meta, Mapping):
-                reports = active_run.meta.get("admission_reports")
-                if isinstance(reports, Mapping):
-                    existing_reports = reports
-            report_dir = (
-                Path(active_tracker.run_dir)
-                if active_tracker is not None
-                and getattr(active_tracker, "run_dir", None)
-                else Path(workspace.full_path)
+            existing_reports = extract_admission_reports(cr.current_run())
+            report_dir = resolve_tracker_report_dir(
+                active_tracker,
+                fallback=workspace.full_path,
             )
             preflight_activitysim_initial_skims_admission(
                 settings=settings,

@@ -2,30 +2,28 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from typing import Mapping, Protocol
+from typing import Mapping
 
 import consist
 
 from pilates.config import PilatesConfig
 from pilates.config.models import DeclaredDigestExpectation
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
+from pilates.utils.admission_helpers import (
+    AdmissionMetadataLogger,
+    persist_admission_report,
+)
 
 
 logger = logging.getLogger(__name__)
 _URBANSIM_DATASTORE_BASE_ROLE = "usim_datastore_base_h5"
+_URBANSIM_DATASTORE_REPORT_FILENAME = "usim-datastore-base-h5.json"
 
 
 class UrbanSimInputAdmissionError(RuntimeError):
     """Raised when configured UrbanSim input-admission policy rejects a file."""
-
-
-class AdmissionMetadataLogger(Protocol):
-    """Minimal active-run metadata capability required for admission evidence."""
-
-    def log_meta(self, **metadata: object) -> None: ...
 
 
 def preflight_bootstrap_urbansim_datastore_admission(
@@ -72,10 +70,12 @@ def preflight_bootstrap_urbansim_datastore_admission(
             source_uri=expectation.source_uri,
         ),
     )
-    _persist_admission_report(
-        report_dir=report_dir,
-        metadata_logger=metadata_logger,
+    persist_admission_report(
         report=report,
+        report_dir=report_dir,
+        report_filename=_URBANSIM_DATASTORE_REPORT_FILENAME,
+        role=_URBANSIM_DATASTORE_BASE_ROLE,
+        metadata_logger=metadata_logger,
         existing_admission_reports=existing_admission_reports,
     )
 
@@ -92,21 +92,3 @@ def preflight_bootstrap_urbansim_datastore_admission(
         report.outcome,
     )
     return report
-
-
-def _persist_admission_report(
-    *,
-    report_dir: Path,
-    metadata_logger: AdmissionMetadataLogger,
-    report: consist.admission.AdmissionReport,
-    existing_admission_reports: Mapping[str, object] | None,
-) -> None:
-    """Write deterministic evidence and merge it into active-run metadata."""
-    canonical_report = report.canonical_json()
-    payload = json.loads(canonical_report)
-    report_path = Path(report_dir) / "admission" / "usim-datastore-base-h5.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(canonical_report + "\n", encoding="utf-8")
-    admission_reports = dict(existing_admission_reports or {})
-    admission_reports[_URBANSIM_DATASTORE_BASE_ROLE] = payload
-    metadata_logger.log_meta(admission_reports=admission_reports)

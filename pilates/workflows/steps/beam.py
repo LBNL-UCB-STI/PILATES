@@ -1792,17 +1792,15 @@ def _preflight_beam_launch_inputs(
     elif has_staged_linkstats_admission_policy(
         settings=settings
     ) and not requires_prior_beam_linkstats_handoff(settings=settings, state=state):
+        from pilates.utils.admission_helpers import extract_admission_reports
+
         try:
             active_run = cr.current_run()
         except RuntimeError:
             active_run = None
         existing_admission_reports = (
-            active_run.meta.get("admission_reports", {})
-            if active_run is not None
-            else {}
+            extract_admission_reports(active_run, default={}) or {}
         )
-        if not isinstance(existing_admission_reports, Mapping):
-            existing_admission_reports = {}
         try:
             tracker = cr.current_tracker()
         except RuntimeError:

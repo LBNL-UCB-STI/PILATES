@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping
 
 import consist
 
@@ -22,20 +22,19 @@ from pilates.config.models import (
     DeclaredDigestExpectation,
     PriorRunExpectation,
 )
+from pilates.utils.admission_helpers import (
+    AdmissionMetadataLogger,
+    persist_admission_report,
+)
 
 
 logger = logging.getLogger(__name__)
 _ASIM_INITIAL_SKIMS_ROLE = "asim_omx_skims"
+_ASIM_INITIAL_SKIMS_REPORT_FILENAME = "asim-omx-skims.json"
 
 
 class ActivitySimInputAdmissionError(RuntimeError):
     """Raised when configured ActivitySim input-admission policy rejects a skim file."""
-
-
-class AdmissionMetadataLogger(Protocol):
-    """Minimal active-run metadata capability required for admission evidence."""
-
-    def log_meta(self, **metadata: object) -> None: ...
 
 
 def _initial_skims_admission_config(
@@ -330,11 +329,14 @@ def resolve_bootstrap_activitysim_skims_path(
     if asim_mutable is not None and asim_mutable.is_file():
         return asim_mutable
     beam_cfg = settings.beam
-    skims_fname = (
-        settings.shared.skims.get("fname", "skims.omx")
-        if isinstance(settings.shared.skims, Mapping)
-        else getattr(settings.shared.skims, "fname", "skims.omx")
-    )
+    skims_cfg = settings.shared.skims
+    if isinstance(skims_cfg, Mapping):
+        skims_fname = skims_cfg.get("fname", "skims.omx")
+    else:
+        try:
+            skims_fname = str(skims_cfg.fname or "skims.omx")
+        except AttributeError:
+            skims_fname = "skims.omx"
     if beam_cfg is not None:
         beam_skims = (
             Path(workspace_path)
@@ -415,13 +417,17 @@ def preflight_activitysim_initial_skims_admission(
                 "Unable to inspect skim structure for %s: %s", execution_path, exc
             )
 
-    _persist_admission_report(
-        report_dir=report_dir,
-        metadata_logger=metadata_logger,
+    persist_admission_report(
         report=report,
-        skim_inspection=skim_inspection,
-        sidecar_provenance=sidecar_payload,
+        report_dir=report_dir,
+        report_filename=_ASIM_INITIAL_SKIMS_REPORT_FILENAME,
+        role=_ASIM_INITIAL_SKIMS_ROLE,
+        metadata_logger=metadata_logger,
         existing_admission_reports=existing_admission_reports,
+        extra_payload={
+            "skim_inspection": skim_inspection,
+            "sidecar_provenance": sidecar_payload,
+        },
     )
 
     if report.outcome == "verified":
@@ -438,33 +444,3 @@ def preflight_activitysim_initial_skims_admission(
         ", ".join(report.observations),
     )
     return report
-
-
-def _persist_admission_report(
-    *,
-    report_dir: Path,
-    metadata_logger: AdmissionMetadataLogger | None,
-    report: consist.admission.AdmissionReport,
-    skim_inspection: Mapping[str, Any] | None,
-    sidecar_provenance: Mapping[str, Any] | None,
-    existing_admission_reports: Mapping[str, object] | None,
-) -> None:
-    """Write deterministic admission evidence and merge it into active-run metadata."""
-    payload = json.loads(report.canonical_json())
-    if skim_inspection is not None:
-        payload["skim_inspection"] = dict(skim_inspection)
-    if sidecar_provenance is not None:
-        payload["sidecar_provenance"] = dict(sidecar_provenance)
-    serialized = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    report_path = Path(report_dir) / "admission" / "asim-omx-skims.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(serialized + "\n", encoding="utf-8")
-    if metadata_logger is not None:
-        admission_reports = dict(existing_admission_reports or {})
-        admission_reports[_ASIM_INITIAL_SKIMS_ROLE] = payload
-        metadata_logger.log_meta(admission_reports=admission_reports)

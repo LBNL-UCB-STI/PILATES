@@ -933,3 +933,67 @@ def test_open_archive_local_cache_copies_db_and_selected_artifacts(
     assert manifest["artifacts"][0]["local_path"].endswith(
         "activitysim/output/trips.parquet"
     )
+
+
+def test_archive_exit_stack_closes_grouped_ibis_context_managers(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+
+    archive_run_dir = tmp_path / "archive"
+    db_path = archive_run_dir / ".consist" / "consist.duckdb"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_bytes(b"")
+    artifact_path = archive_run_dir / "activitysim" / "output" / "trips.parquet"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("placeholder", encoding="utf-8")
+
+    tracker = TrackerStub(
+        [
+            _run(
+                "asim-2020",
+                model_name="activitysim",
+                scenario_id="baseline",
+                year=2020,
+                iteration=0,
+            )
+        ]
+    )
+    tracker._artifacts = [
+        FakeArtifact(
+            id="artifact-1",
+            key="trips_asim_out",
+            run_id="asim-2020",
+            uri="workspace://activitysim/output/trips.parquet",
+            abs_path=str(artifact_path),
+            meta={"facet": {"artifact_family": "trips"}},
+        )
+    ]
+    session = SessionStub(
+        tracker=tracker,
+        archive_run_dir=archive_run_dir,
+        db_path=db_path,
+        epochs=[],
+    )
+
+    events: list[str] = []
+
+    @contextmanager
+    def fake_grouped_context(**_kwargs):
+        events.append("entered")
+        try:
+            yield FakeIbisTable(pd.DataFrame([{"trip_id": 1, "facet_year": 2020}]))
+        finally:
+            events.append("exited")
+
+    monkeypatch.setattr(
+        archive_module.AnalysisSession, "open", lambda **kwargs: session
+    )
+    monkeypatch.setattr(
+        archive_module, "_open_grouped_ibis_table", fake_grouped_context
+    )
+
+    with open_archive(archive_run_dir, project_root=tmp_path / "project") as archive:
+        table = archive.table("activitysim.trips", facets=["year"])
+        assert list(table.to_pandas()["year"]) == [2020]
+        assert events == ["entered"]
+
+    assert events == ["entered", "exited"]

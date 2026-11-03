@@ -296,3 +296,34 @@ def test_second_report_preserves_preexisting_admission_role(
         "beam_linkstats_warmstart": {"outcome": "verified"},
         _ROLE: report_payload,
     }
+
+
+def test_admission_helpers_extract_and_resolve_tracker_report_dir(
+    tmp_path: Path,
+) -> None:
+    from pilates.utils.admission_helpers import (
+        extract_admission_reports,
+        resolve_tracker_report_dir,
+    )
+
+    assert extract_admission_reports(None) is None
+    assert extract_admission_reports(None, default={}) == {}
+    assert extract_admission_reports(
+        SimpleNamespace(meta={"admission_reports": {"role": {"outcome": "verified"}}})
+    ) == {"role": {"outcome": "verified"}}
+    assert (
+        extract_admission_reports(SimpleNamespace(meta={"admission_reports": []}))
+        is None
+    )
+    fallback_dir = tmp_path / "fallback"
+    assert resolve_tracker_report_dir(None, fallback=fallback_dir) == fallback_dir
+    assert (
+        resolve_tracker_report_dir(
+            SimpleNamespace(run_dir=tmp_path), fallback=fallback_dir
+        )
+        == tmp_path
+    )
+    assert (
+        resolve_tracker_report_dir(SimpleNamespace(run_dir=None), fallback=fallback_dir)
+        == fallback_dir
+    )

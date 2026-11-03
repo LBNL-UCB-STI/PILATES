@@ -18,7 +18,7 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Mapping, cast
+from typing import Optional, Dict, Any, List, cast
 
 from consist.models.run import Run
 from pilates.config import PilatesConfig
@@ -34,7 +34,6 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
-from pilates.utils.consist_capabilities import require_consist_runtime_capabilities
 from pilates.utils.consist_db_snapshot import (
     ConsistDbSnapshotManager,
     mirror_consist_db_to_archive,
@@ -54,6 +53,7 @@ from pilates.urbansim.admission import (
     preflight_bootstrap_urbansim_datastore_admission,
 )
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
+from pilates.utils.admission_helpers import extract_admission_reports
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime.context import WorkflowRuntimeContext
@@ -502,7 +502,6 @@ def _prepare_run_context(
             "Check earlier Consist logs for tracker creation errors, often caused by "
             "a PILATES/Consist API mismatch."
         )
-    require_consist_runtime_capabilities(tracker)
     run_event_context = RunNotificationContext.from_env(
         run_name=run_name,
         scenario_id=scenario_id,
@@ -662,12 +661,7 @@ def _preflight_bootstrap_urbansim_datastore_admission(
     prepared: PreparedRunContext,
 ) -> None:
     """Record and enforce datastore admission on the active outer scenario run."""
-    active_outer_run = cr.current_run()
-    existing_admission_reports: Mapping[str, object] | None = None
-    if active_outer_run is not None:
-        reports = active_outer_run.meta.get("admission_reports")
-        if isinstance(reports, Mapping):
-            existing_admission_reports = reports
+    existing_admission_reports = extract_admission_reports(cr.current_run())
 
     preflight_bootstrap_urbansim_datastore_admission(
         settings=prepared.settings,
@@ -695,12 +689,7 @@ def _preflight_bootstrap_activitysim_skims_admission(
     ):
         return
 
-    active_outer_run = cr.current_run()
-    existing_admission_reports: Mapping[str, object] | None = None
-    if active_outer_run is not None:
-        reports = active_outer_run.meta.get("admission_reports")
-        if isinstance(reports, Mapping):
-            existing_admission_reports = reports
+    existing_admission_reports = extract_admission_reports(cr.current_run())
 
     preflight_activitysim_initial_skims_admission(
         settings=prepared.settings,
