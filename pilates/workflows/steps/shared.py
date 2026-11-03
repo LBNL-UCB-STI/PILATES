@@ -14,11 +14,8 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Iterable,
     Mapping,
-    Optional,
     Sequence,
-    Set,
 )
 
 from consist import (
@@ -40,10 +37,6 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.binding import build_resolved_binding
-from pilates.workflows.catalog import (
-    WORKFLOW_STEP_SPECS,
-    workflow_step_spec_for_step_name,
-)
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
@@ -288,80 +281,3 @@ def _activitysim_output_facet_meta(
         "facet_schema_version": "v1",
         "facet_index": True,
     }
-
-
-def _declared_step_model(step_func: Callable[..., Any]) -> Optional[str]:
-    meta = getattr(step_func, "__consist_step__", None)
-    model = getattr(meta, "model", None)
-    if isinstance(model, str) and model:
-        return model
-    return None
-
-
-def _declared_step_name(step_func: Callable[..., Any]) -> Optional[str]:
-    """Return the registered native identity for a decorated step callable."""
-    for spec in WORKFLOW_STEP_SPECS:
-        if spec.definition.function is step_func:
-            return spec.step_name
-    return None
-
-
-def validate_workflow_step_contracts(
-    *,
-    declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
-    allow_untracked_declared: Optional[Set[str]] = None,
-    require_all_tracked_declared: bool = True,
-) -> None:
-    """Validate native decorated steps against the catalog contract."""
-    if declared_steps is None:
-        return
-
-    errors: list[str] = []
-    declared_by_name: Dict[str, Callable[..., Any]] = {}
-    for step in declared_steps:
-        model = _declared_step_model(step)
-        if model is None:
-            errors.append(
-                "Declared step callable is missing __consist_step__.model metadata"
-            )
-            continue
-        name = _declared_step_name(step) or model
-        if name in declared_by_name:
-            errors.append(f"Duplicate declared step identity: {name}")
-            continue
-        declared_by_name[name] = step
-
-    expected_names = {spec.step_name for spec in WORKFLOW_STEP_SPECS}
-    declared_names = set(declared_by_name)
-    if require_all_tracked_declared:
-        missing = expected_names - declared_names
-        if missing:
-            errors.append(
-                "Native definitions missing from declared steps: "
-                + ", ".join(sorted(missing))
-            )
-    allowed = {"postprocessing"} | set(allow_untracked_declared or ())
-    unexpected = declared_names - expected_names - allowed
-    if unexpected:
-        errors.append("Undeclared native step models: " + ", ".join(sorted(unexpected)))
-
-    for name, step in declared_by_name.items():
-        spec = workflow_step_spec_for_step_name(name)
-        if spec is None:
-            continue
-        step_meta = getattr(step, "__consist_step__", None)
-        schema_outputs = (
-            getattr(step_meta, "schema_outputs", ()) if step_meta is not None else ()
-        )
-        if schema_outputs is not None and not set(spec.output_keys).issubset(
-            set(schema_outputs)
-        ):
-            errors.append(
-                f"Step '{name}' metadata schema outputs omit catalog outputs "
-                + ", ".join(sorted(set(spec.output_keys) - set(schema_outputs)))
-            )
-
-    if errors:
-        raise RuntimeError(
-            "Workflow step contract validation failed:\n- " + "\n- ".join(errors)
-        )

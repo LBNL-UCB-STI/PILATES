@@ -276,7 +276,7 @@ def _restart_atlas_identity_facet(
 ) -> dict[str, Any]:
     """Reconstruct the native ATLAS producer facet for one archived subyear."""
 
-    from pilates.utils.consist_config import build_step_consist_kwargs
+    from pilates.workflows.consist_metadata import build_step_consist_kwargs
 
     workspace_path = getattr(workspace, "full_path", None)
     metadata = build_step_consist_kwargs(

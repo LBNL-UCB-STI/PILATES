@@ -158,7 +158,7 @@ def test_activitysim_definitions_resolve_native_consist_contracts(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda model, settings, workspace_path=None: {
             "config": {"model": model},
             "identity_inputs": [],
@@ -703,7 +703,7 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
         _Postprocessor,
     )
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda **_kwargs: {
             "config": {"model": "activitysim"},
             "identity_inputs": [],

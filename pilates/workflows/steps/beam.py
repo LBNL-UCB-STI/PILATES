@@ -94,9 +94,8 @@ from pilates.workflows.input_authority import requires_prior_beam_linkstats_hand
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.surface import build_enabled_workflow_surface
-from pilates.workflows.step_consist_meta import consist_step_meta
-from pilates.workflows.step_definition import (
+from pilates.workflows.consist_metadata import consist_step_meta
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,
@@ -106,6 +105,15 @@ from pilates.utils.state_access import is_start_year, iteration_index
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+def build_enabled_workflow_surface(settings: Any) -> Any:
+    from pilates.workflows.surface import (
+        build_enabled_workflow_surface as _build_enabled_workflow_surface,
+    )
+
+    return _build_enabled_workflow_surface(settings)
+
 
 _ATLAS_VEHICLES2_BASENAME_RE = re.compile(r"^vehicles2_\d{4}\.csv(?:\.gz)?$")
 

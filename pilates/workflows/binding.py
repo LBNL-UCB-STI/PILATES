@@ -718,6 +718,14 @@ FALLBACK_PROVIDER_INVENTORY: tuple[FallbackProviderInventoryEntry, ...] = (
 )
 
 
+def workflow_step_spec_for_step_name(step_name: str) -> Any:
+    from pilates.workflows.catalog import (
+        workflow_step_spec_for_step_name as _catalog_step_spec,
+    )
+
+    return _catalog_step_spec(step_name)
+
+
 def artifact_rules_for_step_name(
     step_name: str,
     *,
@@ -725,8 +733,6 @@ def artifact_rules_for_step_name(
 ) -> tuple[ArtifactBindingRule, ...]:
     """Return catalog-derived native selection rules with step-defined overrides."""
     del settings
-    from pilates.workflows.catalog import workflow_step_spec_for_step_name
-
     spec = workflow_step_spec_for_step_name(step_name)
     if spec is None:
         return ()

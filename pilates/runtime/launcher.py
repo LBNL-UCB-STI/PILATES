@@ -30,7 +30,7 @@ from pilates.generic.initialization import (
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_config import (
+from pilates.workflows.consist_metadata import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
@@ -94,7 +94,7 @@ from pilates.workflows.stages import (
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState  # noqa: E402
 
-from pilates.workflows.steps import validate_workflow_step_contracts  # noqa: E402
+from pilates.workflows.catalog import validate_workflow_step_contracts  # noqa: E402
 from consist.types import CacheOptions  # noqa: E402
 
 logging.basicConfig(
@@ -141,7 +141,6 @@ class PreparedRunContext:
     run_publisher: Optional[ConsistRunPublisher]
 
 
-_ScenarioParentLinkProxy = scenario_runtime.ScenarioParentLinkProxy
 _format_restart_command = format_restart_command
 _format_hpc_restart_command = format_hpc_restart_command
 _resolve_cache_epoch = scenario_runtime.resolve_cache_epoch
@@ -851,8 +850,7 @@ def main(
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            tagged_scenario = _ScenarioParentLinkProxy(scenario)
-            coupler = tagged_scenario.coupler
+            coupler = scenario.coupler
             coupler.declare_outputs(
                 *coupler_schema.keys(),
                 warn_undefined=True,
@@ -868,10 +866,10 @@ def main(
                 coupler=coupler,
             )
             if not is_restart_run:
-                tagged_scenario.capture_coupler_snapshot(phase="init")
+                scenario.capture_coupler_snapshot(phase="init")
             else:
                 restart_runtime.restore_restart_coupler_snapshot(
-                    scenario=tagged_scenario,
+                    scenario=scenario,
                     tracker=tracker,
                     settings=settings,
                     state=state,
@@ -909,7 +907,7 @@ def main(
                 )
                 if state.should_run(WorkflowState.Stage.land_use):
                     run_land_use_stage(
-                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
+                        scenario=cast(ScenarioWithCoupler, scenario),
                         year=year,
                         context=runtime_context,
                     )
@@ -923,7 +921,7 @@ def main(
                         f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
                     )
                     run_vehicle_ownership_stage(
-                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
+                        scenario=cast(ScenarioWithCoupler, scenario),
                         coupler=coupler,
                         year=year,
                         context=runtime_context,
@@ -935,7 +933,7 @@ def main(
 
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
-                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
+                        scenario=cast(ScenarioWithCoupler, scenario),
                         year=year,
                         on_activity_demand_boundary=(
                             lambda iteration, y=year: _snapshot_activitysim_boundary(
@@ -961,7 +959,7 @@ def main(
                 if state.should_run(WorkflowState.Stage.postprocessing):
                     formatted_print("POST-PROCESSING")
                     run_postprocessing_stage(
-                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
+                        scenario=cast(ScenarioWithCoupler, scenario),
                         year=year,
                         context=runtime_context,
                     )

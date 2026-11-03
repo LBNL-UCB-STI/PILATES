@@ -22,7 +22,7 @@ from consist.models.run import Run
 from pilates.workflows.binding import build_resolved_binding
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import (
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,

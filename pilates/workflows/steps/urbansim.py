@@ -30,8 +30,8 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_consist_meta import consist_step_meta
-from pilates.workflows.step_definition import (
+from pilates.workflows.consist_metadata import consist_step_meta
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,

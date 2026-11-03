@@ -415,7 +415,7 @@ class TestBeamFullSkimMode:
     def test_build_beam_identity_config_includes_full_skim_when_present(self):
         """build_beam_identity_config includes full_skim facet when configured."""
         from pilates.config.models import FullSkimsCreatorConfig
-        from pilates.utils.consist_config import build_beam_identity_config
+        from pilates.workflows.consist_metadata import build_beam_identity_config
 
         full_skim = FullSkimsCreatorConfig(
             skims_kind="activitySimOmx",

@@ -1,9 +1,17 @@
-"""PILATES definitions for one native Consist step."""
+"""Leaf workflow step contracts and catalog specification types."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, Mapping, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generic,
+    Literal,
+    Mapping,
+    TypeVar,
+)
 
 from consist import CacheOptions, ExecutionOptions, OutputSet
 
@@ -78,3 +86,8 @@ class StepDefinition(Generic[OutputT]):
     optional_output_keys: tuple[str, ...] = ()
     preflight_identity: bool = False
     archive_outputs: bool = True
+
+
+@dataclass(frozen=True)
+class WorkflowStepProvenanceSpec:
+    builder_key: str

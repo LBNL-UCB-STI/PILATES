@@ -2,7 +2,7 @@
 Pydantic models for PILATES configuration.
 
 This module defines the structure and validation for PILATES configuration files.
-Consist-specific identity and facet mapping lives in pilates.utils.consist_config.
+Consist-specific identity and facet mapping lives in pilates.workflows.consist_metadata.
 """
 
 import argparse

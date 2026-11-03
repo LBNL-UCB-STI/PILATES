@@ -13,7 +13,7 @@ from consist import (
 from pilates.config.models import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import (
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,

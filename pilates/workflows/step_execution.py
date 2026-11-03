@@ -9,8 +9,8 @@ from consist import CacheOptions, ExecutionOptions, RunResult, StepIdentity
 
 from pilates.runtime.run_output_archive import archive_completed_run
 from pilates.utils.coupler_helpers import set_coupler_from_artifact
+from pilates.workflows.contracts import StepDefinition
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import StepDefinition
 
 OutputT = TypeVar("OutputT")
 

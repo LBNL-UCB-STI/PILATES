@@ -23,7 +23,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, atlas, urbansim
-from pilates.workflows import step_consist_meta
+from pilates.workflows import consist_metadata as step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
 from pilates.urbansim.outputs import (
     UrbanSimPreprocessOutputs as NativeUrbanSimPreprocessOutputs,

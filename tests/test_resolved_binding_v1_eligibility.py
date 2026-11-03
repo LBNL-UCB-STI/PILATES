@@ -44,7 +44,7 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.steps import STEP_DEFINITIONS
 import pilates.workflows.steps.activitysim as activitysim_steps
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_consist_meta import activitysim_config_root_dirs
+from pilates.workflows.consist_metadata import activitysim_config_root_dirs
 
 
 @dataclass(frozen=True)

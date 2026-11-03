@@ -375,9 +375,9 @@ def golden_stub_env(tmp_path, monkeypatch):
     """
 
     consist = pytest.importorskip("consist")
-    from pilates.workflows import step_consist_meta as step_consist_meta_module
+    from pilates.workflows import consist_metadata as consist_metadata_module
 
-    original_consist_step_meta = step_consist_meta_module.consist_step_meta
+    original_consist_step_meta = consist_metadata_module.consist_step_meta
 
     def _patched_consist_step_meta(model):
         meta = dict(original_consist_step_meta(model))
@@ -386,7 +386,7 @@ def golden_stub_env(tmp_path, monkeypatch):
         return meta
 
     monkeypatch.setattr(
-        step_consist_meta_module,
+        consist_metadata_module,
         "consist_step_meta",
         _patched_consist_step_meta,
     )

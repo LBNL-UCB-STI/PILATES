@@ -80,18 +80,6 @@ class ScenarioWithCoupler(ScenarioLike, Protocol):
 
 
 @runtime_checkable
-class ScenarioRestorationLike(Protocol):
-    def remember_restored_run_id(
-        self,
-        *,
-        model_name: Optional[str],
-        year: Optional[int],
-        iteration: Optional[int],
-        run_id: Optional[str],
-    ) -> None: ...
-
-
-@runtime_checkable
 class CouplerProtocol(Protocol):
     """
     Protocol for artifact registry used to pass inputs/outputs between steps.

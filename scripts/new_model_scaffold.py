@@ -688,8 +688,8 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
         from pilates.{spec.model}.preprocessor import {spec.preprocessor_class}
         from pilates.utils.consist_runtime import require_runtime_kwargs
         from pilates.workflows.resolved_inputs import ResolvedStepInputs
-        from pilates.workflows.step_consist_meta import consist_step_meta
-        from pilates.workflows.step_definition import (
+        from pilates.workflows.consist_metadata import consist_step_meta
+        from pilates.workflows.contracts import (
             ConfigContract,
             InputContract,
             StepDefinition,
@@ -1360,7 +1360,7 @@ def _render_checklist(
               second execution wrapper.
         - [ ] If this model needs provenance hashing/facets, confirm the generated
               catalog `provenance` metadata and add builder support in
-              `pilates/utils/consist_config.py` as needed.
+              `pilates/workflows/consist_metadata.py` as needed.
         - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`.
         - [ ] Add/extend coupler schema entries in `pilates/workflows/coupler_schema.py`.
 
@@ -1506,7 +1506,7 @@ def _parse_args() -> argparse.Namespace:
         "--provenance-builder-key",
         help=(
             "Optional catalog provenance builder key for generated steps "
-            "(for pilates/utils/consist_config.py dispatch)"
+            "(for pilates/workflows/consist_metadata.py dispatch)"
         ),
     )
     parser.add_argument(

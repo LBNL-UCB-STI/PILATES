@@ -30,7 +30,7 @@ from pilates.config.models import (
     PriorRunExpectation,
     admission_policy_fingerprint,
 )
-from pilates.utils.consist_config import build_activitysim_identity_config
+from pilates.workflows.consist_metadata import build_activitysim_identity_config
 
 
 def _write_omx_file(

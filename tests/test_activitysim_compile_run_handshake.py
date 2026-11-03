@@ -27,8 +27,8 @@ from pilates.activitysim.runner import (
     asim_compile_output_dir,
 )
 from pilates.utils import consist_runtime as cr
+from pilates.workflows.contracts import InputContract, StepDefinition
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import InputContract, StepDefinition
 from pilates.workflows.step_execution import execute_step
 
 

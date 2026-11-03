@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import fields
 from pilates.runtime.scenario_runtime import build_schema_steps
 from pilates.workflows import catalog
+from pilates.workflows.catalog import validate_workflow_step_contracts
 from pilates.workflows.steps import STEP_DEFINITIONS
-from pilates.workflows.steps.shared import validate_workflow_step_contracts
 
 
 def _metadata_keys(values) -> tuple[str, ...]:

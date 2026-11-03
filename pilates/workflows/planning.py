@@ -23,6 +23,7 @@ from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
+from workflow_state import WorkflowState
 
 if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface
@@ -147,46 +148,6 @@ def load_settings_for_planning(config_path: str) -> PilatesConfig:
     return settings
 
 
-def _interval_step_for_year(settings: PilatesConfig, year: int) -> int:
-    return 7 if year == 2010 else int(settings.run.travel_model_freq)
-
-
-def _iter_planning_years(
-    settings: PilatesConfig,
-    *,
-    surface: "EnabledWorkflowSurface",
-) -> List[Dict[str, int]]:
-    years: List[Dict[str, int]] = []
-    land_use_enabled = surface.stage_enabled("land_use")
-    current_year = int(settings.run.start_year)
-    end_year = int(settings.run.end_year)
-    max_year_intervals = settings.run.max_year_intervals
-
-    while current_year <= end_year:
-        if land_use_enabled:
-            forecast_year = min(
-                current_year + _interval_step_for_year(settings, current_year),
-                end_year,
-            )
-        else:
-            forecast_year = current_year
-        years.append(
-            {
-                "year": current_year,
-                "forecast_year": forecast_year,
-            }
-        )
-        if max_year_intervals is not None and len(years) >= max_year_intervals:
-            break
-        if not land_use_enabled:
-            break
-        if forecast_year <= current_year:
-            break
-        current_year = forecast_year
-
-    return years
-
-
 def _atlas_sub_years(year: int, forecast_year: int) -> List[int]:
     years = [year]
     if forecast_year <= year:
@@ -196,34 +157,32 @@ def _atlas_sub_years(year: int, forecast_year: int) -> List[int]:
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
-    beam_cfg = getattr(settings, "beam", None)
-    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg is not None else None
+    beam_cfg = settings.beam
+    skim_cfg = beam_cfg.full_skim if beam_cfg is not None else None
     if skim_cfg is None:
         return "disabled"
-    return str(getattr(skim_cfg, "run_schedule", "standalone"))
+    return str(skim_cfg.run_schedule or "standalone")
 
 
-def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
+def _should_run_full_skim(
+    settings: PilatesConfig,
+    iteration: int,
+    *,
+    total_iters: Optional[int] = None,
+) -> bool:
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
         return True
     if schedule == "after_each_iteration":
         return True
     if schedule == "after_final_iteration":
-        return iteration == int(settings.run.supply_demand_iters) - 1
+        effective_iters = (
+            int(settings.run.supply_demand_iters)
+            if total_iters is None
+            else int(total_iters)
+        )
+        return iteration == effective_iters - 1
     return False
-
-
-def _effective_supply_demand_iterations(
-    settings: PilatesConfig,
-    *,
-    surface: "EnabledWorkflowSurface",
-) -> int:
-    total_iters = int(settings.run.supply_demand_iters)
-    activity_enabled = surface.stage_enabled("activity_demand")
-    if not activity_enabled and total_iters > 1:
-        return 1
-    return total_iters
 
 
 def _format_dynamic_family(family: str, step_run: PlannedStepRun) -> str:
@@ -472,6 +431,10 @@ class _PlanBuilder:
     ) -> None:
         self.settings = settings
         self.surface = surface
+        self.planning_state = WorkflowState.for_planning(
+            self.settings,
+            surface=self.surface,
+        )
         self.config_path = config_path
         self.include_postprocessing = include_postprocessing
         self.contracts = workflow_step_contracts_by_name(settings=self.settings)
@@ -494,31 +457,19 @@ class _PlanBuilder:
     def _stage_enabled(self, stage_name: str) -> bool:
         return self.surface.stage_enabled(stage_name)
 
-    def _iter_years(self) -> List[Dict[str, int]]:
-        return _iter_planning_years(
-            self.settings,
-            surface=self.surface,
-        )
-
-    def _effective_supply_demand_iterations(self) -> int:
-        return _effective_supply_demand_iterations(
-            self.settings,
-            surface=self.surface,
-        )
-
     def _scope_external_artifact(self, artifact_key: str, *, dynamic: bool) -> bool:
         if dynamic:
             return True
         return artifact_key not in _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS
 
     def _build_metadata(self) -> Dict[str, Any]:
-        years = self._iter_years()
+        years = self.planning_state.planned_year_intervals()
         enabled_flags = self.surface.profile.to_dict()
         return {
             "start_year": int(self.settings.run.start_year),
             "end_year": int(self.settings.run.end_year),
             "travel_model_freq": int(self.settings.run.travel_model_freq),
-            "supply_demand_iters": self._effective_supply_demand_iterations(),
+            "supply_demand_iters": self.planning_state.effective_supply_demand_iterations(),
             "enabled_flags": enabled_flags,
             "years": years,
             "full_skim_schedule": _full_skim_run_schedule(self.settings),
@@ -537,7 +488,7 @@ class _PlanBuilder:
         return assumptions
 
     def build(self) -> StaticExecutionPlan:
-        for year_info in self._iter_years():
+        for year_info in self.planning_state.planned_year_intervals():
             self._add_year_steps(
                 year=year_info["year"],
                 forecast_year=year_info["forecast_year"],
@@ -581,7 +532,7 @@ class _PlanBuilder:
             self._add_step_run("postprocessing", year=year, forecast_year=forecast_year)
 
     def _add_supply_demand_steps(self, *, year: int, forecast_year: int) -> None:
-        total_iters = self._effective_supply_demand_iterations()
+        total_iters = self.planning_state.effective_supply_demand_iterations()
         activity_enabled = self._stage_enabled("activity_demand")
         traffic_enabled = self._stage_enabled("traffic_assignment")
         schedule = _full_skim_run_schedule(self.settings)
@@ -637,7 +588,11 @@ class _PlanBuilder:
                 forecast_year=forecast_year,
                 iteration=iteration,
             )
-            if _should_run_full_skim(self.settings, iteration):
+            if _should_run_full_skim(
+                self.settings,
+                iteration,
+                total_iters=total_iters,
+            ):
                 self._add_step_run(
                     "beam_full_skim",
                     year=year,
@@ -1051,7 +1006,7 @@ def build_static_execution_plan(
     surface: "EnabledWorkflowSurface",
 ) -> StaticExecutionPlan:
     include_post = (
-        bool(getattr(settings, "postprocessing", None))
+        bool(settings.postprocessing)
         if include_postprocessing is None
         else bool(include_postprocessing)
     )

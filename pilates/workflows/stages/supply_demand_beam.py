@@ -73,14 +73,31 @@ def _full_skim_run_schedule(settings: PilatesConfig) -> str:
     return skim_cfg.run_schedule
 
 
-def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
+def _should_run_full_skim(
+    settings: PilatesConfig,
+    iteration: int,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> bool:
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
         return True
     if schedule == "after_each_iteration":
         return True
     if schedule == "after_final_iteration":
-        total_iters = settings.run.supply_demand_iters
+        if isinstance(state, WorkflowState):
+            total_iters = state.effective_supply_demand_iterations(
+                resumed_iteration=iteration
+            )
+        else:
+            total_iters = int(settings.run.supply_demand_iters)
+            models = vars(settings.run).get("models")
+            if (
+                models is not None
+                and models.activity_demand is None
+                and total_iters > 1
+            ):
+                total_iters = max(1, iteration + 1)
         return iteration == total_iters - 1
     return False
 
@@ -394,7 +411,7 @@ def _run_beam_steps(
             outputs=postprocess_result.outputs,
         )
 
-    if _should_run_full_skim(settings, iteration):
+    if _should_run_full_skim(settings, iteration, state=state):
         _run_beam_full_skim_step(
             scenario=scenario,
             year=year,

@@ -72,8 +72,8 @@ from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.runtime_overlays import resolve_runtime_input_output_overrides
 from pilates.workflows.state_helpers import resolve_forecast_year
-from pilates.workflows.step_consist_meta import consist_step_meta
-from pilates.workflows.step_definition import (
+from pilates.workflows.consist_metadata import consist_step_meta
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,

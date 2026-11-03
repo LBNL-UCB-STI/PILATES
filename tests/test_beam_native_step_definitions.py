@@ -172,7 +172,7 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
     monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
     monkeypatch.setattr(beam_steps, "enqueue_archive_copy", lambda **_kwargs: None)
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda **_kwargs: {"config": {"model": "beam"}, "identity_inputs": []},
     )
 
@@ -565,7 +565,7 @@ def test_native_beam_definitions_resolve_consist_contracts(
     )
     monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {},
     )
 
