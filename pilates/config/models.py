@@ -603,11 +603,14 @@ class PilatesConfig(BaseModel):
         extra = self.__pydantic_extra__ or {}
         warm_start_skims = bool(extra.get("warm_start_skims", False))
         static_skims = bool(extra.get("static_skims", False))
-        replan_iters = (
-            self.activitysim.replan_iters
-            if self.activitysim is not None
-            else int(extra.get("replan_iters", 0) or 0)
-        )
+        try:
+            replan_iters = (
+                int(self.activitysim.replan_iters)
+                if self.activitysim is not None
+                else int(extra.get("replan_iters", 0) or 0)
+            )
+        except AttributeError:
+            replan_iters = int(extra.get("replan_iters", 0) or 0)
         land_use_enabled = bool(self.run.models.land_use) and not warm_start_skims
         vehicle_ownership_model_enabled = bool(self.run.models.vehicle_ownership)
         activity_demand_model = self.run.models.activity_demand

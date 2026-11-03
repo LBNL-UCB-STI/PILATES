@@ -95,6 +95,12 @@ def test_runtime_flags_derive_live_and_preserve_explicit_overrides():
     settings.runtime.flags.activity_demand_enabled = True
     assert settings.activity_demand_enabled is True
 
+    # Partial test stubs without replan_iters fall back to 0 cleanly
+    from types import SimpleNamespace
+
+    object.__setattr__(settings, "activitysim", SimpleNamespace(file_format="parquet"))
+    assert settings.replanning_enabled is False
+
 
 def test_final_skim_export_setting_is_typed_and_defaults_off():
     settings = PilatesConfig(**_minimal_config())
