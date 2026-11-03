@@ -16,7 +16,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_FORECAST_OUTPUT,
-    USIM_H5_UPDATED,
 )
 from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
@@ -373,13 +372,6 @@ def _planned_artifact_path_metadata(
             "forecast_output_datastore",
             forecast_output_path,
             "Forecast-year UrbanSim output datastore emitted by the runner before postprocessing merges it back into the mutable input slot.",
-        )
-
-    if artifact_key == USIM_H5_UPDATED:
-        return (
-            "current_mutable_datastore",
-            input_path,
-            "Updated current UrbanSim datastore handle republished onto the mutable input slot for downstream steps.",
         )
 
     if artifact_key != USIM_DATASTORE_CURRENT_H5:

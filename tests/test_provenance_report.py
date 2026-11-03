@@ -30,15 +30,15 @@ class _FakeTracker:
                     )
                 },
                 outputs={
-                    "asim_households_in": SimpleNamespace(
-                        key="asim_households_in", path="/tmp/households.csv"
+                    "households_asim_in": SimpleNamespace(
+                        key="households_asim_in", path="/tmp/households.csv"
                     )
                 },
             ),
             "step-b": SimpleNamespace(
                 inputs={
-                    "asim_households_in": SimpleNamespace(
-                        key="asim_households_in", path="/tmp/households.csv"
+                    "households_asim_in": SimpleNamespace(
+                        key="households_asim_in", path="/tmp/households.csv"
                     )
                 },
                 outputs={

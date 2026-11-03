@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Tuple
 
 from pilates.utils.consist_types import ArtifactLike, CouplerProtocol
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -29,7 +28,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
-    USIM_H5_UPDATED,
     USIM_POPULATION_SOURCE_H5,
 )
 
@@ -43,7 +41,6 @@ _EXPLICIT_NAMESPACE_BY_KEY = {
     USIM_DATASTORE_BASE_H5: "urbansim",
     USIM_DATASTORE_CURRENT_H5: "urbansim",
     USIM_DATASTORE_H5: "urbansim",
-    USIM_H5_UPDATED: "urbansim",
     USIM_FORECAST_OUTPUT: "urbansim",
     USIM_POPULATION_SOURCE_H5: "urbansim",
     # ActivitySim
@@ -118,7 +115,7 @@ def canonical_artifact_key_from_raw_key(key: str) -> str:
     Canonicalize a raw storage or alias key back to the workflow key surface.
     """
     _namespace, local_key = _namespace_and_local_key_for_key(key)
-    return resolve_artifact_key(local_key)
+    return local_key
 
 
 def qualify_key(namespace: str, key: str) -> str:
@@ -222,7 +219,7 @@ def resolve_coupler_value(
         )
 
     namespace, local_key = _namespace_and_local_key_for_key(key)
-    canonical_key = canonical_artifact_key_from_raw_key(key)
+    canonical_key = local_key
     view_fn = getattr(coupler, "view", None)
     if namespace and callable(view_fn):
         try:
@@ -415,7 +412,7 @@ def set_coupler_from_artifact(
     """
     if artifact is None and fallback is None:
         return
-    canonical_key = resolve_artifact_key(key)
+    canonical_key = canonical_artifact_key_from_raw_key(key)
     value = artifact
     if _is_noop_artifact_placeholder(value) and fallback is not None:
         value = fallback

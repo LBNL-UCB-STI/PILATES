@@ -30,7 +30,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
-    USIM_H5_UPDATED,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.binding import ArtifactBindingRule
@@ -603,7 +602,7 @@ ATLAS_PREPROCESS = StepDefinition(
             semantic_key=USIM_DATASTORE_CURRENT_H5,
             required=True,
             allow_fallback=True,
-            preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED),
+            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
         ),
         ArtifactBindingRule(
             semantic_key=USIM_DATASTORE_BASE_H5,
@@ -612,7 +611,6 @@ ATLAS_PREPROCESS = StepDefinition(
             preferred_keys=(
                 USIM_DATASTORE_BASE_H5,
                 USIM_DATASTORE_CURRENT_H5,
-                USIM_H5_UPDATED,
             ),
         ),
         ArtifactBindingRule(

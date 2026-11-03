@@ -23,10 +23,12 @@ DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "_remap_outputs_workspace_paths",
     "_remap_workspace_local_path",
     "_resolve_historical_workspace_artifact_path",
+    "canonicalize_artifact_mapping",
     "emit_artifact_lifecycle_audit_event",
     "emit_consist_audit_event",
     "hydrate_missing_restart_artifacts",
     "hydrate_rewind_runner_inputs",
+    "resolve_artifact_key",
     "restart_exact_rewind_contract",
 }
 
@@ -170,6 +172,12 @@ def test_legacy_archive_doctor_stays_deleted() -> None:
     legacy_doctor_path = REPO_ROOT / "pilates/runtime/legacy_archive_doctor.py"
 
     assert not legacy_doctor_path.exists()
+
+
+def test_artifact_key_migrations_stays_deleted() -> None:
+    migrations_path = REPO_ROOT / "pilates/workflows/artifact_key_migrations.py"
+
+    assert not migrations_path.exists()
 
 
 def test_deleted_restart_and_audit_symbols_stay_out_of_production_code() -> None:

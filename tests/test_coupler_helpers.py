@@ -79,10 +79,13 @@ def test_set_coupler_from_artifact_falls_back_to_set() -> None:
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
-def test_set_coupler_from_artifact_resolves_alias_key() -> None:
+def test_set_coupler_from_artifact_canonicalizes_namespaced_key() -> None:
     coupler = CouplerWithSetOnly()
     set_coupler_from_artifact(
-        coupler, "asim_households_in", None, fallback="/tmp/households.csv"
+        coupler,
+        "activitysim/households_asim_in",
+        None,
+        fallback="/tmp/households.csv",
     )
     assert coupler.calls == [("set", "households_asim_in", "/tmp/households.csv")]
 
@@ -113,7 +116,7 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
 
     set_coupler_from_artifact(
         coupler,
-        "usim_h5_updated",
+        "usim_datastore_h5",
         artifact,
         fallback="/tmp/path.h5",
     )
