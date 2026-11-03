@@ -195,7 +195,6 @@ def execute_step(
             workspace=workspace,
         ),
         output_policy=OutputPolicyOptions(
-            output_missing="error",
             run_completion_archive=(
                 RunCompletionArchivePolicy(archive_root=archive_root, mode="copy")
                 if (

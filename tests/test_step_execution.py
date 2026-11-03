@@ -106,7 +106,6 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
 
     assert seen["output_sets"] == output_sets
     assert seen["output_policy"] == OutputPolicyOptions(
-        output_missing="error",
         run_completion_archive=RunCompletionArchivePolicy(
             archive_root=(
                 archive_root / "consist-recovery" / "example__stage"
@@ -172,7 +171,6 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
     )
 
     assert seen["output_policy"] == OutputPolicyOptions(
-        output_missing="error",
         run_completion_archive=None,
     )
     assert received_result is result
@@ -236,7 +234,6 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
     )
 
     assert seen["output_policy"] == OutputPolicyOptions(
-        output_missing="error",
         run_completion_archive=None,
     )
     assert received_result is result
@@ -382,7 +379,6 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
 
     assert URBANSIM_RUN.archive_outputs is True
     assert seen["output_policy"] == OutputPolicyOptions(
-        output_missing="error",
         run_completion_archive=RunCompletionArchivePolicy(
             archive_root=(
                 archive_root
