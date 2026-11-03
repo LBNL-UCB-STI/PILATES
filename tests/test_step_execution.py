@@ -442,10 +442,7 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         project_outputs=lambda outputs, **_: outputs,
         output_paths=lambda **_: {
             "summary": "bundle/summary.csv",
-            "skims": OutputArtifactSpec(
-                path="bundle/skims.zarr",
-                meta={"directory_artifact": True},
-            ),
+            "skims": OutputArtifactSpec.for_directory("bundle/skims.zarr"),
         },
         output_sets=lambda **_: {
             "bundle": OutputSet(root="bundle", include="**/*", recursive=True)
@@ -617,13 +614,14 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
     source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
     assert source == population_source
     assert result.outputs[USIM_POPULATION_SOURCE_H5].recovery_roots == [
+        str(workspace_root.resolve()),
         str(
             (
                 archive_root
                 / "consist-recovery"
                 / "urbansim_postprocess__land_use__y2030__i0__postprocess"
             ).resolve()
-        )
+        ),
     ]
     source.unlink()
     tracker.hydrate_run_outputs(

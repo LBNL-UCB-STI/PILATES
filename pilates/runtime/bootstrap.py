@@ -122,12 +122,9 @@ def _bootstrap_output_paths(
     run_models = getattr(getattr(settings, "run", None), "models", None)
 
     def declare_directory(key: str, path: str) -> None:
-        output_paths[key] = OutputArtifactSpec(
-            path=path,
-            meta={
-                "directory_artifact": True,
-                "directory_allow_extra_files": True,
-            },
+        output_paths[key] = OutputArtifactSpec.for_directory(
+            path,
+            allow_extra_files=True,
         )
 
     get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)

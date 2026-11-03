@@ -267,14 +267,8 @@ def test_archive_beam_run_outputs_native_handles_nested_scalar_and_enclosing_dir
         output_paths={
             "beam_skims_raw": raw_skim,
             "final_skims_omx": final_omx,
-            "beam_iteration_output_dir": OutputArtifactSpec(
-                path=iter_dir,
-                meta={"directory_artifact": True},
-            ),
-            "beam_output_root_dir": OutputArtifactSpec(
-                path=root_dir,
-                meta={"directory_artifact": True},
-            ),
+            "beam_iteration_output_dir": OutputArtifactSpec.for_directory(iter_dir),
+            "beam_output_root_dir": OutputArtifactSpec.for_directory(root_dir),
         },
     )
 

@@ -283,5 +283,5 @@ def _activitysim_output_facet_meta(
     }
     if short_name == ZARR_SKIMS:
         result["driver"] = "zarr"
-        result["meta"] = {"directory_artifact": True}
+        result["directory"] = True
     return result

@@ -120,22 +120,14 @@ def _archive_beam_run_outputs_native(
     outputs: Mapping[str, Any],
 ) -> None:
     """Archive beam step output files and directory artifacts to recovery_root."""
-    selected_keys: list[str] = []
-    for key, artifact in outputs.items():
-        if isinstance(artifact, (Artifact, ArtifactRecordLike)):
-            if artifact.driver == "artifact_set":
-                continue
-            selected_keys.append(key)
-
     resolved_recovery_root = recovery_root.resolve()
     if isinstance(tracker, Tracker):
         persisted_outputs = tracker.get_run_outputs(run_id)
         ws_mount = tracker.mounts.get("workspace")
         if ws_mount:
             ws_path = Path(ws_mount).resolve()
-            for key in selected_keys:
-                artifact = persisted_outputs.get(key) or outputs.get(key)
-                if isinstance(artifact, Artifact):
+            for key, artifact in persisted_outputs.items():
+                if isinstance(artifact, Artifact) and artifact.driver != "artifact_set":
                     tracker.set_artifact_recovery_roots(
                         artifact, [ws_path], append=True
                     )
@@ -151,7 +143,6 @@ def _archive_beam_run_outputs_native(
         archived = tracker.archive_run_outputs(
             run_id,
             resolved_recovery_root,
-            keys=selected_keys if selected_keys else None,
             mode="copy",
             append=True,
         )
@@ -161,15 +152,15 @@ def _archive_beam_run_outputs_native(
         ) from exc
 
     archived_outputs = archived.outputs
-    keys_to_verify = (
-        selected_keys
-        if selected_keys
-        else (
-            list(archived_outputs.keys())
-            if isinstance(archived_outputs, Mapping)
-            else []
-        )
-    )
+    keys_to_verify = [
+        key
+        for key, artifact in outputs.items()
+        if isinstance(artifact, (Artifact, ArtifactRecordLike))
+        and artifact.driver != "artifact_set"
+    ]
+    if not keys_to_verify and isinstance(archived_outputs, Mapping):
+        keys_to_verify = list(archived_outputs.keys())
+
     failures: list[str] = []
     for key in keys_to_verify:
         refreshed = (
