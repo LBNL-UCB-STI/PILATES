@@ -121,24 +121,6 @@ def _archive_beam_run_outputs_native(
 ) -> None:
     """Archive beam step output files and directory artifacts to recovery_root."""
     resolved_recovery_root = recovery_root.resolve()
-    if isinstance(tracker, Tracker):
-        persisted_outputs = tracker.get_run_outputs(run_id)
-        ws_mount = tracker.mounts.get("workspace")
-        if ws_mount:
-            ws_path = Path(ws_mount).resolve()
-            for key, artifact in persisted_outputs.items():
-                if isinstance(artifact, Artifact) and artifact.driver != "artifact_set":
-                    tracker.set_artifact_recovery_roots(
-                        artifact, [ws_path], append=True
-                    )
-                    existing_artifact = outputs.get(key)
-                    if (
-                        isinstance(existing_artifact, Artifact)
-                        and isinstance(existing_artifact.meta, dict)
-                        and isinstance(artifact.meta, dict)
-                    ):
-                        existing_artifact.meta.update(artifact.meta)
-
     try:
         archived = tracker.archive_run_outputs(
             run_id,
