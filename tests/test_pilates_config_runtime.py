@@ -188,3 +188,52 @@ def test_traffic_assignment_flag_derivation_matches_compute_model_enabled_flags(
 
     assert settings.traffic_assignment_enabled is True
     assert compute_model_enabled_flags(settings)["traffic_assignment_enabled"] is True
+
+
+def test_constructor_and_model_copy_flag_overrides_and_initialization_signature():
+    config = _minimal_config()
+    settings = PilatesConfig(**config, land_use_enabled=False)
+
+    assert settings.land_use_enabled is False
+    assert "land_use_enabled" not in (settings.__pydantic_extra__ or {})
+
+    base = PilatesConfig(**_minimal_config())
+    assert base.land_use_enabled is True
+
+    copied = base.model_copy(
+        update={
+            "land_use_enabled": False,
+            "activity_demand_enabled": True,
+        }
+    )
+    assert base.land_use_enabled is True
+    assert base.activity_demand_enabled is False
+    assert copied.land_use_enabled is False
+    assert copied.activity_demand_enabled is True
+    assert "land_use_enabled" not in (copied.__pydantic_extra__ or {})
+
+    base_sig = base.get_initialization_signature()
+    copied_sig = copied.get_initialization_signature()
+    assert base_sig["orchestration"]["runtime_flags"] == {
+        "land_use_enabled": True,
+        "vehicle_ownership_model_enabled": False,
+        "activity_demand_enabled": False,
+        "traffic_assignment_enabled": False,
+        "replanning_enabled": False,
+    }
+    assert copied_sig["orchestration"]["runtime_flags"]["land_use_enabled"] is False
+    assert (
+        copied_sig["orchestration"]["runtime_flags"]["activity_demand_enabled"] is True
+    )
+    assert base_sig != copied_sig
+
+
+def test_polaris_travel_model_validates_without_beam_config():
+    config = _minimal_config()
+    config["run"]["models"]["travel"] = "polaris"
+
+    settings = PilatesConfig(**config)
+
+    assert settings.run.models.travel == "polaris"
+    assert settings.beam is None
+    assert settings.traffic_assignment_enabled is True

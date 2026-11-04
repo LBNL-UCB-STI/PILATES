@@ -370,3 +370,56 @@ def test_surface_standalone_full_skim_requires_only_beam_full_skims():
     assert surface.step_enabled("beam_postprocess", include_optional=True) is False
     assert surface.step_enabled("beam_preprocess", include_optional=False) is False
     assert _required_output_keys_for_surface(surface=surface) == [BEAM_FULL_SKIMS]
+
+
+def test_polaris_travel_model_does_not_enable_or_schedule_beam_steps():
+    from pilates.workflows.catalog import enabled_schema_step_models
+    from pilates.workflows.input_authority import (
+        requires_prior_beam_linkstats_handoff,
+        requires_prior_beam_skim_handoff,
+    )
+    from pilates.workflows.planning import build_static_execution_plan
+
+    settings = _settings(
+        land_use="urbansim",
+        vehicle_ownership=None,
+        activity_demand="activitysim",
+        traffic_assignment="polaris",
+    )
+    settings.beam = None
+    settings.run.start_year = 2020
+    settings.run.end_year = 2020
+    settings.run.travel_model_freq = 1
+    settings.run.land_use_freq = 1
+    settings.run.vehicle_ownership_freq = 1
+    settings.run.supply_demand_iters = 1
+
+    surface = build_enabled_workflow_surface(settings)
+
+    for beam_step in (
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+        "beam_full_skim",
+    ):
+        assert surface.step_enabled(beam_step, include_optional=True) is False
+        assert beam_step not in enabled_schema_step_models(
+            settings,
+            is_model_enabled=lambda *_args, **_kwargs: True,
+        )
+
+    plan = build_static_execution_plan(
+        settings,
+        include_postprocessing=False,
+        surface=surface,
+    )
+    planned_steps = {step.step_name for step in plan.step_runs}
+    assert not (
+        planned_steps
+        & {"beam_preprocess", "beam_run", "beam_postprocess", "beam_full_skim"}
+    )
+    state = SimpleNamespace(current_year=2025, iteration=2)
+    assert requires_prior_beam_skim_handoff(settings=settings, state=state) is False
+    assert (
+        requires_prior_beam_linkstats_handoff(settings=settings, state=state) is False
+    )

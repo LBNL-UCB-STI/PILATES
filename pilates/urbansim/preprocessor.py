@@ -105,60 +105,6 @@ def selected_urbansim_static_input_sources(
     return selected_sources
 
 
-def _restore_missing_mutable_urbansim_supporting_inputs(
-    settings: PilatesConfig,
-    workspace: "Workspace",
-) -> Dict[str, Path]:
-    region = settings.run.region
-    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-    mutable_dir = Path(workspace.get_usim_mutable_data_dir())
-    source_dir = _urbansim_source_data_dir(settings)
-    beam_inputs_root = _beam_input_root(settings)
-
-    required_files: Dict[str, Tuple[Path, Path]] = {
-        "omx_skims": (
-            mutable_dir / f"skims_mpo_{region_id}.omx",
-            beam_inputs_root / region / get_beam_omx_skims_name(settings),
-        ),
-        "hh_size": (
-            mutable_dir / f"hsize_ct_{region_id}.csv",
-            source_dir / f"hsize_ct_{region_id}.csv",
-        ),
-        "income_rates": (
-            mutable_dir / f"income_rates_{region_id}.csv",
-            source_dir / f"income_rates_{region_id}.csv",
-        ),
-        "relmap": (
-            mutable_dir / f"relmap_{region_id}.csv",
-            source_dir / f"relmap_{region_id}.csv",
-        ),
-        "schools": (
-            mutable_dir / "schools_2010.csv",
-            source_dir / "schools_2010.csv",
-        ),
-        "school_districts": (
-            mutable_dir / "blocks_school_districts_2010.csv",
-            source_dir / "blocks_school_districts_2010.csv",
-        ),
-    }
-
-    restored: Dict[str, Path] = {}
-    for key, (dest_path, source_path) in required_files.items():
-        if dest_path.exists() or not source_path.exists():
-            continue
-
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source_path, dest_path)
-        restored[key] = dest_path
-        logger.info(
-            "[UrbansimPreprocessor] Restored missing mutable input %s from %s",
-            dest_path,
-            source_path,
-        )
-
-    return restored
-
-
 def _mutable_urbansim_input_paths(
     settings: PilatesConfig,
     mutable_data_dir: Path,

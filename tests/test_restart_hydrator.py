@@ -238,12 +238,13 @@ def test_restore_restart_coupler_snapshot_handles_beam_input_uri_and_skips_exter
         assert not (fresh_ws / "inputs").exists()
 
 
-def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_preserves_completed_beam():
+def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_rewinds_completed_beam():
     from pilates.runtime.launcher import (
         _rewind_uncommitted_activitysim_restart_to_provider_boundary,
     )
 
     class _FakeStage:
+        land_use = "land_use"
         activity_demand = "activity_demand"
         supply_demand_loop = "supply_demand_loop"
         traffic_assignment = "traffic_assignment"
@@ -255,12 +256,14 @@ def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_preserves_c
         current_sub_stage="traffic_assignment",
         sub_stage_progress="beam_run_completed",
         is_enabled=lambda stage: True,
-        major_stage_order=("supply_demand_loop",),
+        major_stage_order=("land_use", "supply_demand_loop"),
     )
 
     rewound = _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
-    assert rewound is False
-    assert state.current_major_stage == "supply_demand_loop"
+    assert rewound is True
+    assert state.current_major_stage == "land_use"
+    assert state.current_sub_stage is None
+    assert state.sub_stage_progress is None
 
 
 def test_restore_restart_coupler_snapshot_stages_from_recovery_roots(tmp_path):

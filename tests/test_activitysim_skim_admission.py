@@ -493,11 +493,10 @@ def test_activitysim_admission_fingerprint_excludes_host_paths() -> None:
 def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identity(
     tmp_path: Path,
 ) -> None:
-    """Scenario 5: Fast-hashing producer persists admission_file_identity via _attach_skim_provenance_to_output_artifacts for cross-tracker verification."""
-    from pilates.beam.skim_provenance import write_skim_provenance_sidecar
-    from pilates.workflows.steps.beam import (
-        _attach_skim_provenance_to_output_artifacts,
-    )
+    """Scenario 5: Fast-hashing producer persists admission_file_identity via _emit_skim_provenance_sidecars for cross-tracker verification."""
+    from types import SimpleNamespace
+    from pilates.utils import consist_runtime as cr
+    from pilates.workflows.steps.beam import _emit_skim_provenance_sidecars
 
     producer_db_path = tmp_path / "producer_db" / "provenance.duckdb"
     producer_db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -510,37 +509,31 @@ def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identit
     producer_skim = tmp_path / "producer_out" / "skims.omx"
     _write_omx_file(producer_skim, with_provenance_attrs=True, matrix_value=5.25)
 
-    with producer_tracker.start_run(
-        "fast_beam_full_skim_run",
-        model="beam_full_skim",
-    ):
-        art = producer_tracker.log_artifact(
-            producer_skim,
-            key="beam_full_skims",
-            direction="output",
+    producer_settings = SimpleNamespace(
+        run=SimpleNamespace(scenario="baseline", region="sfbay")
+    )
+    producer_state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+
+    def _emit() -> None:
+        _emit_skim_provenance_sidecars(
+            step_name="beam_full_skim",
+            declared_outputs={"beam_full_skims": producer_skim},
+            source_paths={"beam_full_skims": producer_skim},
+            settings=producer_settings,
+            state=producer_state,
+            context=None,
+            skim_keys=("beam_full_skims",),
         )
-        write_skim_provenance_sidecar(
-            producer_skim,
-            producer_step="beam_full_skim",
+
+    with cr.use_tracker(producer_tracker):
+        producer_tracker.run(
+            fn=_emit,
             run_id="fast_beam_full_skim_run",
-            region="sfbay",
-            iteration=0,
-            tracker_db_path=producer_db_path,
+            name="fast_beam_full_skim_run",
+            model="beam_full_skim",
+            output_paths={"beam_full_skims": producer_skim},
         )
 
-    # Simulate archive_completed_run populating _run_artifacts_cache before project_outputs
-    cached_before = producer_tracker.get_run_outputs("fast_beam_full_skim_run")
-    assert "admission_file_identity" not in (
-        cached_before["beam_full_skims"].meta or {}
-    )
-
-    _attach_skim_provenance_to_output_artifacts(
-        {"beam_full_skims": art},
-        workspace=MagicMock(full_path=tmp_path),
-        skim_keys=("beam_full_skims",),
-    )
-
-    # Verify _run_artifacts_cache was invalidated so subsequent queries see updated meta
     cached_after = producer_tracker.get_run_outputs("fast_beam_full_skim_run")
     assert str(
         cached_after["beam_full_skims"].meta.get("admission_file_identity", "")
@@ -630,42 +623,38 @@ def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identit
     assert report.outcome == "verified"
 
 
-def test_attach_skim_provenance_skips_admission_file_identity_for_zarr_directory(
+def test_emit_skim_provenance_sidecars_records_dir_manifest_for_zarr_directory(
     tmp_path: Path,
 ) -> None:
-    """Directory/Zarr sidecars record sha256:dir_manifest:... in skim_provenance without polluting admission_file_identity."""
-    from pilates.beam.skim_provenance import write_skim_provenance_sidecar
+    """Directory/Zarr sidecars record sha256:dir_manifest:... in the provenance sidecar."""
+    from types import SimpleNamespace
+    from pilates.beam.skim_provenance import (
+        read_skim_provenance_sidecar,
+        skim_provenance_sidecar_path,
+    )
     from pilates.workflows.steps.beam import (
-        _attach_skim_provenance_to_output_artifacts,
+        _emit_skim_provenance_sidecars,
     )
 
     zarr_dir = tmp_path / "skims.zarr"
     zarr_dir.mkdir(parents=True, exist_ok=True)
     (zarr_dir / ".zgroup").write_text('{"zarr_format": 2}', encoding="utf-8")
 
-    write_skim_provenance_sidecar(
-        zarr_dir,
-        producer_step="beam_postprocess",
-        run_id="zarr_skim_run",
-        region="sfbay",
-        iteration=0,
-    )
-
-    dummy_artifact = MagicMock()
-    dummy_artifact.meta = {}
-    dummy_artifact.path = zarr_dir
-
-    _attach_skim_provenance_to_output_artifacts(
-        {"zarr_skims": dummy_artifact},
-        workspace=MagicMock(full_path=tmp_path),
+    settings = SimpleNamespace(run=SimpleNamespace(scenario="baseline", region="sfbay"))
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    _emit_skim_provenance_sidecars(
+        step_name="beam_postprocess",
+        declared_outputs={"zarr_skims": zarr_dir},
+        source_paths={"zarr_skims": zarr_dir},
+        settings=settings,
+        state=state,
+        context=None,
         skim_keys=("zarr_skims",),
     )
 
-    assert "skim_provenance" in dummy_artifact.meta
-    assert str(dummy_artifact.meta["skim_provenance"]["identity"]).startswith(
-        "sha256:dir_manifest:"
-    )
-    assert "admission_file_identity" not in dummy_artifact.meta
+    payload = read_skim_provenance_sidecar(skim_provenance_sidecar_path(zarr_dir))
+    assert payload is not None
+    assert str(payload["identity"]).startswith("sha256:dir_manifest:")
 
 
 def test_prior_run_expectation_rejects_blank_identifiers_and_facet_excludes_host_paths() -> (
@@ -717,47 +706,3 @@ def test_prior_run_expectation_rejects_blank_identifiers_and_facet_excludes_host
             "direction": "output",
         }
     }
-
-
-def test_attach_skim_provenance_rematerializes_sidecar_from_cached_artifact_meta(
-    tmp_path: Path,
-) -> None:
-    """When a cache-hydrated output artifact has skim_provenance in meta, _attach_skim_provenance_to_output_artifacts writes the missing sidecar on disk."""
-    from pilates.beam.skim_provenance import (
-        read_skim_provenance_sidecar,
-        skim_provenance_sidecar_path,
-        write_skim_provenance_sidecar,
-    )
-    from pilates.workflows.steps.beam import (
-        _attach_skim_provenance_to_output_artifacts,
-    )
-
-    omx_path = tmp_path / "hydrated_skims.omx"
-    omx_path.write_bytes(b"cached-omx-bytes")
-    sidecar_path, payload = write_skim_provenance_sidecar(
-        omx_path,
-        producer_step="beam_full_skim",
-        run_id="cached_run_1",
-        region="sfbay",
-        year=2020,
-        iteration=0,
-    )
-    # Simulate Consist cache hydration: artifact file exists and artifact.meta has
-    # skim_provenance, but the unmanaged .provenance.json sidecar was not hydrated.
-    sidecar_path.unlink()
-    assert not skim_provenance_sidecar_path(omx_path).exists()
-
-    hydrated_artifact = MagicMock()
-    hydrated_artifact.meta = {"skim_provenance": payload}
-    hydrated_artifact.path = omx_path
-
-    _attach_skim_provenance_to_output_artifacts(
-        {"beam_full_skims": hydrated_artifact},
-        workspace=MagicMock(full_path=tmp_path),
-        skim_keys=("beam_full_skims",),
-    )
-
-    assert sidecar_path.is_file()
-    restored = read_skim_provenance_sidecar(sidecar_path)
-    assert restored == payload
-    assert hydrated_artifact.meta.get("admission_file_identity") == payload["identity"]

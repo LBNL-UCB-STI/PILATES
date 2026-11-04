@@ -18,7 +18,6 @@ from consist.digest import file_sha256
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.failure_hints import log_consist_cli_instructions
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import RunLike
 from pilates.utils.consist_db_snapshot import (
     resolve_consist_db_paths,
     snapshot_latest_dir,
@@ -331,7 +330,11 @@ def _all_runs(tracker: Any) -> list[Any]:
 
 
 def _run_id_text(run: Any) -> str:
-    return str(run.id).strip() if isinstance(run, RunLike) else ""
+    try:
+        raw_id = run.id
+    except AttributeError:
+        return ""
+    return str(raw_id).strip() if raw_id is not None else ""
 
 
 def _run_tags(run: Any) -> list[str]:

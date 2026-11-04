@@ -11,6 +11,7 @@ from pilates.atlas.static_inputs import (
     atlas_static_input_keys_for_interval,
 )
 from pilates.config.models import PilatesConfig, load_config
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
@@ -518,6 +519,9 @@ class _PlanBuilder:
         total_iters = self.planning_state.effective_supply_demand_iterations()
         activity_enabled = self._stage_enabled("activity_demand")
         traffic_enabled = self._stage_enabled("traffic_assignment")
+        beam_traffic_enabled = (
+            traffic_enabled and get_traffic_assignment_model(self.settings) == "beam"
+        )
         schedule = _full_skim_run_schedule(self.settings)
 
         for iteration in range(total_iters):
@@ -541,7 +545,7 @@ class _PlanBuilder:
                     iteration=iteration,
                 )
 
-            if not traffic_enabled:
+            if not beam_traffic_enabled:
                 continue
 
             self._add_step_run(

@@ -13,6 +13,7 @@ from pilates.utils.io import (
 )
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.catalog import (
+    configured_model_for_attr,
     schema_step_specs,
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
@@ -55,15 +56,28 @@ def _enabled_schema_step_names_from_profile(
     include_optional: bool,
 ) -> FrozenSet[str]:
     enabled_steps = set()
+    traffic_model = (
+        get_traffic_assignment_model(settings) if settings is not None else None
+    )
+    beam_traffic_enabled = profile.traffic_assignment_enabled and (
+        traffic_model is None or traffic_model == "beam"
+    )
     for spec in schema_step_specs(include_optional=include_optional):
         flag_attr = spec.enabled_flag_attr
         model_attr = spec.enabled_model_attr
         if flag_attr is None or model_attr is None:
             enabled_steps.add(spec.step_name)
             continue
+        configured_model = configured_model_for_attr(settings, model_attr)
+        if (
+            spec.enabled_model_value is not None
+            and configured_model is not None
+            and configured_model != spec.enabled_model_value
+        ):
+            continue
         if profile.model_enabled(flag_attr):
             enabled_steps.add(spec.step_name)
-    if profile.traffic_assignment_enabled:
+    if beam_traffic_enabled:
         schedule = _full_skim_run_schedule(settings)
         if schedule == "standalone":
             enabled_steps.discard("beam_run")

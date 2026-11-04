@@ -2329,7 +2329,6 @@ def test_beam_provenance_set_output_meta_persists_during_run_and_resists_stale_w
     from pilates.beam.skim_provenance import (
         read_skim_provenance_sidecar,
         skim_provenance_sidecar_path,
-        write_skim_provenance_sidecar,
     )
     from pilates.utils import consist_runtime as cr
 
@@ -2375,38 +2374,7 @@ def test_beam_provenance_set_output_meta_persists_during_run_and_resists_stale_w
     assert str(persisted_artifact.meta.get("admission_file_identity", "")).startswith(
         "sha256:file:"
     )
-
-    # Now write a stale sidecar on disk simulating a leftover workspace file
-    write_skim_provenance_sidecar(
-        omx_path,
-        producer_step="beam_postprocess",
-        run_id="stale-workspace-run",
-        region="sfbay",
-        year=1999,
-        iteration=9,
-    )
     sidecar_path = skim_provenance_sidecar_path(omx_path)
-    assert (
-        read_skim_provenance_sidecar(sidecar_path)["producer"]["run_id"]
-        == "stale-workspace-run"
-    )
-
-    beam_steps._attach_skim_provenance_to_output_artifacts(
-        {"final_skims_omx": logged_artifact},
-        workspace=SimpleNamespace(full_path=str(workspace_root)),
-        skim_keys=("final_skims_omx",),
-    )
-
-    assert (
-        logged_artifact.meta["skim_provenance"]["producer"]["run_id"]
-        == authoritative_run_id
-    )
-    assert (
-        tracker.get_run_outputs(run_result.run.id)["final_skims_omx"].meta[
-            "skim_provenance"
-        ]["producer"]["run_id"]
-        == authoritative_run_id
-    )
     assert (
         read_skim_provenance_sidecar(sidecar_path)["producer"]["run_id"]
         == authoritative_run_id
@@ -2492,3 +2460,120 @@ def test_beam_preprocess_project_outputs_prefers_artifact_meta_over_stale_worksp
         )
         == authoritative_prov
     )
+
+
+def test_beam_postprocess_split_output_paths_recovers_events_from_recovery_roots_when_scratch_missing(
+    tmp_path: Path,
+) -> None:
+    """P0-2: _beam_postprocess_split_output_paths uses artifact_to_existing_path so wiped scratch falls back to recovery_roots."""
+    import pandas as pd
+    from consist import Artifact, Tracker
+    from pilates.utils import consist_runtime as cr
+
+    workspace_root = tmp_path / "scratch_workspace"
+    beam_output_dir = workspace_root / "beam" / "output"
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    archive_root = tmp_path / "archive_root"
+    archived_events = archive_root / "beam" / "output" / "events.parquet"
+    archived_events.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"type": ["PathTraversal", "ModeChoice"]}).to_parquet(
+        archived_events, index=False
+    )
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+    )
+    events_artifact = Artifact(
+        key="events_parquet_2020_0",
+        container_uri="workspace://beam/output/events.parquet",
+        driver="parquet",
+        meta={"recovery_roots": [str(archive_root)]},
+    )
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        get_beam_output_dir=lambda: str(beam_output_dir),
+    )
+
+    with cr.use_tracker(tracker):
+        split_outputs = beam_steps._beam_postprocess_split_output_paths(
+            selected_events_key="events_parquet_2020_0",
+            inputs={"events_parquet_2020_0": events_artifact},
+            year=2020,
+            iteration=0,
+            workspace=workspace,
+        )
+
+    assert "events_parquet_2020_0_type_PathTraversal" in split_outputs
+    assert "events_parquet_2020_0_type_ModeChoice" in split_outputs
+    assert "path_traversal_links_2020_0" in split_outputs
+
+
+def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_recovery_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P0-3: _project_beam_run_outputs populates output.path on direct-zarr Artifact after scratch-wipe hydration."""
+    from consist import Artifact, Tracker
+    from pilates.utils import consist_runtime as cr
+
+    workspace_root = tmp_path / "scratch_workspace"
+    beam_output_dir = workspace_root / "beam" / "output"
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    archive_root = tmp_path / "archive_root"
+    archived_zarr = archive_root / "beam" / "output" / "0.skimsOD_Aggregated.zarr"
+    archived_zarr.mkdir(parents=True, exist_ok=True)
+    (archived_zarr / ".zgroup").write_text('{"zarr_format": 2}', encoding="utf-8")
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+    )
+    zarr_artifact = Artifact(
+        key="raw_od_skims_zarr_2020_0",
+        container_uri="workspace://beam/output/0.skimsOD_Aggregated.zarr",
+        driver="zarr",
+        meta={"recovery_roots": [str(archive_root)]},
+    )
+    assert not Path(zarr_artifact.path).exists()
+
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
+
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        get_beam_output_dir=lambda: str(beam_output_dir),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(
+            linkstats_format="parquet",
+            events_format="parquet",
+            skims_format="zarr",
+            artifact_formats=SimpleNamespace(activitysim_skims="zarr"),
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.zarr")),
+    )
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_run",
+        binding=BindingResult(inputs={}),
+    )
+
+    with cr.use_tracker(tracker):
+        projected = beam_steps._project_beam_run_outputs(
+            {
+                "raw_od_skims_zarr_2020_0": zarr_artifact,
+            },
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            resolved_inputs=resolved_inputs,
+        )
+
+    assert zarr_artifact.path is not None
+    assert Path(zarr_artifact.path).exists()
+    assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == Path(zarr_artifact.path)

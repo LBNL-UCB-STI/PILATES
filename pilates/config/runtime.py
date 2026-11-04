@@ -31,10 +31,16 @@ class RuntimeFlags:
 
     def __setattr__(self, name: str, value: object) -> None:
         if "_overridden_fields" in self.__dict__ and name in _FLAG_FIELD_NAMES:
-            object.__setattr__(self, name, bool(value))
-            self._overridden_fields.add(name)
+            self.set_override(name, bool(value))
             return
         object.__setattr__(self, name, value)
+
+    def set_override(self, name: str, value: bool) -> None:
+        """Explicitly set and mark a runtime enablement flag override."""
+        if name not in _FLAG_FIELD_NAMES:
+            raise ValueError(f"Unknown runtime flag: {name!r}")
+        object.__setattr__(self, name, bool(value))
+        self._overridden_fields.add(name)
 
     def sync_defaults(
         self,

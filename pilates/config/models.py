@@ -51,7 +51,12 @@ from .beam import (
     BeamLinkstatsAdmissionConfig,
     FullSkimsCreatorConfig,
 )
-from .runtime import PilatesRuntime, RuntimeFlags, RuntimeOptions
+from .runtime import (
+    _FLAG_FIELD_NAMES,
+    PilatesRuntime,
+    RuntimeFlags,
+    RuntimeOptions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -594,7 +599,7 @@ class PilatesConfig(BaseModel):
             raise ValueError(
                 "activity_demand model is enabled but activitysim config is missing"
             )
-        if self.run.models.travel and not self.beam:
+        if self.run.models.travel == "beam" and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
         self._sync_runtime_flags()
         return self
@@ -606,14 +611,35 @@ class PilatesConfig(BaseModel):
         deep: bool = False,
     ) -> "PilatesConfig":
         """Return a copy with an isolated ``PilatesRuntime`` instance."""
-        copied = super().model_copy(update=update, deep=deep)
+        flag_overrides: Dict[str, bool] = {}
+        remaining_update = update
+        if update is not None:
+            flag_overrides = {
+                key: bool(val)
+                for key, val in update.items()
+                if key in _FLAG_FIELD_NAMES
+            }
+            if flag_overrides:
+                remaining_update = {
+                    key: val
+                    for key, val in update.items()
+                    if key not in _FLAG_FIELD_NAMES
+                }
+        copied = super().model_copy(update=remaining_update, deep=deep)
         copied._runtime = self._runtime.copy()
+        for flag_name, flag_val in flag_overrides.items():
+            copied._runtime.flags.set_override(flag_name, flag_val)
         copied._sync_runtime_flags()
         return copied
 
     def _sync_runtime_flags(self) -> PilatesRuntime:
         """Compute default runtime flags from current config state and sync non-overridden fields."""
         extra = self.__pydantic_extra__ or {}
+        if self.__pydantic_extra__:
+            for flag_name in tuple(_FLAG_FIELD_NAMES):
+                if flag_name in self.__pydantic_extra__:
+                    flag_val = self.__pydantic_extra__.pop(flag_name)
+                    self._runtime.flags.set_override(flag_name, bool(flag_val))
         warm_start_skims = bool(extra.get("warm_start_skims", False))
         static_skims = bool(extra.get("static_skims", False))
         try:
@@ -763,6 +789,15 @@ class PilatesConfig(BaseModel):
                 },
                 # Determines which sub-models are active
                 "enabled_models": self.run.models,
+                "runtime_flags": {
+                    "land_use_enabled": bool(self.land_use_enabled),
+                    "vehicle_ownership_model_enabled": bool(
+                        self.vehicle_ownership_model_enabled
+                    ),
+                    "activity_demand_enabled": bool(self.activity_demand_enabled),
+                    "traffic_assignment_enabled": bool(self.traffic_assignment_enabled),
+                    "replanning_enabled": bool(self.replanning_enabled),
+                },
             },
             "urbansim_admission": (
                 {

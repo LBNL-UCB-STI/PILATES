@@ -320,15 +320,8 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) 
     activity_demand = getattr(stage_enum, "activity_demand", None)
     supply_demand_loop = getattr(stage_enum, "supply_demand_loop", None)
     current_major_stage = getattr(state, "current_major_stage", None)
-    current_sub_stage = getattr(state, "current_sub_stage", None)
 
     if current_major_stage != supply_demand_loop:
-        return False
-
-    if (
-        current_sub_stage == getattr(stage_enum, "traffic_assignment", None)
-        and getattr(state, "sub_stage_progress", None) == "beam_run_completed"
-    ):
         return False
 
     is_enabled = getattr(state, "is_enabled", None)

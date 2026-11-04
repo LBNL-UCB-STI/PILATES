@@ -26,8 +26,6 @@ from consist import (
     ExecutionOptions,
     define_step,
 )
-from consist.core.persistence import DatabaseManager
-from consist.models.artifact import get_tracker_ref
 
 from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
@@ -55,7 +53,6 @@ from pilates.beam.outputs import (
 )
 from pilates.beam.runner import BeamRunner
 from pilates.beam.skim_provenance import (
-    read_skim_provenance_sidecar,
     skim_provenance_sidecar_path,
     write_skim_provenance_sidecar,
 )
@@ -172,7 +169,7 @@ def _path_from_output(
     if isinstance(destination, os.PathLike):
         path = Path(destination)
     elif isinstance(destination, str) and destination.startswith("workspace://"):
-        workspace_root = getattr(workspace, "full_path", None)
+        workspace_root = get_setting(workspace, "full_path")
         if workspace_root is None:
             raise RuntimeError(
                 f"{step_name} output {key!r} cannot resolve its workspace destination."
@@ -185,7 +182,7 @@ def _path_from_output(
     elif isinstance(destination, str):
         path = Path(destination)
         if not path.is_absolute():
-            workspace_root = getattr(workspace, "full_path", None)
+            workspace_root = get_setting(workspace, "full_path")
             if workspace_root is None:
                 raise RuntimeError(
                     f"{step_name} output {key!r} cannot resolve its relative destination."
@@ -585,7 +582,11 @@ def _project_beam_preprocess_outputs(
     prepared_metadata: dict[str, dict[str, Any]] = {}
     if LINKSTATS_WARMSTART in prepared:
         linkstats_artifact = outputs.get(LINKSTATS_WARMSTART)
-        meta = getattr(linkstats_artifact, "meta", None)
+        meta = (
+            linkstats_artifact.meta
+            if isinstance(linkstats_artifact, Artifact)
+            else get_setting(linkstats_artifact, "meta")
+        )
         if isinstance(meta, Mapping) and "linkstats_provenance" in meta:
             prepared_metadata[LINKSTATS_WARMSTART] = {
                 "linkstats_provenance": meta["linkstats_provenance"]
@@ -633,7 +634,10 @@ def _project_beam_run_outputs(
                 raise RuntimeError(
                     f"beam_run direct Zarr output {key!r} could not be materialized."
                 )
-            raw_outputs[key] = Path(path)
+            resolved_path = Path(path)
+            if isinstance(output, Artifact):
+                output.abs_path = str(resolved_path)
+            raw_outputs[key] = resolved_path
     projected = BeamRunOutputs(
         beam_output_dir=Path(workspace.get_beam_output_dir()),
         raw_outputs=raw_outputs,
@@ -646,137 +650,6 @@ def _project_beam_run_outputs(
         workspace=workspace,
     )
     return projected
-
-
-def _attach_skim_provenance_to_output_artifacts(
-    outputs: Mapping[str, Any],
-    *,
-    workspace: Any,
-    skim_keys: Iterable[str],
-) -> None:
-    import json
-
-    db_cache: dict[str, DatabaseManager] = {}
-    try:
-        for key in skim_keys:
-            artifact = outputs.get(key)
-            if artifact is None:
-                continue
-            path = artifact_to_path(artifact, workspace=workspace)
-            if path is None:
-                continue
-            sidecar_path = skim_provenance_sidecar_path(path)
-            try:
-                existing_meta = artifact.meta
-            except AttributeError:
-                existing_meta = None
-            cached_prov = (
-                existing_meta.get("skim_provenance")
-                if isinstance(existing_meta, Mapping)
-                else None
-            )
-            from_cached_meta = isinstance(cached_prov, Mapping)
-            payload: Mapping[str, Any] | None = None
-            if from_cached_meta:
-                payload = dict(cached_prov)
-                if Path(path).exists():
-                    try:
-                        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-                        tmp_path = (
-                            sidecar_path.parent
-                            / f".tmp_{sidecar_path.name}.{os.getpid()}"
-                        )
-                        tmp_path.write_text(
-                            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                            encoding="utf-8",
-                        )
-                        tmp_path.replace(sidecar_path)
-                    except Exception as exc:
-                        logger.debug(
-                            "Unable to materialize cached skim provenance sidecar to %s: %s",
-                            sidecar_path,
-                            exc,
-                        )
-            elif sidecar_path.is_file():
-                try:
-                    payload = read_skim_provenance_sidecar(sidecar_path)
-                except Exception as exc:
-                    logger.debug(
-                        "Unable to attach skim provenance sidecar from %s: %s",
-                        sidecar_path,
-                        exc,
-                    )
-                    continue
-            if payload is None:
-                continue
-            updates: dict[str, Any] = {"skim_provenance": dict(payload)}
-            identity = payload.get("identity")
-            if isinstance(identity, str) and identity.startswith("sha256:file:"):
-                updates["admission_file_identity"] = identity
-            if isinstance(artifact, Artifact):
-                current_meta = (
-                    dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
-                )
-                needs_persist = any(
-                    current_meta.get(meta_key) != meta_val
-                    for meta_key, meta_val in updates.items()
-                )
-                if not needs_persist:
-                    continue
-                current_meta.update(updates)
-                if isinstance(artifact.meta, dict):
-                    artifact.meta.update(updates)
-                else:
-                    try:
-                        artifact.meta = current_meta
-                    except Exception:
-                        artifact.__dict__["meta"] = current_meta
-                if from_cached_meta:
-                    continue
-                producer_info = payload.get("producer")
-                tracker_db_path = (
-                    producer_info.get("tracker_db_path")
-                    if isinstance(producer_info, Mapping)
-                    else None
-                ) or payload.get("tracker_db_path")
-                tracker_ref = get_tracker_ref(artifact)
-                explicit_owner = tracker_ref() if tracker_ref is not None else None
-                if explicit_owner is not None and explicit_owner.db is not None:
-                    explicit_owner.db.update_artifact_meta(artifact, updates)
-                    explicit_owner._run_artifacts_cache.clear()
-                    continue
-                active_tracker = cr.current_tracker()
-                if active_tracker is not None and active_tracker.db is not None:
-                    owner_db_path = getattr(active_tracker.db, "db_path", None)
-                    if (
-                        not isinstance(tracker_db_path, str)
-                        or not tracker_db_path
-                        or (
-                            owner_db_path is not None
-                            and Path(owner_db_path).resolve()
-                            == Path(tracker_db_path).resolve()
-                        )
-                    ):
-                        active_tracker.db.update_artifact_meta(artifact, updates)
-                        active_tracker._run_artifacts_cache.clear()
-                        continue
-                if (
-                    isinstance(tracker_db_path, str)
-                    and tracker_db_path
-                    and Path(tracker_db_path).is_file()
-                ):
-                    db = db_cache.get(tracker_db_path)
-                    if db is None:
-                        db = DatabaseManager(tracker_db_path)
-                        db_cache[tracker_db_path] = db
-                    db.update_artifact_meta(artifact, updates)
-            else:
-                meta = getattr(artifact, "meta", None)
-                if isinstance(meta, dict):
-                    meta.update(updates)
-    finally:
-        for db in db_cache.values():
-            db.engine.dispose()
 
 
 def _emit_skim_provenance_sidecars(
@@ -799,11 +672,10 @@ def _emit_skim_provenance_sidecars(
         tracker = None
     run_id = active_run.id if active_run is not None else None
     tracker_db_path = tracker.db_path if tracker is not None else None
-    run_cfg = getattr(settings, "run", None)
-    scenario_name = getattr(run_cfg, "scenario", None)
-    region_name = getattr(run_cfg, "region", None)
+    scenario_name = get_setting(settings, "run.scenario")
+    region_name = get_setting(settings, "run.region")
     year = resolve_forecast_year(state)
-    iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", None))
+    iteration = iteration_index(state)
 
     provenance_by_key: dict[str, dict[str, Any]] = {}
     for key in skim_keys:
@@ -852,8 +724,11 @@ def _emit_skim_provenance_sidecars(
                 target_path,
                 exc,
             )
-    if provenance_by_key and context is not None and hasattr(context, "log_meta"):
-        context.log_meta(skim_provenance=provenance_by_key)
+    if provenance_by_key and context is not None:
+        try:
+            context.log_meta(skim_provenance=provenance_by_key)
+        except AttributeError:
+            pass
 
 
 def _project_beam_postprocess_outputs(
@@ -891,11 +766,6 @@ def _project_beam_postprocess_outputs(
         state=state,
         workspace=workspace,
         resolved_inputs=resolved_inputs,
-    )
-    _attach_skim_provenance_to_output_artifacts(
-        outputs,
-        workspace=workspace,
-        skim_keys=(ZARR_SKIMS, FINAL_SKIMS_OMX),
     )
     projected = BeamPostprocessOutputs(
         zarr_skims=(
@@ -966,11 +836,6 @@ def _project_beam_full_skim_outputs(
     del resolved_inputs
     declared_outputs = _beam_full_skim_native_output_paths(
         settings=settings, state=state, workspace=workspace
-    )
-    _attach_skim_provenance_to_output_artifacts(
-        outputs,
-        workspace=workspace,
-        skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
     )
     projected = BeamFullSkimOutputs(
         full_skims=_path_from_output(
@@ -1179,8 +1044,6 @@ def _beam_preprocess_identity_payload(
 
     preprocess_context = resolved_inputs.metadata.get("beam_preprocess_context", {})
     zones_enabled = "canonical_zone_source" in preprocess_context
-    activitysim = getattr(settings, "activitysim", None)
-    beam_settings = getattr(settings, "beam", None)
     return {
         "schema_version": "beam_preprocess_identity_v1",
         "input_contract": {
@@ -1189,7 +1052,7 @@ def _beam_preprocess_identity_payload(
         },
         "selected_roles": tuple(sorted(resolved_inputs.binding.inputs or {})),
         "launch": {
-            "activitysim_file_format": getattr(activitysim, "file_format", None),
+            "activitysim_file_format": get_setting(settings, "activitysim.file_format"),
             "zone_preparation": {
                 "enabled": zones_enabled,
                 "canonical_id_column": preprocess_context.get(
@@ -1198,25 +1061,25 @@ def _beam_preprocess_identity_payload(
                 "canonical_index_column": preprocess_context.get(
                     "canonical_zone_index_column"
                 ),
-                "beam_sort_column": getattr(beam_settings, "skim_zone_geoid_col", None),
+                "beam_sort_column": get_setting(settings, "beam.skim_zone_geoid_col"),
             },
             "plan_memory": {
-                "max_plans_memory": getattr(beam_settings, "max_plans_memory", 5),
-                "discard_plans_every_year": getattr(
-                    beam_settings, "discard_plans_every_year", False
+                "max_plans_memory": get_setting(settings, "beam.max_plans_memory", 5),
+                "discard_plans_every_year": get_setting(
+                    settings, "beam.discard_plans_every_year", False
                 ),
-                "plan_memory_beta": getattr(beam_settings, "plan_memory_beta", 1.0),
-                "new_plan_selection_policy": getattr(
-                    beam_settings, "new_plan_selection_policy", "force_new"
+                "plan_memory_beta": get_setting(settings, "beam.plan_memory_beta", 1.0),
+                "new_plan_selection_policy": get_setting(
+                    settings, "beam.new_plan_selection_policy", "force_new"
                 ),
-                "new_plan_initial_score": getattr(
-                    beam_settings, "new_plan_initial_score", 0.0
+                "new_plan_initial_score": get_setting(
+                    settings, "beam.new_plan_initial_score", 0.0
                 ),
-                "new_plan_adoption_rate": getattr(
-                    beam_settings, "new_plan_adoption_rate", 1.0
+                "new_plan_adoption_rate": get_setting(
+                    settings, "beam.new_plan_adoption_rate", 1.0
                 ),
-                "plan_selection_random_seed": getattr(
-                    beam_settings, "plan_selection_random_seed", 42
+                "plan_selection_random_seed": get_setting(
+                    settings, "beam.plan_selection_random_seed", 42
                 ),
             },
         },
@@ -1230,8 +1093,7 @@ def _resolve_beam_preprocess_inputs(
     exchange_scenario_folder = beam_exchange.resolve_beam_exchange_scenario_folder(
         settings, workspace
     )
-    geography = getattr(getattr(settings, "shared", None), "geography", None)
-    zones = getattr(geography, "zones", None)
+    zones = get_setting(settings, "shared.geography.zones")
     preprocess_context: dict[str, Any] = {
         "primary_config": primary_config,
         "exchange_scenario_folder": Path(exchange_scenario_folder),
@@ -1264,9 +1126,8 @@ def _resolve_beam_preprocess_inputs(
         BEAM_PERSONS_IN,
         *((ATLAS_VEHICLES2_OUTPUT,) if requires_atlas_vehicles else ()),
     )
-    beam_settings = getattr(settings, "beam", None)
     is_start = is_start_year(state, settings)
-    discard_plans = getattr(beam_settings, "discard_plans_every_year", False)
+    discard_plans = bool(get_setting(settings, "beam.discard_plans_every_year", False))
     should_resolve_beam_plans_out = current_iter > 0 or (
         not is_start and not discard_plans
     )
@@ -1431,7 +1292,7 @@ def _beam_postprocess_split_output_paths(
     if selected_events_key is None:
         return {}
     source = inputs.get(selected_events_key)
-    source_path = artifact_to_path(source, workspace=workspace)
+    source_path = artifact_to_existing_path(source, workspace=workspace)
     if source_path is None or "://" in source_path or not Path(source_path).is_file():
         raise RuntimeError(
             "beam_postprocess cannot inspect selected events input "
@@ -1768,12 +1629,9 @@ def _native_beam_preprocess(
                         {"linkstats_provenance": prov_dict},
                         merge=True,
                     )
-                    if hasattr(_consist_ctx, "run_metadata") and isinstance(
-                        _consist_ctx.run_metadata, dict
-                    ):
-                        _consist_ctx.run_metadata["linkstats_warmstart_provenance"] = (
-                            prov_dict
-                        )
+                    run_meta = get_setting(_consist_ctx, "run_metadata")
+                    if isinstance(run_meta, dict):
+                        run_meta["linkstats_warmstart_provenance"] = prov_dict
                     try:
                         active_run = cr.current_run()
                     except RuntimeError:
@@ -2121,11 +1979,13 @@ def _native_beam_full_skim(
                 source_paths[FINAL_SKIMS_OMX] = final_target
                 if _consist_ctx is not None:
                     report_dict = conversion_report.model_dump(mode="json")
-                    run_meta = getattr(_consist_ctx, "run_metadata", None)
+                    run_meta = get_setting(_consist_ctx, "run_metadata")
                     if isinstance(run_meta, dict):
                         run_meta["full_skim_conversion"] = report_dict
-                    if hasattr(_consist_ctx, "log_meta"):
+                    try:
                         _consist_ctx.log_meta(full_skim_conversion=report_dict)
+                    except AttributeError:
+                        pass
             else:
                 source_paths[FINAL_SKIMS_OMX] = produced_final_path
                 _materialize_native_outputs(

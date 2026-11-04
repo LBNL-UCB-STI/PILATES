@@ -16,6 +16,12 @@ from typing import (
     Tuple,
 )
 
+from pilates.utils.io import (
+    get_activity_demand_model,
+    get_land_use_model,
+    get_traffic_assignment_model,
+    get_vehicle_ownership_model,
+)
 from pilates.workflows.contracts import StepDefinition, WorkflowStepProvenanceSpec
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.workflows.steps import STEP_DEFINITIONS
@@ -52,6 +58,7 @@ class WorkflowStepSpec:
     depends_on: Tuple[str, ...] = ()
     enabled_flag_attr: Optional[str] = None
     enabled_model_attr: Optional[str] = None
+    enabled_model_value: Optional[str] = None
     provenance: Optional[WorkflowStepProvenanceSpec] = None
 
     @property
@@ -212,6 +219,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         depends_on=("activitysim_postprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        enabled_model_value="beam",
         provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
@@ -235,6 +243,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         depends_on=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        enabled_model_value="beam",
         provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
@@ -254,6 +263,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         depends_on=("beam_run",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        enabled_model_value="beam",
         provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
@@ -265,6 +275,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         depends_on=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        enabled_model_value="beam",
         provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
@@ -476,6 +487,24 @@ def schema_step_specs(*, include_optional: bool = True) -> Tuple[WorkflowStepSpe
     return tuple(specs)
 
 
+def configured_model_for_attr(
+    settings: Any,
+    model_attr: Optional[str],
+) -> Optional[str]:
+    """Return the configured model name for a catalog ``enabled_model_attr``."""
+    if settings is None or model_attr is None:
+        return None
+    if model_attr in {"travel", "traffic_assignment", "travel_model"}:
+        return get_traffic_assignment_model(settings)
+    if model_attr in {"land_use", "land_use_model"}:
+        return get_land_use_model(settings)
+    if model_attr in {"vehicle_ownership", "vehicle_ownership_model"}:
+        return get_vehicle_ownership_model(settings)
+    if model_attr in {"activity_demand", "activity_demand_model"}:
+        return get_activity_demand_model(settings)
+    return None
+
+
 def enabled_schema_step_models(
     settings: Any,
     *,
@@ -504,6 +533,13 @@ def enabled_schema_step_models(
         model_attr = spec.enabled_model_attr
         if flag_attr is None or model_attr is None:
             enabled_models.add(spec.step_name)
+            continue
+        configured_model = configured_model_for_attr(settings, model_attr)
+        if (
+            spec.enabled_model_value is not None
+            and configured_model is not None
+            and configured_model != spec.enabled_model_value
+        ):
             continue
         if is_model_enabled(
             settings,

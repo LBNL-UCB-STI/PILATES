@@ -25,7 +25,6 @@ from typing import (
 
 from pilates.utils.consist_types import (
     ArtifactLike,
-    RunLike,
     ScenarioWithCoupler,
     TrackerLike,
 )
@@ -402,9 +401,13 @@ def current_run_id() -> Optional[str]:
     run = current_run()
     if run is None:
         return None
-    if not isinstance(run, RunLike):
+    try:
+        raw_id = run.id
+    except AttributeError:
         return None
-    run_id_text = str(run.id).strip()
+    if raw_id is None:
+        return None
+    run_id_text = str(raw_id).strip()
     return run_id_text or None
 
 

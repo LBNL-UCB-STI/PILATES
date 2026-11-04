@@ -25,6 +25,7 @@ from pilates.workflows.coupler_namespace import (
     set_coupler_from_artifact,
 )
 from pilates.utils.archive_paths import resolve_archive_run_dir
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.steps import (
     beam_full_skim,
     beam_postprocess,
@@ -396,6 +397,13 @@ def _run_traffic_assignment_phase(
     settings = context.settings
     state = context.state
     workspace = context.workspace
+
+    traffic_model = get_traffic_assignment_model(settings)
+    if traffic_model is not None and traffic_model != "beam":
+        raise NotImplementedError(
+            f"Runtime traffic_assignment execution for model {traffic_model!r} "
+            "is not yet wired in supply_demand."
+        )
 
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
 
