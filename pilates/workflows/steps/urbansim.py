@@ -37,7 +37,7 @@ from pilates.workflows.contracts import (
     StepDefinition,
 )
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 from .shared import (
     _execution_options_with_launch_context,

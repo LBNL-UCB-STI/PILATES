@@ -7,11 +7,10 @@ from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PILATES_ROOT = REPO_ROOT / "pilates"
-WORKFLOW_STATE_PATH = REPO_ROOT / "workflow_state.py"
 
 ALLOWED_PROFILE_IMPORT_FILES: set[Path] = set()
 ALLOWED_RUNTIME_FLAG_CALL_FILES = {
-    Path("workflow_state.py"),
+    Path("pilates/workflows/state.py"),
     Path("pilates/generic/initialization.py"),
     Path("pilates/runtime/launcher.py"),
     Path("pilates/workflows/surface.py"),
@@ -45,7 +44,6 @@ def _production_python_files() -> Iterable[Path]:
     for path in sorted(PILATES_ROOT.rglob("*.py")):
         if "__pycache__" not in path.parts:
             yield path
-    yield WORKFLOW_STATE_PATH
 
 
 def _relative(path: Path) -> Path:
@@ -180,6 +178,11 @@ def test_legacy_archive_doctor_stays_deleted() -> None:
     legacy_doctor_path = REPO_ROOT / "pilates/runtime/legacy_archive_doctor.py"
 
     assert not legacy_doctor_path.exists()
+
+
+def test_root_workflow_state_module_stays_moved() -> None:
+    assert not (REPO_ROOT / "workflow_state.py").exists()
+    assert (REPO_ROOT / "pilates/workflows/state.py").exists()
 
 
 def test_artifact_key_migrations_stays_deleted() -> None:

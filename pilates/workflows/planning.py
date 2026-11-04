@@ -22,7 +22,7 @@ from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface

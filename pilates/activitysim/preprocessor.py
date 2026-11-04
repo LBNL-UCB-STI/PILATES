@@ -47,7 +47,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_PERSONS_TABLE,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace

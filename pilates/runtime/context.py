@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from pilates.config.models import PilatesConfig
     from pilates.workflows.surface import EnabledWorkflowSurface
     from pilates.workspace import Workspace
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 
 @dataclass(frozen=True)

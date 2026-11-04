@@ -26,7 +26,7 @@ from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
 )
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.consist_runtime import artifact_fingerprint
 

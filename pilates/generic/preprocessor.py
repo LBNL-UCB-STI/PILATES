@@ -7,7 +7,7 @@ from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
     from pilates.workspace import Workspace
 
 

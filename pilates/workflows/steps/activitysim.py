@@ -81,7 +81,7 @@ from pilates.workflows.contracts import (
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 from .shared import _activitysim_output_facet_meta
 

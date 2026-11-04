@@ -29,7 +29,7 @@ from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 

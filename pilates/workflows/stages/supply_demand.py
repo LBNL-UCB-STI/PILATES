@@ -7,7 +7,7 @@ from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils.formatting import formatted_print
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 from .supply_demand_activity import (
     ActivityDemandPhaseInputs,

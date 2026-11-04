@@ -19,7 +19,7 @@ from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 
 logger = logging.getLogger(__name__)

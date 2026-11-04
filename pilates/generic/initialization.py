@@ -18,7 +18,7 @@ import os
 import logging
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 

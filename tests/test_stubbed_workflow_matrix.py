@@ -51,7 +51,7 @@ from tests.workflow_contract_harness import (
     write_file as _write_file,
     write_parquet as _write_parquet,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 def _reconfigure_models(

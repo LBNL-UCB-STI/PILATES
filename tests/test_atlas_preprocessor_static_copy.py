@@ -17,7 +17,7 @@ from pilates.workflows.steps.atlas import ATLAS_PREPROCESS, ATLAS_RUN
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 def _touch(path: Path, content: str = "x") -> None:

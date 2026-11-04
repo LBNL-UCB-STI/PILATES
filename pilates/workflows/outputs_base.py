@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from pilates.config import PilatesConfig
     from pilates.workspace import Workspace
     from pilates.workflows.atlas_state import AtlasSubState
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 StepOutputsT = TypeVar("StepOutputsT")
 logger = logging.getLogger(__name__)

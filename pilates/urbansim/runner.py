@@ -9,7 +9,7 @@ from pilates.generic.runner import GenericRunner
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.urbansim import postprocessor as usim_post
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 

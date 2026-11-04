@@ -25,7 +25,7 @@ from pilates.utils.archive_paths import workspace_storage_roots
 from pilates.utils.settings_helper import get as get_setting
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 
 logger = logging.getLogger(__name__)

@@ -20,7 +20,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
 )
 from pilates.utils import consist_db_snapshot as snapshot_module
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 class DummyWorkspace:

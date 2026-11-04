@@ -22,7 +22,7 @@ from pilates.activitysim.config_roots import (
 )
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,

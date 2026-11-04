@@ -15,7 +15,7 @@ from pilates.workflows.planning import (
     build_static_execution_plan_from_file,
 )
 from pilates.workflows.surface import build_enabled_workflow_surface
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 SEATTLE_ACTIVITYSIM_BEAM = "scenarios/seattle/settings-new-asim-seattle-null.yaml"

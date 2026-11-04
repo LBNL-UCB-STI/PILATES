@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pilates.config.models import load_config
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 def test_asim_compiled_is_ignored_on_read_and_not_serialized_on_write(tmp_path) -> None:

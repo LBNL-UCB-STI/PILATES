@@ -42,7 +42,7 @@ from pilates.workflows.steps.urbansim import (
     URBANSIM_RUN,
 )
 from pilates.workflows.step_execution import execute_step
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 def _settings() -> SimpleNamespace:

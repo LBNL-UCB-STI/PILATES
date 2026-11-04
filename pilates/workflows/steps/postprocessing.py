@@ -18,7 +18,7 @@ from pilates.workflows.contracts import (
     InputContract,
     StepDefinition,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 _POSTPROCESSING_INPUT_CONTRACT = InputContract(

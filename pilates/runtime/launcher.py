@@ -86,12 +86,11 @@ from pilates.workflows.stages import (
     run_supply_demand_stage,
     run_vehicle_ownership_stage,
 )
+from pilates.workflows.state import WorkflowState
+from pilates.workflows.catalog import validate_workflow_step_contracts
+from consist.types import CacheOptions
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
-from workflow_state import WorkflowState  # noqa: E402
-
-from pilates.workflows.catalog import validate_workflow_step_contracts  # noqa: E402
-from consist.types import CacheOptions  # noqa: E402
 
 logging.basicConfig(
     stream=sys.stdout,

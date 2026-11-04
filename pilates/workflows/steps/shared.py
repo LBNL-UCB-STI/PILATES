@@ -42,7 +42,7 @@ from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 def _persisted_output_path(

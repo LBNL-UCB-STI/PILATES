@@ -5,7 +5,7 @@ from typing import Generic, Optional, TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 
 PostprocessInputsT = TypeVar("PostprocessInputsT")

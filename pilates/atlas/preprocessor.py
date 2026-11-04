@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Tuple, Optional, TYPE_CHECKING, List, Dict, Any
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
     from pilates.workspace import Workspace
 
 import numpy as np

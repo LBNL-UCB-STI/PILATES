@@ -24,7 +24,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 

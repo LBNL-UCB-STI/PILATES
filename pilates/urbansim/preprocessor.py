@@ -17,7 +17,7 @@ from pilates.utils.zone_utils import resolve_canonical_zone_source_path
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)

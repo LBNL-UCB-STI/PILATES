@@ -83,7 +83,7 @@ from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from tests.workflow_contract_harness import build_runtime_context
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 EXPECTED_STAGE_MODELS = (

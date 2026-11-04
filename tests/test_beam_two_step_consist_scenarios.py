@@ -46,7 +46,7 @@ from pilates.workflows.stages.supply_demand_beam import (
 )
 from pilates.workflows.steps.beam import beam_run
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 _TEST_ZONE_IDS = ["101", "102"]
 _TEST_TIME_PERIODS = ["EA", "AM", "MD", "PM", "EV"]

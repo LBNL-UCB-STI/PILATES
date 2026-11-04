@@ -30,7 +30,7 @@ from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 
 from pilates.beam.tnc_zarr_pipeline import (

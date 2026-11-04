@@ -28,7 +28,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS_WARMSTART,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
