@@ -10,7 +10,7 @@ from consist import (
     resolve_step_contract,
 )
 from pilates.config.models import BeamArtifactFormatsConfig
-from pilates.runtime.archive_paths import resolve_workspace_uri_path
+from pilates.utils.archive_paths import resolve_workspace_uri_path
 
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -166,9 +166,6 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         hashing_strategy="full",
         mounts={"workspace": str(tmp_path)},
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
     monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
     monkeypatch.setattr(
         "pilates.workflows.consist_metadata.build_step_consist_kwargs",
@@ -224,6 +221,7 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         return SimpleNamespace(
             run=SimpleNamespace(
                 region="test-region",
+                enable_archive_copy=True,
                 models=SimpleNamespace(traffic_assignment=None, travel=None),
             ),
             beam=SimpleNamespace(
@@ -244,6 +242,7 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         config.write_text("beam {}\n", encoding="utf-8")
         return SimpleNamespace(
             full_path=str(root),
+            archive_run_dir=str(archive_root),
             get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         )
 

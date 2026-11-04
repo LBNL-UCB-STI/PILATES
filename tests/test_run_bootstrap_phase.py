@@ -350,6 +350,23 @@ def _state():
     )
 
 
+class _WorkspaceStub:
+    def __init__(
+        self,
+        _settings,
+        local_root: str,
+        folder_name: str,
+        *,
+        archive_run_dir: str | None = None,
+    ):
+        self.full_path = os.path.join(local_root, folder_name)
+        self.archive_run_dir = archive_run_dir
+        os.makedirs(self.full_path, exist_ok=True)
+
+    def get_atlas_mutable_input_dir(self):
+        return os.path.join(self.full_path, "atlas", "atlas_input")
+
+
 def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
@@ -396,17 +413,18 @@ def test_bootstrap_cache_disabled_execution_does_not_archive_workspace_snapshots
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
     archive_root = tmp_path / "archive"
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    settings = _settings(cache_enabled=False)
+    settings.run.enable_archive_copy = True
+    state = _state()
+    state.archive_run_dir = str(archive_root)
     tracker = ArchiveAwareTracker(
         responses=[{"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}]
     )
 
     run_module.run_bootstrap_phase(
         tracker=tracker,
-        settings=_settings(cache_enabled=False),
-        state=_state(),
+        settings=settings,
+        state=state,
         workspace=DummyWorkspace(),
         scenario_id="seattle-baseline",
         seed=None,
@@ -421,9 +439,10 @@ def test_bootstrap_executed_probe_does_not_archive_workspace_snapshots(
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
     archive_root = tmp_path / "archive"
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    settings = _settings(cache_enabled=True)
+    settings.run.enable_archive_copy = True
+    state = _state()
+    state.archive_run_dir = str(archive_root)
     tracker = ArchiveAwareTracker(
         responses=[
             {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_probe"}
@@ -432,8 +451,8 @@ def test_bootstrap_executed_probe_does_not_archive_workspace_snapshots(
 
     run_module.run_bootstrap_phase(
         tracker=tracker,
-        settings=_settings(cache_enabled=True),
-        state=_state(),
+        settings=settings,
+        state=state,
         workspace=DummyWorkspace(),
         scenario_id="seattle-baseline",
         seed=12345,
@@ -1850,11 +1869,6 @@ def test_resolve_run_storage_roots_defaults_local_to_archive_root(tmp_path):
 def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
     tmp_path, monkeypatch
 ):
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
-
     class SnapshotStub:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -1941,7 +1955,7 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
         "ConsistDbSnapshotManager",
         lambda **kwargs: SnapshotStub(**kwargs),
     )
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module, "Workspace", _WorkspaceStub)
 
     prepared = run_module._prepare_run_context(settings=settings, state=state)
 
@@ -1953,6 +1967,7 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
     assert prepared.run_name.startswith("pilates-run--seattle--prepare-context-test--")
     assert prepared.archive_run_dir.startswith(str(tmp_path / "archive-root"))
     assert prepared.local_run_dir.startswith(str(tmp_path / "local-root"))
+    assert prepared.workspace.archive_run_dir == prepared.archive_run_dir
     assert state.file_loc == prepared.archive_state_path
     assert state.mirror_file_loc == prepared.local_state_path
     assert state.run_info_path == prepared.archive_state_path
@@ -2044,11 +2059,6 @@ def test_restart_rewinds_uncommitted_activitysim_to_upstream_provider_boundary(
 
 
 def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog):
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
-
     class SnapshotStub:
         def final_snapshot(self):
             return True
@@ -2099,7 +2109,7 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(
         run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub()
     )
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module, "Workspace", _WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
 
     def _fail_bootstrap(**_kwargs):
@@ -2337,16 +2347,15 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
         def set_data_initialized(self, initialized: bool) -> None:
             self.data_initialized = initialized
 
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
+    created_workspaces = []
+
+    class WorkspaceStub(_WorkspaceStub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            created_workspaces.append(self)
 
     archive_root = tmp_path / "archive-root"
     local_root = tmp_path / "local-root"
-    monkeypatch.delenv("PILATES_LOCAL_RUN_DIR", raising=False)
-    monkeypatch.delenv("PILATES_ARCHIVE_RUN_DIR", raising=False)
-    monkeypatch.delenv("PILATES_ENABLE_ARCHIVE_COPY", raising=False)
     settings = SimpleNamespace(
         run=SimpleNamespace(
             region="seattle",
@@ -2422,9 +2431,8 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     }
     assert project_root == repo_root.resolve()
     assert tracker_kwargs["allow_external_paths"] is True
-    assert os.environ["PILATES_LOCAL_RUN_DIR"] == str(workspace_mount)
-    assert os.environ["PILATES_ARCHIVE_RUN_DIR"] == str(archive_run_dir)
-    assert os.environ["PILATES_ENABLE_ARCHIVE_COPY"] == "0"
+    assert created_workspaces[-1].full_path == str(workspace_mount)
+    assert created_workspaces[-1].archive_run_dir == str(archive_run_dir)
 
 
 def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstrap(
@@ -2449,11 +2457,6 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
 
         def set_data_initialized(self, initialized: bool) -> None:
             self.data_initialized = initialized
-
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
 
     archive_root = tmp_path / "archive-root"
     local_root = tmp_path / "local-root"
@@ -2505,7 +2508,7 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
     monkeypatch.setattr(
         run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub()
     )
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module, "Workspace", _WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
     missing_before_bootstrap = [
         {
@@ -2582,11 +2585,6 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
         def set_data_initialized(self, initialized: bool) -> None:
             self.data_initialized = initialized
 
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
-
     archive_root = tmp_path / "archive-root"
     local_root = tmp_path / "local-root"
     run_name = "restart-surface-deferred"
@@ -2642,7 +2640,7 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
     monkeypatch.setattr(
         run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object()
     )
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module, "Workspace", _WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
     monkeypatch.setattr(
         run_module,
@@ -2677,11 +2675,6 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
 def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
     tmp_path, monkeypatch
 ):
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
-
     archive_root = tmp_path / "archive-root"
     local_root = tmp_path / "local-root"
     run_name = "restart-strict-missing"
@@ -2741,7 +2734,7 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
     monkeypatch.setattr(
         run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object()
     )
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module, "Workspace", _WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
 
     missing = [
@@ -2776,14 +2769,6 @@ def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(
     class SnapshotStub:
         def final_snapshot(self):
             return True
-
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
-
-        def get_atlas_mutable_input_dir(self):
-            return os.path.join(self.full_path, "atlas", "atlas_input")
 
     archive_root = tmp_path / "archive-root"
     local_root = tmp_path / "local-root"
@@ -2920,7 +2905,7 @@ def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(
     monkeypatch.setattr(
         run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub()
     )
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module, "Workspace", _WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
     monkeypatch.setattr(
         run_module, "_find_missing_restart_local_artifacts", _atlas_only_missing

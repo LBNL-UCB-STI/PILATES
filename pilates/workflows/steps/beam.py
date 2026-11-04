@@ -2198,7 +2198,6 @@ beam_run = StepDefinition(
     input_contract=_BEAM_RUN_INPUT_CONTRACT,
     output_paths=_beam_run_native_output_paths,
     execution_options=_native_execution_options,
-    archive_outputs=False,
     cache_options=_beam_run_output_cache,
 )
 beam_postprocess = StepDefinition(
@@ -2209,7 +2208,6 @@ beam_postprocess = StepDefinition(
     input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_beam_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    archive_outputs=False,
     cache_options=_beam_postprocess_output_cache,
     optional_output_keys=(FINAL_SKIMS_OMX,),
 )

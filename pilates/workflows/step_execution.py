@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
+from typing import Any, Literal, Mapping, Protocol, TypeVar, runtime_checkable
 
 from consist import (
     CacheOptions,
@@ -16,7 +16,7 @@ from consist import (
     StepIdentity,
 )
 
-from pilates.runtime.archive_paths import archive_roots
+from pilates.utils.archive_paths import ArchiveRunDirLike, workspace_storage_roots
 from pilates.workflows.contracts import StepDefinition
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 
@@ -33,6 +33,40 @@ class _RunCodeIdentityConfig(Protocol):
 @runtime_checkable
 class _SettingsWithRunCodeIdentity(Protocol):
     run: _RunCodeIdentityConfig
+
+
+@runtime_checkable
+class _HasEnableArchiveCopy(Protocol):
+    enable_archive_copy: bool
+
+
+@runtime_checkable
+class _HasRunConfig(Protocol):
+    run: Any
+
+
+def _is_step_archive_enabled(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> bool:
+    if isinstance(settings, Mapping):
+        run_cfg = settings.get("run")
+        if isinstance(run_cfg, Mapping) and isinstance(
+            run_cfg.get("enable_archive_copy"), bool
+        ):
+            return run_cfg["enable_archive_copy"]
+    elif (
+        isinstance(settings, _HasRunConfig)
+        and isinstance(settings.run, _HasEnableArchiveCopy)
+        and isinstance(settings.run.enable_archive_copy, bool)
+    ):
+        return settings.run.enable_archive_copy
+    return bool(
+        (isinstance(workspace, ArchiveRunDirLike) and workspace.archive_run_dir)
+        or (isinstance(state, ArchiveRunDirLike) and state.archive_run_dir)
+    )
 
 
 def _resolve_cache_options(
@@ -64,6 +98,9 @@ def _resolve_cache_options(
 def _configured_step_archive_root(
     *,
     definition: StepDefinition[Any],
+    settings: Any,
+    state: Any,
+    workspace: Any,
     stage: str,
     year: int | None,
     iteration: int | None,
@@ -71,14 +108,13 @@ def _configured_step_archive_root(
 ) -> Path | None:
     if not definition.archive_outputs:
         return None
-    if os.environ.get("PILATES_ENABLE_ARCHIVE_COPY", "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
+    if not _is_step_archive_enabled(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    ):
         return None
-    roots = archive_roots()
+    roots = workspace_storage_roots(workspace=workspace, state=state)
     if roots is None:
         return None
     local_root, archive_root = roots
@@ -200,6 +236,9 @@ def execute_step(
                 if (
                     archive_root := _configured_step_archive_root(
                         definition=definition,
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
                         stage=stage,
                         year=year,
                         iteration=iteration,

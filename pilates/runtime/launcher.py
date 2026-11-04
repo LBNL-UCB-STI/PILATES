@@ -186,20 +186,6 @@ def _resolve_run_storage_roots(settings: PilatesConfig) -> tuple[str, str]:
     return archive_root, local_root
 
 
-def _configure_run_storage_environment(
-    *,
-    archive_run_dir: str,
-    local_run_dir: str,
-    enable_archive_copy: bool,
-) -> None:
-    """
-    Export the runtime storage topology for helpers that archive logged outputs.
-    """
-    os.environ["PILATES_LOCAL_RUN_DIR"] = local_run_dir
-    os.environ["PILATES_ARCHIVE_RUN_DIR"] = archive_run_dir
-    os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = "1" if enable_archive_copy else "0"
-
-
 def _get_consist_schemas() -> Optional[list[type[Any]]]:
     try:
         from pilates.database.schema.registry import get_consist_schemas
@@ -434,12 +420,6 @@ def _prepare_run_context(
     if archive_run_dir != local_run_dir:
         os.makedirs(archive_run_dir, exist_ok=True)
 
-    _configure_run_storage_environment(
-        archive_run_dir=archive_run_dir,
-        local_run_dir=local_run_dir,
-        enable_archive_copy=settings.run.enable_archive_copy,
-    )
-
     project_root_abs = str(Path(__file__).resolve().parents[2])
 
     local_consist_db_path, archive_consist_db_path = resolve_consist_db_paths(
@@ -527,6 +507,7 @@ def _prepare_run_context(
             settings,
             local_root,
             folder_name=run_name,
+            archive_run_dir=archive_run_dir,
         )
     archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
     local_state_path = os.path.join(workspace.full_path, "run_state.yaml")

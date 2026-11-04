@@ -6,13 +6,22 @@ import logging
 import os
 import shlex
 from collections.abc import Mapping, Sequence
-from typing import Optional, List, TYPE_CHECKING, Union, Any, Generic, TypeVar
+from typing import (
+    Optional,
+    List,
+    TYPE_CHECKING,
+    Union,
+    Any,
+    Generic,
+    TypeVar,
+)
 
 from pilates.config import PilatesConfig
 
 from abc import ABC
 
 from pilates.utils import consist_runtime as cr
+from pilates.utils.archive_paths import workspace_storage_roots
 from pilates.utils.settings_helper import get as get_setting
 
 if TYPE_CHECKING:
@@ -191,8 +200,7 @@ class GenericRunner(
             )
 
         strict_mounts = True
-        local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
-        archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
+        local_root, archive_root = workspace_storage_roots() or (None, None)
         output_values: Sequence[Any]
         if isinstance(output_paths, Mapping):
             output_values = list(output_paths.values())

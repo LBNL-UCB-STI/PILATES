@@ -20,10 +20,15 @@ class Workspace:
         settings: PilatesConfig,
         output_path: str,
         folder_name: str,
+        *,
+        archive_run_dir: Optional[str] = None,
     ):
         self.settings = settings
         self.output_path = output_path
         self.folder_name = folder_name
+        self.archive_run_dir: Optional[str] = (
+            os.path.expanduser(archive_run_dir) if archive_run_dir is not None else None
+        )
         self.input_data: Dict[str, RecordStore] = {}
         self.output_data: Dict[str, RecordStore] = {}
         self._asim_mutable_data_dir_override: Optional[str] = None

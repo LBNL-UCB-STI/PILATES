@@ -38,7 +38,7 @@ from consist import (
 from consist.types import BindingResult
 
 from pilates.beam.preprocessor import BeamPreprocessor
-from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
+from pilates.utils.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model

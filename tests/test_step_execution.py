@@ -88,16 +88,18 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     archive_root = tmp_path / "archive"
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path / "local"),
+        archive_run_dir=str(archive_root),
+    )
 
     result, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
-        workspace="workspace",
+        workspace=workspace,
         stage="stage",
         year=None,
         iteration=None,
@@ -154,16 +156,18 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     shared_root = tmp_path / "shared"
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(shared_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(shared_root / "."))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "true")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True))
+    workspace = SimpleNamespace(
+        full_path=str(shared_root),
+        archive_run_dir=str(shared_root / "."),
+    )
 
     received_result, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
-        workspace="workspace",
+        workspace=workspace,
         stage="stage",
         year=None,
         iteration=None,
@@ -217,16 +221,18 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
         input_contract=_EXAMPLE_INPUT_CONTRACT,
         archive_outputs=False,
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(tmp_path / "archive"))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path / "local"),
+        archive_run_dir=str(tmp_path / "archive"),
+    )
 
     received_result, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
-        workspace="workspace",
+        workspace=workspace,
         stage="stage",
         year=None,
         iteration=None,
@@ -284,12 +290,12 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
         ),
         archive_outputs=False,
     )
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "0")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=False))
 
     _, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
         workspace="workspace",
         stage="stage",
@@ -303,6 +309,66 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
     assert supplied_options.input_paths == {"selected": "/workspace/selected"}
     assert seen["cache_options"] == cache_options
     assert projected == result.outputs
+
+
+def test_execute_step_enable_archive_copy_false_authoritatively_disables_archival(
+    tmp_path: Path,
+) -> None:
+    """When enable_archive_copy=False, execute_step disables archival even with distinct workspace/archive roots."""
+
+    @define_step(model="example", outputs=["result"])
+    def example(*, settings, state, workspace) -> None:
+        return None
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    result = RunResult(
+        run=Run(
+            id="example-run",
+            model_name="example",
+            config_hash=None,
+            git_hash=None,
+        ),
+        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+    )
+    seen: dict[str, object] = {}
+    scenario = SimpleNamespace(
+        coupler=SimpleNamespace(update=lambda _: None),
+        tracker=SimpleNamespace(),
+    )
+    scenario.run = lambda **kwargs: seen.update(kwargs) or result
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="example", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda outputs, **_: outputs,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+        archive_outputs=True,
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=False))
+    workspace = SimpleNamespace(
+        full_path=str(local_root),
+        archive_run_dir=str(archive_root),
+    )
+    state = SimpleNamespace(archive_run_dir=str(archive_root))
+
+    execute_step(
+        scenario=scenario,
+        definition=definition,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="stage",
+        year=2030,
+        iteration=0,
+        phase="run",
+    )
+
+    assert seen["output_policy"] == OutputPolicyOptions(
+        run_completion_archive=None,
+    )
 
 
 def test_urbansim_run_archives_only_scalar_forecast_output(
@@ -341,11 +407,13 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         seen.update(kwargs) or RunResult(run=run, outputs=archived_outputs)
     )
     settings = SimpleNamespace(
-        urbansim=SimpleNamespace(output_file_template="output_{year}.h5")
+        run=SimpleNamespace(enable_archive_copy=True),
+        urbansim=SimpleNamespace(output_file_template="output_{year}.h5"),
     )
     state = SimpleNamespace(forecast_year=2030)
     workspace = SimpleNamespace(
         full_path=str(workspace_root),
+        archive_run_dir=str(archive_root),
         get_usim_mutable_data_dir=lambda: str(forecast_h5.parent),
     )
     resolved = ResolvedStepInputs(
@@ -360,9 +428,6 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
             )
         },
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
 
     result, projected = execute_step(
         scenario=scenario,
@@ -418,9 +483,6 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         return archived
 
     monkeypatch.setattr(tracker, "archive_run_outputs", capture_archive)
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
 
     @define_step(model="archive_probe")
     def archive_probe(*, settings, state, workspace, ctx) -> None:
@@ -455,9 +517,9 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         result, projected = execute_step(
             scenario=scenario,
             definition=definition,
-            settings=object(),
-            state=object(),
-            workspace=object(),
+            settings=SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True)),
+            state=SimpleNamespace(archive_run_dir=str(archive_root)),
+            workspace=SimpleNamespace(full_path=str(local_root)),
             stage="test",
             year=2030,
             iteration=0,
@@ -555,7 +617,7 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
         )
 
     settings = SimpleNamespace(
-        run=SimpleNamespace(region="test"),
+        run=SimpleNamespace(region="test", enable_archive_copy=True),
         urbansim=SimpleNamespace(
             command_template="urbansim {0}",
             input_file_template="input_{region_id}.h5",
@@ -570,6 +632,7 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
         year=2030,
         current_year=2030,
         forecast_year=2030,
+        archive_run_dir=str(archive_root),
         set_sub_stage_progress=lambda _stage: None,
     )
     workspace = SimpleNamespace(
@@ -585,9 +648,6 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
             pass
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
     population_source = (
         workspace_root / "urbansim" / "data" / "output_2030_population_source.h5"
     )
@@ -1040,17 +1100,12 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
 
 def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     local_root = tmp_path / "local"
     workspace_root = local_root / "workspace"
     archive_run_dir = tmp_path / "archive"
     workspace_root.mkdir(parents=True)
     archive_run_dir.mkdir(parents=True)
-
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_run_dir))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
 
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",

@@ -10,8 +10,9 @@ from typing import (
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.archive_paths import (
-    archive_roots as _archive_roots,
+    WorkspaceRootLike,
     resolve_workspace_uri_path as _resolve_workspace_uri_path,
+    workspace_storage_roots as _workspace_storage_roots,
 )
 from pilates.utils.consist_types import ArtifactLike
 
@@ -37,14 +38,11 @@ def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
 def _materialization_roots(
     workspace: Optional["Workspace"],
 ) -> tuple[Optional[str], Optional[str]]:
-    roots = _archive_roots()
-    source_root = os.path.abspath(roots[1]) if roots is not None else None
-    if workspace is not None and getattr(workspace, "full_path", None):
-        return os.path.abspath(str(workspace.full_path)), source_root
-    if roots is None:
-        return None, None
-    local_root, _archive_root = roots
-    return os.path.abspath(local_root), source_root
+    if (roots := _workspace_storage_roots(workspace=workspace)) is not None:
+        return roots
+    if isinstance(workspace, WorkspaceRootLike) and workspace.full_path:
+        return os.path.abspath(str(workspace.full_path)), None
+    return None, None
 
 
 def _materialize_artifact_to_existing_path(

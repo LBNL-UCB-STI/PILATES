@@ -128,8 +128,6 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
     monkeypatch,
     tmp_path,
 ) -> None:
-    monkeypatch.delenv("PILATES_LOCAL_RUN_DIR", raising=False)
-    monkeypatch.delenv("PILATES_ARCHIVE_RUN_DIR", raising=False)
     current_local = tmp_path / "current-run"
     rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
     expected_local = current_local / rel_path

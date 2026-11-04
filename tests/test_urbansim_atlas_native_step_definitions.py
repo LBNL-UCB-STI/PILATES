@@ -556,7 +556,9 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     archive_root = tmp_path / "archive"
     workspace_root = tmp_path / "workspace"
     workspace = _workspace(workspace_root)
+    workspace.archive_run_dir = str(archive_root)
     settings = _settings()
+    settings.run.enable_archive_copy = True
     state = _state()
     tracker = Tracker(
         run_dir=local_root / "consist-runs",
@@ -564,9 +566,6 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
         hashing_strategy="full",
         mounts={"workspace": workspace.full_path},
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
 
     source_h5 = tmp_path / "source" / "output_2030.h5"
     source_h5.parent.mkdir(parents=True)

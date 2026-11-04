@@ -10,7 +10,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.runtime.archive_paths import archive_fallback_path
+from pilates.utils.archive_paths import archive_fallback_path
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root

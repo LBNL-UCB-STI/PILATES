@@ -18,6 +18,7 @@ from typing import (
 
 from pilates.runtime.promote_run_archive import _open_archive_tracker
 from pilates.runtime.scenario_runtime import resolve_cache_epoch
+from pilates.utils.archive_paths import WorkspaceRootLike, resolve_archive_run_dir
 from pilates.utils.coupler_helpers import (
     resolve_existing_path,
 )
@@ -481,17 +482,13 @@ def restore_restart_coupler_snapshot(
         if cand and str(cand) not in candidate_ids:
             candidate_ids.append(str(cand))
 
-    workspace_full_path = getattr(workspace, "full_path", None)
-    target_root = Path(workspace_full_path) if workspace_full_path else None
-    archive_run_dir_val = (
-        getattr(workspace, "archive_run_dir", None)
-        or get_setting(settings, "run.archive_run_dir", None)
-        or (
-            Path(state.run_info_path).parent
-            if getattr(state, "run_info_path", None)
-            else None
-        )
+    workspace_full_path = (
+        workspace.full_path if isinstance(workspace, WorkspaceRootLike) else None
     )
+    target_root = Path(workspace_full_path) if workspace_full_path else None
+    archive_run_dir_val = resolve_archive_run_dir(
+        workspace=workspace, state=state
+    ) or get_setting(settings, "run.archive_run_dir", None)
     source_root = Path(archive_run_dir_val).resolve() if archive_run_dir_val else None
 
     coupler_obj = getattr(scenario, "coupler", None)

@@ -5,7 +5,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING
 
 
 from pilates.config.models import PilatesConfig
@@ -24,8 +24,7 @@ from pilates.workflows.coupler_namespace import (
     coupler_storage_value,
     set_coupler_from_artifact,
 )
-from consist import Artifact, RunResult, Tracker
-from consist.protocols import ArtifactRecordLike
+from pilates.utils.archive_paths import resolve_archive_run_dir
 from pilates.workflows.steps import (
     beam_full_skim,
     beam_postprocess,
@@ -101,85 +100,6 @@ def _should_run_full_skim(
                 total_iters = max(1, iteration + 1)
         return iteration == total_iters - 1
     return False
-
-
-def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
-    run_info_path = state.run_info_path
-    if not run_info_path:
-        archive_dir = state.archive_run_dir
-        return Path(archive_dir).expanduser().resolve() if archive_dir else None
-    try:
-        return Path(run_info_path).expanduser().resolve().parent
-    except Exception:
-        return None
-
-
-def _archive_beam_run_outputs_native(
-    *,
-    run_id: str,
-    tracker: Tracker,
-    recovery_root: Path,
-    outputs: Mapping[str, Any],
-) -> None:
-    """Archive beam step output files and directory artifacts to recovery_root."""
-    resolved_recovery_root = recovery_root.resolve()
-    try:
-        archived = tracker.archive_run_outputs(
-            run_id,
-            resolved_recovery_root,
-            mode="copy",
-            append=True,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            f"Archiving beam_run outputs failed verification or copy: {exc}"
-        ) from exc
-
-    archived_outputs = archived.outputs
-    keys_to_verify = [
-        key
-        for key, artifact in outputs.items()
-        if isinstance(artifact, (Artifact, ArtifactRecordLike))
-        and artifact.driver != "artifact_set"
-    ]
-    if not keys_to_verify and isinstance(archived_outputs, Mapping):
-        keys_to_verify = list(archived_outputs.keys())
-
-    failures: list[str] = []
-    for key in keys_to_verify:
-        refreshed = (
-            archived_outputs.get(key) if isinstance(archived_outputs, Mapping) else None
-        )
-        raw_roots = (
-            refreshed.meta.get("recovery_roots")
-            if isinstance(refreshed, (Artifact, ArtifactRecordLike))
-            and isinstance(refreshed.meta, Mapping)
-            else None
-        )
-        normalized_roots = {
-            Path(os.fspath(root)).expanduser().resolve()
-            for root in (raw_roots if isinstance(raw_roots, (list, tuple, set)) else ())
-            if isinstance(root, (str, os.PathLike)) and str(root).strip()
-        }
-        if resolved_recovery_root not in normalized_roots:
-            failures.append(
-                f"{key}: recovery_root {resolved_recovery_root} not committed in artifact.meta['recovery_roots']"
-            )
-            continue
-        existing_artifact = outputs.get(key)
-        if isinstance(existing_artifact, Artifact) and isinstance(refreshed, Artifact):
-            if isinstance(existing_artifact.meta, dict) and isinstance(
-                refreshed.meta, dict
-            ):
-                existing_artifact.meta.update(refreshed.meta)
-            if existing_artifact.abs_path is None and refreshed.abs_path is not None:
-                existing_artifact.abs_path = refreshed.abs_path
-
-    if failures:
-        raise RuntimeError(
-            "Archiving beam_run outputs failed verification or copy: "
-            + "; ".join(failures)
-        )
 
 
 def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
@@ -287,7 +207,7 @@ def _run_beam_steps(
     settings = context.settings
     state = context.state
     workspace = context.workspace
-    archive_run_dir = _archive_run_dir_for_restart(state)
+    archive_run_dir = resolve_archive_run_dir(workspace=workspace, state=state)
 
     _, preprocess_outputs = execute_step(
         scenario=scenario,
@@ -329,25 +249,6 @@ def _run_beam_steps(
         resolved_inputs=run_inputs,
     )
 
-    # Archive beam_run outputs natively with verify=True
-    base_archive = (
-        archive_run_dir / "consist-recovery"
-        if archive_run_dir is not None
-        else Path(scenario.tracker.run_dir) / "archive"
-    )
-    if not getattr(run_result, "cache_hit", False):
-        recovery_root = (
-            base_archive
-            if base_archive.name == run_result.run.id
-            else base_archive / run_result.run.id
-        )
-        _archive_beam_run_outputs_native(
-            run_id=run_result.run.id,
-            tracker=scenario.tracker,
-            recovery_root=recovery_root,
-            outputs=run_result.outputs,
-        )
-
     logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
     _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
 
@@ -360,7 +261,7 @@ def _run_beam_steps(
     )
     postprocess_inputs.require_complete()
 
-    postprocess_result, _ = execute_step(
+    _, _ = execute_step(
         scenario=scenario,
         definition=beam_postprocess,
         settings=settings,
@@ -372,20 +273,6 @@ def _run_beam_steps(
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
     )
-    if isinstance(postprocess_result, RunResult) and not getattr(
-        postprocess_result, "cache_hit", False
-    ):
-        postprocess_recovery_root = (
-            base_archive
-            if base_archive.name == postprocess_result.run.id
-            else base_archive / postprocess_result.run.id
-        )
-        _archive_beam_run_outputs_native(
-            run_id=postprocess_result.run.id,
-            tracker=scenario.tracker,
-            recovery_root=postprocess_recovery_root,
-            outputs=postprocess_result.outputs,
-        )
 
     if _should_run_full_skim(settings, iteration, state=state):
         _run_beam_full_skim_step(
@@ -519,7 +406,7 @@ def _run_traffic_assignment_phase(
             workspace=workspace,
             settings=settings,
         )
-        archive_run_dir = _archive_run_dir_for_restart(state)
+        archive_run_dir = resolve_archive_run_dir(workspace=workspace, state=state)
         launch_config = _compile_beam_launch_config(
             scenario=scenario,
             settings=settings,
