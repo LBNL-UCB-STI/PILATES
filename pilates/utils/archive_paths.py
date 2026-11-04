@@ -8,7 +8,6 @@ from typing import (
     Optional,
     Protocol,
     TYPE_CHECKING,
-    TypeVar,
     Union,
     runtime_checkable,
 )
@@ -18,7 +17,6 @@ from pilates.utils import consist_runtime as cr
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
-PathValue = TypeVar("PathValue", str, Path)
 PathLike = Union[str, os.PathLike[str]]
 
 
@@ -140,39 +138,4 @@ def resolve_workspace_uri_path(
                 ws_mount := _non_empty_path(tracker.mounts.get("workspace"))
             ) is not None:
                 return os.path.join(os.path.abspath(ws_mount), rel_path)
-    return None
-
-
-def archive_fallback_path(
-    *,
-    state: object,
-    workspace: object,
-    local_path: PathLike,
-) -> Optional[Path]:
-    archive_run_dir = resolve_archive_run_dir(workspace=workspace, state=state)
-    full_path = (
-        _non_empty_path(workspace.full_path)
-        if isinstance(workspace, WorkspaceRootLike)
-        else None
-    )
-    if archive_run_dir is None or full_path is None:
-        return None
-    local_root = full_path.resolve()
-    try:
-        rel = Path(local_path).expanduser().resolve().relative_to(local_root)
-    except Exception:
-        return None
-    return archive_run_dir / rel
-
-
-def first_existing_path(*paths: Optional[PathValue]) -> Optional[PathValue]:
-    for path in paths:
-        if path is None:
-            continue
-        if isinstance(path, Path):
-            if path.exists():
-                return path
-            continue
-        if os.path.exists(path):
-            return path
     return None

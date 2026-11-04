@@ -255,7 +255,7 @@ def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
                 "final_skims_omx": "explicit",
             },
             logical_destinations=kwargs["logical_destinations"],
-            metadata={"candidate_paths_by_semantic_key": {}},
+            metadata={},
         )
 
     monkeypatch.setattr(activitysim, "resolve_artifact_roles", resolve_roles)

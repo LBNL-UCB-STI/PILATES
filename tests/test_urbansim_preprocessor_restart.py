@@ -68,11 +68,7 @@ def test_restore_missing_mutable_urbansim_supporting_inputs_prefers_archive_then
     archive_run_dir = tmp_path / "archive-run"
     usim_dir = local_run_dir / "urbansim" / "data"
     workspace = _WorkspaceStub(local_run_dir, usim_dir)
-    state = SimpleNamespace(run_info_path=str(archive_run_dir / "run_state.yaml"))
-
     usim_dir.mkdir(parents=True, exist_ok=True)
-    Path(state.run_info_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(state.run_info_path).write_text("year: 2023\n", encoding="utf-8")
 
     source_dir = tmp_path / "usim-source"
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +78,7 @@ def test_restore_missing_mutable_urbansim_supporting_inputs_prefers_archive_then
     archive_hh.parent.mkdir(parents=True, exist_ok=True)
     archive_hh.write_text("archive-hh", encoding="utf-8")
 
+    (source_dir / "hsize_ct_000.csv").write_text("source-hh", encoding="utf-8")
     (source_dir / "income_rates_000.csv").write_text("source-income", encoding="utf-8")
     (source_dir / "relmap_000.csv").write_text("source-relmap", encoding="utf-8")
     (source_dir / "schools_2010.csv").write_text("source-schools", encoding="utf-8")
@@ -99,11 +96,10 @@ def test_restore_missing_mutable_urbansim_supporting_inputs_prefers_archive_then
 
     restored = _restore_missing_mutable_urbansim_supporting_inputs(
         settings=settings,
-        state=state,
         workspace=workspace,
     )
 
-    assert (usim_dir / "hsize_ct_000.csv").read_text(encoding="utf-8") == "archive-hh"
+    assert (usim_dir / "hsize_ct_000.csv").read_text(encoding="utf-8") == "source-hh"
     assert (usim_dir / "income_rates_000.csv").read_text(
         encoding="utf-8"
     ) == "source-income"
@@ -134,13 +130,7 @@ def test_restore_missing_mutable_urbansim_supporting_inputs_uses_omx_export_name
     local_run_dir = tmp_path / "local-run"
     usim_dir = local_run_dir / "urbansim" / "data"
     workspace = _WorkspaceStub(local_run_dir, usim_dir)
-    state = SimpleNamespace(
-        run_info_path=str(tmp_path / "archive-run" / "run_state.yaml")
-    )
-
     usim_dir.mkdir(parents=True, exist_ok=True)
-    Path(state.run_info_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(state.run_info_path).write_text("year: 2023\n", encoding="utf-8")
 
     source_dir = tmp_path / "usim-source"
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -160,7 +150,6 @@ def test_restore_missing_mutable_urbansim_supporting_inputs_uses_omx_export_name
 
     restored = _restore_missing_mutable_urbansim_supporting_inputs(
         settings=settings,
-        state=state,
         workspace=workspace,
     )
 

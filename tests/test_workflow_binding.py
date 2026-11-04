@@ -229,7 +229,7 @@ def test_build_resolved_binding_requires_consist_preflight_identity(
         )
 
 
-def test_restart_activitysim_required_artifacts_uses_forecast_year(
+def test_restart_activitysim_required_artifacts_requires_only_bootstrap_configs(
     tmp_path: Path,
 ) -> None:
     stage = SimpleNamespace(
@@ -282,9 +282,13 @@ def test_restart_activitysim_required_artifacts_uses_forecast_year(
         workflow_stage=stage,
     )
 
-    assert required is not None
-    assert USIM_DATASTORE_CURRENT_H5 in required
-    assert "2019" in required[USIM_DATASTORE_CURRENT_H5]
+    assert required == {
+        "activitysim_config_settings_yaml_configs": str(
+            tmp_path / "configs" / "configs" / "settings.yaml"
+        )
+    }
+    assert USIM_DATASTORE_CURRENT_H5 not in required
+    assert USIM_POPULATION_SOURCE_H5 not in required
 
 
 def test_beam_preprocess_binding_rules_prefer_linkstats_over_warmstart() -> None:

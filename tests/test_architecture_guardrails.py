@@ -38,6 +38,7 @@ DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "restart_exact_rewind_contract",
     "urbansim_datastore_selection_rules",
 }
+ZERO_GETATTR_MODULES = (Path("pilates/workflows/binding.py"),)
 
 
 def _production_python_files() -> Iterable[Path]:
@@ -301,4 +302,23 @@ def test_config_and_utils_do_not_import_runtime_or_workflows() -> None:
     assert not violations, (
         "pilates/config/ and pilates/utils/ must not import from pilates.runtime "
         f"or pilates.workflows at runtime. Violations: {violations}"
+    )
+
+
+def test_zero_getattr_modules_stay_free_of_getattr_and_setattr() -> None:
+    violations: list[str] = []
+
+    for rel in ZERO_GETATTR_MODULES:
+        path = REPO_ROOT / rel
+        tree = _parse(path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and _call_name(node) in {
+                "getattr",
+                "setattr",
+            }:
+                violations.append(f"{rel}:{node.lineno}:{_call_name(node)}")
+
+    assert not violations, (
+        "Typed workflow modules must use narrow protocols instead of getattr/setattr. "
+        f"Violations: {violations}"
     )

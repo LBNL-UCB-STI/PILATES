@@ -10,7 +10,6 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.archive_paths import archive_fallback_path
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
@@ -108,7 +107,6 @@ def selected_urbansim_static_input_sources(
 
 def _restore_missing_mutable_urbansim_supporting_inputs(
     settings: PilatesConfig,
-    state: "WorkflowState",
     workspace: "Workspace",
 ) -> Dict[str, Path]:
     region = settings.run.region
@@ -146,30 +144,16 @@ def _restore_missing_mutable_urbansim_supporting_inputs(
 
     restored: Dict[str, Path] = {}
     for key, (dest_path, source_path) in required_files.items():
-        if dest_path.exists():
-            continue
-
-        archive_path = archive_fallback_path(
-            state=state,
-            workspace=workspace,
-            local_path=dest_path,
-        )
-        candidate = None
-        if archive_path is not None and archive_path.exists():
-            candidate = archive_path
-        elif source_path.exists():
-            candidate = source_path
-
-        if candidate is None:
+        if dest_path.exists() or not source_path.exists():
             continue
 
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(candidate, dest_path)
+        shutil.copyfile(source_path, dest_path)
         restored[key] = dest_path
         logger.info(
             "[UrbansimPreprocessor] Restored missing mutable input %s from %s",
             dest_path,
-            candidate,
+            source_path,
         )
 
     return restored
