@@ -14,7 +14,11 @@ import zarr
 from pilates.config import PilatesConfig
 from pilates.activitysim.config_roots import (
     ActivitySimConfigRoot,
+    configured_activitysim_main_configs_dir,
+    configured_activitysim_sharrow,
     required_activitysim_config_roots,
+    resolve_activitysim_sharrow_enabled,
+    sync_activitysim_sharrow_configs,
 )
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
@@ -251,6 +255,21 @@ def _asim_container_environment() -> Dict[str, str]:
         if value:
             env[key] = value
     return env
+
+
+def sharrow_enabled(
+    settings: PilatesConfig,
+    *,
+    launch_context: Optional[ActivitySimLaunchContext] = None,
+) -> bool:
+    """Return whether ActivitySim sharrow mode is active for ``settings``."""
+    configs_root: Path | None = None
+    if launch_context is not None:
+        configs_root = launch_context.mutable_configs_dir
+    return resolve_activitysim_sharrow_enabled(
+        settings,
+        configs_root=configs_root,
+    )
 
 
 def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
@@ -634,8 +653,23 @@ class ActivitysimRunner(GenericRunner):
         transition. It carries the already selected skim mode/path straight to
         the body while replacing only its non-identity cache root.
         """
+        sync_activitysim_sharrow_configs(
+            launch_context.mutable_configs_dir,
+            main_configs_dir=configured_activitysim_main_configs_dir(
+                self.state.full_settings
+            ),
+            sharrow=configured_activitysim_sharrow(self.state.full_settings),
+        )
         if skip_numba_warmup:
             logger.info("ActivitySim Numba warmup: not required (explicit rewind skip)")
+            return ActivitySimPreparationResult(
+                launch_context=launch_context,
+                skim_mode=skim_mode,
+                zarr_input_path=zarr_input_path,
+                generated_zarr_path=None,
+            )
+        if not sharrow_enabled(self.state.full_settings, launch_context=launch_context):
+            logger.info("ActivitySim Numba warmup: not required (sharrow disabled)")
             return ActivitySimPreparationResult(
                 launch_context=launch_context,
                 skim_mode=skim_mode,
@@ -771,6 +805,8 @@ class ActivitysimRunner(GenericRunner):
         )
         if preparation.zarr_input_path is not None:
             staged_extra_inputs[ZARR_SKIMS] = preparation.zarr_input_path
+        elif preparation.skim_mode == "omx":
+            _remove_path_if_present(str(preparation.launch_context.runtime_zarr_path))
         outputs = self._run(
             inputs,
             preparation.launch_context,
@@ -809,7 +845,7 @@ class ActivitysimRunner(GenericRunner):
     def get_asim_additional_args(settings: PilatesConfig, asim_docker_vols, compile):
         additional_args = []
         if settings.activitysim.file_format == "parquet":
-            if persist_sharrow_cache_enabled(settings):
+            if sharrow_enabled(settings) and persist_sharrow_cache_enabled(settings):
                 additional_args.append("--persist-sharrow-cache")
             data_dirs = []
             output_dirs = []

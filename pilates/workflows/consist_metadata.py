@@ -28,7 +28,12 @@ from typing import (
 from consist.core.step_context import StepContext
 from consist.types import HasConsistFacet
 
-from pilates.activitysim.config_roots import required_activitysim_config_roots
+from pilates.activitysim.config_roots import (
+    configured_activitysim_main_configs_dir,
+    configured_activitysim_sharrow,
+    required_activitysim_config_roots,
+    sync_activitysim_sharrow_configs,
+)
 from pilates.atlas.preprocessor import selected_atlas_static_input_sources
 from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
 from pilates.config.models import (
@@ -239,6 +244,9 @@ def build_activitysim_identity_config(settings: PilatesConfig) -> Dict[str, Any]
             else None
         ),
     }
+    sharrow = configured_activitysim_sharrow(cfg)
+    if isinstance(sharrow, bool):
+        identity_config["sharrow"] = sharrow
     admission = (
         cfg.admission
         if isinstance(cfg, ActivitySimConfig)
@@ -689,6 +697,13 @@ def consist_step_meta(
             if not selected_roots:
                 return None
 
+        sync_activitysim_sharrow_configs(
+            mutable_configs_root,
+            main_configs_dir=configured_activitysim_main_configs_dir(
+                activitysim_settings
+            ),
+            sharrow=configured_activitysim_sharrow(activitysim_settings),
+        )
         return ActivitySimConfigAdapter(root_dirs=list(selected_roots))
 
     def _beam_adapter(ctx: StepContext) -> Any:

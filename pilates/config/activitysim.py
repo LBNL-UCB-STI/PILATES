@@ -100,6 +100,13 @@ class ActivitySimConfig(BaseModel):
     file_format: Literal["parquet", "csv"] = Field(
         "parquet", description="Output file format"
     )
+    sharrow: Optional[bool] = Field(
+        None,
+        description=(
+            "Enable ActivitySim sharrow mode. "
+            "When unset, inherits from ActivitySim config files."
+        ),
+    )
     persist_sharrow_cache: Optional[bool] = Field(
         None,
         description=(
@@ -182,6 +189,7 @@ class ActivitySimConfig(BaseModel):
             "chunk_size": self.chunk_size,
             "num_processes": self.num_processes,
             "file_format": self.file_format,
+            "sharrow": self.sharrow,
             "persist_sharrow_cache": self.persist_sharrow_cache,
             "replan_iters": self.replan_iters,
             "replan_hh_samp_size": self.replan_hh_samp_size,

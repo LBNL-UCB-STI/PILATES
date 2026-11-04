@@ -18,7 +18,11 @@ import yaml
 
 from pilates.config import PilatesConfig
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
-from pilates.activitysim.config_roots import required_activitysim_config_roots
+from pilates.activitysim.config_roots import (
+    configured_activitysim_sharrow,
+    required_activitysim_config_roots,
+    sync_activitysim_sharrow_configs,
+)
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
@@ -2920,6 +2924,13 @@ def _copy_data_to_mutable_location(
         main_configs_dir=get_setting(
             settings, "activitysim.main_configs_dir", "configs"
         ),
+    )
+    sync_activitysim_sharrow_configs(
+        configs_dest_dir,
+        main_configs_dir=get_setting(
+            settings, "activitysim.main_configs_dir", "configs"
+        ),
+        sharrow=configured_activitysim_sharrow(settings),
     )
 
     # ActivitySim configs are captured via the config adapter; no artifact logging here.
