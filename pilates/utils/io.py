@@ -87,6 +87,7 @@ def get_traffic_assignment_model(settings: Any) -> Optional[str]:
     """
     return (
         get_setting(settings, "run.models.traffic_assignment")
+        or get_setting(settings, "traffic_assignment")
         or get_setting(settings, "run.models.travel")
         or get_setting(settings, "travel_model")
     )

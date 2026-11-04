@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 _FLAG_FIELD_NAMES: frozenset[str] = frozenset(
@@ -57,6 +57,12 @@ class RuntimeFlags:
             if flag_name not in self._overridden_fields:
                 object.__setattr__(self, flag_name, flag_value)
 
+    def copy(self) -> RuntimeFlags:
+        """Return an independent copy preserving any explicit flag overrides."""
+        cloned = replace(self)
+        object.__setattr__(cloned, "_overridden_fields", set(self._overridden_fields))
+        return cloned
+
 
 @dataclass
 class RuntimeOptions:
@@ -66,6 +72,10 @@ class RuntimeOptions:
     settings_file: Optional[str] = None
     allow_rewind_resume: bool = False
 
+    def copy(self) -> RuntimeOptions:
+        """Return an independent copy of runtime options."""
+        return replace(self)
+
 
 @dataclass
 class PilatesRuntime:
@@ -74,3 +84,7 @@ class PilatesRuntime:
     flags: RuntimeFlags = field(default_factory=RuntimeFlags)
     options: RuntimeOptions = field(default_factory=RuntimeOptions)
     flags_initialized: bool = True
+
+    def copy(self) -> PilatesRuntime:
+        """Return an independent copy of the runtime state."""
+        return replace(self, flags=self.flags.copy(), options=self.options.copy())

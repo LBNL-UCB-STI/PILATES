@@ -5,6 +5,13 @@ from enum import Enum
 from typing import Any, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
 
 from pilates.activitysim.preprocessor import required_asim_config_dirs
+from pilates.utils.io import (
+    get_activity_demand_model,
+    get_land_use_model,
+    get_traffic_assignment_model,
+    get_vehicle_ownership_model,
+)
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.catalog import (
     schema_step_specs,
     workflow_step_contracts_by_name,
@@ -241,19 +248,10 @@ def _enabled_stage_names(profile: WorkflowProfile) -> FrozenSet[str]:
 
 def _bootstrap_owned_artifact_keys(settings: Any) -> FrozenSet[str]:
     keys = []
-    models = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand = (
-        getattr(models, "activity_demand", None) if models is not None else None
-    )
-    land_use = getattr(models, "land_use", None) if models is not None else None
-    vehicle_ownership = (
-        getattr(models, "vehicle_ownership", None) if models is not None else None
-    )
-    traffic_assignment = None
-    if models is not None:
-        traffic_assignment = getattr(models, "traffic_assignment", None) or getattr(
-            models, "travel", None
-        )
+    activity_demand = get_activity_demand_model(settings)
+    land_use = get_land_use_model(settings)
+    vehicle_ownership = get_vehicle_ownership_model(settings)
+    traffic_assignment = get_traffic_assignment_model(settings)
 
     if (
         land_use == "urbansim"
@@ -264,8 +262,7 @@ def _bootstrap_owned_artifact_keys(settings: Any) -> FrozenSet[str]:
 
     if activity_demand == "activitysim":
         main_configs_dir = (
-            getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
-            or "configs"
+            get_setting(settings, "activitysim.main_configs_dir") or "configs"
         )
         keys.extend(
             f"activitysim_config_settings_yaml_{dirname}"

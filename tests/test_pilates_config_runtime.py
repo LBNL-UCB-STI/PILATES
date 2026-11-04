@@ -157,3 +157,34 @@ def test_recovery_archive_roots_expand_environment_variables(monkeypatch):
         "/tmp/recovery-root",
         "/tmp/static-root",
     ]
+
+
+def test_model_copy_isolates_runtime_flags_and_options():
+    settings = PilatesConfig(**_minimal_config())
+    settings.land_use_enabled = False
+    settings.state_file_loc = "/tmp/original_state.yaml"
+
+    copied = settings.model_copy()
+    copied.land_use_enabled = True
+    copied.state_file_loc = "/tmp/copied_state.yaml"
+
+    assert settings.land_use_enabled is False
+    assert settings.state_file_loc == "/tmp/original_state.yaml"
+    assert copied.land_use_enabled is True
+    assert copied.state_file_loc == "/tmp/copied_state.yaml"
+    assert settings._runtime is not copied._runtime
+    assert settings._runtime.flags is not copied._runtime.flags
+    assert settings._runtime.options is not copied._runtime.options
+
+
+def test_traffic_assignment_flag_derivation_matches_compute_model_enabled_flags():
+    from pilates.utils.io import compute_model_enabled_flags
+
+    config = _minimal_config()
+    config["run"]["models"]["travel"] = None
+    config["traffic_assignment"] = "beam"
+
+    settings = PilatesConfig(**config)
+
+    assert settings.traffic_assignment_enabled is True
+    assert compute_model_enabled_flags(settings)["traffic_assignment_enabled"] is True

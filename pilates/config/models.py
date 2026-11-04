@@ -596,7 +596,20 @@ class PilatesConfig(BaseModel):
             )
         if self.run.models.travel and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
+        self._sync_runtime_flags()
         return self
+
+    def model_copy(
+        self,
+        *,
+        update: Optional[Dict[str, Any]] = None,
+        deep: bool = False,
+    ) -> "PilatesConfig":
+        """Return a copy with an isolated ``PilatesRuntime`` instance."""
+        copied = super().model_copy(update=update, deep=deep)
+        copied._runtime = self._runtime.copy()
+        copied._sync_runtime_flags()
+        return copied
 
     def _sync_runtime_flags(self) -> PilatesRuntime:
         """Compute default runtime flags from current config state and sync non-overridden fields."""
@@ -615,7 +628,12 @@ class PilatesConfig(BaseModel):
         vehicle_ownership_model_enabled = bool(self.run.models.vehicle_ownership)
         activity_demand_model = self.run.models.activity_demand
         activity_demand_enabled = bool(activity_demand_model)
-        travel_model = extra.get("traffic_assignment") or self.run.models.travel
+        travel_model = (
+            self.run.models.__dict__.get("traffic_assignment")
+            or extra.get("traffic_assignment")
+            or self.run.models.travel
+            or extra.get("travel_model")
+        )
         traffic_assignment_enabled = bool(travel_model) and not static_skims
         replanning_enabled = (replan_iters > 0) and not (
             activity_demand_enabled and activity_demand_model == "polaris"

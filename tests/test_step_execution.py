@@ -1036,3 +1036,123 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
             code_identity="callable_source",
         ),
     ]
+
+
+def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    local_root = tmp_path / "local"
+    workspace_root = local_root / "workspace"
+    archive_run_dir = tmp_path / "archive"
+    workspace_root.mkdir(parents=True)
+    archive_run_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_run_dir))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+        hashing_strategy="fast",
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            enable_archive_copy=True,
+            consist_code_identity="callable_module",
+        )
+    )
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        workspace_root=workspace_root,
+        archive_run_dir=archive_run_dir,
+    )
+    payload_value = {"text": "v1\n"}
+
+    @define_step(model="example", outputs=["result"])
+    def example(*, settings, state, workspace):
+        del settings, state
+        out = workspace.workspace_root / "outputs" / "result.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload_value["text"], encoding="utf-8")
+        return {"result": out}
+
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="example", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda outputs, **_: outputs["result"],
+        archive_outputs=True,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+
+    with tracker.scenario("rerun-archive-v1") as scenario_1:
+        _, art_1 = execute_step(
+            scenario=scenario_1,
+            definition=definition,
+            settings=settings,
+            state="state",
+            workspace=workspace,
+            stage="supply_demand",
+            year=2015,
+            iteration=0,
+            phase="preprocess",
+        )
+
+    expected_archive_file = (
+        archive_run_dir
+        / "consist-recovery"
+        / "example__supply_demand__y2015__i0__preprocess"
+        / "outputs"
+        / "result.txt"
+    )
+    assert expected_archive_file.read_text(encoding="utf-8") == "v1\n"
+
+    # Simulate a code patch / config change causing the step to re-run into the same archive_run_dir
+    payload_value["text"] = "v2-modified\n"
+
+    @define_step(
+        model="example",
+        outputs=["result"],
+        config={"patch": 2},
+    )
+    def example_v2(*, settings, state, workspace):
+        del settings, state
+        out = workspace.workspace_root / "outputs" / "result.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload_value["text"], encoding="utf-8")
+        return {"result": out}
+
+    definition_v2 = StepDefinition(
+        name="example",
+        function=example_v2,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="example", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda outputs, **_: outputs["result"],
+        archive_outputs=True,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+
+    with tracker.scenario("rerun-archive-v2") as scenario_2:
+        _, art_2 = execute_step(
+            scenario=scenario_2,
+            definition=definition_v2,
+            settings=settings,
+            state="state",
+            workspace=workspace,
+            stage="supply_demand",
+            year=2015,
+            iteration=0,
+            phase="preprocess",
+        )
+
+    assert expected_archive_file.read_text(encoding="utf-8") == "v2-modified\n"
+    expected_root = str(expected_archive_file.parent.parent.resolve())
+    assert expected_root in art_2.meta.get("recovery_roots", [])
+    refreshed_art_1 = tracker.get_run_outputs(str(art_1.run_id))["result"]
+    assert expected_root not in refreshed_art_1.meta.get("recovery_roots", [])
