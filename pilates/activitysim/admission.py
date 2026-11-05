@@ -311,6 +311,32 @@ def _check_declared_digest_expectation(
     return report, sidecar_payload
 
 
+def _resolve_local_skim_uri(raw_uri: str | None) -> Path | None:
+    if not isinstance(raw_uri, str) or not raw_uri.strip():
+        return None
+    uri = raw_uri.strip()
+    if uri.startswith("file://"):
+        from urllib.parse import unquote, urlparse
+
+        parsed = urlparse(uri)
+        if parsed.netloc and parsed.netloc != "localhost":
+            return None
+        local_source = unquote(parsed.path)
+    elif "://" in uri:
+        return None
+    else:
+        local_source = uri
+    candidate = Path(local_source).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    import os
+    from pilates.utils.path_utils import find_project_root
+
+    pilates_root = find_project_root(start_path=os.path.dirname(__file__))
+    base_root = Path(pilates_root) if pilates_root else Path.cwd()
+    return (base_root / candidate).resolve()
+
+
 def resolve_bootstrap_activitysim_skims_path(
     *,
     settings: PilatesConfig,
@@ -337,15 +363,54 @@ def resolve_bootstrap_activitysim_skims_path(
             skims_fname = str(skims_cfg.fname or "skims.omx")
         except AttributeError:
             skims_fname = "skims.omx"
+    beam_skims: Path | None = None
     if beam_cfg is not None:
-        beam_skims = (
-            Path(workspace_path)
-            / beam_cfg.local_mutable_data_folder
-            / settings.run.region
-            / skims_fname
-        )
-        if beam_skims.is_file() or asim_mutable is None:
-            return beam_skims
+        try:
+            mutable_folder = beam_cfg.local_mutable_data_folder
+        except AttributeError:
+            mutable_folder = None
+        if isinstance(mutable_folder, str) and mutable_folder.strip():
+            beam_skims = (
+                Path(workspace_path)
+                / mutable_folder
+                / settings.run.region
+                / skims_fname
+            )
+            if beam_skims.is_file():
+                return beam_skims
+
+    policy = _initial_skims_admission_config(settings)
+    policy_source_path: Path | None = None
+    if policy is not None:
+        expectation = policy.expectation
+        if isinstance(expectation, DeclaredDigestExpectation):
+            policy_source_path = _resolve_local_skim_uri(expectation.source_uri)
+        elif (
+            isinstance(expectation, PriorRunExpectation)
+            and expectation.expected_bytes_path is not None
+        ):
+            policy_source_path = _resolve_local_skim_uri(
+                str(expectation.expected_bytes_path)
+            )
+        if policy_source_path is not None and policy_source_path.is_file():
+            return policy_source_path
+
+    if beam_cfg is not None:
+        try:
+            local_input_folder = beam_cfg.local_input_folder
+        except AttributeError:
+            local_input_folder = None
+        if isinstance(local_input_folder, str) and local_input_folder.strip():
+            prod_root = _resolve_local_skim_uri(local_input_folder)
+            if prod_root is not None:
+                prod_skims = prod_root / settings.run.region / skims_fname
+                if prod_skims.is_file():
+                    return prod_skims
+
+    if policy_source_path is not None:
+        return policy_source_path
+    if beam_skims is not None and (beam_skims.is_file() or asim_mutable is None):
+        return beam_skims
     assert asim_mutable is not None
     return asim_mutable
 

@@ -729,6 +729,7 @@ def create_usim_input_data(
     current_input_store_path: str,
     population_source_store_path: Optional[str],
     target_store_path: Optional[str] = None,
+    base_input_store_path: Optional[str] = None,
 ) -> Tuple[str, Optional[FileRecord]]:
     """
     Creates UrbanSim input data for the next iteration.
@@ -983,6 +984,20 @@ def create_usim_input_data(
                     if table_name not in updated_tables:
                         new_input_store[table_name] = pre_usim_archive_store[h5_key]
                         updated_tables.append(table_name)
+
+        if (
+            base_input_store_path is not None
+            and os.path.exists(base_input_store_path)
+            and os.path.abspath(base_input_store_path)
+            != os.path.abspath(archived_input_store_path)
+        ):
+            with pd.HDFStore(base_input_store_path, mode="r") as base_store:
+                for table_name, h5_key in _select_preferred_h5_key_by_table(
+                    base_store, forecast_year
+                ).items():
+                    if table_name not in updated_tables:
+                        new_input_store[table_name] = base_store[h5_key]
+                        updated_tables.append(table_name)
     finally:
         og_input_store.close()
         new_input_store.close()
@@ -1074,6 +1089,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         population_source_h5_path: Optional[str] = None,
         current_input_h5_path: Optional[str] = None,
         households_asim_input_path: Optional[str] = None,
+        base_input_h5_path: Optional[str] = None,
     ) -> ActivitySimPostprocessOutputs:
         if not isinstance(raw_outputs, ActivitySimRunOutputs):
             raise TypeError(
@@ -1089,6 +1105,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             postprocess_kwargs["households_asim_input_path"] = (
                 households_asim_input_path
             )
+        if base_input_h5_path is not None:
+            postprocess_kwargs["base_input_h5_path"] = base_input_h5_path
         return self._postprocess(
             raw_outputs,
             workspace,
@@ -1189,6 +1207,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         forecast_year: int,
         population_source_h5_path: Optional[str],
         current_input_h5_path: Optional[str],
+        base_input_h5_path: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         if not self.state.is_enabled(WorkflowState.Stage.land_use):
             return None, None
@@ -1232,6 +1251,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 workspace,
                 self.state,
             ),
+            base_input_store_path=base_input_h5_path,
         )
         if not usim_record:
             return None, None
@@ -1317,6 +1337,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         population_source_h5_path: Optional[str] = None,
         current_input_h5_path: Optional[str] = None,
         households_asim_input_path: Optional[str] = None,
+        base_input_h5_path: Optional[str] = None,
     ) -> ActivitySimPostprocessOutputs:
         """
         Consolidates all postprocessing steps for ActivitySim.
@@ -1392,6 +1413,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 forecast_year,
                 population_source_h5_path,
                 current_input_h5_path,
+                base_input_h5_path=base_input_h5_path,
             )
         )
 

@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import (
     Any,
     Dict,
-    List,
     Optional,
     cast,
 )
@@ -29,16 +28,12 @@ from typing import (
 from consist.models.run import Run
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.generic.initialization import (
-    Initialization,
-    build_bootstrap_artifact_summary,
-)
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
 from pilates.utils import consist_runtime as cr
+from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
 from pilates.workflows.consist_metadata import (
     build_scenario_consist_kwargs,
-    build_step_consist_kwargs,
 )
 from pilates.utils.consist_db_snapshot import (
     ConsistDbSnapshotManager,
@@ -47,17 +42,11 @@ from pilates.utils.consist_db_snapshot import (
     restore_local_consist_db_from_snapshot,
     seed_local_consist_db_from_shared,
 )
-from pilates.atlas.static_inputs import (
-    atlas_static_input_relpaths,
-)
-from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.admission import (
     preflight_bootstrap_urbansim_datastore_admission,
 )
-from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.admission_helpers import extract_admission_reports
 from pilates.utils.consist_types import ScenarioWithCoupler
-from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime.failure_hints import (
     RUN_FAILURE_CONTEXT,
@@ -94,7 +83,6 @@ from pilates.workflows.stages import (
 )
 from pilates.workflows.state import WorkflowState
 from pilates.workflows.catalog import validate_workflow_step_contracts
-from consist.types import CacheOptions
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -150,7 +138,6 @@ _filter_schema_steps_for_enabled_models = (
     scenario_runtime.filter_schema_steps_for_enabled_models
 )
 _log_local_storage_info = log_local_storage_info_if_enabled
-_assert_bootstrap_output_invariant = bootstrap_runtime.assert_bootstrap_output_invariant
 
 
 def _log_restart_instructions_on_failure() -> None:
@@ -225,66 +212,6 @@ def _build_scenario_runtime_contract(
         merge_epoch_facet_fn=scenario_runtime.merge_epoch_facet,
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
         surface=surface,
-    )
-
-
-def run_bootstrap_phase(
-    *,
-    tracker: Any,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    scenario_id: str,
-    seed: Optional[int],
-) -> Dict[str, Any]:
-    return bootstrap_runtime.run_bootstrap_phase(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        scenario_id=scenario_id,
-        seed=seed,
-        initialization_cls=Initialization,
-        build_bootstrap_artifact_summary_fn=build_bootstrap_artifact_summary,
-        build_step_consist_kwargs_fn=build_step_consist_kwargs,
-        merge_tag_list_fn=scenario_runtime.merge_tag_list,
-        merge_epoch_facet_fn=scenario_runtime.merge_epoch_facet,
-        cache_options_cls=CacheOptions,
-    )
-
-
-def _restart_required_local_artifacts(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    surface: Optional[EnabledWorkflowSurface] = None,
-) -> List[restart_runtime.RestartArtifactDiagnostic]:
-    return restart_runtime.restart_required_local_artifacts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-        get_usim_datastore_fname_fn=get_usim_datastore_fname,
-        required_asim_config_dirs_fn=required_asim_config_dirs,
-        atlas_static_input_relpaths_fn=atlas_static_input_relpaths,
-        workflow_stage=WorkflowState.Stage,
-    )
-
-
-def _find_missing_restart_local_artifacts(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    surface: Optional[EnabledWorkflowSurface] = None,
-) -> List[restart_runtime.RestartArtifactDiagnostic]:
-    return restart_runtime.find_missing_restart_local_artifacts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-        restart_required_local_artifacts_fn=_restart_required_local_artifacts,
     )
 
 
@@ -564,83 +491,6 @@ def _prepare_run_context(
     )
 
 
-def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, Any]]:
-    """
-    Run restart preflight, bootstrap initialization, and post-bootstrap checks.
-
-    This keeps `main()` focused on the top-level lifecycle while preserving the
-    launcher-level wrapper seams used by tests and runtime integrations.
-    """
-    settings = prepared.settings
-    state = prepared.state
-    surface = prepared.surface
-    workspace = prepared.workspace
-    tracker = prepared.tracker
-    scenario_id = prepared.scenario_id
-    run_seed = prepared.seed
-    is_restart_run = prepared.is_restart_run
-
-    if state.data_initialized:
-        restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            surface=surface,
-        )
-        restart_runtime.log_prebootstrap_missing_artifacts(
-            restart_missing_artifacts_initial,
-            surface=surface,
-        )
-
-    cr.set_tracker(tracker)
-    bootstrap_result: Optional[Dict[str, Any]] = None
-    should_run_bootstrap = is_restart_run or not state.data_initialized
-    if should_run_bootstrap:
-        if is_restart_run and state.data_initialized:
-            logger.info(
-                "Running bootstrap pre-scenario hydration for restart. "
-                "bootstrap re-hydrates workspace invariants through the normal "
-                "cached run path before restart frontier hydration runs inside "
-                "the scenario context."
-            )
-        else:
-            logger.info("Running bootstrap initialization phase.")
-        bootstrap_result = run_bootstrap_phase(
-            tracker=tracker,
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            scenario_id=scenario_id,
-            seed=run_seed,
-        )
-        _assert_bootstrap_output_invariant(bootstrap_result)
-    else:
-        logger.info("Restarting from a previous state. Skipping bootstrap phase.")
-    bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
-
-    if is_restart_run:
-        restart_runtime.hydrate_restart_atlas_continuation_inputs(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            workflow_stage=WorkflowState.Stage,
-        )
-        restart_missing_artifacts_after_bootstrap = (
-            _find_missing_restart_local_artifacts(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                surface=surface,
-            )
-        )
-        restart_runtime.enforce_postbootstrap_missing_artifacts(
-            restart_missing_artifacts_after_bootstrap,
-            settings=settings,
-        )
-
-    return bootstrap_result
-
-
 def _preflight_bootstrap_urbansim_datastore_admission(
     prepared: PreparedRunContext,
 ) -> None:
@@ -713,27 +563,6 @@ def main(
 ):
     """
     Run the PILATES simulation lifecycle using the Consist Scenario API.
-
-    This workflow coordinates multiple land use and transportation microsimulation models
-    across a multi-year planning horizon:
-
-    1. **Initialization**: Copy immutable input data to mutable workspace
-    2. **Land Use Forecasting**: UrbanSim predicts demographic/economic changes
-    3. **Vehicle Ownership**: ATLAS models vehicle fleet evolution
-    4. **Supply/Demand Loop**: Iterates between activity demand (ActivitySim) and
-       traffic assignment (BEAM) until convergence
-    5. **Post-Processing**: Validation and output generation
-
-    Architecture:
-    - **Consist Scenario**: Manages caching of expensive computations and provenance logging
-    - **Coupler**: Passes artifacts (outputs) between models via `scenario.coupler`
-    - **Workflow step builders**: Encapsulate model-specific execution logic
-
-    Caching Strategy:
-    - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
-    - Model outputs: Cached per iteration (convergence check)
-    - Bootstrap: pre-scenario cached run with replay-hydrated declared output paths
-    - Restart: default path is scenario replay plus cache hits; legacy hydration helpers are manual tooling only
     """
     prepared = _prepare_run_context(
         settings=settings,
@@ -776,12 +605,9 @@ def main(
             pass
 
     try:
-        # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
-        # Initialization runs before entering scenario step execution so bootstrap
-        # lifecycle can evolve independently from normal model steps.
-        bootstrap_result = _run_bootstrap_sequence(prepared)
+        cr.set_tracker(tracker)
 
-        # 6. START SCENARIO CONTEXT
+        # 5. START SCENARIO CONTEXT
         # The scenario context is where all model execution happens. Each step runs inside
         # scenario.run(), which handles:
         #   - Caching checks (skip if inputs identical to previous run)
@@ -841,10 +667,10 @@ def main(
                 warn_undefined=True,
                 description=coupler_schema,
             )
-            if bootstrap_result is not None:
+            if not state.data_initialized:
                 _preflight_bootstrap_urbansim_datastore_admission(prepared)
                 _preflight_bootstrap_activitysim_skims_admission(prepared)
-            bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+            seed_bootstrap_artifacts_to_coupler(
                 settings=settings,
                 state=state,
                 workspace=workspace,
@@ -857,15 +683,22 @@ def main(
             )
             if not is_restart_run:
                 scenario.capture_coupler_snapshot(phase="init")
-            elif not _is_at_initial_workflow_boundary(state):
-                restart_runtime.restore_restart_coupler_snapshot(
-                    scenario=scenario,
-                    tracker=tracker,
+            else:
+                if not _is_at_initial_workflow_boundary(state):
+                    restart_runtime.restore_restart_coupler_snapshot(
+                        scenario=scenario,
+                        tracker=tracker,
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
+                restart_runtime.hydrate_restart_atlas_continuation_inputs(
                     settings=settings,
                     state=state,
                     workspace=workspace,
+                    workflow_stage=WorkflowState.Stage,
                 )
-            if bootstrap_result is not None and not state.data_initialized:
+            if not state.data_initialized:
                 state.set_data_initialized(True)
             if is_restart_run and state.data_initialized:
                 logger.info(

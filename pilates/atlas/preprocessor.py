@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
+from pilates.generic.records import RecordStore, sanitize_artifact_key
 from pilates.atlas.static_inputs import (
     atlas_selected_scenario,
     atlas_static_input_relpaths,
@@ -82,55 +82,6 @@ def _export_atlas_table_to_csv(
         index=True,
         index_label=expected_index_name,
     )
-
-
-def _atlas_static_input_metadata(
-    *,
-    relpath: str,
-    settings,
-    source_origin: str,
-    source_path: str,
-) -> Dict[str, object]:
-    normalized_relpath = relpath.replace("\\", "/")
-    filename = os.path.basename(normalized_relpath)
-    input_group = "global"
-    selected_scenario = atlas_selected_scenario(settings)
-    input_year = None
-    compact_key = normalized_relpath.replace("/", "_")
-    compact_stem = os.path.splitext(compact_key)[0]
-
-    if normalized_relpath.startswith("adopt/"):
-        input_group = "adopt"
-        parts = normalized_relpath.split("/")
-        if len(parts) >= 2:
-            selected_scenario = parts[1]
-    elif compact_key.startswith("vehicle_type_mapping_"):
-        input_group = "vehicle_type_mapping"
-        if "baseline" in compact_key:
-            selected_scenario = "baseline"
-        elif "evMandForced2" in compact_key:
-            selected_scenario = "zev_mandate"
-        elif "ESS_const_220_price" in compact_key:
-            selected_scenario = "ess_cons"
-
-    tail = compact_stem.rsplit("_", 1)
-    if len(tail) == 2 and len(tail[1]) == 4 and tail[1].isdigit():
-        input_year = int(tail[1])
-
-    metadata: Dict[str, object] = {
-        "atlas_static_input": True,
-        "atlas_relpath": normalized_relpath,
-        "atlas_source_origin": source_origin,
-        "atlas_source_path": os.path.realpath(source_path),
-        "atlas_input_group": input_group,
-    }
-    if selected_scenario:
-        metadata["atlas_scenario"] = selected_scenario
-    if input_year is not None:
-        metadata["atlas_input_year"] = input_year
-    if filename.lower().endswith(".csv"):
-        metadata["profile_file_schema"] = True
-    return metadata
 
 
 def _resolve_atlas_h5_table_key(
@@ -231,9 +182,14 @@ def stage_selected_atlas_static_inputs(
     *,
     settings,
     output_dir: str,
-    selected_sources: Tuple[Tuple[str, Path], ...],
-) -> Tuple[Dict[str, Path], Dict[str, Dict[str, object]]]:
+    selected_sources: Optional[Tuple[Tuple[str, Path], ...]] = None,
+) -> Dict[str, Path]:
     """Copy an already selected static ATLAS source set into the run workspace."""
+    resolved_sources = (
+        selected_sources
+        if selected_sources is not None
+        else selected_atlas_static_input_sources(settings)
+    )
     source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
     logger.info(
         "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
@@ -243,12 +199,12 @@ def stage_selected_atlas_static_inputs(
     )
 
     staged_paths: Dict[str, Path] = {}
-    metadata_by_key: Dict[str, Dict[str, object]] = {}
     fallback_copy_count = 0
-    for relpath, source_path in selected_sources:
+    for relpath, source_path in resolved_sources:
         dest_path = os.path.realpath(os.path.join(output_dir, relpath))
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        shutil.copy2(source_path, dest_path)
+        if not os.path.exists(dest_path):
+            shutil.copy2(source_path, dest_path)
 
         source_origin = (
             "primary" if source_path.is_relative_to(source_dir) else "fallback"
@@ -257,12 +213,6 @@ def stage_selected_atlas_static_inputs(
             fallback_copy_count += 1
         short_name = sanitize_artifact_key(os.path.splitext(relpath)[0]) or relpath
         staged_paths[short_name] = Path(dest_path)
-        metadata_by_key[short_name] = _atlas_static_input_metadata(
-            relpath=relpath,
-            settings=settings,
-            source_origin=source_origin,
-            source_path=str(source_path),
-        )
 
     if fallback_copy_count:
         logger.warning(
@@ -274,19 +224,7 @@ def stage_selected_atlas_static_inputs(
         "[AtlasPreprocessor] Finished copying %s static ATLAS inputs.",
         len(staged_paths),
     )
-    return staged_paths, metadata_by_key
-
-
-def _stage_atlas_static_inputs(
-    *,
-    settings,
-    output_dir: str,
-) -> Tuple[Dict[str, Path], Dict[str, Dict[str, object]]]:
-    return stage_selected_atlas_static_inputs(
-        settings=settings,
-        output_dir=output_dir,
-        selected_sources=selected_atlas_static_input_sources(settings),
-    )
+    return staged_paths
 
 
 class AtlasPreprocessor(GenericPreprocessor):
@@ -302,43 +240,6 @@ class AtlasPreprocessor(GenericPreprocessor):
         state: "WorkflowState",
     ):
         super().__init__(model_name, state)
-
-    def copy_data_to_mutable_location(
-        self,
-        settings,
-        output_dir,
-        workspace: Optional["Workspace"] = None,
-    ) -> Tuple[RecordStore, RecordStore]:
-        """
-        Copy ATLAS input files from the production directory to the run's mutable input directory.
-        """
-        staged_paths, metadata_by_key = _stage_atlas_static_inputs(
-            settings=settings,
-            output_dir=output_dir,
-        )
-        input_records = []
-        output_records = []
-        for short_name, dest_path in staged_paths.items():
-            source_path = metadata_by_key[short_name]["atlas_source_path"]
-            filename = os.path.basename(str(dest_path))
-            input_records.append(
-                FileRecord(
-                    file_path=str(source_path),
-                    description=f"ATLAS input file: {filename}",
-                    short_name=short_name,
-                    metadata=metadata_by_key[short_name],
-                )
-            )
-            output_records.append(
-                FileRecord(
-                    file_path=str(dest_path),
-                    description=f"Mutable ATLAS input file: {filename}",
-                    short_name=short_name,
-                )
-            )
-        return RecordStore(recordList=input_records), RecordStore(
-            recordList=output_records
-        )
 
     def _preprocess(
         self,
@@ -375,6 +276,19 @@ class AtlasPreprocessor(GenericPreprocessor):
             workspace.get_atlas_mutable_input_dir(),
             "year{}".format(target_year),
         )
+        if get_setting(settings, "atlas.host_input_folder") is not None:
+            stage_selected_atlas_static_inputs(
+                settings=settings,
+                output_dir=workspace.get_atlas_mutable_input_dir(),
+            )
+        else:
+            try:
+                stage_selected_atlas_static_inputs(
+                    settings=settings,
+                    output_dir=workspace.get_atlas_mutable_input_dir(),
+                )
+            except RuntimeError:
+                pass
 
         # Record BEAM skims as input if needed
         beamac = settings.atlas.beamac

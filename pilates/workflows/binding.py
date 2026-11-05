@@ -26,7 +26,6 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
-    Sequence,
     runtime_checkable,
 )
 
@@ -39,7 +38,10 @@ from consist import (
 )
 from consist.types import BindingResult
 
-from pilates.beam.preprocessor import BeamPreprocessor
+from pilates.beam.preprocessor import BeamPreprocessor, ensure_beam_mutable_workspace
+from pilates.urbansim.preprocessor import (
+    resolve_urbansim_initial_datastore_source_path,
+)
 from pilates.utils.archive_paths import WorkspaceRootLike
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
@@ -56,9 +58,11 @@ from pilates.workflows.coupler_namespace import resolve_input_precedence
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (
+    ASIM_OMX_SKIMS,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    FINAL_SKIMS_OMX,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -267,18 +271,6 @@ class StageBoundaryDurabilityRule:
     notes: Optional[str] = None
 
 
-@dataclass(frozen=True)
-class RestartArtifactRequirementRule:
-    """
-    Runtime policy for artifacts that restart preflight should keep present.
-    """
-
-    name: str
-    semantic_keys: tuple[str, ...]
-    resolve: Callable[..., Optional[Mapping[str, str]]]
-    notes: Optional[str] = None
-
-
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
 
 
@@ -353,7 +345,15 @@ def _urbansim_datastore_candidates_for_year(
     input_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="input"
     )
-    base_path = input_path if input_path.exists() else None
+    if input_path.exists():
+        base_path: Optional[Path] = input_path
+    else:
+        static_source = resolve_urbansim_initial_datastore_source_path(settings)
+        base_path = (
+            static_source
+            if static_source is not None and static_source.exists()
+            else None
+        )
     land_use_enabled = _is_land_use_stage_enabled(state)
 
     mapping: Dict[str, Any] = {}
@@ -448,9 +448,12 @@ def _activitysim_input_datastore(
         usim_dir,
         get_usim_datastore_fname(settings, io="input"),
     )
-    if not os.path.exists(candidate):
-        return None
-    return {USIM_DATASTORE_BASE_H5: candidate}
+    if os.path.exists(candidate):
+        return {USIM_DATASTORE_BASE_H5: candidate}
+    static_source = resolve_urbansim_initial_datastore_source_path(settings)
+    if static_source is not None and static_source.exists():
+        return {USIM_DATASTORE_BASE_H5: str(static_source)}
+    return None
 
 
 def _activitysim_population_source(
@@ -759,6 +762,11 @@ def _bootstrap_beam_exchange_inputs(
     if get_activity_demand_model(settings) is not None:
         return None
 
+    try:
+        ensure_beam_mutable_workspace(settings, workspace)
+    except Exception:
+        pass
+
     beam_preprocessor = BeamPreprocessor("beam", state)
     try:
         record_store = beam_preprocessor.existing_beam_exchange_inputs(workspace)
@@ -803,6 +811,65 @@ def _bootstrap_beam_warmstart_artifacts(
     return {LINKSTATS_WARMSTART: warmstart_path}
 
 
+def _bootstrap_initial_skims(
+    *,
+    settings: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    has_skim_consumer = (
+        get_activity_demand_model(settings) == "activitysim"
+        or get_land_use_model(settings) == "urbansim"
+        or get_vehicle_ownership_model(settings) == "atlas"
+        or get_traffic_assignment_model(settings) == "beam"
+    )
+    if not has_skim_consumer:
+        return None
+
+    from pilates.activitysim.admission import resolve_bootstrap_activitysim_skims_path
+
+    workspace_path = (
+        Path(str(workspace.full_path))
+        if isinstance(workspace, WorkspaceRootLike) and workspace.full_path is not None
+        else None
+    )
+    resolved_skims: Optional[Path] = None
+    if workspace_path is not None:
+        try:
+            candidate = resolve_bootstrap_activitysim_skims_path(
+                settings=settings,
+                workspace_path=workspace_path,
+            )
+            if candidate.is_file():
+                resolved_skims = candidate
+        except Exception:
+            resolved_skims = None
+
+    if resolved_skims is None:
+        usim_dir = _usim_mutable_data_dir(workspace)
+        region = get_setting(settings, "run.region")
+        region_to_id = get_setting(
+            settings, "urbansim.region_mappings.region_to_region_id", {}
+        )
+        region_id = (
+            region_to_id.get(region)
+            if isinstance(region_to_id, Mapping) and region
+            else None
+        )
+        if usim_dir is not None and region_id:
+            usim_skims = Path(usim_dir) / f"skims_mpo_{region_id}.omx"
+            if usim_skims.is_file():
+                resolved_skims = usim_skims
+
+    if resolved_skims is None:
+        return None
+
+    seeded: Dict[str, str] = {ASIM_OMX_SKIMS: str(resolved_skims)}
+    if get_traffic_assignment_model(settings) is None:
+        seeded[FINAL_SKIMS_OMX] = str(resolved_skims)
+    return seeded
+
+
 def _bootstrap_urbansim_initial_datastore(
     *,
     settings: Any,
@@ -810,7 +877,7 @@ def _bootstrap_urbansim_initial_datastore(
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
-    """Publish the bootstrap-staged UrbanSim input H5 at the initial frontier."""
+    """Publish the initial UrbanSim input H5 at the initial frontier."""
     if not uses_input_datastore(state):
         return None
 
@@ -823,41 +890,76 @@ def _bootstrap_urbansim_initial_datastore(
         return None
 
     usim_dir = _usim_mutable_data_dir(workspace)
-    if usim_dir is None or get_setting(settings, "urbansim") is None:
+    if get_setting(settings, "urbansim") is None:
         return None
 
     from pilates.urbansim.postprocessor import get_usim_datastore_fname
 
-    staged_input_h5 = os.path.join(
-        usim_dir,
-        get_usim_datastore_fname(settings, io="input"),
-    )
-    if not os.path.exists(staged_input_h5):
+    resolved_h5: Optional[str] = None
+    if usim_dir is not None:
+        staged_input_h5 = os.path.join(
+            usim_dir,
+            get_usim_datastore_fname(settings, io="input"),
+        )
+        if os.path.exists(staged_input_h5):
+            resolved_h5 = staged_input_h5
+
+    if resolved_h5 is None:
+        static_source = resolve_urbansim_initial_datastore_source_path(settings)
+        if static_source is not None and static_source.exists():
+            resolved_h5 = str(static_source)
+
+    if resolved_h5 is None:
+        from pilates.urbansim.admission import _resolve_local_source_uri
+
+        raw_uri = get_setting(
+            settings,
+            "urbansim.admission.initial_datastore.expectation.source_uri",
+        )
+        uri_path = _resolve_local_source_uri(str(raw_uri) if raw_uri else None)
+        if uri_path is not None and uri_path.exists():
+            resolved_h5 = str(uri_path)
+
+    if resolved_h5 is None:
         return None
-    return {
-        USIM_DATASTORE_BASE_H5: staged_input_h5,
-        USIM_DATASTORE_CURRENT_H5: staged_input_h5,
+
+    seeded: Dict[str, str] = {
+        USIM_DATASTORE_BASE_H5: resolved_h5,
+        USIM_DATASTORE_CURRENT_H5: resolved_h5,
     }
+    if get_land_use_model(settings) != "urbansim":
+        seeded[USIM_POPULATION_SOURCE_H5] = resolved_h5
+    return seeded
 
 
 def bootstrap_stage_boundary_durability_policy() -> tuple[
     StageBoundaryDurabilityRule, ...
 ]:
     """
-    Stage-boundary durability policy for bootstrap seeding.
-
-    The returned rules are consumable by runtime bootstrap code and keep the
-    policy inspectable without hard-coding path inventories in the runtime.
+    Stage-boundary durability policy for initial coupler seeding.
     """
 
     return (
         StageBoundaryDurabilityRule(
             name="urbansim_initial_datastore",
-            semantic_keys=(USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5),
+            semantic_keys=(
+                USIM_DATASTORE_BASE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_POPULATION_SOURCE_H5,
+            ),
             resolve=_bootstrap_urbansim_initial_datastore,
             notes=(
-                "The initial workflow frontier consumes the bootstrap-staged "
+                "The initial workflow frontier consumes the initial "
                 "UrbanSim input datastore as both its immutable base and current role."
+            ),
+        ),
+        StageBoundaryDurabilityRule(
+            name="initial_skims",
+            semantic_keys=(ASIM_OMX_SKIMS, FINAL_SKIMS_OMX),
+            resolve=_bootstrap_initial_skims,
+            notes=(
+                "Seed initial OMX skims at scenario start so cold-scratch and "
+                "non-BEAM workflows resolve OMX skims through the coupler."
             ),
         ),
         StageBoundaryDurabilityRule(
@@ -865,223 +967,44 @@ def bootstrap_stage_boundary_durability_policy() -> tuple[
             semantic_keys=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
             resolve=_bootstrap_beam_exchange_inputs,
             notes=(
-                "BEAM-only bootstrap should seed the mutable exchange inputs "
-                "already staged inside the BEAM workspace."
+                "BEAM-only runs seed the initial exchange inputs "
+                "from the BEAM workspace or static scenario folder."
             ),
         ),
         StageBoundaryDurabilityRule(
             name="beam_warmstart",
             semantic_keys=(LINKSTATS_WARMSTART,),
             resolve=_bootstrap_beam_warmstart_artifacts,
-            notes="BEAM-only bootstrap should seed the initial linkstats warmstart when configured.",
+            notes="BEAM runs seed the initial linkstats warmstart when configured.",
         ),
     )
 
 
-def _restart_urbansim_required_artifacts(
+def seed_bootstrap_artifacts_to_coupler(
     *,
     settings: Any,
     state: Any,
     workspace: Any,
-    get_usim_datastore_fname_fn: Callable[..., str],
-    workflow_stage: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    current_stage = _current_major_stage(state)
-    requires_usim_base_h5 = (
-        get_land_use_model(settings) == "urbansim"
-        or get_activity_demand_model(settings) == "activitysim"
-    )
-    if not requires_usim_base_h5:
-        return None
-
-    usim_data_dir = workspace.get_usim_mutable_data_dir()
-    usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
-    local_base_path = Path(usim_data_dir) / usim_base_fname
-    required: Dict[str, str] = {USIM_DATASTORE_BASE_H5: str(local_base_path)}
-
-    region = get_setting(settings, "run.region")
-    urbansim_cfg = get_setting(settings, "urbansim")
-    if (
-        current_stage
-        in {
-            None,
-            workflow_stage.land_use,
-        }
-        and region
-        and urbansim_cfg is not None
-    ):
-        region_to_id = get_setting(
-            settings, "urbansim.region_mappings.region_to_region_id", {}
-        )
-        region_id = (
-            region_to_id.get(region) if isinstance(region_to_id, Mapping) else None
-        )
-        if region_id:
-            required.update(
-                {
-                    "omx_skims": os.path.join(
-                        usim_data_dir, f"skims_mpo_{region_id}.omx"
-                    ),
-                    "hh_size": os.path.join(usim_data_dir, f"hsize_ct_{region_id}.csv"),
-                    "income_rates": os.path.join(
-                        usim_data_dir, f"income_rates_{region_id}.csv"
-                    ),
-                    "relmap": os.path.join(usim_data_dir, f"relmap_{region_id}.csv"),
-                    "schools": os.path.join(usim_data_dir, "schools_2010.csv"),
-                    "school_districts": os.path.join(
-                        usim_data_dir, "blocks_school_districts_2010.csv"
-                    ),
-                }
-            )
-
-    return required or None
-
-
-def _restart_activitysim_required_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
-    workflow_stage: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    current_stage = _current_major_stage(state)
-    if get_activity_demand_model(settings) != "activitysim":
-        return None
-    if current_stage not in {
-        None,
-        workflow_stage.supply_demand_loop,
-        workflow_stage.activity_demand,
-        workflow_stage.activity_demand_directly_from_land_use,
-    }:
-        return None
-
-    asim_configs_dir = workspace.get_asim_mutable_configs_dir()
-    main_configs_dir = (
-        get_setting(settings, "activitysim.main_configs_dir") or "configs"
-    )
-    required: Dict[str, str] = {}
-    for dirname in required_asim_config_dirs_fn(main_configs_dir):
-        required[f"activitysim_config_settings_yaml_{dirname}"] = os.path.join(
-            asim_configs_dir,
-            dirname,
-            "settings.yaml",
-        )
-    return required or None
-
-
-def _restart_beam_required_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    workflow_stage: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    current_stage = _current_major_stage(state)
-    if get_traffic_assignment_model(settings) != "beam":
-        return None
-    if current_stage not in {
-        workflow_stage.supply_demand_loop,
-        workflow_stage.traffic_assignment,
-    }:
-        return None
-
-    region = get_setting(settings, "run.region")
-    beam_input_dir = _beam_mutable_data_dir(workspace)
-    if beam_input_dir is None or not region:
-        return None
-
-    beam_config_name = get_setting(settings, "beam.config")
-    required: Dict[str, str] = {
-        "beam_mutable_data_dir": beam_input_dir,
-        "beam_region_input_dir": os.path.join(beam_input_dir, region),
-    }
-    if beam_config_name:
-        required["beam_primary_config_file"] = os.path.join(
-            beam_input_dir, region, beam_config_name
-        )
-    return required or None
-
-
-def restart_required_local_artifact_policy() -> tuple[
-    RestartArtifactRequirementRule, ...
-]:
+    coupler: CouplerProtocol,
+) -> None:
     """
-    Stage-aware restart artifact policy.
-
-    Restart preflight consumes this policy to keep its required-local-artifact
-    inventory inspectable without open-coding the stage branches in runtime
-    logic.
+    Seed coupler keys for initial static/staged artifacts needed by workflow steps.
     """
-
-    return (
-        RestartArtifactRequirementRule(
-            name="urbansim_restart_artifacts",
-            semantic_keys=(
-                USIM_DATASTORE_BASE_H5,
-                "omx_skims",
-                "hh_size",
-                "income_rates",
-                "relmap",
-                "schools",
-                "school_districts",
-            ),
-            resolve=_restart_urbansim_required_artifacts,
-            notes=(
-                "UrbanSim restart should keep the mutable base datastore, "
-                "land-use datastore handle, and local lookup inputs required "
-                "to resume UrbanSim entry stages."
-            ),
-        ),
-        RestartArtifactRequirementRule(
-            name="activitysim_restart_configs",
-            semantic_keys=(),
-            resolve=_restart_activitysim_required_artifacts,
-            notes=(
-                "ActivitySim restart should keep the mutable config tree for "
-                "stage entries that can re-enter ActivitySim directly."
-            ),
-        ),
-        RestartArtifactRequirementRule(
-            name="beam_restart_inputs",
-            semantic_keys=(
-                "beam_mutable_data_dir",
-                "beam_region_input_dir",
-                "beam_primary_config_file",
-            ),
-            resolve=_restart_beam_required_artifacts,
-            notes=(
-                "BEAM restart should preserve the mutable input tree and primary "
-                "config for resumed traffic assignment."
-            ),
-        ),
-    )
-
-
-def is_restart_prebootstrap_deferred_artifact_key(key: str) -> bool:
-    """
-    Return True when bootstrap is expected to recreate the missing artifact.
-
-    These keys are still validated after bootstrap in strict restart mode, but
-    pre-bootstrap diagnostics should treat them as deferred hydration work
-    rather than immediate restart failures.
-    """
-    if not key:
-        return False
-    if key.startswith("activitysim_config_settings_yaml_"):
-        return True
-    return key in {
-        "beam_mutable_data_dir",
-        "beam_region_input_dir",
-        "beam_primary_config_file",
-        "usim_datastore_base_h5",
-        "omx_skims",
-        "hh_size",
-        "income_rates",
-        "relmap",
-        "schools",
-        "school_districts",
-    }
+    for rule in bootstrap_stage_boundary_durability_policy():
+        resolved_artifacts = rule.resolve(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        if not resolved_artifacts:
+            continue
+        for key, path in resolved_artifacts.items():
+            try:
+                existing = coupler.get(key)
+            except Exception:
+                existing = None
+            if existing is not None:
+                continue
+            if not path or not os.path.exists(path):
+                continue
+            coupler.set(key, path)

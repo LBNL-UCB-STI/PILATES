@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from consist import Artifact
+
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils import consist_runtime as cr
@@ -14,8 +16,15 @@ from pilates.workflows.steps import (
 )
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_H5,
     USIM_POPULATION_SOURCE_H5,
 )
+from pilates.workflows.coupler_namespace import (
+    resolve_coupler_value,
+    set_coupler_from_artifact,
+)
+from pilates.utils.state_access import iteration_index
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +75,10 @@ def run_land_use_stage(
     formatted_print(f"LAND USE MODEL FOR YEAR {year}")
     logger.info("[land_use] year=%s run_id=%s", year, cr.current_run_id())
 
+    prior_datastore_artifact = resolve_coupler_value(
+        scenario.coupler, USIM_DATASTORE_H5
+    ).value
+
     # Definitions own semantic selection.  The stage intentionally sequences
     # native executions only; it neither constructs bindings nor replays output
     # records through a holder.
@@ -77,9 +90,15 @@ def run_land_use_stage(
         workspace=workspace,
         stage="land_use",
         year=year,
-        iteration=getattr(state, "iteration", None),
+        iteration=iteration_index(state),
         phase="run",
     )
+    if isinstance(prior_datastore_artifact, Artifact):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            prior_datastore_artifact,
+        )
     _, postprocess_outputs = execute_step(
         scenario=scenario,
         definition=urbansim_postprocess,
@@ -88,7 +107,7 @@ def run_land_use_stage(
         workspace=workspace,
         stage="land_use",
         year=year,
-        iteration=getattr(state, "iteration", None),
+        iteration=iteration_index(state),
         phase="postprocess",
     )
 

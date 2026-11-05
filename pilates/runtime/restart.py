@@ -19,9 +19,6 @@ from typing import (
 from pilates.runtime.promote_run_archive import _open_archive_tracker
 from pilates.runtime.scenario_runtime import resolve_cache_epoch
 from pilates.utils.archive_paths import WorkspaceRootLike, resolve_archive_run_dir
-from pilates.utils.coupler_helpers import (
-    resolve_existing_path,
-)
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import current_year, is_start_year, iteration_index
 from pilates.workflows.artifact_keys import (
@@ -30,7 +27,6 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
-from pilates.workflows.binding import restart_required_local_artifact_policy
 
 logger = logging.getLogger(__name__)
 
@@ -67,86 +63,6 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def restart_required_local_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    surface: Any = None,
-    get_usim_datastore_fname_fn: Callable[..., str],
-    required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
-    atlas_static_input_relpaths_fn: Callable[[Any], Sequence[str]],
-    workflow_stage: Any,
-) -> List[RestartArtifactDiagnostic]:
-    """Build the local restart artifact inventory used by preflight checks.
-
-    This stays operational rather than semantic: the surface decides which
-    frontier/bootstrap classifications are active, while this function keeps the
-    existing path resolution and local-materialization checks.
-    """
-    required: List[RestartArtifactDiagnostic] = []
-    for rule in restart_required_local_artifact_policy():
-        resolved = rule.resolve(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            get_usim_datastore_fname_fn=get_usim_datastore_fname_fn,
-            required_asim_config_dirs_fn=required_asim_config_dirs_fn,
-            atlas_static_input_relpaths_fn=atlas_static_input_relpaths_fn,
-            workflow_stage=workflow_stage,
-        )
-        if not resolved:
-            continue
-        for key, path in resolved.items():
-            if path is None:
-                continue
-            required.append(
-                {
-                    "key": key,
-                    "path": path,
-                    "reason": (
-                        f"Restart policy '{rule.name}' requires {key}"
-                        + (f" ({rule.notes})" if rule.notes else "")
-                    ),
-                }
-            )
-    return required
-
-
-def find_missing_restart_local_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    surface: Any = None,
-    restart_required_local_artifacts_fn: Callable[..., List[RestartArtifactDiagnostic]],
-) -> List[RestartArtifactDiagnostic]:
-    """Resolve the restart inventory against local/archive materialization state."""
-    missing: List[RestartArtifactDiagnostic] = []
-    kwargs = {
-        "settings": settings,
-        "state": state,
-        "workspace": workspace,
-    }
-    if surface is not None:
-        kwargs["surface"] = surface
-    for artifact in restart_required_local_artifacts_fn(**kwargs):
-        path = os.path.realpath(artifact["path"])
-        resolved_path = resolve_existing_path(
-            path,
-            workspace=workspace,
-        )
-        if resolved_path is None or not os.path.exists(resolved_path):
-            missing.append(
-                {
-                    "key": artifact["key"],
-                    "path": path,
-                    "reason": artifact["reason"],
-                }
-            )
-    return missing
 
 
 def hydrate_restart_atlas_continuation_inputs(
@@ -339,80 +255,6 @@ def _select_exact_completed_restart_run(
             f"{step_name} run for target {query}; found {len(candidates)}"
         )
     return candidates[0]
-
-
-def format_missing_artifact_summary(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-) -> str:
-    if not artifacts:
-        return "none"
-    return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
-
-
-def split_prebootstrap_missing_artifacts(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-    *,
-    surface: Any,
-) -> Tuple[List[RestartArtifactDiagnostic], List[RestartArtifactDiagnostic]]:
-    blocking_missing = [
-        item
-        for item in artifacts
-        if not surface.is_restart_prebootstrap_deferred_artifact_key(
-            item.get("key", "")
-        )
-    ]
-    deferred_missing = [
-        item
-        for item in artifacts
-        if surface.is_restart_prebootstrap_deferred_artifact_key(item.get("key", ""))
-    ]
-    return blocking_missing, deferred_missing
-
-
-def log_prebootstrap_missing_artifacts(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-    *,
-    surface: Any,
-) -> None:
-    if not artifacts:
-        return
-    blocking_missing, deferred_missing = split_prebootstrap_missing_artifacts(
-        artifacts,
-        surface=surface,
-    )
-    if blocking_missing:
-        logger.warning(
-            "Restart diagnostic found missing local workspace inputs while "
-            "data_initialized=True: %s",
-            format_missing_artifact_summary(blocking_missing),
-        )
-    if deferred_missing:
-        logger.info(
-            "Restart diagnostic deferring bootstrap-owned workspace inputs "
-            "until bootstrap hydration: %s",
-            format_missing_artifact_summary(deferred_missing),
-        )
-
-
-def enforce_postbootstrap_missing_artifacts(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-    *,
-    settings: Any,
-) -> None:
-    if artifacts:
-        logger.warning(
-            "Restart diagnostic still sees missing local workspace inputs "
-            "after restart bootstrap: %s",
-            format_missing_artifact_summary(artifacts),
-        )
-    if artifacts and bool(
-        getattr(getattr(settings, "run", None), "restart_strict", False)
-    ):
-        raise RuntimeError(
-            "Strict restart preflight failed; required restart artifacts are "
-            "still missing after restart bootstrap. missing="
-            + format_missing_artifact_summary(artifacts)
-        )
 
 
 def read_archive_run_state_year(

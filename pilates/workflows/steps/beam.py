@@ -51,6 +51,7 @@ from pilates.beam.outputs import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
 )
+from pilates.beam.preprocessor import ensure_beam_mutable_workspace
 from pilates.beam.runner import BeamRunner
 from pilates.beam.skim_provenance import (
     skim_provenance_sidecar_path,
@@ -1090,6 +1091,7 @@ def _beam_preprocess_identity_payload(
 def _resolve_beam_preprocess_inputs(
     *, settings: Any, state: Any, workspace: Any, coupler: Any
 ) -> ResolvedStepInputs:
+    ensure_beam_mutable_workspace(settings, workspace)
     primary_config = _require_primary_beam_config(settings, workspace)
     exchange_scenario_folder = beam_exchange.resolve_beam_exchange_scenario_folder(
         settings, workspace
@@ -1202,7 +1204,8 @@ def _resolve_beam_run_inputs(
     workspace: Any,
     coupler: Any,
 ) -> ResolvedStepInputs:
-    del settings, state
+    del state
+    ensure_beam_mutable_workspace(settings, workspace)
     return _resolved_beam_inputs(
         step_name="beam_run",
         coupler=coupler,
@@ -1471,6 +1474,7 @@ def _resolve_beam_full_skim_inputs(
     coupler: Any,
 ) -> ResolvedStepInputs:
     del state
+    ensure_beam_mutable_workspace(settings, workspace)
     schedule = (
         str(get_setting(settings, "beam.full_skim.run_schedule", "never") or "never")
         .strip()

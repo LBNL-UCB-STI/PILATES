@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils.formatting import formatted_print
+from pilates.utils.state_access import current_year
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import (
     activitysim_postprocess,
@@ -26,9 +28,9 @@ class ActivityDemandPhaseInputs:
 
 
 def _activitysim_population_year(state: WorkflowState) -> int:
-    forecast_year = getattr(state, "forecast_year", None)
+    forecast_year = resolve_forecast_year(state)
     if forecast_year is None:
-        forecast_year = getattr(state, "year", None)
+        forecast_year = current_year(state)
     if forecast_year is None:
         raise RuntimeError(
             "WorkflowState.forecast_year or WorkflowState.year must be set before "

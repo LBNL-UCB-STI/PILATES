@@ -163,13 +163,17 @@ def _compile_beam_launch_config(
 ) -> BeamLaunchConfig:
     """Create the one derived config tree consumed by the next BEAM process."""
 
+    from pilates.beam.preprocessor import (
+        _prepare_beam_zone_shapefile,
+        ensure_beam_mutable_workspace,
+    )
+
+    ensure_beam_mutable_workspace(settings, workspace)
     source_root = beam_config_root(settings, workspace=workspace)
     if (
         get_setting(settings, "shared.geography.zones") is not None
         and not (source_root / "shape" / "canonical_zones_sorted.geojson").exists()
     ):
-        from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
-
         _prepare_beam_zone_shapefile(workspace, settings)
     output_dir = (
         Path(workspace.full_path)

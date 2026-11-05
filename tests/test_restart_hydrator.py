@@ -8,39 +8,6 @@ import pytest
 from pilates.runtime import restart as restart_runtime
 
 
-def test_prebootstrap_missing_artifacts_are_split_by_surface():
-    surface = SimpleNamespace(
-        is_restart_prebootstrap_deferred_artifact_key=lambda key: (
-            key == "bootstrap_owned"
-        )
-    )
-    artifacts = [
-        {"key": "runtime_owned", "path": "/tmp/runtime", "reason": "runtime"},
-        {"key": "bootstrap_owned", "path": "/tmp/bootstrap", "reason": "bootstrap"},
-    ]
-
-    blocking, deferred = restart_runtime.split_prebootstrap_missing_artifacts(
-        artifacts,
-        surface=surface,
-    )
-
-    assert blocking == [artifacts[0]]
-    assert deferred == [artifacts[1]]
-
-
-def test_enforce_postbootstrap_missing_artifacts_raises_when_strict():
-    artifacts = [
-        {"key": "runtime_owned", "path": "/tmp/runtime", "reason": "runtime"},
-    ]
-    settings = SimpleNamespace(run=SimpleNamespace(restart_strict=True))
-
-    with pytest.raises(RuntimeError, match="Strict restart preflight failed"):
-        restart_runtime.enforce_postbootstrap_missing_artifacts(
-            artifacts,
-            settings=settings,
-        )
-
-
 def test_restore_restart_coupler_snapshot_from_captured_snapshot(tmp_path):
     db_path = str(tmp_path / "provenance.duckdb")
     run_dir = tmp_path / "run"

@@ -56,9 +56,6 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
     captured = {}
 
     class _Preprocessor(GenericPreprocessor):
-        def copy_data_to_mutable_location(self, settings, output_dir):
-            raise AssertionError("not used by this contract test")
-
         def _preprocess(self, workspace_arg, previous_records_arg):
             captured["preprocess"] = (workspace_arg, previous_records_arg)
             return previous_records_arg

@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.urbansim.outputs import UrbanSimRunOutputs
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.workflows import binding as workflow_binding
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -48,7 +48,7 @@ def _initialize(env) -> None:
         cr.log_input(source_path, key="golden_surface_init_source")
         _write_file(init_marker, "initialized")
         cr.log_output(init_marker, key="golden_surface_init_marker")
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    workflow_binding.seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,

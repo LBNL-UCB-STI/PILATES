@@ -114,6 +114,22 @@ def beam_exchange_scenario_folder_candidates(
         for existing in candidates
     ):
         candidates.append(config_folder)
+
+    try:
+        from pilates.beam.preprocessor import BeamPreprocessor
+
+        prod_path = BeamPreprocessor._find_beam_production_path(
+            settings, settings.run.region
+        )
+        prod_scenario_folder = os.path.join(prod_path, settings.beam.scenario_folder)
+        if os.path.isdir(prod_scenario_folder) and all(
+            os.path.normpath(prod_scenario_folder) != os.path.normpath(existing)
+            for existing in candidates
+        ):
+            candidates.append(prod_scenario_folder)
+    except Exception:
+        pass
+
     return candidates
 
 

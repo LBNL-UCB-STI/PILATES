@@ -19,6 +19,7 @@ from consist.types import OutputArtifactSpec
 
 from pilates.activitysim.preprocessor import (
     ActivitysimPreprocessor,
+    ensure_activitysim_mutable_configs,
 )
 from pilates.activitysim.config_roots import (
     ActivitySimConfigRoot,
@@ -371,6 +372,12 @@ def _native_activitysim_resolved_inputs(
                 else None
             ),
         )
+        if FINAL_SKIMS_OMX in rules:
+            rules[FINAL_SKIMS_OMX] = ArtifactBindingRule(
+                semantic_key=FINAL_SKIMS_OMX,
+                required=False,
+                preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
+            )
     elif step_name == "activitysim_run":
         rules[ASIM_OMX_SKIMS] = ArtifactBindingRule(
             semantic_key=ASIM_OMX_SKIMS,
@@ -427,6 +434,7 @@ def _activitysim_preprocess_resolver(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
+    ensure_activitysim_mutable_configs(settings, workspace)
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
@@ -461,11 +469,21 @@ def _activitysim_preprocess_resolver(
         canonical_datastore_dest = ActivitysimPreprocessor.declared_expected_inputs(
             settings, state, workspace
         ).get(USIM_POPULATION_SOURCE_H5)
+        try:
+            workspace_root = Path(workspace.full_path).resolve(strict=False)
+        except AttributeError:
+            workspace_root = None
         if (
             existing_population_path is not None
             and canonical_datastore_dest is not None
             and Path(existing_population_path).resolve(strict=False)
             != Path(canonical_datastore_dest).resolve(strict=False)
+            and (
+                workspace_root is None
+                or Path(existing_population_path)
+                .resolve(strict=False)
+                .is_relative_to(workspace_root)
+            )
         ):
             updated_destinations = dict(resolved.logical_destinations)
             updated_destinations[USIM_POPULATION_SOURCE_H5] = Path(
@@ -496,6 +514,7 @@ def _activitysim_run_resolver(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
+    ensure_activitysim_mutable_configs(settings, workspace)
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
@@ -1372,6 +1391,9 @@ def _activitysim_postprocess_callable(
             or usim_datastore_base_h5 is not None
         )
         else None,
+        base_input_h5_path=(
+            str(usim_datastore_base_h5) if usim_datastore_base_h5 is not None else None
+        ),
     )
 
 

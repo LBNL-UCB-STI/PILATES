@@ -20,6 +20,8 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
+from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.zone_utils import resolve_canonical_zone_source_path
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
@@ -205,6 +207,162 @@ def _prepare_beam_zone_shapefile(
             f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True
         )
         raise
+
+
+def _copy_if_missing_or_broken_link(src: str, dst: str) -> None:
+    if os.path.islink(dst) and not os.path.exists(dst):
+        try:
+            os.unlink(dst)
+        except OSError:
+            pass
+    if os.path.exists(dst):
+        return
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def ensure_beam_mutable_workspace(
+    settings: PilatesConfig,
+    workspace: Optional["Workspace"] = None,
+    output_dir: Optional[str] = None,
+) -> Path:
+    """
+    Idempotently stage BEAM static production inputs into the run's mutable input directory
+    without overwriting existing scenario exchange files.
+    """
+    if output_dir is not None:
+        dest_base_dir = os.path.abspath(str(output_dir))
+    elif workspace is not None:
+        try:
+            dest_base_dir = os.path.abspath(str(workspace.get_beam_mutable_data_dir()))
+        except AttributeError:
+            mutable_rel = (
+                get_setting(settings, "beam.local_mutable_data_folder", "beam/input")
+                or "beam/input"
+            )
+            dest_base_dir = os.path.abspath(
+                os.path.join(str(workspace.full_path), str(mutable_rel))
+            )
+    else:
+        mutable_rel = (
+            get_setting(settings, "beam.local_mutable_data_folder", "beam/input")
+            or "beam/input"
+        )
+        dest_base_dir = os.path.abspath(str(mutable_rel))
+
+    region = str(get_setting(settings, "run.region") or "")
+    dest_region = os.path.join(dest_base_dir, region) if region else dest_base_dir
+
+    beam_production_path: Optional[str] = None
+    if region:
+        try:
+            beam_production_path = BeamPreprocessor._find_beam_production_path(
+                settings, region
+            )
+        except (ValueError, FileNotFoundError):
+            if output_dir is not None:
+                raise
+            beam_production_path = None
+
+    if beam_production_path is not None and os.path.isdir(beam_production_path):
+        logger.info(
+            "Ensuring BEAM production inputs from %s in %s",
+            beam_production_path,
+            dest_region,
+        )
+        shutil.copytree(
+            beam_production_path,
+            dest_region,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git", ".git*"),
+            copy_function=_copy_if_missing_or_broken_link,
+        )
+        common_config_path = os.path.join(
+            os.path.dirname(beam_production_path), "common"
+        )
+        if os.path.exists(common_config_path):
+            dest_common = os.path.join(dest_base_dir, "common")
+            shutil.copytree(
+                common_config_path,
+                dest_common,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(".git", ".git*"),
+                copy_function=_copy_if_missing_or_broken_link,
+            )
+    else:
+        os.makedirs(dest_region, exist_ok=True)
+
+    try:
+        skims_fname = get_beam_omx_skims_name(settings)
+    except Exception:
+        skims_fname = "skims.omx"
+    dest_skims = os.path.join(dest_region, skims_fname)
+    if os.path.islink(dest_skims) and not os.path.exists(dest_skims):
+        try:
+            os.unlink(dest_skims)
+        except OSError:
+            pass
+
+    if not os.path.exists(dest_skims):
+        pilates_root = find_project_root(
+            start_path=os.path.dirname(__file__)
+        ) or os.path.realpath(os.getcwd())
+        raw_source_uri = get_setting(
+            settings,
+            "activitysim.admission.initial_skims.expectation.source_uri",
+        )
+        source_uri = str(raw_source_uri) if raw_source_uri else None
+
+        if source_uri and (source_uri.startswith("file://") or "://" not in source_uri):
+            local_source = (
+                source_uri[len("file://") :]
+                if source_uri.startswith("file://")
+                else source_uri
+            )
+            cand_path = (
+                os.path.abspath(local_source)
+                if os.path.isabs(local_source)
+                else os.path.abspath(os.path.join(pilates_root, local_source))
+            )
+            if not os.path.exists(cand_path):
+                raise FileNotFoundError(
+                    f"Configured initial_skims source_uri does not exist: {cand_path}"
+                )
+            logger.info(
+                "[BEAM Preprocessor] Staging initial skims from %s -> %s",
+                cand_path,
+                dest_skims,
+            )
+            os.makedirs(os.path.dirname(dest_skims), exist_ok=True)
+            shutil.copy2(cand_path, dest_skims)
+            sidecar_src = f"{cand_path}.provenance.json"
+            sidecar_dst = f"{dest_skims}.provenance.json"
+            if os.path.islink(sidecar_dst) and not os.path.exists(sidecar_dst):
+                try:
+                    os.unlink(sidecar_dst)
+                except OSError:
+                    pass
+            if os.path.exists(sidecar_src) and not os.path.exists(sidecar_dst):
+                shutil.copy2(sidecar_src, sidecar_dst)
+
+    if (
+        workspace is not None
+        and get_setting(settings, "shared.geography.zones") is not None
+        and get_setting(settings, "beam.skim_zone_geoid_col") is not None
+    ):
+        sorted_zones_path = os.path.join(
+            dest_region, "shape", "canonical_zones_sorted.geojson"
+        )
+        if not os.path.exists(sorted_zones_path):
+            zone_src = resolve_canonical_zone_source_path(settings, workspace)
+            if zone_src and os.path.isfile(zone_src):
+                _prepare_beam_zone_shapefile(
+                    workspace,
+                    settings,
+                    zone_output_path=sorted_zones_path,
+                )
+
+    return Path(dest_region)
 
 
 class BeamPreprocessor(GenericPreprocessor):
@@ -459,121 +617,6 @@ class BeamPreprocessor(GenericPreprocessor):
             beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
             prepared_inputs=prepared_inputs,
             prepared_input_metadata=prepared_input_metadata,
-        )
-
-    def copy_data_to_mutable_location(
-        self,
-        settings: PilatesConfig,
-        output_dir: str,
-        workspace: Optional["Workspace"] = None,
-    ) -> Tuple[RecordStore, RecordStore]:
-        """
-        Copy BEAM input files for the current region from the production directory
-        to the run's mutable input directory.
-        """
-        input_records, output_records = [], []
-        region = settings.run.region
-        beam_production_path = self._find_beam_production_path(settings, region)
-
-        dest_region = os.path.join(os.path.abspath(output_dir), region)
-        logger.info(
-            f"Copying BEAM production inputs from {beam_production_path} to {dest_region}"
-        )
-
-        shutil.copytree(
-            beam_production_path,
-            dest_region,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(".git", ".git*"),
-        )
-        # Note: BEAM input directories are captured via the BEAM config adapter;
-        # we intentionally avoid tracking them as separate artifacts.
-
-        skims_fname = get_beam_omx_skims_name(settings)
-        dest_skims = os.path.join(dest_region, skims_fname)
-        if os.path.islink(dest_skims) and not os.path.exists(dest_skims):
-            try:
-                os.unlink(dest_skims)
-            except OSError:
-                pass
-
-        if not os.path.exists(dest_skims):
-            pilates_root = find_project_root(
-                start_path=os.path.dirname(__file__)
-            ) or os.path.realpath(os.getcwd())
-            source_uri: Optional[str] = None
-            if (
-                getattr(settings, "activitysim", None) is not None
-                and getattr(settings.activitysim, "admission", None) is not None
-                and getattr(settings.activitysim.admission, "initial_skims", None)
-                is not None
-                and getattr(
-                    settings.activitysim.admission.initial_skims, "expectation", None
-                )
-                is not None
-                and getattr(
-                    settings.activitysim.admission.initial_skims.expectation,
-                    "source_uri",
-                    None,
-                )
-            ):
-                source_uri = str(
-                    settings.activitysim.admission.initial_skims.expectation.source_uri
-                )
-
-            if source_uri and (
-                source_uri.startswith("file://") or "://" not in source_uri
-            ):
-                local_source = (
-                    source_uri[len("file://") :]
-                    if source_uri.startswith("file://")
-                    else source_uri
-                )
-                cand_path = (
-                    os.path.abspath(local_source)
-                    if os.path.isabs(local_source)
-                    else os.path.abspath(os.path.join(pilates_root, local_source))
-                )
-                if not os.path.exists(cand_path):
-                    raise FileNotFoundError(
-                        f"Configured initial_skims source_uri does not exist: {cand_path}"
-                    )
-                logger.info(
-                    f"[BEAM Preprocessor] Staging initial skims from {cand_path} -> {dest_skims}"
-                )
-                shutil.copy2(cand_path, dest_skims)
-                sidecar_src = f"{cand_path}.provenance.json"
-                sidecar_dst = f"{dest_skims}.provenance.json"
-                if os.path.islink(sidecar_dst) and not os.path.exists(sidecar_dst):
-                    try:
-                        os.unlink(sidecar_dst)
-                    except OSError:
-                        pass
-                if os.path.exists(sidecar_src) and not os.path.exists(sidecar_dst):
-                    shutil.copy2(sidecar_src, sidecar_dst)
-
-        # Optionally copy 'common' configs if present
-        common_config_path = os.path.join(
-            os.path.dirname(beam_production_path), "common"
-        )
-        if os.path.exists(common_config_path):
-            dest_common = os.path.join(os.path.abspath(output_dir), "common")
-            shutil.copytree(
-                common_config_path,
-                dest_common,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(".git", ".git*"),
-            )
-            # Note: BEAM common directory is not tracked as a separate artifact.
-
-        if hasattr(settings.beam, "skims_shapefile"):
-            logger.debug(
-                "[BEAM Preprocessor] Deferring zone-id config updates until the "
-                "sorted zone shapefile is prepared."
-            )
-
-        return RecordStore(recordList=input_records), RecordStore(
-            recordList=output_records
         )
 
     def prepare_beam_zone_shapefile(self, workspace: "Workspace") -> Optional[str]:

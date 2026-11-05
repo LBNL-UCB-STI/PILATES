@@ -953,7 +953,7 @@ def test_stage_orchestrators_and_launcher_happy_path_workflow(tmp_path: Path) ->
     """
     Scenario 1 (Main Happy-Path Orchestration via Launcher & Stage Runners):
     Drives the 4-model micro-world through `pilates.runtime.launcher.main`, exercising
-    `run_bootstrap_phase`, `seed_bootstrap_artifacts_to_coupler`, `run_land_use_stage`,
+    `seed_bootstrap_artifacts_to_coupler`, `run_land_use_stage`,
     `run_vehicle_ownership_stage` (both warmstart `2015` and forecast `2017`),
     `run_supply_demand_stage` (`ActivitySim -> BEAM`), `run_postprocessing_stage`,
     `ConsistDbSnapshotManager` archive DB snapshots, and `run_state.yaml` updates.

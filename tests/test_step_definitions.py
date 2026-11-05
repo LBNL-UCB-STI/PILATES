@@ -304,7 +304,7 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
     for name, definition in STEP_DEFINITIONS.items():
         contract = definition.input_contract
 
-        if name == "beam_preprocess":
+        if name in {"beam_preprocess", "urbansim_postprocess"}:
             assert contract.status == "complete"
             assert contract.reason is None
         else:
@@ -445,7 +445,7 @@ def test_native_steps_declare_static_consist_metadata() -> None:
         },
         "urbansim_postprocess": {
             "inputs": {USIM_DATASTORE_H5},
-            "optional": set(),
+            "optional": {USIM_DATASTORE_BASE_H5},
             "schema_outputs": {USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5},
         },
         "atlas_preprocess": {

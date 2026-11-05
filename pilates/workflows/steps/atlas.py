@@ -22,6 +22,9 @@ from pilates.config.models import PilatesConfig
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_runtime import require_runtime_kwargs
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.io import get_land_use_model
+from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.state_access import is_start_year
 from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -188,19 +191,21 @@ def _resolve_atlas_preprocess_inputs(
         settings=settings,
         state=state,
     )
+    land_use_enabled = bool(
+        get_setting(
+            settings,
+            "land_use_enabled",
+            get_land_use_model(settings) is not None,
+        )
+    )
+    use_base_datastore = is_start_year(state, settings) or not land_use_enabled
     usim_input_fname = get_usim_datastore_fname(
         settings,
-        io="input" if state.is_start_year() else "output",
+        io="input" if use_base_datastore else "output",
         year=state.forecast_year,
     )
     atlas_input = Path(workspace.get_usim_mutable_data_dir()) / usim_input_fname
-    if not atlas_input.exists():
-        atlas_input = Path(
-            _urbansim_run_native_output_paths(
-                settings=settings, state=state, workspace=workspace
-            )[USIM_DATASTORE_H5]
-        )
-    return _resolve_native_inputs(
+    resolved = _resolve_native_inputs(
         step_name="atlas_preprocess",
         function=_native_atlas_preprocess,
         required_roles=(
@@ -215,6 +220,35 @@ def _resolve_atlas_preprocess_inputs(
         },
         coupler=coupler,
     )
+    if not land_use_enabled or USIM_DATASTORE_H5 not in (resolved.binding.inputs or {}):
+        datastore_candidates = (
+            (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_H5)
+            if not land_use_enabled
+            else (USIM_DATASTORE_H5, USIM_DATASTORE_BASE_H5)
+        )
+        for candidate_key in datastore_candidates:
+            candidate = resolve_coupler_value(coupler, candidate_key)
+            if candidate.value is not None:
+                updated_inputs = dict(resolved.binding.inputs or {})
+                updated_inputs[USIM_DATASTORE_H5] = candidate.value
+                updated_sources = dict(resolved.source_by_role)
+                updated_sources[USIM_DATASTORE_H5] = candidate.source
+                updated_keys = dict(resolved.selected_key_by_role)
+                if candidate.storage_key is not None:
+                    updated_keys[USIM_DATASTORE_H5] = candidate.storage_key
+                updated_destinations = dict(resolved.logical_destinations)
+                updated_destinations[USIM_DATASTORE_H5] = Path(atlas_input)
+                return ResolvedStepInputs(
+                    step_name=resolved.step_name,
+                    binding=BindingResult(inputs=updated_inputs),
+                    required_roles=resolved.required_roles,
+                    optional_roles=resolved.optional_roles,
+                    source_by_role=updated_sources,
+                    selected_key_by_role=updated_keys,
+                    logical_destinations=updated_destinations,
+                    metadata=resolved.metadata,
+                )
+    return resolved
 
 
 def _resolve_atlas_run_inputs(

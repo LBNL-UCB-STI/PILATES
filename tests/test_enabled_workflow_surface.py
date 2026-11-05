@@ -204,28 +204,6 @@ def test_surface_requires_omx_for_downstream_models_or_explicit_export():
     )
 
 
-def test_surface_bootstrap_owned_and_deferred_keys_follow_run_shape():
-    surface = build_enabled_workflow_surface(
-        _settings(
-            land_use=None,
-            vehicle_ownership=None,
-            activity_demand="activitysim",
-            traffic_assignment="beam",
-        )
-    )
-
-    assert "beam_mutable_data_dir" in surface.bootstrap_owned_artifact_keys
-    assert (
-        "beam_region_input_dir" in surface.restart_prebootstrap_deferred_artifact_keys
-    )
-    assert USIM_DATASTORE_BASE_H5 in surface.bootstrap_owned_artifact_keys
-    assert USIM_DATASTORE_BASE_H5 in surface.restart_prebootstrap_deferred_artifact_keys
-    assert any(
-        key.startswith("activitysim_config_settings_yaml_")
-        for key in surface.bootstrap_owned_artifact_keys
-    )
-
-
 def test_surface_projects_activitysim_postprocess_required_keys_when_land_use_enabled():
     surface = build_enabled_workflow_surface(
         _settings(

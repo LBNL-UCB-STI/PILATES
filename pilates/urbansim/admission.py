@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import unquote, urlparse
 
 import consist
 
 from pilates.config import PilatesConfig
 from pilates.config.models import DeclaredDigestExpectation
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
+from pilates.urbansim.preprocessor import (
+    resolve_urbansim_initial_datastore_source_path,
+)
 from pilates.utils.admission_helpers import (
     AdmissionMetadataLogger,
     persist_admission_report,
 )
+from pilates.utils.path_utils import find_project_root
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +32,27 @@ class UrbanSimInputAdmissionError(RuntimeError):
     """Raised when configured UrbanSim input-admission policy rejects a file."""
 
 
+def _resolve_local_source_uri(raw_uri: str | None) -> Path | None:
+    if not isinstance(raw_uri, str) or not raw_uri.strip():
+        return None
+    uri = raw_uri.strip()
+    if uri.startswith("file://"):
+        parsed = urlparse(uri)
+        if parsed.netloc and parsed.netloc != "localhost":
+            return None
+        local_source = unquote(parsed.path)
+    elif "://" in uri:
+        return None
+    else:
+        local_source = uri
+    candidate = Path(local_source).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    pilates_root = find_project_root(start_path=os.path.dirname(__file__))
+    base_root = Path(pilates_root) if pilates_root else Path.cwd()
+    return (base_root / candidate).resolve()
+
+
 def preflight_bootstrap_urbansim_datastore_admission(
     *,
     settings: PilatesConfig,
@@ -34,7 +61,7 @@ def preflight_bootstrap_urbansim_datastore_admission(
     report_dir: Path,
     existing_admission_reports: Mapping[str, object] | None = None,
 ) -> consist.admission.AdmissionReport | None:
-    """Check the bootstrap-staged UrbanSim datastore when configured.
+    """Check the initial UrbanSim datastore when configured.
 
     ``existing_admission_reports`` is supplied by the active run owner because
     the metadata logger intentionally only writes metadata; it does not assume
@@ -53,11 +80,26 @@ def preflight_bootstrap_urbansim_datastore_admission(
             "Bootstrap UrbanSim datastore admission requires a declared_digest expectation"
         )
 
-    execution_path = (
+    workspace_candidate = (
         Path(workspace_path)
         / urbansim_config.local_mutable_data_folder
         / get_usim_datastore_fname(settings, io="input")
     )
+    if workspace_candidate.is_file():
+        execution_path = workspace_candidate
+    else:
+        source_uri_path = _resolve_local_source_uri(expectation.source_uri)
+        static_source = resolve_urbansim_initial_datastore_source_path(settings)
+        if source_uri_path is not None and source_uri_path.is_file():
+            execution_path = source_uri_path
+        elif static_source is not None and static_source.is_file():
+            execution_path = static_source
+        elif source_uri_path is not None:
+            execution_path = source_uri_path
+        elif static_source is not None:
+            execution_path = static_source
+        else:
+            execution_path = workspace_candidate
     report = consist.admission.check_admission_reference_expected_identity(
         reference=consist.admission.AdmissionReference(
             artifact_key=None,

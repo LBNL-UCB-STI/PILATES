@@ -6,11 +6,9 @@ import shutil
 import pytest
 from consist import ExecutionOptions, Tracker, resolve_step_contract
 
-from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasLaunchContext
 import pilates.atlas.preprocessor as atlas_preprocessor_module
 from pilates.runtime import restart as restart_runtime
-from pilates.workflows import binding as workflow_binding
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.steps import atlas
 from pilates.workflows.steps.atlas import ATLAS_PREPROCESS, ATLAS_RUN
@@ -25,7 +23,7 @@ def _touch(path: Path, content: str = "x") -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_copy_data_to_mutable_location_uses_fallback_source_for_missing_required_files(
+def test_stage_selected_atlas_static_inputs_uses_fallback_source_for_missing_required_files(
     tmp_path, monkeypatch
 ):
     primary_source = tmp_path / "primary_atlas_input"
@@ -54,7 +52,6 @@ def test_copy_data_to_mutable_location_uses_fallback_source_for_missing_required
         lambda start_path=None: str(project_root),
     )
 
-    preprocessor = AtlasPreprocessor.__new__(AtlasPreprocessor)
     settings = {
         "atlas": {
             "host_input_folder": str(primary_source),
@@ -63,34 +60,18 @@ def test_copy_data_to_mutable_location_uses_fallback_source_for_missing_required
         }
     }
 
-    _inputs, outputs = preprocessor.copy_data_to_mutable_location(
+    staged_paths = atlas_preprocessor_module.stage_selected_atlas_static_inputs(
         settings=settings,
         output_dir=str(output_dir),
     )
 
     output_paths = {
-        Path(record.file_path).relative_to(output_dir).as_posix()
-        for record in outputs.all_records()
+        Path(path).relative_to(output_dir).as_posix() for path in staged_paths.values()
     }
     assert set(required_relpaths) <= output_paths
 
-    inputs_by_key = {record.short_name: record for record in _inputs.all_records()}
-    psid_record = inputs_by_key["psid_names"]
-    assert psid_record.metadata["atlas_static_input"] is True
-    assert psid_record.metadata["atlas_relpath"] == "psid_names.Rdat"
-    assert psid_record.metadata["atlas_source_origin"] == "fallback"
-    assert psid_record.metadata["atlas_input_group"] == "global"
 
-    adopt_record = inputs_by_key["adopt/zev_mandate/new_vehicles_biannual_values_2021"]
-    assert adopt_record.metadata["atlas_static_input"] is True
-    assert adopt_record.metadata["atlas_source_origin"] == "fallback"
-    assert adopt_record.metadata["atlas_input_group"] == "adopt"
-    assert adopt_record.metadata["atlas_scenario"] == "zev_mandate"
-    assert adopt_record.metadata["atlas_input_year"] == 2021
-    assert adopt_record.metadata["profile_file_schema"] is True
-
-
-def test_copy_data_to_mutable_location_raises_when_required_static_file_missing(
+def test_stage_selected_atlas_static_inputs_raises_when_required_static_file_missing(
     tmp_path, monkeypatch
 ):
     primary_source = tmp_path / "primary_atlas_input"
@@ -113,7 +94,6 @@ def test_copy_data_to_mutable_location_raises_when_required_static_file_missing(
         lambda start_path=None: str(project_root),
     )
 
-    preprocessor = AtlasPreprocessor.__new__(AtlasPreprocessor)
     settings = {
         "atlas": {
             "host_input_folder": str(primary_source),
@@ -123,17 +103,10 @@ def test_copy_data_to_mutable_location_raises_when_required_static_file_missing(
     }
 
     with pytest.raises(RuntimeError, match="Missing required ATLAS static input files"):
-        preprocessor.copy_data_to_mutable_location(
+        atlas_preprocessor_module.stage_selected_atlas_static_inputs(
             settings=settings,
             output_dir=str(output_dir),
         )
-
-
-def test_restart_local_artifact_policy_has_no_atlas_mirror_rule():
-    assert all(
-        rule.name != "atlas_restart_inputs"
-        for rule in workflow_binding.restart_required_local_artifact_policy()
-    )
 
 
 def test_restart_parent_forecast_rejects_subyear_before_scheduler_boundary() -> None:

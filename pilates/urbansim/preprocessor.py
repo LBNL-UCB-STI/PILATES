@@ -9,7 +9,7 @@ import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import RecordStore
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
@@ -253,93 +253,50 @@ def stage_urbansim_run_workspace(
     )
 
 
-def stage_synthetic_population(
+def resolve_urbansim_initial_datastore_source_path(
     settings: PilatesConfig,
-    output_dir: str,
-) -> Tuple[RecordStore, RecordStore]:
-    """
-    Stage the base synthetic population HDF5 datastore into the mutable workspace.
-
-    This helper copies ``custom_mpo_*.h5`` (and its ``.metadata.json`` sidecar if
-    present) into ``<workspace>/urbansim/data/`` without invoking full UrbanSim
-    land-use preprocessing or staging UrbanSim-only static/skim inputs.
-    """
-    urbansim_cfg = getattr(settings, "urbansim", None)
+) -> Optional[Path]:
+    """Resolve the configured static UrbanSim initial HDF5 datastore path."""
+    try:
+        urbansim_cfg = settings.urbansim
+    except AttributeError:
+        return None
     if urbansim_cfg is None:
-        return RecordStore(), RecordStore()
+        return None
 
-    region = settings.run.region
-    region_id = urbansim_cfg.region_mappings["region_to_region_id"][region]
+    try:
+        region = settings.run.region
+        start_year = settings.run.start_year
+    except AttributeError:
+        return None
 
+    region_map = urbansim_cfg.region_mappings.get("region_to_region_id", {})
+    region_id = region_map.get(region)
+    if region_id is None:
+        return None
+
+    data_dir = _urbansim_source_data_dir(settings)
     year_template = urbansim_cfg.input_file_template_year
-    if year_template:
-        year_specific_model_data_fname = year_template.format(
+    if year_template and start_year is not None:
+        year_specific_fname = year_template.format(
             region_id=region_id,
-            year=settings.run.start_year,
-            start_year=settings.run.start_year,
+            year=start_year,
+            start_year=start_year,
         )
-    else:
-        year_specific_model_data_fname = ""
+        year_candidate = data_dir / year_specific_fname
+        if year_candidate.is_file():
+            return year_candidate
 
     base_template = urbansim_cfg.input_file_template
-    if base_template:
-        model_data_fname = base_template.format(region_id=region_id)
-    else:
-        model_data_fname = ""
-    data_dir = str(_urbansim_source_data_dir(settings))
-
-    if not model_data_fname:
-        raise ValueError(
-            "UrbanSim input file template is not configured. "
-            "Please set 'urbansim.input_file_template' or 'usim_formattable_input_file_name' in settings."
-        )
-
-    if (
-        year_specific_model_data_fname
-        and os.path.exists(os.path.join(data_dir, year_specific_model_data_fname))
-        and urbansim_cfg.input_file_template_year is not None
-    ):
-        src = os.path.join(data_dir, year_specific_model_data_fname)
-    else:
-        src = os.path.join(data_dir, model_data_fname)
-    dest = os.path.join(output_dir, model_data_fname)
-
-    if not os.path.exists(src):
-        raise FileNotFoundError(
-            f"Synthetic population HDF5 file not found at configured path: {src}"
-        )
-
-    os.makedirs(output_dir, exist_ok=True)
-    logger.info(f"Copying synthetic population HDF5 data from {src} to {dest}")
-    shutil.copy2(src, dest)
-
-    sidecar_src = f"{src}.metadata.json"
-    sidecar_dest = f"{dest}.metadata.json"
-    if os.path.exists(sidecar_src):
-        shutil.copy2(sidecar_src, sidecar_dest)
-
-    inputs = [
-        FileRecord(
-            file_path=src,
-            description="Reference urbanSim model data",
-            short_name="usim_data_reference",
-        )
-    ]
-    outputs = [
-        FileRecord(
-            file_path=dest,
-            description="UrbanSim model data",
-            short_name="usim_datastore_h5",
-        )
-    ]
-    return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
+    if not base_template:
+        return None
+    model_data_fname = base_template.format(region_id=region_id)
+    return data_dir / model_data_fname
 
 
 class UrbansimPreprocessor(GenericPreprocessor):
     """
     UrbanSim-specific preprocessor that consolidates all preprocessing steps for the UrbanSim land use model.
-    This includes copying input files to a mutable location and preparing any additional
-    data needed for the UrbanSim run.
     """
 
     def __init__(
@@ -348,101 +305,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
         state: "WorkflowState",
     ):
         super().__init__(model_name, state)
-
-    def copy_data_to_mutable_location(
-        self,
-        settings: PilatesConfig,
-        output_dir,
-        workspace: Optional["Workspace"] = None,
-    ) -> Tuple[RecordStore, RecordStore]:
-        """
-        Copy UrbanSim input files from production to mutable location.
-
-        Returns:
-            Tuple[RecordStore, RecordStore]: (inputs, outputs) as RecordStores
-        """
-        del workspace
-        region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        data_dir = str(_urbansim_source_data_dir(settings))
-
-        in_store, out_store = stage_synthetic_population(settings, output_dir)
-        inputs = list(in_store.all_records())
-        outputs = list(out_store.all_records())
-
-        beam_inputs_root = str(_beam_input_root(settings))
-        skims_src = os.path.abspath(
-            os.path.join(
-                beam_inputs_root,
-                settings.run.region,
-                get_beam_omx_skims_name(settings),
-            )
-        )
-
-        skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
-        if os.path.islink(skims_target) and not os.path.exists(skims_target):
-            try:
-                os.unlink(skims_target)
-            except OSError:
-                pass
-
-        if os.path.exists(skims_src):
-            inputs.append(
-                FileRecord(
-                    file_path=skims_src,
-                    short_name="omx_skims",
-                    description="Raw BEAM OD skims",
-                )
-            )
-            shutil.copy2(skims_src, skims_target)
-
-            outputs.append(
-                FileRecord(
-                    file_path=skims_target,
-                    short_name="omx_skims",
-                    description="Raw BEAM OD skims for USim",
-                )
-            )
-
-            logger.info(
-                f"[UrbansimPreprocessor] Copying input beam skims data from {skims_src} to {skims_target}"
-            )
-        else:
-            raise FileNotFoundError(
-                f"[UrbansimPreprocessor] UrbanSim skims file not found at {skims_src}"
-            )
-
-        other_data_fnames = {
-            f"hsize_ct_{region_id}.csv": "hh_size",
-            f"income_rates_{region_id}.csv": "income_rates",
-            f"relmap_{region_id}.csv": "relmap",
-            "schools_2010.csv": "schools",
-            "blocks_school_districts_2010.csv": "school_districts",
-        }
-        for fname, short_name in other_data_fnames.items():
-            src = os.path.join(data_dir, fname)
-            dest = os.path.join(output_dir, fname)
-            if os.path.exists(src):
-                logger.info(
-                    f"[UrbansimPreprocessor] Copying input urbansim file from {src} to {dest}"
-                )
-                shutil.copy2(src, dest)
-                inputs.append(
-                    FileRecord(
-                        file_path=src,
-                        description=f"UrbanSim input file: {fname}",
-                        short_name=short_name,
-                    )
-                )
-                outputs.append(
-                    FileRecord(
-                        file_path=dest,
-                        description=f"UrbanSim input file: {fname}",
-                        short_name=short_name,
-                    )
-                )
-        logger.info("[UrbansimPreprocessor] Finished copying UrbanSim input files.")
-        return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
     def preprocess(
         self,

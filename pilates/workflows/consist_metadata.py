@@ -225,6 +225,12 @@ def build_activitysim_identity_config(settings: PilatesConfig) -> Dict[str, Any]
         if isinstance(cfg, ActivitySimConfig)
         else vars(cfg).get("database")
     )
+    vo_model = get_setting(
+        settings,
+        "run.models.vehicle_ownership",
+        default=get_setting(settings, "vehicle_ownership_model"),
+    )
+    atlas_vo_enabled = isinstance(vo_model, str) and vo_model.strip().lower() == "atlas"
     identity_config: Dict[str, Any] = {
         "household_sample_size": cfg.household_sample_size,
         "chunk_size": cfg.chunk_size,
@@ -234,6 +240,8 @@ def build_activitysim_identity_config(settings: PilatesConfig) -> Dict[str, Any]
         "replan_hh_samp_size": cfg.replan_hh_samp_size,
         "replan_after": cfg.replan_after,
         "random_seed": cfg.random_seed,
+        "main_configs_dir": configured_activitysim_main_configs_dir(cfg),
+        "atlas_vehicle_ownership_enabled": atlas_vo_enabled,
         "database": (
             {
                 "enabled": database.enabled,
@@ -278,6 +286,36 @@ def build_activitysim_identity_inputs(
         return []
 
     configs_dir = Path(workspace_path) / cfg.local_mutable_configs_folder
+    if not configs_dir.exists():
+        local_configs_folder = get_setting(settings, "activitysim.local_configs_folder")
+        region = get_setting(settings, "run.region")
+        if isinstance(local_configs_folder, str) and isinstance(region, str):
+            from pilates.activitysim.preprocessor import (
+                ensure_activitysim_mutable_configs,
+            )
+            from pilates.utils.path_utils import find_project_root
+
+            project_root = (
+                find_project_root(start_path=os.path.dirname(__file__)) or os.getcwd()
+            )
+            source_dir = (
+                Path(local_configs_folder)
+                if os.path.isabs(local_configs_folder)
+                else Path(project_root) / local_configs_folder
+            ) / region
+            if source_dir.is_dir():
+                mutable_data_rel = (
+                    get_setting(
+                        settings,
+                        "activitysim.local_mutable_data_folder",
+                        "activitysim/data",
+                    )
+                    or "activitysim/data"
+                )
+                ensure_activitysim_mutable_configs(
+                    settings,
+                    folder_path=str(Path(workspace_path) / str(mutable_data_rel)),
+                )
     if not configs_dir.exists():
         raise FileNotFoundError(
             f"ActivitySim mutable configs dir not found: {configs_dir}"
@@ -359,6 +397,16 @@ def build_beam_identity_inputs(
 
     identity_inputs: List[IdentityInput] = []
     root = Path(workspace_path) / cfg.local_mutable_data_folder
+    if not root.exists():
+        local_input_folder = get_setting(settings, "beam.local_input_folder")
+        region = get_setting(settings, "run.region")
+        if isinstance(local_input_folder, str) and isinstance(region, str):
+            from pilates.beam.preprocessor import ensure_beam_mutable_workspace
+
+            try:
+                ensure_beam_mutable_workspace(settings, output_dir=str(root))
+            except (ValueError, FileNotFoundError):
+                pass
     if root.exists():
         config_name = cfg.config
         if isinstance(config_name, str) and config_name:
@@ -679,6 +727,20 @@ def consist_step_meta(
         config_roots = activitysim_config_root_dirs(
             activitysim_settings, mutable_configs_root
         )
+        if not all(candidate.is_dir() for candidate in config_roots):
+            local_configs_folder = get_setting(
+                settings, "activitysim.local_configs_folder"
+            )
+            region = get_setting(settings, "run.region")
+            if isinstance(local_configs_folder, str) and isinstance(region, str):
+                from pilates.activitysim.preprocessor import (
+                    ensure_activitysim_mutable_configs,
+                )
+
+                ensure_activitysim_mutable_configs(settings, workspace=workspace_obj)
+                config_roots = activitysim_config_root_dirs(
+                    activitysim_settings, mutable_configs_root
+                )
         if model == "activitysim_run":
             missing_roots = [
                 candidate for candidate in config_roots if not candidate.is_dir()
@@ -764,6 +826,16 @@ def consist_step_meta(
 
         if primary_config is None:
             primary_config = config_root / beam_settings.config
+        if not primary_config.exists():
+            local_input_folder = get_setting(settings, "beam.local_input_folder")
+            region = get_setting(settings, "run.region")
+            if isinstance(local_input_folder, str) and isinstance(region, str):
+                from pilates.beam.preprocessor import ensure_beam_mutable_workspace
+
+                try:
+                    ensure_beam_mutable_workspace(settings, workspace=workspace_obj)
+                except (ValueError, FileNotFoundError):
+                    pass
         if not primary_config.exists():
             return None
 

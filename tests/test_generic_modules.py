@@ -143,9 +143,6 @@ def test_generic_preprocessor_sets_stage_and_forwards_payload():
     captured = {}
 
     class _GenericPreprocessor(GenericPreprocessor):
-        def copy_data_to_mutable_location(self, settings, output_dir):
-            return RecordStore(), RecordStore()
-
         def _preprocess(self, workspace_arg, previous_records_arg):
             captured["workspace"] = workspace_arg
             captured["previous_records"] = previous_records_arg
@@ -168,9 +165,6 @@ def test_generic_preprocessor_defaults_previous_records_to_none():
     captured = {"previous_records": []}
 
     class _GenericPreprocessor(GenericPreprocessor):
-        def copy_data_to_mutable_location(self, settings, output_dir):
-            return RecordStore(), RecordStore()
-
         def _preprocess(self, workspace_arg, previous_records_arg):
             captured["workspace"] = workspace_arg
             captured["previous_records"].append(previous_records_arg)
