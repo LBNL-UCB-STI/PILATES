@@ -932,3 +932,374 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 phase="postprocess",
                 resolved_inputs=post_inputs_1,
             )
+
+
+def _latest_run_dir(root: Path) -> Path:
+    matches = sorted(root.glob("pilates-run--*"))
+    assert matches, f"Expected a timestamped run directory under {root}"
+    return matches[-1]
+
+
+def _extract_atlas_outyear(command: tuple[str, ...]) -> int:
+    for idx, token in enumerate(command):
+        if token == "--outyear" and idx + 1 < len(command):
+            return int(command[idx + 1])
+        if token.startswith("--outyear="):
+            return int(token.split("=", 1)[1])
+    raise AssertionError(f"Expected --outyear in ATLAS command: {command}")
+
+
+def test_stage_orchestrators_and_launcher_happy_path_workflow(tmp_path: Path) -> None:
+    """
+    Scenario 1 (Main Happy-Path Orchestration via Launcher & Stage Runners):
+    Drives the 4-model micro-world through `pilates.runtime.launcher.main`, exercising
+    `run_bootstrap_phase`, `seed_bootstrap_artifacts_to_coupler`, `run_land_use_stage`,
+    `run_vehicle_ownership_stage` (both warmstart `2015` and forecast `2017`),
+    `run_supply_demand_stage` (`ActivitySim -> BEAM`), `run_postprocessing_stage`,
+    `ConsistDbSnapshotManager` archive DB snapshots, and `run_state.yaml` updates.
+    """
+    from pilates.runtime import launcher
+
+    env = build_micro_world(
+        tmp_path,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+
+    with ContractValidatingContainerBackend() as backend:
+        launcher.main(settings=env.settings)
+
+    invoked_models = [inv.model_name for inv in backend.invocations]
+    assert invoked_models == [
+        "urbansim",
+        "atlas",
+        "atlas",
+        "activitysim_numba_warmup",
+        "activitysim",
+        "beam_run",
+    ]
+    assert [
+        _extract_atlas_outyear(inv.command)
+        for inv in backend.invocations
+        if inv.model_name == "atlas"
+    ] == [2015, 2017]
+
+    archive_run_dir = _latest_run_dir(env.paths.archive_root)
+    scratch_run_dir = _latest_run_dir(env.paths.scratch_root)
+    assert (
+        archive_run_dir / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+    ).is_file() or (archive_run_dir / ".consist" / "provenance.duckdb").is_file()
+    assert (
+        archive_run_dir
+        / "consist-recovery"
+        / "activitysim_postprocess__supply_demand__y2017__i0__postprocess"
+        / "activitysim"
+        / "output"
+        / "year-2015-iteration-0"
+        / "beam_plans.parquet"
+    ).is_file()
+    assert (
+        archive_run_dir
+        / "consist-recovery"
+        / "beam_postprocess__supply_demand__y2015__i0__postprocess"
+        / "sfbay"
+        / "skims.omx"
+    ).is_file()
+    assert (
+        scratch_run_dir
+        / "activitysim"
+        / "output"
+        / "year-2015-iteration-0"
+        / "beam_plans.parquet"
+    ).is_file()
+    assert (scratch_run_dir / "beam" / "input" / "sfbay" / "skims.omx").is_file()
+
+
+def test_full_workflow_cache_hit_replay_skips_all_containers_on_cold_scratch(
+    tmp_path: Path,
+) -> None:
+    """
+    Scenario 2 (Full-Workflow Cache-Hit Replay on Cold Scratch):
+    Runs the full 4-model stage-orchestrated workflow (`UrbanSim -> ATLAS -> ActivitySim -> BEAM`),
+    promotes the completed run's Consist DB snapshot into `shared.database.path`, wipes the
+    mutable node-local scratch workspace (`local_workspace_root`), and runs the full workflow
+    a second time. Verifies zero new container executions on the second pass while hydrating
+    required outputs from the archive.
+    """
+    from pilates.runtime import launcher
+    from pilates.runtime.promote_run_archive import promote_run_to_recovery_roots
+
+    env = build_micro_world(
+        tmp_path,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+
+    with ContractValidatingContainerBackend() as backend:
+        launcher.main(settings=env.settings)
+        first_run_count = len(backend.invocations)
+        assert first_run_count == 6
+
+        first_archive_run_dir = _latest_run_dir(env.paths.archive_root)
+        promo = promote_run_to_recovery_roots(
+            settings=env.settings,
+            archive_run_dir=first_archive_run_dir,
+            merge_db_only=True,
+            merge_main_db=env.paths.db_path,
+        )
+        assert promo.success
+
+        # Wipe node-local scratch workspace completely (simulating a cold compute node)
+        shutil.rmtree(env.paths.scratch_root)
+        env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
+
+        # Second run seeds its local Consist DB from shared.database.path,
+        # hits cache on bootstrap + all 4 model stages, and invokes 0 containers
+        second_settings = env.settings.model_copy(deep=True)
+        launcher.main(settings=second_settings)
+
+        assert len(backend.invocations) == first_run_count
+
+    second_scratch_run_dir = _latest_run_dir(env.paths.scratch_root)
+    assert (
+        second_scratch_run_dir
+        / "activitysim"
+        / "output"
+        / "year-2015-iteration-0"
+        / "beam_plans.parquet"
+    ).is_file()
+    assert (second_scratch_run_dir / "beam" / "input" / "sfbay" / "skims.omx").is_file()
+
+
+def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Scenario 3 (Mid-Run Interruption & Restart on a Fresh Node):
+    - Case A (Committed Stage Boundary Restart at `supply_demand_loop`):
+      Runs `launcher.main` until `supply_demand_loop` (after `land_use` and `vehicle_ownership`
+      have completed, archived their outputs, and snapshotted `run_state.yaml` + DuckDB),
+      simulates a node interruption, wipes `local_workspace_root`, and restarts via `launcher.main`.
+      Verifies `UrbanSim` and `ATLAS` are NOT re-executed while `ActivitySim -> BEAM`
+      run to completion using restored coupler artifacts.
+    - Case B (Uncommitted Mid-ActivitySim Rewind Restart):
+      Simulates an interruption mid-`supply_demand_loop` (`current_sub_stage="activity_demand"`)
+      before BEAM commits a checkpoint on a wiped scratch workspace. Verifies
+      `_rewind_uncommitted_activitysim_restart_to_provider_boundary` rewinds to `land_use`,
+      replays `UrbanSim` and `ATLAS` via Consist cache hits (0 container re-executions),
+      and finishes `ActivitySim -> BEAM`.
+    """
+    from pilates.runtime import launcher
+
+    real_run_supply_demand_stage = launcher.run_supply_demand_stage
+
+    # --- Case A: Committed boundary restart at supply_demand_loop ---
+    case_a_dir = tmp_path / "case_a"
+    env_a = build_micro_world(
+        case_a_dir,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+
+    def _interrupt_at_supply_demand_boundary(**_kwargs):
+        raise RuntimeError("Simulated node preemption at supply_demand_loop boundary")
+
+    with ContractValidatingContainerBackend() as backend_a:
+        monkeypatch.setattr(
+            launcher, "run_supply_demand_stage", _interrupt_at_supply_demand_boundary
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="Simulated node preemption at supply_demand_loop boundary",
+        ):
+            launcher.main(settings=env_a.settings)
+
+        assert [inv.model_name for inv in backend_a.invocations] == [
+            "urbansim",
+            "atlas",
+            "atlas",
+        ]
+        archive_run_dir_a = _latest_run_dir(env_a.paths.archive_root)
+        archived_state_a = archive_run_dir_a / "run_state.yaml"
+        assert archived_state_a.is_file()
+
+        # Restore real supply_demand stage, wipe node-local scratch, and restart
+        monkeypatch.setattr(
+            launcher, "run_supply_demand_stage", real_run_supply_demand_stage
+        )
+        shutil.rmtree(env_a.paths.scratch_root)
+        env_a.paths.scratch_root.mkdir(parents=True, exist_ok=True)
+
+        restart_settings_a = env_a.settings.model_copy(deep=True)
+        restart_settings_a.runtime.options.state_file_loc = str(archived_state_a)
+        launcher.main(settings=restart_settings_a)
+
+        # Only ActivitySim (warmup + main) and BEAM should have executed after restart!
+        assert [inv.model_name for inv in backend_a.invocations[3:]] == [
+            "activitysim_numba_warmup",
+            "activitysim",
+            "beam_run",
+        ]
+
+    # --- Case B: Uncommitted mid-ActivitySim rewind restart ---
+    case_b_dir = tmp_path / "case_b"
+    env_b = build_micro_world(
+        case_b_dir,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+
+    def _interrupt_mid_activitysim(**kwargs):
+        ctx = kwargs["context"]
+        ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
+        ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
+        ctx.state.sub_stage_progress = "runner"
+        ctx.state.write_state()
+        raise RuntimeError("Simulated crash mid-ActivitySim before BEAM checkpoint")
+
+    with ContractValidatingContainerBackend() as backend_b:
+        monkeypatch.setattr(
+            launcher, "run_supply_demand_stage", _interrupt_mid_activitysim
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="Simulated crash mid-ActivitySim before BEAM checkpoint",
+        ):
+            launcher.main(settings=env_b.settings)
+
+        pre_restart_count = len(backend_b.invocations)
+        assert pre_restart_count == 3
+        archive_run_dir_b = _latest_run_dir(env_b.paths.archive_root)
+        archived_state_b = archive_run_dir_b / "run_state.yaml"
+        assert archived_state_b.is_file()
+
+        # Restore real supply_demand stage, wipe scratch, and restart with allow_rewind_resume=True
+        monkeypatch.setattr(
+            launcher, "run_supply_demand_stage", real_run_supply_demand_stage
+        )
+        shutil.rmtree(env_b.paths.scratch_root)
+        env_b.paths.scratch_root.mkdir(parents=True, exist_ok=True)
+
+        restart_settings_b = env_b.settings.model_copy(deep=True)
+        restart_settings_b.runtime.options.state_file_loc = str(archived_state_b)
+        restart_settings_b.runtime.options.allow_rewind_resume = True
+        launcher.main(settings=restart_settings_b)
+
+        # UrbanSim and ATLAS replay from Consist cache (0 container re-runs);
+        # only ActivitySim (warmup + main) and BEAM execute containers!
+        assert [
+            inv.model_name for inv in backend_b.invocations[pre_restart_count:]
+        ] == [
+            "activitysim_numba_warmup",
+            "activitysim",
+            "beam_run",
+        ]
+
+
+def test_stage_skipping_disabled_model_topologies(tmp_path: Path) -> None:
+    """
+    Scenario 4 (Stage Skipping / Disabled-Model Topologies):
+    - Case A (`ATLAS` disabled: `UrbanSim -> ActivitySim -> BEAM`):
+      Verifies `USIM_POPULATION_SOURCE_H5` and `USIM_DATASTORE_CURRENT_H5` hand off
+      cleanly from `urbansim_postprocess` to `ActivitySim` and `BEAM` when
+      `vehicle_ownership` is disabled.
+    - Case B (`UrbanSim` + `ATLAS` disabled: standalone `ActivitySim -> BEAM`):
+      Verifies bootstrap datastore and initial skims feed `ActivitySim` and `BEAM`
+      directly when both `land_use` and `vehicle_ownership` are disabled.
+    """
+    from pilates.runtime import launcher
+
+    # --- Case A: ATLAS disabled (UrbanSim -> ActivitySim -> BEAM) ---
+    env_no_atlas = build_micro_world(
+        tmp_path / "no_atlas",
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        vehicle_ownership_model=None,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+    with ContractValidatingContainerBackend() as backend_no_atlas:
+        launcher.main(settings=env_no_atlas.settings)
+
+    assert [inv.model_name for inv in backend_no_atlas.invocations] == [
+        "urbansim",
+        "activitysim_numba_warmup",
+        "activitysim",
+        "beam_run",
+    ]
+    scratch_no_atlas = _latest_run_dir(env_no_atlas.paths.scratch_root)
+    assert (
+        scratch_no_atlas
+        / "activitysim"
+        / "output"
+        / "year-2015-iteration-0"
+        / "beam_plans.parquet"
+    ).is_file()
+    assert (scratch_no_atlas / "beam" / "input" / "sfbay" / "skims.omx").is_file()
+
+    # --- Case B: UrbanSim + ATLAS disabled (standalone ActivitySim -> BEAM) ---
+    env_standalone = build_micro_world(
+        tmp_path / "standalone_asim_beam",
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        land_use_model=None,
+        vehicle_ownership_model=None,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+    with ContractValidatingContainerBackend() as backend_standalone:
+        launcher.main(settings=env_standalone.settings)
+
+    assert [inv.model_name for inv in backend_standalone.invocations] == [
+        "activitysim_numba_warmup",
+        "activitysim",
+        "beam_run",
+    ]
+    scratch_standalone = _latest_run_dir(env_standalone.paths.scratch_root)
+    assert (
+        scratch_standalone
+        / "activitysim"
+        / "output"
+        / "year-2015-iteration-0"
+        / "beam_plans.parquet"
+    ).is_file()
+    assert (scratch_standalone / "beam" / "input" / "sfbay" / "skims.omx").is_file()

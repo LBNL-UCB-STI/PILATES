@@ -821,6 +821,12 @@ def build_micro_world(
     split_events_by_type: bool = False,
     replan_iters: int = 0,
     replan_hh_samp_size: int = 0,
+    database_enabled: bool = False,
+    land_use_model: str | None = "urbansim",
+    vehicle_ownership_model: str | None = "atlas",
+    activity_demand_model: str | None = "activitysim",
+    travel_model: str | None = "beam",
+    max_year_intervals: int | None = None,
     scratch_root: Path | None = None,
     archive_root: Path | None = None,
 ) -> MicroWorldEnv:
@@ -869,14 +875,21 @@ def build_micro_world(
             "local_workspace_root": str(resolved_scratch),
             "output_run_name": "run",
             "enable_archive_copy": enable_archive_copy,
+            "consist_db_seed_from_shared_on_start": database_enabled,
+            "consist_db_snapshot_interval_seconds": 0,
             "consist_code_identity": "callable_module",
             "consist_hashing_strategy": "full",
             "models": {
-                "land_use": "urbansim",
-                "travel": "beam",
-                "activity_demand": "activitysim",
-                "vehicle_ownership": "atlas",
+                "land_use": land_use_model,
+                "travel": travel_model,
+                "activity_demand": activity_demand_model,
+                "vehicle_ownership": vehicle_ownership_model,
             },
+            **(
+                {"max_year_intervals": max_year_intervals}
+                if max_year_intervals is not None
+                else {}
+            ),
         },
         "write_skims_to_omx": True,
         "shared": {
@@ -900,7 +913,7 @@ def build_micro_world(
                 },
             },
             "database": {
-                "enabled": False,
+                "enabled": database_enabled,
                 "type": "duckdb",
                 "path": str(db_path),
             },
@@ -923,7 +936,7 @@ def build_micro_world(
             "client_base_folder": "/usim",
             "client_data_folder": "/usim/data",
             "input_file_template": "custom_mpo_{region_id}_model_data.h5",
-            "input_file_template_year": "custom_mpo_{region_id}_{year}_model_data.h5",
+            "input_file_template_year": "custom_mpo_{region_id}_model_data_{start_year}.h5",
             "output_file_template": "model_data_{year}.h5",
             "command_template": "-c -r {0} -i {1} -y {2} -f {3} -t {4}",
             "region_mappings": {"region_to_region_id": {region: region_id}},

@@ -278,12 +278,18 @@ def _load_asim_outputs(
     workspace: Workspace,
     state: WorkflowState,
     fallback_dir: Optional[str] = None,
+    raw_outputs: Optional[ActivitySimRunOutputs] = None,
 ):
     prefix = settings.activitysim.output_tables["prefix"]
     output_tables = settings.activitysim.output_tables["tables"]
     asim_output_dict = {}
     asim_output_dir = workspace.get_asim_output_dir()
-    allow_final_pipeline = has_asim_run_marker(
+    has_bound_raw_outputs = bool(
+        raw_outputs is not None
+        and raw_outputs.raw_outputs
+        and all(os.path.isfile(str(p)) for p in raw_outputs.raw_outputs.values())
+    )
+    allow_final_pipeline = has_bound_raw_outputs or has_asim_run_marker(
         asim_output_dir, state.current_year, state.current_inner_iter
     )
     if not allow_final_pipeline:
@@ -1186,6 +1192,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             workspace,
             self.state,
             fallback_dir=iteration_folder_path,
+            raw_outputs=raw_outputs,
         )
         source_file_paths = [str(path) for path in raw_outputs.raw_outputs.values()]
         tables_updated_by_asim = ["households", "persons"]

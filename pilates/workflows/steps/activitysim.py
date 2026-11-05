@@ -42,6 +42,8 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
     configured_asim_output_keys,
+    has_asim_run_marker,
+    write_asim_run_marker,
 )
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.config.models import PilatesConfig
@@ -662,6 +664,15 @@ def _activitysim_postprocess_resolver(
         coupler=coupler,
     )
     inputs = dict(resolved.binding.inputs or {})
+    if (
+        USIM_DATASTORE_BASE_H5 in inputs
+        and not isinstance(inputs[USIM_DATASTORE_BASE_H5], Artifact)
+        and (
+            isinstance(inputs.get(USIM_POPULATION_SOURCE_H5), Artifact)
+            or isinstance(inputs.get(USIM_DATASTORE_CURRENT_H5), Artifact)
+        )
+    ):
+        inputs.pop(USIM_DATASTORE_BASE_H5, None)
     if step_identity is not None and all(
         isinstance(value, Artifact) for value in inputs.values()
     ):
@@ -695,14 +706,24 @@ def _activitysim_postprocess_resolver(
 
     population_source = inputs.get(USIM_POPULATION_SOURCE_H5)
     current_datastore = inputs.get(USIM_DATASTORE_CURRENT_H5)
-    if not _is_population_source_alias(population_source, current_datastore):
+    base_datastore = inputs.get(USIM_DATASTORE_BASE_H5)
+    removed_alias = False
+    if _is_population_source_alias(population_source, current_datastore):
+        # Vehicle ownership intentionally aliases the current datastore role to
+        # the immutable population snapshot.  The ActivitySim postprocessor can
+        # use that snapshot for both optional parameters, but Consist must receive
+        # the artifact once so requested staging has one unambiguous input key.
+        inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
+        current_datastore = None
+        removed_alias = True
+    if _is_population_source_alias(
+        population_source, base_datastore
+    ) or _is_population_source_alias(current_datastore, base_datastore):
+        inputs.pop(USIM_DATASTORE_BASE_H5, None)
+        removed_alias = True
+    if not removed_alias:
         return resolved
 
-    # Vehicle ownership intentionally aliases the current datastore role to
-    # the immutable population snapshot.  The ActivitySim postprocessor can
-    # use that snapshot for both optional parameters, but Consist must receive
-    # the artifact once so requested staging has one unambiguous input key.
-    inputs.pop(USIM_DATASTORE_CURRENT_H5)
     return ResolvedStepInputs(
         step_name=resolved.step_name,
         binding=BindingResult(
@@ -720,18 +741,37 @@ def _activitysim_postprocess_resolver(
     )
 
 
+def _h5_input_local_path(value: Any) -> Path | None:
+    """Resolve an H5 input role value (Artifact or path) to its canonical local path."""
+
+    if isinstance(value, Artifact):
+        candidate = value.ensure_local_path() or value.abs_path or value.path
+        return Path(str(candidate)).resolve() if candidate else None
+    if isinstance(value, (str, Path)):
+        text = str(value).strip()
+        return Path(text).resolve() if text else None
+    return None
+
+
 def _is_population_source_alias(population_source: Any, current_datastore: Any) -> bool:
     """Return whether current datastore is the population-source alias."""
 
     if population_source is current_datastore:
         return population_source is not None
-    if not isinstance(population_source, Artifact) or not isinstance(
+    if isinstance(population_source, Artifact) and isinstance(
         current_datastore, Artifact
     ):
-        return False
-    return population_source.id == current_datastore.id or (
-        population_source.key == USIM_POPULATION_SOURCE_H5
-        and current_datastore.key == USIM_POPULATION_SOURCE_H5
+        if population_source.id == current_datastore.id or (
+            population_source.key == USIM_POPULATION_SOURCE_H5
+            and current_datastore.key == USIM_POPULATION_SOURCE_H5
+        ):
+            return True
+    primary_path = _h5_input_local_path(population_source)
+    candidate_path = _h5_input_local_path(current_datastore)
+    return (
+        primary_path is not None
+        and candidate_path is not None
+        and primary_path == candidate_path
     )
 
 
@@ -1019,6 +1059,20 @@ def _project_activitysim_run_outputs(
             step_name="activitysim_run",
         )
     )
+    if isinstance(state, WorkflowState):
+        asim_output_dir = workspace.get_asim_output_dir()
+        if not has_asim_run_marker(
+            asim_output_dir, state.current_year, state.current_inner_iter
+        ):
+            write_asim_run_marker(
+                asim_output_dir,
+                state.current_year,
+                state.current_inner_iter,
+                meta={
+                    "model": "activitysim",
+                    "output_tables": list(projected.raw_outputs),
+                },
+            )
     return projected
 
 

@@ -301,6 +301,19 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
+def _is_at_initial_workflow_boundary(state: Any) -> bool:
+    """Return True when state is positioned at the first enabled major stage of start_year."""
+    if not isinstance(state, WorkflowState):
+        return False
+    if not state.is_start_year() or int(state.iteration or 0) != 0:
+        return False
+    first_enabled = next(
+        (stage for stage in state.major_stage_order if state.is_enabled(stage)),
+        None,
+    )
+    return first_enabled is not None and state.current_major_stage == first_enabled
+
+
 def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) -> bool:
     """Re-enter the provider chain when restart lacks a BEAM checkpoint.
 
@@ -831,9 +844,12 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
+            _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+                state=state,
+            )
             if not is_restart_run:
                 scenario.capture_coupler_snapshot(phase="init")
-            else:
+            elif not _is_at_initial_workflow_boundary(state):
                 restart_runtime.restore_restart_coupler_snapshot(
                     scenario=scenario,
                     tracker=tracker,
@@ -848,10 +864,6 @@ def main(
                     "Restart replay mode active: skipping bespoke restart "
                     "hydration and relying on scenario replay plus Consist cache hits."
                 )
-
-            _rewind_uncommitted_activitysim_restart_to_provider_boundary(
-                state=state,
-            )
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:

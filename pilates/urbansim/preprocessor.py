@@ -274,7 +274,9 @@ def stage_synthetic_population(
     year_template = urbansim_cfg.input_file_template_year
     if year_template:
         year_specific_model_data_fname = year_template.format(
-            region_id=region_id, start_year=settings.run.start_year
+            region_id=region_id,
+            year=settings.run.start_year,
+            start_year=settings.run.start_year,
         )
     else:
         year_specific_model_data_fname = ""
