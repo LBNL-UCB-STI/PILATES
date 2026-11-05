@@ -1436,8 +1436,6 @@ def _resolve_beam_postprocess_inputs(
         logical_destinations=destinations,
         metadata={"beam_postprocess_dynamic_paths": dynamic_paths},
     )
-    for input_artifact in (resolved.binding.inputs or {}).values():
-        artifact_to_existing_path(input_artifact, workspace=workspace)
     selected_events_key = _selected_postprocess_events_key(
         dynamic_keys=dynamic_keys,
         year=int(year),

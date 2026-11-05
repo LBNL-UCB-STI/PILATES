@@ -745,9 +745,9 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
     snapshot_root = (
         tracker.run_dir / ".resolved-bindings" / result.run.id / "inputs"
     ).resolve()
-    population_snapshot = snapshot_root / USIM_POPULATION_SOURCE_H5
-    current_snapshot = snapshot_root / USIM_DATASTORE_CURRENT_H5
-    base_snapshot = snapshot_root / USIM_DATASTORE_BASE_H5
+    population_snapshot = snapshot_root / f"{USIM_POPULATION_SOURCE_H5}.h5"
+    current_snapshot = snapshot_root / f"{USIM_DATASTORE_CURRENT_H5}.h5"
+    base_snapshot = snapshot_root / f"{USIM_DATASTORE_BASE_H5}.h5"
     assert Path(received["population_source_h5_path"]) == population_snapshot
     assert Path(received["current_input_h5_path"]) == current_snapshot
     assert Path(received["households_asim_input_path"]) == (

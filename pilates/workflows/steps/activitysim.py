@@ -675,15 +675,7 @@ def _activitysim_postprocess_resolver(
                 step_name=resolved.step_name,
                 function=_activitysim_postprocess_callable,
                 selected_artifacts=inputs,
-                logical_destinations={
-                    role: (
-                        Path("inputs")
-                        / f"{role}{''.join(Path(resolved.logical_destinations[role]).suffixes)}"
-                        if role in resolved.logical_destinations
-                        else Path("inputs") / role
-                    )
-                    for role in inputs
-                },
+                logical_destinations={role: Path("inputs") / role for role in inputs},
                 selection_diagnostics={
                     "source_by_role": resolved.source_by_role,
                     "selected_key_by_role": resolved.selected_key_by_role,

@@ -10,6 +10,8 @@ from typing import (
     runtime_checkable,
 )
 
+from consist import Artifact
+
 from pilates.utils import consist_runtime as cr
 from pilates.utils.archive_paths import (
     WorkspaceRootLike,
@@ -47,9 +49,6 @@ def _materialization_roots(
     return None, None
 
 
-from consist.models.artifact import get_tracker_ref
-
-
 @runtime_checkable
 class _MaterializableTrackerLike(Protocol):
     def materialize_artifact(
@@ -83,16 +82,29 @@ def _materialize_artifact_to_existing_path(
         tracker: Any = cr.current_tracker()
     except Exception:
         tracker = None
-    if not isinstance(tracker, _MaterializableTrackerLike):
-        tracker_ref = get_tracker_ref(value)
-        if tracker_ref is not None:
-            candidate_tracker = tracker_ref() if callable(tracker_ref) else tracker_ref
-            if isinstance(candidate_tracker, _MaterializableTrackerLike):
-                tracker = candidate_tracker
-    if not isinstance(tracker, _MaterializableTrackerLike):
+    active_tracker = (
+        tracker if isinstance(tracker, _MaterializableTrackerLike) else None
+    )
+    if isinstance(value, Artifact):
+        try:
+            resolved = value.ensure_local_path(
+                tracker=active_tracker,
+                target_root=target_root,
+                source_root=source_root,
+                on_missing="warn",
+            )
+        except Exception:
+            logger.debug(
+                "[Archive] Consist artifact materialization failed for %s",
+                value.key,
+                exc_info=True,
+            )
+            return None
+        return os.path.abspath(os.fspath(resolved)) if resolved is not None else None
+    if active_tracker is None:
         return None
     try:
-        result = tracker.materialize_artifact(
+        result = active_tracker.materialize_artifact(
             value,
             target_root=target_root,
             source_root=source_root,

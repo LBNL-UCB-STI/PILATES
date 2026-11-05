@@ -188,37 +188,46 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
 def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tracker_inactive(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import weakref
+    from consist import Artifact
+    from consist.models.artifact import set_tracker_ref
 
     current_local = tmp_path / "run-current"
     current_local.mkdir()
     expected_local = current_local / "beam" / "output" / "0.events.parquet"
 
     class _TrackerStub:
+        def resolve_uri(self, uri: str) -> str:
+            rel_path = uri.removeprefix("workspace://")
+            return str(tmp_path / "missing-run" / rel_path)
+
         def materialize_artifact(
             self,
             requested_artifact: object,
             *,
-            target_root: str,
-            source_root: str | None = None,
+            target_root: str | Path,
+            source_root: str | Path | None = None,
             preserve_existing: bool = True,
             on_missing: str = "warn",
+            allow_external_paths: bool | None = None,
             validate_content_hash: str = "if-present",
         ) -> object:
             expected_local.parent.mkdir(parents=True, exist_ok=True)
             expected_local.write_text("events", encoding="utf-8")
-            return SimpleNamespace(path=expected_local, resolvable=True)
+            return SimpleNamespace(
+                path=expected_local,
+                status="materialized_from_recovery_root",
+                resolvable=True,
+            )
 
     tracker_stub = _TrackerStub()
-    artifact = SimpleNamespace(
+    artifact = Artifact(
         key="events_parquet_2015_0",
         container_uri="workspace://beam/output/0.events.parquet",
-        path=None,
-        abs_path=None,
+        driver="parquet",
         run_id="beam_run_1",
         meta={},
-        _tracker=weakref.ref(tracker_stub),
     )
+    set_tracker_ref(artifact, tracker_stub)
 
     monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: None)
 
