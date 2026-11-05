@@ -26,6 +26,7 @@ from pilates.workflows.coupler_namespace import (
 )
 from pilates.utils.archive_paths import resolve_archive_run_dir
 from pilates.utils.io import get_traffic_assignment_model
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.steps import (
     beam_full_skim,
     beam_postprocess,
@@ -163,6 +164,13 @@ def _compile_beam_launch_config(
     """Create the one derived config tree consumed by the next BEAM process."""
 
     source_root = beam_config_root(settings, workspace=workspace)
+    if (
+        get_setting(settings, "shared.geography.zones") is not None
+        and not (source_root / "shape" / "canonical_zones_sorted.geojson").exists()
+    ):
+        from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
+
+        _prepare_beam_zone_shapefile(workspace, settings)
     output_dir = (
         Path(workspace.full_path)
         / ".pilates-beam-launch-config"
@@ -354,14 +362,6 @@ def _standalone_full_skim_preprocess_outputs(
                     LINKSTATS_WARMSTART,
                     prepared[LINKSTATS_WARMSTART],
                 )
-    if settings is not None:
-        shared_cfg = getattr(settings, "shared", None)
-        geography_cfg = getattr(shared_cfg, "geography", None)
-        zones_cfg = getattr(geography_cfg, "zones", None)
-        if zones_cfg is not None:
-            from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
-
-            _prepare_beam_zone_shapefile(workspace, settings)
     return BeamPreprocessOutputs(
         beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
         prepared_inputs=prepared,

@@ -1303,3 +1303,221 @@ def test_stage_skipping_disabled_model_topologies(tmp_path: Path) -> None:
         / "beam_plans.parquet"
     ).is_file()
     assert (scratch_standalone / "beam" / "input" / "sfbay" / "skims.omx").is_file()
+
+
+def test_standalone_beam_with_linkstats_admission_and_run_publishing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise a standalone just-BEAM run with linkstats admission and run publishing."""
+    import gzip
+    import hashlib
+    import json
+    import requests
+    from pilates.beam.admission import (
+        BeamInputAdmissionError,
+        LINKSTATS_PROVENANCE_SCHEMA_VERSION,
+        write_linkstats_provenance_sidecar,
+    )
+    from pilates.config.models import (
+        BeamAdmissionConfig,
+        BeamLinkstatsAdmissionConfig,
+        DeclaredDigestExpectation,
+    )
+    from pilates.runtime import launcher
+    from pilates.runtime.promote_run_archive import promote_run_to_recovery_roots
+
+    env = build_micro_world(
+        tmp_path / "just_beam",
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=2,  # Clamped to 1 outer iteration in BEAM-only mode
+        max_year_intervals=1,
+        land_use_model=None,
+        vehicle_ownership_model=None,
+        activity_demand_model=None,
+        travel_model="beam",
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+    assert env.settings.write_skims_to_omx is False
+    assert env.settings.beam is not None
+
+    # Create a warmstart linkstats file + provenance sidecar in static BEAM inputs
+    warmstart_rel = "warmstart_linkstats.csv.gz"
+    warmstart_src = env.paths.beam_static_input_dir / "sfbay" / warmstart_rel
+    with gzip.open(warmstart_src, "wt", encoding="utf-8") as gz:
+        gz.write(
+            "link,from,to,hour,length,freespeed,capacity,stat,volume,traveltime\n"
+            "1,1,2,8.0,1000.0,13.8,1800.0,AVG,420.0,78.5\n"
+        )
+    digest_hex = hashlib.sha256(warmstart_src.read_bytes()).hexdigest()
+    expected_identity = f"sha256:file:{digest_hex}"
+    write_linkstats_provenance_sidecar(
+        warmstart_src,
+        {
+            "schema_version": LINKSTATS_PROVENANCE_SCHEMA_VERSION,
+            "identity": expected_identity,
+            "source_run_id": "baseline_beam_2015",
+            "forecast_year": 2015,
+        },
+    )
+    env.settings.beam.warmstart_linkstats_path = warmstart_rel
+
+    # --- Part A: Strict linkstats admission rejects a mismatched digest before BEAM runs ---
+    rejected_scratch = tmp_path / "just_beam_rejected_scratch"
+    rejected_archive = tmp_path / "just_beam_rejected_archive"
+    rejected_scratch.mkdir(parents=True, exist_ok=True)
+    rejected_archive.mkdir(parents=True, exist_ok=True)
+
+    rejected_settings = env.settings.model_copy(deep=True)
+    rejected_settings.run.local_workspace_root = str(rejected_scratch)
+    rejected_settings.run.output_directory = str(rejected_archive)
+    assert rejected_settings.beam is not None
+    rejected_settings.beam.admission = BeamAdmissionConfig(
+        linkstats=BeamLinkstatsAdmissionConfig(
+            mode="strict",
+            expectation=DeclaredDigestExpectation(
+                identity="sha256:file:" + ("0" * 64),
+                source_label="wrong-baseline-digest",
+            ),
+        )
+    )
+
+    with ContractValidatingContainerBackend() as backend_rejected:
+        with pytest.raises(
+            BeamInputAdmissionError,
+            match="BEAM linkstats admission rejected before execution: mismatched",
+        ):
+            launcher.main(settings=rejected_settings)
+
+    assert backend_rejected.invocations == []
+    rejected_archive_run = _latest_run_dir(rejected_archive)
+    rejected_report_path = (
+        rejected_archive_run / "admission" / "beam-linkstats-warmstart.json"
+    )
+    assert rejected_report_path.is_file()
+    rejected_report = json.loads(rejected_report_path.read_text(encoding="utf-8"))
+    assert rejected_report["outcome"] == "mismatched"
+    rejected_events_path = rejected_archive_run / ".pilates" / "run_events.jsonl"
+    assert rejected_events_path.is_file()
+    rejected_events = [
+        json.loads(line)
+        for line in rejected_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(
+        ev["event_type"] == "failed"
+        and ev["run_kind"] == "scenario"
+        and "BEAM linkstats admission rejected before execution" in (ev["error"] or "")
+        for ev in rejected_events
+    )
+
+    # --- Part B: Verified linkstats admission + standalone BEAM execution + publishing ---
+    published_webhook_payloads: list[dict[str, object]] = []
+
+    class _DummyResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def _capture_webhook_post(
+        url: str,
+        *,
+        json: dict[str, object],
+        timeout: float,
+    ) -> _DummyResponse:
+        published_webhook_payloads.append(
+            {"url": url, "json": json, "timeout": timeout}
+        )
+        return _DummyResponse()
+
+    monkeypatch.setenv("PILATES_GSHEET_PUBLISH", "1")
+    monkeypatch.setenv(
+        "PILATES_GSHEET_WEBHOOK_URL", "https://example.invalid/pilates-webhook"
+    )
+    monkeypatch.setenv("PILATES_GSHEET_SECRET", "test-secret")
+    monkeypatch.setattr(requests, "post", _capture_webhook_post)
+
+    env.settings.beam.admission = BeamAdmissionConfig(
+        linkstats=BeamLinkstatsAdmissionConfig(
+            mode="strict",
+            expectation=DeclaredDigestExpectation(
+                identity=expected_identity,
+                source_label="baseline_beam_2015",
+            ),
+        )
+    )
+
+    with ContractValidatingContainerBackend() as backend_verified:
+        launcher.main(settings=env.settings)
+
+    # Clamped to 1 outer iteration even though supply_demand_iters=2
+    assert [inv.model_name for inv in backend_verified.invocations] == ["beam_run"]
+
+    archive_run_dir = _latest_run_dir(env.paths.archive_root)
+    scratch_run_dir = _latest_run_dir(env.paths.scratch_root)
+
+    # Verify linkstats admission report & staged warmstart provenance sidecar
+    verified_report_path = (
+        archive_run_dir / "admission" / "beam-linkstats-warmstart.json"
+    )
+    assert verified_report_path.is_file()
+    verified_report = json.loads(verified_report_path.read_text(encoding="utf-8"))
+    assert verified_report["outcome"] == "verified"
+    assert verified_report["observed_artifact_id"] == expected_identity
+    assert (
+        verified_report["sidecar_provenance"]["source_run_id"] == "baseline_beam_2015"
+    )
+    staged_warmstarts = list(
+        (scratch_run_dir / ".pilates-beam-launch-config").rglob("*.provenance.json")
+    )
+    assert len(staged_warmstarts) >= 1
+
+    # Verify local JSONL, HTML summary, and webhook run publishing
+    events_jsonl = archive_run_dir / ".pilates" / "run_events.jsonl"
+    summary_html = archive_run_dir / ".pilates" / "run_summary.html"
+    assert events_jsonl.is_file()
+    assert summary_html.is_file()
+    events = [
+        json.loads(line)
+        for line in events_jsonl.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    completed_models = [ev["model"] for ev in events if ev["event_type"] == "complete"]
+    assert "beam_preprocess" in completed_models
+    assert "beam_run" in completed_models
+    assert "beam_postprocess" in completed_models
+    assert any(
+        ev["event_type"] == "complete" and ev["run_kind"] == "scenario" for ev in events
+    )
+    html_text = summary_html.read_text(encoding="utf-8")
+    assert "beam_run" in html_text
+    assert len(published_webhook_payloads) == len(events)
+    assert all(
+        item["url"] == "https://example.invalid/pilates-webhook"
+        and isinstance(item["json"], dict)
+        and item["json"].get("secret") == "test-secret"
+        for item in published_webhook_payloads
+    )
+
+    # Verify archive promotion to long-term recovery roots
+    recovery_root = tmp_path / "just_beam_recovery_root"
+    promoted_db = tmp_path / "just_beam_promoted.duckdb"
+    promotion_summary = promote_run_to_recovery_roots(
+        env.settings,
+        archive_run_dir=archive_run_dir,
+        roots=[recovery_root],
+        merge_main_db=promoted_db,
+    )
+    assert promotion_summary.success
+    assert len(promotion_summary.roots) == 1
+    promoted_run_dir = Path(promotion_summary.roots[0].destination_run_dir)
+    assert (promoted_run_dir / ".pilates" / "run_events.jsonl").is_file()
+    assert (promoted_run_dir / "admission" / "beam-linkstats-warmstart.json").is_file()
+    assert promoted_db.is_file()

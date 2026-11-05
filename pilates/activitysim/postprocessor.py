@@ -300,16 +300,41 @@ def _load_asim_outputs(
             state.current_inner_iter,
         )
     for table_name in output_tables:
+        bound_path = None
+        if raw_outputs is not None and raw_outputs.raw_outputs:
+            bound_path = raw_outputs.raw_outputs.get(
+                f"{table_name}_asim_out"
+            ) or raw_outputs.raw_outputs.get(f"{table_name}_asim_out_temp")
         file_format = settings.activitysim.file_format
         if file_format == "parquet":
-            file_name = "%s%s.parquet" % (prefix, table_name)
-            file_path = os.path.join(
-                asim_output_dir, "final_pipeline", table_name, "final.parquet"
-            )
-            if allow_final_pipeline:
-                try:
-                    table = pd.read_parquet(file_path)
-                except FileNotFoundError:
+            if bound_path is not None and os.path.isfile(str(bound_path)):
+                table = pd.read_parquet(bound_path)
+            else:
+                file_name = "%s%s.parquet" % (prefix, table_name)
+                file_path = os.path.join(
+                    asim_output_dir, "final_pipeline", table_name, "final.parquet"
+                )
+                if allow_final_pipeline:
+                    try:
+                        table = pd.read_parquet(file_path)
+                    except FileNotFoundError:
+                        if fallback_dir:
+                            fallback_path = os.path.join(
+                                fallback_dir, f"{table_name}.parquet"
+                            )
+                            try:
+                                table = pd.read_parquet(fallback_path)
+                            except FileNotFoundError:
+                                logger.warning(
+                                    "Parquet file not found: %s (fallback: %s)",
+                                    file_path,
+                                    fallback_path,
+                                )
+                                continue
+                        else:
+                            logger.warning("Parquet file not found: %s", file_path)
+                            continue
+                else:
                     if fallback_dir:
                         fallback_path = os.path.join(
                             fallback_dir, f"{table_name}.parquet"
@@ -318,34 +343,23 @@ def _load_asim_outputs(
                             table = pd.read_parquet(fallback_path)
                         except FileNotFoundError:
                             logger.warning(
-                                "Parquet file not found: %s (fallback: %s)",
-                                file_path,
+                                "Parquet file not found (final_pipeline ignored): %s",
                                 fallback_path,
                             )
                             continue
                     else:
-                        logger.warning("Parquet file not found: %s", file_path)
-                        continue
-            else:
-                if fallback_dir:
-                    fallback_path = os.path.join(fallback_dir, f"{table_name}.parquet")
-                    try:
-                        table = pd.read_parquet(fallback_path)
-                    except FileNotFoundError:
                         logger.warning(
-                            "Parquet file not found (final_pipeline ignored): %s",
-                            fallback_path,
+                            "Parquet file not found; final_pipeline ignored and no fallback provided: %s",
+                            file_path,
                         )
                         continue
-                else:
-                    logger.warning(
-                        "Parquet file not found; final_pipeline ignored and no fallback provided: %s",
-                        file_path,
-                    )
-                    continue
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
-            file_path = os.path.join(asim_output_dir, file_name)
+            file_path = (
+                str(bound_path)
+                if bound_path is not None and os.path.isfile(str(bound_path))
+                else os.path.join(asim_output_dir, file_name)
+            )
             if table_name == "persons":
                 index_col = "person_id"
             elif table_name == "households":

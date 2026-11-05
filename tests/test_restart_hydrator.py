@@ -514,3 +514,74 @@ def test_restore_restart_coupler_snapshot_stages_directory_artifacts_and_enforce
                 state=cross_year_state,
                 workspace=workspace,
             )
+
+
+def test_restore_restart_coupler_snapshot_respects_before_step_ordinal_on_multi_year_rewind(
+    tmp_path,
+):
+    from pathlib import Path
+    from pilates.workflows.state import WorkflowState
+    from tests.helpers.micro_world_fixture import build_micro_world
+
+    env = build_micro_world(
+        tmp_path / "multi_year_rewind",
+        start_year=2015,
+        end_year=2019,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+    )
+    db_path = str(tmp_path / "provenance.duckdb")
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    h5_2015 = ws / "model_data_2015.h5"
+    h5_2015.write_text("end-of-2015-h5\n", encoding="utf-8")
+    h5_2017 = ws / "model_data_2017.h5"
+    h5_2017.write_text("mid-2017-urbansim-h5\n", encoding="utf-8")
+
+    tracker = consist.Tracker(run_dir=ws, db_path=db_path)
+    with tracker.scenario("multi_year_scenario") as sc:
+
+        def step_2015_beam():
+            art = tracker.log_artifact(h5_2015, key="usim_datastore_h5")
+            sc.coupler.set("usim_datastore_h5", art)
+
+        def step_2017_urbansim():
+            art = tracker.log_artifact(h5_2017, key="usim_datastore_h5")
+            sc.coupler.set("usim_datastore_h5", art)
+
+        sc.run(
+            step_2015_beam,
+            name="beam_postprocess_2017",
+            stage="supply_demand",
+            year=2017,
+            iteration=0,
+        )
+        sc.capture_coupler_snapshot(phase="post")
+        sc.run(
+            step_2017_urbansim,
+            name="urbansim_postprocess_2017",
+            stage="land_use",
+            year=2017,
+            iteration=0,
+        )
+        sc.capture_coupler_snapshot(phase="post")
+
+    # Simulate a restart in year 2017 rewound to Stage.land_use (forecast_year=2019)
+    state = env.state
+    state.current_year = 2017
+    state.current_major_stage = WorkflowState.Stage.land_use
+    state.current_inner_iter = 0
+    state.scenario_id = "multi_year_scenario"
+
+    with tracker.scenario("multi_year_scenario_restart") as sc_restart:
+        restored = restart_runtime.restore_restart_coupler_snapshot(
+            scenario=sc_restart,
+            tracker=tracker,
+            settings=env.settings,
+            state=state,
+            workspace=SimpleNamespace(full_path=ws, archive_run_dir=ws),
+        )
+        assert "usim_datastore_h5" in restored
+        assert Path(restored["usim_datastore_h5"].abs_path).name == "model_data_2015.h5"

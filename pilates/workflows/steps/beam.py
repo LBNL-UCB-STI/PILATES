@@ -597,27 +597,6 @@ def _project_beam_preprocess_outputs(
         prepared_inputs=prepared,
         prepared_input_metadata=prepared_metadata,
     )
-    preprocess_context = resolved_inputs.metadata.get("beam_preprocess_context")
-    if isinstance(preprocess_context, Mapping):
-        zone_output_path = preprocess_context.get("zone_output_path")
-        if (
-            isinstance(zone_output_path, (str, Path))
-            and not Path(zone_output_path).exists()
-        ):
-            from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
-
-            _prepare_beam_zone_shapefile(
-                workspace,
-                settings,
-                canonical_zone_source=preprocess_context.get("canonical_zone_source"),
-                canonical_zone_id_column=preprocess_context.get(
-                    "canonical_zone_id_column"
-                ),
-                canonical_zone_index_column=preprocess_context.get(
-                    "canonical_zone_index_column"
-                ),
-                zone_output_path=Path(zone_output_path),
-            )
     _validate_native_outputs(
         projected,
         step_name="beam_preprocess",

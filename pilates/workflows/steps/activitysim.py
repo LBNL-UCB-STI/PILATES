@@ -42,8 +42,6 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
     configured_asim_output_keys,
-    has_asim_run_marker,
-    write_asim_run_marker,
 )
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.config.models import PilatesConfig
@@ -664,6 +662,7 @@ def _activitysim_postprocess_resolver(
         coupler=coupler,
     )
     inputs = dict(resolved.binding.inputs or {})
+    removed_roles: set[str] = set()
     if (
         USIM_DATASTORE_BASE_H5 in inputs
         and not isinstance(inputs[USIM_DATASTORE_BASE_H5], Artifact)
@@ -673,6 +672,7 @@ def _activitysim_postprocess_resolver(
         )
     ):
         inputs.pop(USIM_DATASTORE_BASE_H5, None)
+        removed_roles.add(USIM_DATASTORE_BASE_H5)
     if step_identity is not None and all(
         isinstance(value, Artifact) for value in inputs.values()
     ):
@@ -680,6 +680,11 @@ def _activitysim_postprocess_resolver(
         # datastore in restart/base-only cases.  A normal BindingResult loses
         # that parameter-to-artifact relation during requested staging; freeze
         # it so Consist stages each named parameter by its tracked identity.
+        filtered_destinations = {
+            role: dest
+            for role, dest in resolved.logical_destinations.items()
+            if role not in removed_roles
+        }
         return ResolvedStepInputs(
             step_name=resolved.step_name,
             binding=build_resolved_binding(
@@ -700,14 +705,13 @@ def _activitysim_postprocess_resolver(
             optional_roles=resolved.optional_roles,
             source_by_role=resolved.source_by_role,
             selected_key_by_role=resolved.selected_key_by_role,
-            logical_destinations=resolved.logical_destinations,
+            logical_destinations=filtered_destinations,
             metadata=resolved.metadata,
         )
 
     population_source = inputs.get(USIM_POPULATION_SOURCE_H5)
     current_datastore = inputs.get(USIM_DATASTORE_CURRENT_H5)
     base_datastore = inputs.get(USIM_DATASTORE_BASE_H5)
-    removed_alias = False
     if _is_population_source_alias(population_source, current_datastore):
         # Vehicle ownership intentionally aliases the current datastore role to
         # the immutable population snapshot.  The ActivitySim postprocessor can
@@ -715,15 +719,20 @@ def _activitysim_postprocess_resolver(
         # the artifact once so requested staging has one unambiguous input key.
         inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
         current_datastore = None
-        removed_alias = True
+        removed_roles.add(USIM_DATASTORE_CURRENT_H5)
     if _is_population_source_alias(
         population_source, base_datastore
     ) or _is_population_source_alias(current_datastore, base_datastore):
         inputs.pop(USIM_DATASTORE_BASE_H5, None)
-        removed_alias = True
-    if not removed_alias:
+        removed_roles.add(USIM_DATASTORE_BASE_H5)
+    if not removed_roles:
         return resolved
 
+    filtered_destinations = {
+        role: dest
+        for role, dest in resolved.logical_destinations.items()
+        if role not in removed_roles
+    }
     return ResolvedStepInputs(
         step_name=resolved.step_name,
         binding=BindingResult(
@@ -736,7 +745,7 @@ def _activitysim_postprocess_resolver(
         optional_roles=resolved.optional_roles,
         source_by_role=resolved.source_by_role,
         selected_key_by_role=resolved.selected_key_by_role,
-        logical_destinations=resolved.logical_destinations,
+        logical_destinations=filtered_destinations,
         metadata=resolved.metadata,
     )
 
@@ -1059,20 +1068,6 @@ def _project_activitysim_run_outputs(
             step_name="activitysim_run",
         )
     )
-    if isinstance(state, WorkflowState):
-        asim_output_dir = workspace.get_asim_output_dir()
-        if not has_asim_run_marker(
-            asim_output_dir, state.current_year, state.current_inner_iter
-        ):
-            write_asim_run_marker(
-                asim_output_dir,
-                state.current_year,
-                state.current_inner_iter,
-                meta={
-                    "model": "activitysim",
-                    "output_tables": list(projected.raw_outputs),
-                },
-            )
     return projected
 
 

@@ -737,12 +737,19 @@ def _stage_static_inputs(
     sample_plans.to_parquet(
         beam_urbansim_dir / "sample_urbansim_plans.parquet", index=False
     )
+    sample_plans.to_parquet(beam_urbansim_dir / "plans.parquet", index=False)
     sample_plans.to_csv(beam_urbansim_dir / "sample_urbansim_plans.csv", index=False)
     tables["households"].reset_index().to_parquet(
         beam_urbansim_dir / "sample_urbansim_households.parquet", index=False
     )
+    tables["households"].reset_index().to_parquet(
+        beam_urbansim_dir / "households.parquet", index=False
+    )
     tables["persons"].reset_index().to_parquet(
         beam_urbansim_dir / "sample_urbansim_persons.parquet", index=False
+    )
+    tables["persons"].reset_index().to_parquet(
+        beam_urbansim_dir / "persons.parquet", index=False
     )
     tables["blocks"].reset_index().to_parquet(
         beam_urbansim_dir / "sample_urbansim_blocks.parquet", index=False
@@ -826,6 +833,7 @@ def build_micro_world(
     vehicle_ownership_model: str | None = "atlas",
     activity_demand_model: str | None = "activitysim",
     travel_model: str | None = "beam",
+    write_skims_to_omx: bool | None = None,
     max_year_intervals: int | None = None,
     scratch_root: Path | None = None,
     archive_root: Path | None = None,
@@ -833,6 +841,11 @@ def build_micro_world(
     """Create a complete, self-contained 3-zone micro-world in ``tmp_path``."""
     effective_sharrow = sharrow_enabled if sharrow_enabled is not None else sharrow
     effective_beamac = atlas_beamac if atlas_beamac is not None else beamac
+    effective_write_skims_to_omx = (
+        write_skims_to_omx
+        if write_skims_to_omx is not None
+        else bool(land_use_model or vehicle_ownership_model or activity_demand_model)
+    )
     resolved_scratch = (scratch_root or (tmp_path / "scratch")).resolve()
     resolved_archive = (archive_root or (tmp_path / "archive")).resolve()
     static_root = (tmp_path / "static_inputs").resolve()
@@ -891,7 +904,7 @@ def build_micro_world(
                 else {}
             ),
         },
-        "write_skims_to_omx": True,
+        "write_skims_to_omx": effective_write_skims_to_omx,
         "shared": {
             "geography": {
                 "FIPS": {"counties": ["001"], "state": "06"},

@@ -844,6 +844,8 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
+            # Primary rewind runs in _prepare_run_context; this second call is an
+            # idempotent guard when _prepare_run_context is stubbed in unit tests.
             _rewind_uncommitted_activitysim_restart_to_provider_boundary(
                 state=state,
             )

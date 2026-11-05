@@ -457,6 +457,106 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
+def _resolve_restart_before_step_ordinal(
+    *,
+    tracker: Any,
+    scenario_run_id: str,
+    state: Any,
+) -> Optional[int]:
+    """Return the earliest step_ordinal at or after the resumed workflow frontier, if any."""
+    from pilates.workflows.state import WorkflowState
+
+    if not isinstance(state, WorkflowState):
+        return None
+    from consist import Tracker
+    from consist.models.run import Run, RunCouplerSnapshot
+    from sqlmodel import col, select
+
+    if not isinstance(tracker, Tracker) or tracker.db is None:
+        return None
+
+    cur_year = state.current_year
+    fcast_year = state.forecast_year
+    cur_iter = int(state.iteration or 0)
+    major_stage = state.current_major_stage
+
+    try:
+        with tracker.db.session_scope() as session:
+            rows = session.exec(
+                select(
+                    RunCouplerSnapshot.step_ordinal,
+                    Run.stage,
+                    Run.year,
+                    Run.iteration,
+                )
+                .join(Run, col(RunCouplerSnapshot.run_id) == col(Run.id))
+                .where(
+                    col(RunCouplerSnapshot.scenario_run_id) == scenario_run_id,
+                    col(RunCouplerSnapshot.phase) == "post",
+                )
+            ).all()
+    except Exception:
+        return None
+
+    if not rows:
+        return None
+
+    max_land_use_ord = max(
+        (
+            int(step_ord)
+            for step_ord, r_stage, r_year, _ in rows
+            if r_stage == "land_use" and r_year == cur_year
+        ),
+        default=0,
+    )
+    matching_ordinals: list[int] = []
+    for step_ord, r_stage, r_year, r_iter in rows:
+        ord_int = int(step_ord)
+        r_iter_int = int(r_iter or 0)
+        if major_stage == WorkflowState.Stage.land_use:
+            if (
+                r_stage == "land_use" and r_year is not None and r_year >= cur_year
+            ) or (
+                r_stage == "supply_demand"
+                and r_year is not None
+                and fcast_year is not None
+                and r_year >= fcast_year
+            ):
+                matching_ordinals.append(ord_int)
+        elif major_stage == WorkflowState.Stage.vehicle_ownership_model:
+            if (
+                (r_stage == "land_use" and r_year is not None and r_year > cur_year)
+                or (
+                    r_stage == "vehicle_ownership"
+                    and ord_int > max_land_use_ord
+                    and r_year is not None
+                    and r_year >= cur_year
+                )
+                or (
+                    r_stage == "supply_demand"
+                    and r_year is not None
+                    and fcast_year is not None
+                    and r_year >= fcast_year
+                )
+            ):
+                matching_ordinals.append(ord_int)
+        elif major_stage == WorkflowState.Stage.supply_demand_loop:
+            if (r_stage == "land_use" and r_year is not None and r_year > cur_year) or (
+                r_stage == "supply_demand"
+                and r_year is not None
+                and fcast_year is not None
+                and (
+                    r_year > fcast_year
+                    or (r_year == fcast_year and r_iter_int >= cur_iter)
+                )
+            ):
+                matching_ordinals.append(ord_int)
+
+    if not matching_ordinals:
+        return None
+    return min(matching_ordinals)
+
+
 def restore_restart_coupler_snapshot(
     *,
     scenario: Any,
@@ -466,7 +566,6 @@ def restore_restart_coupler_snapshot(
     workspace: Any,
 ) -> Mapping[str, Any]:
     """Restore coupler state from DuckDB, materializing available artifacts and enforcing warmstart policy."""
-    del tracker
     candidate_ids: List[str] = []
     output_run_name = get_setting(settings, "run.output_run_name", None)
     for cand in (
@@ -503,16 +602,26 @@ def restore_restart_coupler_snapshot(
             if baseline_coupler is not None and coupler_obj is not None:
                 coupler_obj.clear()
                 coupler_obj.update(baseline_coupler)
-            restored = scenario.restore_coupler_snapshot(
-                phase="post",
+            before_ord = _resolve_restart_before_step_ordinal(
+                tracker=tracker,
                 scenario_run_id=sid,
-                clear_existing=False,
-                fallback_to_completed_outputs=True,
-                target_root=target_root,
-                source_root=source_root,
-                remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
-                prune_unrecoverable=True,
+                state=state,
             )
+            if before_ord == 1:
+                continue
+            restore_kwargs: dict[str, Any] = {
+                "phase": "post",
+                "scenario_run_id": sid,
+                "clear_existing": False,
+                "fallback_to_completed_outputs": True,
+                "target_root": target_root,
+                "source_root": source_root,
+                "remappable_schemes": RESTART_REMAPPABLE_SCHEMES,
+                "prune_unrecoverable": True,
+            }
+            if before_ord is not None and before_ord > 1:
+                restore_kwargs["before_step_ordinal"] = before_ord
+            restored = scenario.restore_coupler_snapshot(**restore_kwargs)
             if restored:
                 break
             pruned_for_sid = (

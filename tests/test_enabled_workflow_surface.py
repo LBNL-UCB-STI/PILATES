@@ -194,6 +194,14 @@ def test_surface_requires_omx_for_downstream_models_or_explicit_export():
         FINAL_SKIMS_OMX
         in beam_only_surface.step_surface("beam_postprocess").required_output_keys
     )
+    assert (
+        "zarr_skims"
+        not in beam_only_surface.step_surface("beam_postprocess").required_output_keys
+    )
+    assert (
+        "zarr_skims"
+        in beam_only_surface.step_surface("beam_postprocess").optional_output_keys
+    )
 
 
 def test_surface_bootstrap_owned_and_deferred_keys_follow_run_shape():

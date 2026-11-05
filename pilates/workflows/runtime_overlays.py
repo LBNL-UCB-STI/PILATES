@@ -5,11 +5,13 @@ from typing import Any, Optional, Sequence, Tuple
 
 from pilates.activitysim.outputs import configured_asim_output_keys
 from pilates.beam.outputs import requires_omx_skim_output
+from pilates.utils.io import get_activity_demand_model
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
 )
 
 
@@ -137,6 +139,7 @@ def resolve_runtime_output_overrides(
     that a downstream enabled model requires.
     """
     promoted: Tuple[str, ...] = ()
+    demoted: Tuple[str, ...] = ()
     if step_name in {"activitysim_run", "activitysim_postprocess"}:
         activitysim_settings = getattr(settings, "activitysim", None)
         if activitysim_settings is not None:
@@ -149,14 +152,25 @@ def resolve_runtime_output_overrides(
         )
         if beamac and beamac > 0:
             promoted = ("atlas_accessibility_csv",)
-    elif step_name == "beam_postprocess" and requires_omx_skim_output(settings):
-        promoted = (FINAL_SKIMS_OMX,)
+    elif step_name == "beam_postprocess":
+        if requires_omx_skim_output(settings):
+            promoted = (FINAL_SKIMS_OMX,)
+        if get_activity_demand_model(settings) != "activitysim":
+            demoted = (ZARR_SKIMS,)
 
-    if not promoted:
+    if not promoted and not demoted:
         return required_outputs, optional_outputs
 
     promoted_set = set(promoted)
-    return (
-        _ordered_unique(required_outputs, promoted),
-        tuple(key for key in optional_outputs if key not in promoted_set),
+    demoted_set = set(demoted)
+    effective_required = tuple(
+        key
+        for key in _ordered_unique(required_outputs, promoted)
+        if key not in demoted_set
     )
+    effective_optional = tuple(
+        key
+        for key in _ordered_unique(optional_outputs, demoted)
+        if key not in promoted_set
+    )
+    return effective_required, effective_optional
