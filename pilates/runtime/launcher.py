@@ -18,7 +18,16 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, List, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    cast,
+    runtime_checkable,
+)
 
 from consist.models.run import Run
 from pilates.config import PilatesConfig
@@ -145,6 +154,25 @@ _filter_schema_steps_for_enabled_models = (
 )
 _log_local_storage_info = log_local_storage_info_if_enabled
 _assert_bootstrap_output_invariant = bootstrap_runtime.assert_bootstrap_output_invariant
+
+
+@runtime_checkable
+class _SupportsSetRunSubdirFn(Protocol):
+    def set_run_subdir_fn(self, fn: Callable[[Run], str]) -> None: ...
+
+
+def _pilates_run_subdir(run: Run) -> str:
+    """
+    Build a collision-free run artifact subdirectory under ``outputs/``.
+
+    Multi-year and multi-subyear scenarios execute the same ``model_name`` and
+    ``iteration`` multiple times under the same scenario ``parent_run_id``.
+    Using ``run.id`` avoids collisions across years and sub-years for run-scoped
+    artifacts such as ``OutputSet`` manifests.
+    """
+    if run.parent_run_id:
+        return f"{run.parent_run_id}/{run.model_name}/{run.id}"
+    return f"{run.model_name}/{run.id}"
 
 
 def _log_restart_instructions_on_failure() -> None:
@@ -480,6 +508,8 @@ def _prepare_run_context(
             "Check earlier Consist logs for tracker creation errors, often caused by "
             "a PILATES/Consist API mismatch."
         )
+    if isinstance(tracker, _SupportsSetRunSubdirFn):
+        tracker.set_run_subdir_fn(_pilates_run_subdir)
     run_event_context = RunNotificationContext.from_env(
         run_name=run_name,
         scenario_id=scenario_id,

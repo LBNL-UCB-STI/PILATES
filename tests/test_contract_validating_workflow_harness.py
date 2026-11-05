@@ -1521,3 +1521,203 @@ def test_standalone_beam_with_linkstats_admission_and_run_publishing(
     assert (promoted_run_dir / ".pilates" / "run_events.jsonl").is_file()
     assert (promoted_run_dir / "admission" / "beam-linkstats-warmstart.json").is_file()
     assert promoted_db.is_file()
+
+
+def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Scenario 6 (Multi-Year Mid-Run Interruption & Rewind Restart on a Fresh Node):
+    Runs a 2-interval multi-year horizon (`2015 -> 2017 -> 2019`, `max_year_intervals=2`).
+    Year 2015 completes all 4 stages (`UrbanSim`, `ATLAS`, `ActivitySim`, `BEAM`, `Postprocessing`).
+    In Year 2017 (`2017 -> 2019`), `UrbanSim` and `ATLAS` complete and snapshot their
+    updated 2019 datastore to DuckDB before an uncommitted crash occurs mid-`ActivitySim`
+    in 2017. On restart on a wiped scratch workspace with `allow_rewind_resume=True`:
+    - `_rewind_uncommitted_activitysim_restart_to_provider_boundary` rewinds `2017` to `land_use`,
+    - `restore_restart_coupler_snapshot` uses `before_step_ordinal` to restore the end-of-2015
+      coupler snapshot (not the post-crash 2017 `atlas_postprocess` snapshot),
+    - `UrbanSim(2017)` and `ATLAS(2017/2019)` replay via Consist cache hits (0 container re-runs),
+    - `ActivitySim(2017) -> BEAM(2017) -> Postprocessing(2017)` execute to completion.
+    """
+    from pilates.runtime import launcher
+
+    real_run_supply_demand_stage = launcher.run_supply_demand_stage
+
+    env = build_micro_world(
+        tmp_path,
+        start_year=2015,
+        end_year=2019,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=2,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+
+    def _interrupt_mid_activitysim_in_2017(**kwargs):
+        year = kwargs["year"]
+        if year == 2015:
+            return real_run_supply_demand_stage(**kwargs)
+        ctx = kwargs["context"]
+        ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
+        ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
+        ctx.state.sub_stage_progress = "runner"
+        ctx.state.write_state()
+        raise RuntimeError(
+            "Simulated crash mid-ActivitySim in year 2017 after 2017 UrbanSim+ATLAS"
+        )
+
+    with ContractValidatingContainerBackend() as backend:
+        monkeypatch.setattr(
+            launcher, "run_supply_demand_stage", _interrupt_mid_activitysim_in_2017
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="Simulated crash mid-ActivitySim in year 2017 after 2017 UrbanSim\\+ATLAS",
+        ):
+            launcher.main(settings=env.settings)
+
+        pre_restart_models = [inv.model_name for inv in backend.invocations]
+        # Year 2015: urbansim, atlas(2015), atlas(2017), activitysim_numba_warmup, activitysim, beam_run (6)
+        # Year 2017 before crash: urbansim, atlas(2017), atlas(2019) (3) -> 9 total
+        assert pre_restart_models == [
+            "urbansim",
+            "atlas",
+            "atlas",
+            "activitysim_numba_warmup",
+            "activitysim",
+            "beam_run",
+            "urbansim",
+            "atlas",
+            "atlas",
+        ]
+        pre_restart_count = len(backend.invocations)
+
+        archive_run_dir = _latest_run_dir(env.paths.archive_root)
+        archived_state = archive_run_dir / "run_state.yaml"
+        assert archived_state.is_file()
+
+        # Restore real supply_demand stage, wipe node-local scratch, and restart
+        monkeypatch.setattr(
+            launcher, "run_supply_demand_stage", real_run_supply_demand_stage
+        )
+        shutil.rmtree(env.paths.scratch_root)
+        env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
+
+        restart_settings = env.settings.model_copy(deep=True)
+        restart_settings.runtime.options.state_file_loc = str(archived_state)
+        restart_settings.runtime.options.allow_rewind_resume = True
+        launcher.main(settings=restart_settings)
+
+        # Year 2017 UrbanSim and ATLAS replay from Consist cache (0 container re-runs);
+        # only Year 2017 ActivitySim (warmup + main) and BEAM execute containers!
+        post_restart_models = [
+            inv.model_name for inv in backend.invocations[pre_restart_count:]
+        ]
+        assert post_restart_models == [
+            "activitysim_numba_warmup",
+            "activitysim",
+            "beam_run",
+        ]
+
+    restarted_scratch_dir = _latest_run_dir(env.paths.scratch_root)
+    assert (
+        restarted_scratch_dir
+        / "activitysim"
+        / "output"
+        / "year-2017-iteration-0"
+        / "beam_plans.parquet"
+    ).is_file()
+    assert (restarted_scratch_dir / "beam" / "input" / "sfbay" / "skims.omx").is_file()
+
+
+def test_forecast_year_scenario_fork_reuses_base_year_cache_and_branches_forecast_year(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Scenario 7 (Forecast-Year Scenario Forking from a Cached Base Year):
+    1. Runs a 2-interval Baseline Scenario (`2015 -> 2017` and `2017 -> 2019`, `max_year_intervals=2`),
+       executing all 12 containers across both intervals, and promotes the completed run's
+       Consist DB into `shared.database.path`.
+    2. Wipes node-local scratch (`local_workspace_root`) and launches a Forked Policy Scenario
+       seeded from `shared.database.path` where Year 2015 is identical to baseline, but at the
+       start of Year 2017 a policy parameter (`beam.replanning_portion`) is modified.
+    3. Verifies:
+       - All of Year 2015 (`UrbanSim`, `ATLAS`, `ActivitySim`, `BEAM`, `Postprocessing`) and
+         Year 2017 `UrbanSim`, `ATLAS`, and `ActivitySim` hit the Consist cache on cold scratch
+         (0 container re-executions) while hydrating the 2015 -> 2017 handoff artifacts,
+       - Only Year 2017 `BEAM` (whose `replanning_portion` policy changed) misses the cache
+         and executes its container in the forked scenario.
+    """
+    from pilates.runtime import launcher
+    from pilates.runtime.promote_run_archive import promote_run_to_recovery_roots
+
+    real_run_land_use_stage = launcher.run_land_use_stage
+
+    env = build_micro_world(
+        tmp_path,
+        start_year=2015,
+        end_year=2019,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=2,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+
+    with ContractValidatingContainerBackend() as backend:
+        # 1. Baseline 2-interval run (2015 and 2017)
+        # Note: activitysim_numba_warmup only runs once per workspace (in 2015)
+        launcher.main(settings=env.settings)
+        baseline_models = [inv.model_name for inv in backend.invocations]
+        assert baseline_models == [
+            # Year 2015
+            "urbansim",
+            "atlas",
+            "atlas",
+            "activitysim_numba_warmup",
+            "activitysim",
+            "beam_run",
+            # Year 2017
+            "urbansim",
+            "atlas",
+            "atlas",
+            "activitysim",
+            "beam_run",
+        ]
+        baseline_count = len(backend.invocations)
+
+        baseline_archive_dir = _latest_run_dir(env.paths.archive_root)
+        promo = promote_run_to_recovery_roots(
+            settings=env.settings,
+            archive_run_dir=baseline_archive_dir,
+            merge_db_only=True,
+            merge_main_db=env.paths.db_path,
+        )
+        assert promo.success
+
+        # 2. Wipe scratch completely and launch Forked Scenario with a Year-2017 BEAM policy tweak
+        shutil.rmtree(env.paths.scratch_root)
+        env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
+
+        fork_settings = env.settings.model_copy(deep=True)
+
+        def _apply_2017_policy_fork(**kwargs):
+            year = kwargs["year"]
+            if year == 2017:
+                kwargs["context"].settings.beam.replanning_portion = 0.75
+            return real_run_land_use_stage(**kwargs)
+
+        monkeypatch.setattr(launcher, "run_land_use_stage", _apply_2017_policy_fork)
+        launcher.main(settings=fork_settings)
+
+        # Year 2015 (all 4 models) + Year 2017 UrbanSim, ATLAS, and ActivitySim all hit cache;
+        # only Year 2017 beam_run executes a container due to the 2017 BEAM policy change!
+        fork_models = [inv.model_name for inv in backend.invocations[baseline_count:]]
+        assert fork_models == ["beam_run"]
