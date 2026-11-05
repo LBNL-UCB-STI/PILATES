@@ -582,6 +582,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 settings,
                 self.state.forecast_year,
                 workspace,
+                skims_path=expected_beam_skims_path,
             )
             logger.info("[AtlasPreprocessor] Accessibility calculation complete.")
 
@@ -621,7 +622,13 @@ class AtlasPreprocessor(GenericPreprocessor):
 
 
 def compute_accessibility(
-    path_list, measure_list, settings, year, workspace, threshold=500
+    path_list,
+    measure_list,
+    settings,
+    year,
+    workspace,
+    threshold=500,
+    skims_path: Optional[str | os.PathLike[str]] = None,
 ):
     # set where to put atlas csv inputs (processed from urbansim outputs)
     atlas_input_path = os.path.join(
@@ -641,7 +648,13 @@ def compute_accessibility(
     # for each OD, compute minimum time taken by public transit
     # inf means no public transit available; unit = minute
     ODmatrix_df = _get_time_ODmatrix(
-        settings, path_list, measure_list, threshold, workspace, canonical_order
+        settings,
+        path_list,
+        measure_list,
+        threshold,
+        workspace,
+        canonical_order,
+        skims_path=skims_path,
     )
 
     # assign values = 1 if time taken by public transit <= 30min; 0 if not
@@ -687,10 +700,24 @@ def compute_accessibility(
     # accessibility.to_csv('{}/accessibility_{}_taz.csv'.format(atlas_input_path, year))
 
     # read in taz_to_tract conversion matrix (1454*1588)
-    taz_to_tract = pd.read_csv(
-        "{}/taz_to_tract_{}.csv".format(
-            settings.atlas.host_input_folder, settings.run.region
+    taz_to_tract_fname = f"taz_to_tract_{settings.run.region}.csv"
+    source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
+    taz_to_tract_candidates = [
+        os.path.join(workspace.get_atlas_mutable_input_dir(), taz_to_tract_fname),
+        os.path.join(source_dir, taz_to_tract_fname),
+        os.path.join(default_source_dir, taz_to_tract_fname),
+        f"{settings.atlas.host_input_folder}/{taz_to_tract_fname}",
+    ]
+    resolved_taz_to_tract_path = next(
+        (
+            candidate
+            for candidate in taz_to_tract_candidates
+            if os.path.exists(candidate)
         ),
+        taz_to_tract_candidates[-1],
+    )
+    taz_to_tract = pd.read_csv(
+        resolved_taz_to_tract_path,
         index_col=0,
     )
 
@@ -702,9 +729,13 @@ def compute_accessibility(
     accessibility_tract = accessibility_tract.transpose()
 
     # calculate tract-level zscore
-    accessibility_tract["access_zscore"] = (
-        accessibility_tract["access_sum"] - accessibility_tract["access_sum"].mean()
-    ) / accessibility_tract["access_sum"].std()
+    access_std = accessibility_tract["access_sum"].std()
+    if pd.isna(access_std) or access_std == 0:
+        accessibility_tract["access_zscore"] = 0.0
+    else:
+        accessibility_tract["access_zscore"] = (
+            accessibility_tract["access_sum"] - accessibility_tract["access_sum"].mean()
+        ) / access_std
 
     # format before writing
     accessibility_tract.index.name = "tract"
@@ -717,13 +748,23 @@ def compute_accessibility(
 
 
 def _get_time_ODmatrix(
-    settings, path_list, measure_list, threshold, workspace, canonical_order
+    settings,
+    path_list,
+    measure_list,
+    threshold,
+    workspace,
+    canonical_order,
+    skims_path: Optional[str | os.PathLike[str]] = None,
 ):
     # open skims file
     import openmatrix as omx
 
-    skims_dir = workspace.get_asim_mutable_data_dir()
-    skims = omx.open_file(os.path.join(skims_dir, "skims.omx"), mode="r")
+    if skims_path is not None:
+        resolved_skims_path = os.fspath(skims_path)
+    else:
+        skims_dir = workspace.get_asim_mutable_data_dir()
+        resolved_skims_path = os.path.join(skims_dir, "skims.omx")
+    skims = omx.open_file(resolved_skims_path, mode="r")
 
     # find the path with minimum time for each o-d
     ODmatrix = np.ones(skims.shape()) * np.inf

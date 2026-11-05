@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Mapping
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Protocol, runtime_checkable
 
 from consist import (
     Artifact,
@@ -31,6 +31,7 @@ from pilates.activitysim.runner import (
     ActivitySimConfigStagingPlan,
     ActivitySimLaunchContext,
     asim_runtime_zarr_path,
+    sharrow_enabled,
     stage_activitysim_config_roots,
     validate_activitysim_zarr_skims,
 )
@@ -377,6 +378,11 @@ def _native_activitysim_resolved_inputs(
             preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
         )
     elif step_name == "activitysim_postprocess":
+        rules[ASIM_OMX_SKIMS] = ArtifactBindingRule(
+            semantic_key=ASIM_OMX_SKIMS,
+            required=True,
+            preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
+        )
         rules[USIM_DATASTORE_CURRENT_H5] = ArtifactBindingRule(
             semantic_key=USIM_DATASTORE_CURRENT_H5,
             required=False,
@@ -425,7 +431,7 @@ def _activitysim_preprocess_resolver(
         settings=settings,
         state=state,
     )
-    return _native_activitysim_resolved_inputs(
+    resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_preprocess",
         required_roles=_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
         optional_roles=(
@@ -439,6 +445,36 @@ def _activitysim_preprocess_resolver(
         workspace=workspace,
         coupler=coupler,
     )
+    population_input = (resolved.binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5)
+    if isinstance(population_input, Artifact) and isinstance(
+        population_input.container_uri, str
+    ):
+        container_uri = population_input.container_uri
+        if container_uri.startswith("workspace://") and isinstance(
+            workspace, Workspace
+        ):
+            rel_path = container_uri[len("workspace://") :].lstrip("/")
+            if rel_path:
+                logical_destinations = dict(resolved.logical_destinations)
+                logical_destinations[USIM_POPULATION_SOURCE_H5] = (
+                    Path(workspace.full_path) / rel_path
+                )
+                return ResolvedStepInputs(
+                    step_name=resolved.step_name,
+                    binding=resolved.binding,
+                    required_roles=resolved.required_roles,
+                    optional_roles=resolved.optional_roles,
+                    source_by_role=resolved.source_by_role,
+                    selected_key_by_role=resolved.selected_key_by_role,
+                    logical_destinations=logical_destinations,
+                    metadata=resolved.metadata,
+                )
+    return resolved
+
+
+@runtime_checkable
+class _AsimMutableConfigsWorkspaceLike(Protocol):
+    def get_asim_mutable_configs_dir(self) -> str: ...
 
 
 def _activitysim_run_resolver(
@@ -501,10 +537,19 @@ def _activitysim_run_resolver(
                 zarr_rejection,
                 ASIM_OMX_SKIMS,
             )
+        configs_root = (
+            workspace.get_asim_mutable_configs_dir()
+            if isinstance(workspace, _AsimMutableConfigsWorkspaceLike)
+            else None
+        )
+        produces_zarr = sharrow_enabled(
+            settings,
+            configs_root=configs_root,
+        )
         decision = ActivitySimSkimDecision(
             role=ASIM_OMX_SKIMS,
             mode="omx",
-            produces_zarr=True,
+            produces_zarr=produces_zarr,
             selected_source=omx_source,
         )
     elif zarr_rejection is not None:

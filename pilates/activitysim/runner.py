@@ -261,14 +261,15 @@ def sharrow_enabled(
     settings: PilatesConfig,
     *,
     launch_context: Optional[ActivitySimLaunchContext] = None,
+    configs_root: str | Path | None = None,
 ) -> bool:
     """Return whether ActivitySim sharrow mode is active for ``settings``."""
-    configs_root: Path | None = None
-    if launch_context is not None:
-        configs_root = launch_context.mutable_configs_dir
+    resolved_configs_root: str | Path | None = configs_root
+    if resolved_configs_root is None and launch_context is not None:
+        resolved_configs_root = launch_context.mutable_configs_dir
     return resolve_activitysim_sharrow_enabled(
         settings,
-        configs_root=configs_root,
+        configs_root=resolved_configs_root,
     )
 
 
@@ -815,7 +816,13 @@ class ActivitysimRunner(GenericRunner):
         )
         if preparation.generated_zarr_path is not None:
             outputs.zarr_skims = preparation.generated_zarr_path
-        elif preparation.skim_mode == "omx":
+        elif preparation.skim_mode == "omx" and (
+            sharrow_enabled(
+                self.state.full_settings,
+                launch_context=preparation.launch_context,
+            )
+            or preparation.launch_context.runtime_zarr_path.exists()
+        ):
             if workspace is None:
                 raise RuntimeError(
                     "ActivitySim OMX mode requires a workspace for skim finalization"

@@ -5,7 +5,9 @@ from typing import (
     Any,
     Mapping,
     Optional,
+    Protocol,
     TYPE_CHECKING,
+    runtime_checkable,
 )
 
 from pilates.utils import consist_runtime as cr
@@ -45,6 +47,30 @@ def _materialization_roots(
     return None, None
 
 
+@runtime_checkable
+class _MaterializableTrackerLike(Protocol):
+    def materialize_artifact(
+        self,
+        artifact: Any,
+        *,
+        target_root: str,
+        source_root: Optional[str] = None,
+        preserve_existing: bool = True,
+        on_missing: str = "warn",
+        validate_content_hash: str = "if-present",
+    ) -> Any: ...
+
+
+@runtime_checkable
+class _ArtifactWithTrackerLike(Protocol):
+    _tracker: Any
+
+
+@runtime_checkable
+class _MaterializationResultLike(Protocol):
+    path: Any
+
+
 def _materialize_artifact_to_existing_path(
     value: Any,
     *,
@@ -56,14 +82,19 @@ def _materialize_artifact_to_existing_path(
     if target_root is None:
         return None
     try:
-        tracker = cr.current_tracker()
+        tracker: Any = cr.current_tracker()
     except Exception:
         tracker = None
-    materialize_artifact = getattr(tracker, "materialize_artifact", None)
-    if not callable(materialize_artifact):
+    if not isinstance(tracker, _MaterializableTrackerLike) and isinstance(
+        value, _ArtifactWithTrackerLike
+    ):
+        candidate_tracker = value._tracker
+        if isinstance(candidate_tracker, _MaterializableTrackerLike):
+            tracker = candidate_tracker
+    if not isinstance(tracker, _MaterializableTrackerLike):
         return None
     try:
-        result = materialize_artifact(
+        result = tracker.materialize_artifact(
             value,
             target_root=target_root,
             source_root=source_root,
@@ -74,14 +105,13 @@ def _materialize_artifact_to_existing_path(
     except Exception:
         logger.debug(
             "[Archive] Consist artifact materialization failed for %s",
-            getattr(value, "key", value),
+            value.key,
             exc_info=True,
         )
         return None
-    materialized_path = getattr(result, "path", None)
-    if materialized_path is None:
+    if not isinstance(result, _MaterializationResultLike) or result.path is None:
         return None
-    resolved_path = os.path.abspath(os.fspath(materialized_path))
+    resolved_path = os.path.abspath(os.fspath(result.path))
     if os.path.exists(resolved_path):
         return resolved_path
     return None

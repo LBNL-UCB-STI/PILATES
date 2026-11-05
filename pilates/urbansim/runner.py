@@ -152,6 +152,7 @@ class UrbansimRunner(
                 # can retain table-level recovery metadata without creating a
                 # second output link from this nested container boundary.
                 output_paths=None,
+                lineage_mode="none",
             )
 
             if not success:

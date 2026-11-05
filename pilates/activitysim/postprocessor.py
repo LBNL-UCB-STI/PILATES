@@ -98,6 +98,12 @@ def _read_household_table(path: Path) -> pd.DataFrame:
         return pd.read_parquet(path)
     if path.suffix in {".csv", ".gz"}:
         return pd.read_csv(path)
+    if path.suffix == "" and path.is_file():
+        with path.open("rb") as handle:
+            magic = handle.read(4)
+        if magic == b"PAR1":
+            return pd.read_parquet(path)
+        return pd.read_csv(path)
     raise ValueError(
         f"Cannot restore ATLAS household cars from unsupported table format: {path}"
     )
@@ -735,19 +741,35 @@ def create_usim_input_data(
     )
 
     archived_input_store_path: Optional[str] = None
+    prior_step_store_path: Optional[str] = None
     if os.path.exists(input_store_path):
-        logger.info(
-            "Moving urbansim inputs from the previous iteration to {0}".format(
-                archive_fname
+        if os.path.exists(archive_path) and os.path.abspath(
+            input_store_path
+        ) != os.path.abspath(archive_path):
+            prior_step_store_path = os.path.join(
+                os.path.dirname(input_store_path),
+                f".prior_step_{input_datastore_name}",
             )
-        )
-        os.rename(input_store_path, archive_path)
-        archived_input_store_path = archive_path
+            logger.info(
+                "Preserving existing pre-UrbanSim archive %s; moving prior step datastore to %s",
+                archive_fname,
+                os.path.basename(prior_step_store_path),
+            )
+            os.replace(input_store_path, prior_step_store_path)
+            archived_input_store_path = prior_step_store_path
+        else:
+            logger.info(
+                "Moving urbansim inputs from the previous iteration to {0}".format(
+                    archive_fname
+                )
+            )
+            os.rename(input_store_path, archive_path)
+            archived_input_store_path = archive_path
         if fallback_to_current_input or (
             source_store_path
             and os.path.abspath(source_store_path) == os.path.abspath(input_store_path)
         ):
-            source_store_path = archive_path
+            source_store_path = archived_input_store_path
     elif os.path.exists(archive_path):
         archived_input_store_path = archive_path
     elif current_input_store_path and os.path.exists(current_input_store_path):
@@ -822,7 +844,7 @@ def create_usim_input_data(
 
     # load last iter UrbanSim output/current data
     same_source_as_archive = os.path.abspath(usim_output_store_path) == os.path.abspath(
-        archive_path
+        archived_input_store_path
     )
     usim_output_store = (
         og_input_store
@@ -892,6 +914,7 @@ def create_usim_input_data(
         table_name = h5_key.split("/")[-1]
         if table_name not in updated_tables:
             new_input_store[table_name] = og_input_store[h5_key]
+            updated_tables.append(table_name)
             logger.info(
                 (
                     "Passing original UrbanSim table {0} through to the new Urbansim "
@@ -899,10 +922,24 @@ def create_usim_input_data(
                 ).format(table_name)
             )
 
+    if (
+        prior_step_store_path is not None
+        and os.path.exists(archive_path)
+        and os.path.abspath(archive_path) != os.path.abspath(archived_input_store_path)
+    ):
+        with pd.HDFStore(archive_path, mode="r") as pre_usim_archive_store:
+            for h5_key in pre_usim_archive_store.keys():
+                table_name = h5_key.split("/")[-1]
+                if table_name not in updated_tables:
+                    new_input_store[table_name] = pre_usim_archive_store[h5_key]
+                    updated_tables.append(table_name)
+
     og_input_store.close()
     new_input_store.close()
     if not same_source_as_archive:
         usim_output_store.close()
+    if prior_step_store_path is not None and os.path.exists(prior_step_store_path):
+        os.remove(prior_step_store_path)
     logger.info("Closing all open h5 files")
 
     output_record = FileRecord(

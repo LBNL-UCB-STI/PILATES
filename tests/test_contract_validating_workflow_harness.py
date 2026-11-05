@@ -53,7 +53,7 @@ def _run_activitysim_and_beam_preprocess(
     *,
     year: int = 2015,
     iteration: int = 0,
-    bypass_atlas_restore_suffix_bug: bool = True,
+    bypass_atlas_restore_suffix_bug: bool = False,
 ):
     """Run ActivitySim (preprocess -> run -> postprocess) and BEAM preprocess via execute_step."""
     env.state.current_year = year
@@ -671,7 +671,7 @@ def test_atlas_preprocess_beamac_uses_resolved_beam_skims_omx(
             assert (
                 Path(env.workspace.get_atlas_mutable_input_dir())
                 / "year2015"
-                / "beam_accessibility.csv"
+                / "accessibility_2015_tract.csv"
             ).exists()
 
 

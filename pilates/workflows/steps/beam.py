@@ -1000,7 +1000,8 @@ def _beam_run_output_cache(
     del settings, state, workspace
     return CacheOptions(
         cache_hydration="outputs-requested",
-        cache_hydration_failure="warn",
+        cache_hydration_failure="miss",
+        validate_cached_outputs="eager",
         cache_version=1,
     )
 
@@ -1435,6 +1436,8 @@ def _resolve_beam_postprocess_inputs(
         logical_destinations=destinations,
         metadata={"beam_postprocess_dynamic_paths": dynamic_paths},
     )
+    for input_artifact in (resolved.binding.inputs or {}).values():
+        artifact_to_existing_path(input_artifact, workspace=workspace)
     selected_events_key = _selected_postprocess_events_key(
         dynamic_keys=dynamic_keys,
         year=int(year),
