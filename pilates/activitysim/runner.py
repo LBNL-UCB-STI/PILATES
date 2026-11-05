@@ -6,7 +6,16 @@ import json
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any, Literal, Mapping
+from typing import (
+    Tuple,
+    Optional,
+    Dict,
+    Any,
+    Literal,
+    Mapping,
+    Protocol,
+    runtime_checkable,
+)
 
 import xarray as xr
 import zarr
@@ -273,6 +282,21 @@ def sharrow_enabled(
     )
 
 
+@runtime_checkable
+class _ActivitysimFileFormatLike(Protocol):
+    file_format: Any
+
+
+@runtime_checkable
+class _ActivitysimPersistFlagLike(Protocol):
+    persist_sharrow_cache: Any
+
+
+@runtime_checkable
+class _SettingsWithActivitysimLike(Protocol):
+    activitysim: Any
+
+
 def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
     """
     Return whether ActivitySim should persist sharrow/numba compile caches.
@@ -283,13 +307,54 @@ def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
     - Otherwise fall back to historical behavior where parquet mode persists
       sharrow cache by default.
     """
-    activitysim_cfg = getattr(settings, "activitysim", None)
+    if not isinstance(settings, _SettingsWithActivitysimLike):
+        return False
+    activitysim_cfg = settings.activitysim
     if activitysim_cfg is None:
         return False
-    explicit_flag = getattr(activitysim_cfg, "persist_sharrow_cache", None)
-    if explicit_flag is not None:
-        return bool(explicit_flag)
-    return getattr(activitysim_cfg, "file_format", None) == "parquet"
+    if (
+        isinstance(activitysim_cfg, _ActivitysimPersistFlagLike)
+        and activitysim_cfg.persist_sharrow_cache is not None
+    ):
+        return bool(activitysim_cfg.persist_sharrow_cache)
+    if isinstance(activitysim_cfg, _ActivitysimFileFormatLike):
+        return activitysim_cfg.file_format == "parquet"
+    return False
+
+
+def activitysim_persists_zarr_skims(
+    settings: PilatesConfig,
+    *,
+    launch_context: Optional[ActivitySimLaunchContext] = None,
+    configs_root: str | Path | None = None,
+) -> bool:
+    """Return whether ActivitySim is configured to persist ``skims.zarr`` on OMX runs."""
+    if not sharrow_enabled(
+        settings,
+        launch_context=launch_context,
+        configs_root=configs_root,
+    ):
+        return False
+    if not isinstance(settings, _SettingsWithActivitysimLike):
+        return True
+    activitysim_cfg = settings.activitysim
+    if activitysim_cfg is None:
+        return True
+    file_format = (
+        activitysim_cfg.file_format
+        if isinstance(activitysim_cfg, _ActivitysimFileFormatLike)
+        else None
+    )
+    explicit_flag = (
+        activitysim_cfg.persist_sharrow_cache
+        if isinstance(activitysim_cfg, _ActivitysimPersistFlagLike)
+        else None
+    )
+    if file_format is None and explicit_flag is None:
+        return True
+    if file_format is not None and file_format != "parquet":
+        return False
+    return persist_sharrow_cache_enabled(settings)
 
 
 def asim_sharrow_cache_dir(workspace: Workspace) -> str:
@@ -817,7 +882,7 @@ class ActivitysimRunner(GenericRunner):
         if preparation.generated_zarr_path is not None:
             outputs.zarr_skims = preparation.generated_zarr_path
         elif preparation.skim_mode == "omx" and (
-            sharrow_enabled(
+            activitysim_persists_zarr_skims(
                 self.state.full_settings,
                 launch_context=preparation.launch_context,
             )
@@ -852,7 +917,7 @@ class ActivitysimRunner(GenericRunner):
     def get_asim_additional_args(settings: PilatesConfig, asim_docker_vols, compile):
         additional_args = []
         if settings.activitysim.file_format == "parquet":
-            if sharrow_enabled(settings) and persist_sharrow_cache_enabled(settings):
+            if activitysim_persists_zarr_skims(settings):
                 additional_args.append("--persist-sharrow-cache")
             data_dirs = []
             output_dirs = []

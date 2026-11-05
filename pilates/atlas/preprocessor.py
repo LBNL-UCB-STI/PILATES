@@ -366,9 +366,14 @@ class AtlasPreprocessor(GenericPreprocessor):
             raise TypeError("AtlasPreprocessor._preprocess requires usim_datastore_h5")
         urbansim_output = Path(usim_datastore_h5)
 
+        target_year = (
+            self.state.forecast_year
+            if self.state.forecast_year is not None
+            else self.state.year
+        )
         atlas_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(),
-            "year{}".format(self.state.year),
+            "year{}".format(target_year),
         )
 
         # Record BEAM skims as input if needed
@@ -426,7 +431,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.error("[AtlasPreprocessor] UrbanSim input H5 was not found.")
             raise RuntimeError(
                 "ATLAS preprocess cannot continue: UrbanSim input H5 was not found "
-                f"for year {self.state.year} (resolved path: {urbansim_output})"
+                f"for year {target_year} (resolved path: {urbansim_output})"
             )
 
         with pd.HDFStore(urbansim_output, mode="r") as data:
@@ -443,7 +448,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             ):
                 resolved_table_name = _resolve_atlas_h5_table_key(
                     data,
-                    year=self.state.year,
+                    year=target_year,
                     table=table_name_root,
                     is_start_year=self.state.is_start_year(),
                 )
@@ -487,9 +492,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                         f"[AtlasPreprocessor] Error processing table {table_name_in_h5}: {e}"
                     )
 
-            year_prefix = (
-                f"/{self.state.year}" if not self.state.is_start_year() else ""
-            )
+            year_prefix = f"/{target_year}" if not self.state.is_start_year() else ""
 
             process_table(
                 f"{year_prefix}/households",
@@ -521,7 +524,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             # Dynamic ATLAS evolution years need grave.csv whenever the subyear
             # is beyond the global simulation start year, including the first
             # subyear in a later forecast interval (e.g. 2023 in a 2017->2029 run).
-            if int(self.state.year) > int(self.state.start_year):
+            if int(target_year) > int(self.state.start_year):
                 process_table(
                     f"{year_prefix}/graveyard",
                     "grave",
@@ -554,12 +557,12 @@ class AtlasPreprocessor(GenericPreprocessor):
                 missing_msg = ", ".join(sorted(set(missing_required_tables)))
                 raise RuntimeError(
                     "ATLAS preprocess missing required UrbanSim tables for "
-                    f"year {self.state.year}: {missing_msg} "
+                    f"year {target_year}: {missing_msg} "
                     f"(source H5: {urbansim_output})"
                 )
 
             logger.info(
-                f"[AtlasPreprocessor] Prepared ATLAS Year {self.state.year} input from UrbanSim output."
+                f"[AtlasPreprocessor] Prepared ATLAS Year {target_year} input from UrbanSim output."
             )
 
         # --- Accessibility calculation (BEAM skims) ---
@@ -580,7 +583,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 path_list,
                 measure_list,
                 settings,
-                self.state.forecast_year,
+                target_year,
                 workspace,
                 skims_path=expected_beam_skims_path,
             )
@@ -588,7 +591,7 @@ class AtlasPreprocessor(GenericPreprocessor):
 
             # Record accessibility output file
             accessibility_csv = "{}/accessibility_{}_tract.csv".format(
-                atlas_input_path, self.state.forecast_year
+                atlas_input_path, target_year
             )
             if os.path.exists(accessibility_csv):
                 prepared_inputs["atlas_accessibility_csv"] = Path(accessibility_csv)

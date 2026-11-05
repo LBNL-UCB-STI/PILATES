@@ -40,6 +40,11 @@ def pytest_configure(config):
         "slow_ci: tests excluded from the default CI pytest run because they are"
         " long-running end-to-end coverage",
     )
+    config.addinivalue_line(
+        "markers",
+        "contract_harness: micro-world contract-validating workflow boundary tests"
+        " run in their own dedicated CI step",
+    )
 
 
 @pytest.fixture

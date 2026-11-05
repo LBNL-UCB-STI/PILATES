@@ -14,6 +14,7 @@ import shutil
 import pandas as pd
 import pytest
 
+from pilates.activitysim.runner import validate_activitysim_zarr_skims
 from pilates.utils import consist_runtime as cr
 from pilates.utils.archive_paths import resolve_archive_run_dir
 from pilates.workflows.artifact_keys import (
@@ -45,6 +46,8 @@ from tests.helpers.micro_world_fixture import (
     build_micro_world,
     write_micro_skims_omx,
 )
+
+pytestmark = pytest.mark.contract_harness
 
 
 def _run_activitysim_and_beam_preprocess(
@@ -318,10 +321,12 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
     """
     Boundary Scenario 1:
     - Run `beam_preprocess` -> `beam_run` with `activitysim_skims="zarr"` and `PILATES_ARCHIVE_ROOT` enabled.
-    - Wipe `PILATES_SCRATCH_ROOT` (`beam/output`) AND remove the archived Zarr directory in `PILATES_ARCHIVE_ROOT`.
-    - Re-run `beam_run` on a cache hit: it must either hydrate `raw_od_skims_zarr` when archived or
-      fall back to `cache_hydration_failure="miss"` re-execution when the archive is missing/corrupted,
-      instead of crashing post-hit with `RuntimeError: beam_run direct Zarr output ... could not be materialized`.
+    - Phase A (cold scratch + intact archive): Wipe `PILATES_SCRATCH_ROOT` (`beam/output`) while keeping
+      `PILATES_ARCHIVE_ROOT` intact. Re-run `beam_run` and verify it takes a cache hit (`backend_executed=False`)
+      and hydrates `raw_od_skims_zarr_2015_0` back to disk with valid Zarr arrays.
+    - Phase B (cold scratch + missing archive): Wipe `PILATES_SCRATCH_ROOT` (`beam/output`) AND remove the
+      archived Zarr directory in `PILATES_ARCHIVE_ROOT`. Re-run `beam_run` and verify it falls back cleanly
+      via `cache_hydration_failure="miss"` to re-execution (`backend_executed=True`) and regenerates the Zarr store.
     """
     env = build_micro_world(
         tmp_path,
@@ -331,7 +336,7 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
         enable_archive_copy=True,
     )
 
-    with ContractValidatingContainerBackend():
+    with ContractValidatingContainerBackend() as backend:
         with env.scenario_context("beam_zarr_warm") as sc1:
             _, launch_cfg = _run_activitysim_and_beam_preprocess(
                 env, sc1, year=2015, iteration=0
@@ -342,6 +347,7 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 workspace=env.workspace,
                 coupler=sc1.coupler,
             )
+            exec_before_warm = len(backend.invocations)
             _, first_run = execute_step(
                 scenario=sc1,
                 definition=beam_run,
@@ -355,19 +361,19 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 runtime_kwargs={"beam_launch_config": launch_cfg},
                 resolved_inputs=run_inputs_1,
             )
+            assert len(backend.invocations) == exec_before_warm + 1
             assert first_run is not None
             raw_zarr_path = Path(first_run.raw_outputs["raw_od_skims_zarr_2015_0"])
             assert raw_zarr_path.is_dir()
+            assert validate_activitysim_zarr_skims(raw_zarr_path) is None
 
-        # Wipe scratch BEAM output directory AND delete any archived copy of 0.skimsActivitySimOD_current.zarr
+        # Phase A: Wipe scratch BEAM output directory while keeping archive_root intact
         beam_output_dir = Path(env.workspace.get_beam_output_dir())
         shutil.rmtree(beam_output_dir)
         beam_output_dir.mkdir(parents=True, exist_ok=True)
-        for archived_zarr in env.paths.archive_root.rglob("*.zarr"):
-            if "skimsActivitySimOD" in archived_zarr.name:
-                shutil.rmtree(archived_zarr)
+        assert not raw_zarr_path.exists()
 
-        with env.scenario_context("beam_zarr_cold_recovery") as sc2:
+        with env.scenario_context("beam_zarr_cold_hit_hydration") as sc2:
             _, launch_cfg_2 = _run_activitysim_and_beam_preprocess(
                 env, sc2, year=2015, iteration=0
             )
@@ -377,7 +383,8 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 workspace=env.workspace,
                 coupler=sc2.coupler,
             )
-            _, recovered_run = execute_step(
+            exec_before_phase_a = len(backend.invocations)
+            _, hydrated_run = execute_step(
                 scenario=sc2,
                 definition=beam_run,
                 settings=env.settings,
@@ -390,9 +397,50 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 runtime_kwargs={"beam_launch_config": launch_cfg_2},
                 resolved_inputs=run_inputs_2,
             )
+            # Cache hit: container backend was NOT re-executed
+            assert len(backend.invocations) == exec_before_phase_a
+            assert hydrated_run is not None
+            hydrated_zarr = Path(hydrated_run.raw_outputs["raw_od_skims_zarr_2015_0"])
+            assert hydrated_zarr.is_dir()
+            assert validate_activitysim_zarr_skims(hydrated_zarr) is None
+
+        # Phase B: Wipe scratch BEAM output directory AND delete archived Zarr copies
+        shutil.rmtree(beam_output_dir)
+        beam_output_dir.mkdir(parents=True, exist_ok=True)
+        for archived_zarr in env.paths.archive_root.rglob("*.zarr"):
+            if "skimsActivitySimOD" in archived_zarr.name:
+                shutil.rmtree(archived_zarr)
+
+        with env.scenario_context("beam_zarr_cold_missing_archive_recovery") as sc3:
+            _, launch_cfg_3 = _run_activitysim_and_beam_preprocess(
+                env, sc3, year=2015, iteration=0
+            )
+            run_inputs_3 = beam_run.resolve_inputs(
+                settings=env.settings,
+                state=env.state,
+                workspace=env.workspace,
+                coupler=sc3.coupler,
+            )
+            exec_before_phase_b = len(backend.invocations)
+            _, recovered_run = execute_step(
+                scenario=sc3,
+                definition=beam_run,
+                settings=env.settings,
+                state=env.state,
+                workspace=env.workspace,
+                stage="supply_demand",
+                year=2015,
+                iteration=0,
+                phase="run",
+                runtime_kwargs={"beam_launch_config": launch_cfg_3},
+                resolved_inputs=run_inputs_3,
+            )
+            # Cache hydration failure -> clean fallback to re-execution
+            assert len(backend.invocations) == exec_before_phase_b + 1
             assert recovered_run is not None
             recovered_zarr = Path(recovered_run.raw_outputs["raw_od_skims_zarr_2015_0"])
             assert recovered_zarr.is_dir()
+            assert validate_activitysim_zarr_skims(recovered_zarr) is None
 
 
 def test_beam_postprocess_cold_scratch_events_parquet_materialization(

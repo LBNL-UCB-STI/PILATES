@@ -103,6 +103,8 @@ def _read_household_table(path: Path) -> pd.DataFrame:
             magic = handle.read(4)
         if magic == b"PAR1":
             return pd.read_parquet(path)
+        if magic[:2] == b"\x1f\x8b":
+            return pd.read_csv(path, compression="gzip")
         return pd.read_csv(path)
     raise ValueError(
         f"Cannot restore ATLAS household cars from unsupported table format: {path}"
@@ -861,86 +863,114 @@ def create_usim_input_data(
 
     # instantiate empty .h5 store (e.g. custom_mpo_321487234_model_data.h5)
     new_input_store = pd.HDFStore(input_store_path, mode="w")
-    assert len(new_input_store.keys()) == 0
 
-    # Keep track of which tables have already been added (i.e. updated)
-    updated_tables = []
+    def _select_preferred_h5_key_by_table(
+        store: pd.HDFStore, preferred_year: object
+    ) -> Dict[str, str]:
+        preferred_prefix = (
+            str(preferred_year).strip("/") if preferred_year not in (None, "") else ""
+        )
+        candidates_by_table: Dict[str, list[str]] = {}
+        for h5_key in store.keys():
+            table_name = h5_key.split("/")[-1]
+            candidates_by_table.setdefault(table_name, []).append(h5_key)
 
-    # 1. copy ASIM OUTPUTS into new input data store
-    logger.info(
-        "Copying ActivitySim outputs to the new Urbansim input store at {0}! "
-        "Tables: {1}".format(input_store_path, tables_updated_by_asim)
-    )
-    for table_name in tables_updated_by_asim:
-        logger.info("   Moving {0}".format(table_name))
-        new_input_store["/" + table_name] = asim_output_dict[table_name]
-        updated_tables.append(table_name)
+        selected: Dict[str, str] = {}
+        for table_name, keys in candidates_by_table.items():
+            exact_prefixed = (
+                f"/{preferred_prefix}/{table_name}" if preferred_prefix else None
+            )
+            if exact_prefixed and exact_prefixed in keys:
+                selected[table_name] = exact_prefixed
+            elif f"/{table_name}" in keys:
+                selected[table_name] = f"/{table_name}"
+            else:
+                selected[table_name] = sorted(keys)[-1]
+        return selected
 
-    # 2. copy USIM OUTPUTS into new input data store if not present already
-    logger.info(
-        (
-            "Passing last set of UrbanSim outputs through to the new "
-            "Urbansim input store! {0} -> {1}".format(
-                usim_output_datastore_name, input_store_path
+    try:
+        assert len(new_input_store.keys()) == 0
+
+        # Keep track of which tables have already been added (i.e. updated)
+        updated_tables = []
+
+        # 1. copy ASIM OUTPUTS into new input data store
+        logger.info(
+            "Copying ActivitySim outputs to the new Urbansim input store at {0}! "
+            "Tables: {1}".format(input_store_path, tables_updated_by_asim)
+        )
+        for table_name in tables_updated_by_asim:
+            logger.info("   Moving {0}".format(table_name))
+            new_input_store["/" + table_name] = asim_output_dict[table_name]
+            updated_tables.append(table_name)
+
+        # 2. copy USIM OUTPUTS into new input data store if not present already
+        logger.info(
+            (
+                "Passing last set of UrbanSim outputs through to the new "
+                "Urbansim input store! {0} -> {1}".format(
+                    usim_output_datastore_name, input_store_path
+                )
             )
         )
-    )
-    for h5_key in usim_output_store.keys():
-        table_name = h5_key.split("/")[-1]
-        if table_name not in updated_tables:
-            if os.path.join("/", table_prefix_year, table_name) == h5_key:
-                new_input_store[table_name] = usim_output_store[h5_key]
+        for h5_key in usim_output_store.keys():
+            table_name = h5_key.split("/")[-1]
+            if table_name not in updated_tables:
+                if os.path.join("/", table_prefix_year, table_name) == h5_key:
+                    new_input_store[table_name] = usim_output_store[h5_key]
+                    updated_tables.append(table_name)
+                    logger.info(
+                        (
+                            "    Passing static UrbanSim table {0} through to the new Urbansim "
+                            "input store!"
+                        ).format(table_name)
+                    )
+                else:
+                    logger.info(
+                        "    Skipping key {0} because it is not formatted correctly".format(
+                            h5_key
+                        )
+                    )
+            else:
+                logger.info(
+                    "    Skipping {0} because it was updated by Asim".format(h5_key)
+                )
+
+        # 3. copy USIM INPUTS into new input data store if not present already
+        for table_name, h5_key in _select_preferred_h5_key_by_table(
+            og_input_store, forecast_year
+        ).items():
+            if table_name not in updated_tables:
+                new_input_store[table_name] = og_input_store[h5_key]
                 updated_tables.append(table_name)
                 logger.info(
                     (
-                        "    Passing static UrbanSim table {0} through to the new Urbansim "
+                        "Passing original UrbanSim table {0} through to the new Urbansim "
                         "input store!"
                     ).format(table_name)
                 )
-            else:
-                logger.info(
-                    "    Skipping key {0} because it is not formatted correctly".format(
-                        h5_key
-                    )
-                )
-        else:
-            logger.info(
-                "    Skipping {0} because it was updated by Asim".format(h5_key)
-            )
 
-    # 3. copy USIM INPUTS into new input data store if not present already
-
-    for h5_key in og_input_store.keys():
-        table_name = h5_key.split("/")[-1]
-        if table_name not in updated_tables:
-            new_input_store[table_name] = og_input_store[h5_key]
-            updated_tables.append(table_name)
-            logger.info(
-                (
-                    "Passing original UrbanSim table {0} through to the new Urbansim "
-                    "input store!"
-                ).format(table_name)
-            )
-
-    if (
-        prior_step_store_path is not None
-        and os.path.exists(archive_path)
-        and os.path.abspath(archive_path) != os.path.abspath(archived_input_store_path)
-    ):
-        with pd.HDFStore(archive_path, mode="r") as pre_usim_archive_store:
-            for h5_key in pre_usim_archive_store.keys():
-                table_name = h5_key.split("/")[-1]
-                if table_name not in updated_tables:
-                    new_input_store[table_name] = pre_usim_archive_store[h5_key]
-                    updated_tables.append(table_name)
-
-    og_input_store.close()
-    new_input_store.close()
-    if not same_source_as_archive:
-        usim_output_store.close()
-    if prior_step_store_path is not None and os.path.exists(prior_step_store_path):
-        os.remove(prior_step_store_path)
-    logger.info("Closing all open h5 files")
+        if (
+            prior_step_store_path is not None
+            and os.path.exists(archive_path)
+            and os.path.abspath(archive_path)
+            != os.path.abspath(archived_input_store_path)
+        ):
+            with pd.HDFStore(archive_path, mode="r") as pre_usim_archive_store:
+                for table_name, h5_key in _select_preferred_h5_key_by_table(
+                    pre_usim_archive_store, forecast_year
+                ).items():
+                    if table_name not in updated_tables:
+                        new_input_store[table_name] = pre_usim_archive_store[h5_key]
+                        updated_tables.append(table_name)
+    finally:
+        og_input_store.close()
+        new_input_store.close()
+        if not same_source_as_archive:
+            usim_output_store.close()
+        if prior_step_store_path is not None and os.path.exists(prior_step_store_path):
+            os.remove(prior_step_store_path)
+        logger.info("Closing all open h5 files")
 
     output_record = FileRecord(
         file_path=input_store_path,

@@ -30,8 +30,8 @@ from pilates.activitysim.runner import (
     ActivitysimRunner,
     ActivitySimConfigStagingPlan,
     ActivitySimLaunchContext,
+    activitysim_persists_zarr_skims,
     asim_runtime_zarr_path,
-    sharrow_enabled,
     stage_activitysim_config_roots,
     validate_activitysim_zarr_skims,
 )
@@ -431,44 +431,56 @@ def _activitysim_preprocess_resolver(
         settings=settings,
         state=state,
     )
+    logical_destinations = dict(
+        ActivitysimPreprocessor.declared_expected_inputs(settings, state, workspace)
+    )
+    usim_dest = logical_destinations.get(USIM_POPULATION_SOURCE_H5)
+    if usim_dest is not None:
+        usim_path = Path(usim_dest)
+        if not usim_path.stem.endswith("_population_source"):
+            logical_destinations[USIM_POPULATION_SOURCE_H5] = usim_path.with_name(
+                f"{usim_path.stem}_population_source{usim_path.suffix}"
+            )
     resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_preprocess",
         required_roles=_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
         optional_roles=(
             () if requires_beam_skim else _ACTIVITYSIM_PREPROCESS_OPTIONAL_ROLES
         ),
-        logical_destinations=ActivitysimPreprocessor.declared_expected_inputs(
-            settings, state, workspace
-        ),
+        logical_destinations=logical_destinations,
         settings=settings,
         state=state,
         workspace=workspace,
         coupler=coupler,
     )
     population_input = (resolved.binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5)
-    if isinstance(population_input, Artifact) and isinstance(
-        population_input.container_uri, str
-    ):
-        container_uri = population_input.container_uri
-        if container_uri.startswith("workspace://") and isinstance(
-            workspace, Workspace
+    if isinstance(population_input, Artifact):
+        existing_population_path = artifact_to_existing_path(
+            population_input, workspace=workspace
+        ) or artifact_to_path(population_input, workspace=workspace)
+        canonical_datastore_dest = ActivitysimPreprocessor.declared_expected_inputs(
+            settings, state, workspace
+        ).get(USIM_POPULATION_SOURCE_H5)
+        if (
+            existing_population_path is not None
+            and canonical_datastore_dest is not None
+            and Path(existing_population_path).resolve(strict=False)
+            != Path(canonical_datastore_dest).resolve(strict=False)
         ):
-            rel_path = container_uri[len("workspace://") :].lstrip("/")
-            if rel_path:
-                logical_destinations = dict(resolved.logical_destinations)
-                logical_destinations[USIM_POPULATION_SOURCE_H5] = (
-                    Path(workspace.full_path) / rel_path
-                )
-                return ResolvedStepInputs(
-                    step_name=resolved.step_name,
-                    binding=resolved.binding,
-                    required_roles=resolved.required_roles,
-                    optional_roles=resolved.optional_roles,
-                    source_by_role=resolved.source_by_role,
-                    selected_key_by_role=resolved.selected_key_by_role,
-                    logical_destinations=logical_destinations,
-                    metadata=resolved.metadata,
-                )
+            updated_destinations = dict(resolved.logical_destinations)
+            updated_destinations[USIM_POPULATION_SOURCE_H5] = Path(
+                existing_population_path
+            )
+            return ResolvedStepInputs(
+                step_name=resolved.step_name,
+                binding=resolved.binding,
+                required_roles=resolved.required_roles,
+                optional_roles=resolved.optional_roles,
+                source_by_role=resolved.source_by_role,
+                selected_key_by_role=resolved.selected_key_by_role,
+                logical_destinations=updated_destinations,
+                metadata=resolved.metadata,
+            )
     return resolved
 
 
@@ -542,7 +554,7 @@ def _activitysim_run_resolver(
             if isinstance(workspace, _AsimMutableConfigsWorkspaceLike)
             else None
         )
-        produces_zarr = sharrow_enabled(
+        produces_zarr = activitysim_persists_zarr_skims(
             settings,
             configs_root=configs_root,
         )
@@ -663,7 +675,15 @@ def _activitysim_postprocess_resolver(
                 step_name=resolved.step_name,
                 function=_activitysim_postprocess_callable,
                 selected_artifacts=inputs,
-                logical_destinations={role: Path("inputs") / role for role in inputs},
+                logical_destinations={
+                    role: (
+                        Path("inputs")
+                        / f"{role}{''.join(Path(resolved.logical_destinations[role]).suffixes)}"
+                        if role in resolved.logical_destinations
+                        else Path("inputs") / role
+                    )
+                    for role in inputs
+                },
                 selection_diagnostics={
                     "source_by_role": resolved.source_by_role,
                     "selected_key_by_role": resolved.selected_key_by_role,

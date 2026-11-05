@@ -1667,3 +1667,31 @@ def test_activitysim_projector_rejects_source_mount_when_declared_destination_mi
             state=SimpleNamespace(),
             workspace=workspace,
         )
+
+
+@pytest.mark.parametrize(
+    ("file_format", "persist_sharrow_cache", "expected_persists"),
+    [
+        ("parquet", True, True),
+        ("parquet", None, True),
+        ("parquet", False, False),
+        ("csv", True, False),
+        ("csv", None, False),
+    ],
+)
+def test_activitysim_persists_zarr_skims_respects_file_format_and_persist_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    file_format: str,
+    persist_sharrow_cache: bool | None,
+    expected_persists: bool,
+) -> None:
+    from pilates.activitysim import runner as asim_runner
+
+    monkeypatch.setattr(asim_runner, "sharrow_enabled", lambda *_args, **_kwargs: True)
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(
+            file_format=file_format,
+            persist_sharrow_cache=persist_sharrow_cache,
+        )
+    )
+    assert asim_runner.activitysim_persists_zarr_skims(settings) is expected_persists

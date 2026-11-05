@@ -47,6 +47,9 @@ def _materialization_roots(
     return None, None
 
 
+from consist.models.artifact import get_tracker_ref
+
+
 @runtime_checkable
 class _MaterializableTrackerLike(Protocol):
     def materialize_artifact(
@@ -59,11 +62,6 @@ class _MaterializableTrackerLike(Protocol):
         on_missing: str = "warn",
         validate_content_hash: str = "if-present",
     ) -> Any: ...
-
-
-@runtime_checkable
-class _ArtifactWithTrackerLike(Protocol):
-    _tracker: Any
 
 
 @runtime_checkable
@@ -85,12 +83,12 @@ def _materialize_artifact_to_existing_path(
         tracker: Any = cr.current_tracker()
     except Exception:
         tracker = None
-    if not isinstance(tracker, _MaterializableTrackerLike) and isinstance(
-        value, _ArtifactWithTrackerLike
-    ):
-        candidate_tracker = value._tracker
-        if isinstance(candidate_tracker, _MaterializableTrackerLike):
-            tracker = candidate_tracker
+    if not isinstance(tracker, _MaterializableTrackerLike):
+        tracker_ref = get_tracker_ref(value)
+        if tracker_ref is not None:
+            candidate_tracker = tracker_ref() if callable(tracker_ref) else tracker_ref
+            if isinstance(candidate_tracker, _MaterializableTrackerLike):
+                tracker = candidate_tracker
     if not isinstance(tracker, _MaterializableTrackerLike):
         return None
     try:

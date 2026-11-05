@@ -183,3 +183,49 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
             "validate_content_hash": "if-present",
         }
     ]
+
+
+def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tracker_inactive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import weakref
+
+    current_local = tmp_path / "run-current"
+    current_local.mkdir()
+    expected_local = current_local / "beam" / "output" / "0.events.parquet"
+
+    class _TrackerStub:
+        def materialize_artifact(
+            self,
+            requested_artifact: object,
+            *,
+            target_root: str,
+            source_root: str | None = None,
+            preserve_existing: bool = True,
+            on_missing: str = "warn",
+            validate_content_hash: str = "if-present",
+        ) -> object:
+            expected_local.parent.mkdir(parents=True, exist_ok=True)
+            expected_local.write_text("events", encoding="utf-8")
+            return SimpleNamespace(path=expected_local, resolvable=True)
+
+    tracker_stub = _TrackerStub()
+    artifact = SimpleNamespace(
+        key="events_parquet_2015_0",
+        container_uri="workspace://beam/output/0.events.parquet",
+        path=None,
+        abs_path=None,
+        run_id="beam_run_1",
+        meta={},
+        _tracker=weakref.ref(tracker_stub),
+    )
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: None)
+
+    resolved = coupler_helpers.artifact_to_existing_path(
+        artifact,
+        workspace=SimpleNamespace(full_path=current_local),
+    )
+
+    assert resolved == str(expected_local)
+    assert expected_local.read_text(encoding="utf-8") == "events"
