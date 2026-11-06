@@ -135,12 +135,6 @@ class RunConfig(BaseModel):
     enable_archive_copy: bool = Field(
         False, description="Copy logged outputs to archive root as they are produced"
     )
-    bootstrap_cache_enabled: bool = Field(
-        True,
-        description=(
-            "Enable cache probing for the pre-scenario bootstrap initialization phase"
-        ),
-    )
     restart_strict: bool = Field(
         False,
         description=(

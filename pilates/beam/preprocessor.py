@@ -15,6 +15,7 @@ from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils.admission_helpers import resolve_local_source_uri
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
@@ -304,26 +305,15 @@ def ensure_beam_mutable_workspace(
             pass
 
     if not os.path.exists(dest_skims):
-        pilates_root = find_project_root(
-            start_path=os.path.dirname(__file__)
-        ) or os.path.realpath(os.getcwd())
         raw_source_uri = get_setting(
             settings,
             "activitysim.admission.initial_skims.expectation.source_uri",
         )
-        source_uri = str(raw_source_uri) if raw_source_uri else None
-
-        if source_uri and (source_uri.startswith("file://") or "://" not in source_uri):
-            local_source = (
-                source_uri[len("file://") :]
-                if source_uri.startswith("file://")
-                else source_uri
-            )
-            cand_path = (
-                os.path.abspath(local_source)
-                if os.path.isabs(local_source)
-                else os.path.abspath(os.path.join(pilates_root, local_source))
-            )
+        cand_path_obj = resolve_local_source_uri(
+            str(raw_source_uri) if raw_source_uri else None
+        )
+        if cand_path_obj is not None:
+            cand_path = str(cand_path_obj)
             if not os.path.exists(cand_path):
                 raise FileNotFoundError(
                     f"Configured initial_skims source_uri does not exist: {cand_path}"
@@ -563,12 +553,6 @@ class BeamPreprocessor(GenericPreprocessor):
             state=self.state,
             workspace=workspace,
         )
-
-    def existing_beam_exchange_inputs(self, workspace: "Workspace") -> RecordStore:
-        """
-        Return the canonical BEAM exchange inputs already staged in the mutable repo.
-        """
-        return self._register_existing_beam_exchange_inputs(workspace)
 
     def preprocess(
         self,

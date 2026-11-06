@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from consist import Artifact
@@ -18,6 +19,7 @@ from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.coupler_namespace import (
@@ -93,11 +95,34 @@ def run_land_use_stage(
         iteration=iteration_index(state),
         phase="run",
     )
+    forecast_datastore_artifact = resolve_coupler_value(
+        scenario.coupler, USIM_DATASTORE_H5
+    ).value
+    if isinstance(forecast_datastore_artifact, Artifact):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_FORECAST_OUTPUT,
+            forecast_datastore_artifact,
+        )
+    elif isinstance(forecast_datastore_artifact, (str, Path)):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_FORECAST_OUTPUT,
+            None,
+            fallback=str(forecast_datastore_artifact),
+        )
     if isinstance(prior_datastore_artifact, Artifact):
         set_coupler_from_artifact(
             scenario.coupler,
             USIM_DATASTORE_BASE_H5,
             prior_datastore_artifact,
+        )
+    elif isinstance(prior_datastore_artifact, (str, Path)):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            None,
+            fallback=str(prior_datastore_artifact),
         )
     _, postprocess_outputs = execute_step(
         scenario=scenario,

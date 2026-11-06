@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple, Optional, TYPE_CHECKING, Dict, Any
+from typing import Tuple, Optional, TYPE_CHECKING, Dict
 import os
 import shutil
 import logging
 import pandas as pd
 
 from pilates.config import PilatesConfig
-from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
+from pilates.utils.admission_helpers import resolve_local_source_uri
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.zone_utils import resolve_canonical_zone_source_path
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 
@@ -257,23 +257,33 @@ def resolve_urbansim_initial_datastore_source_path(
     settings: PilatesConfig,
 ) -> Optional[Path]:
     """Resolve the configured static UrbanSim initial HDF5 datastore path."""
+    raw_source_uri = get_setting(
+        settings,
+        "urbansim.admission.initial_datastore.expectation.source_uri",
+    )
+    source_uri_path = resolve_local_source_uri(
+        str(raw_source_uri) if raw_source_uri is not None else None
+    )
+    if source_uri_path is not None and source_uri_path.is_file():
+        return source_uri_path
+
     try:
         urbansim_cfg = settings.urbansim
     except AttributeError:
-        return None
+        return source_uri_path
     if urbansim_cfg is None:
-        return None
+        return source_uri_path
 
     try:
         region = settings.run.region
         start_year = settings.run.start_year
     except AttributeError:
-        return None
+        return source_uri_path
 
     region_map = urbansim_cfg.region_mappings.get("region_to_region_id", {})
     region_id = region_map.get(region)
     if region_id is None:
-        return None
+        return source_uri_path
 
     data_dir = _urbansim_source_data_dir(settings)
     year_template = urbansim_cfg.input_file_template_year
@@ -289,62 +299,9 @@ def resolve_urbansim_initial_datastore_source_path(
 
     base_template = urbansim_cfg.input_file_template
     if not base_template:
-        return None
+        return source_uri_path
     model_data_fname = base_template.format(region_id=region_id)
-    return data_dir / model_data_fname
-
-
-class UrbansimPreprocessor(GenericPreprocessor):
-    """
-    UrbanSim-specific preprocessor that consolidates all preprocessing steps for the UrbanSim land use model.
-    """
-
-    def __init__(
-        self,
-        model_name: str,
-        state: "WorkflowState",
-    ):
-        super().__init__(model_name, state)
-
-    def preprocess(
-        self,
-        workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
-        usim_datastore_h5: Optional[Path] = None,
-        final_skims_omx: Optional[Any] = None,
-        allow_workspace_skim_fallback: bool = True,
-    ) -> UrbanSimPreprocessOutputs:
-        """Prepare UrbanSim inputs and return typed outputs."""
-        if usim_datastore_h5 is None:
-            raise TypeError(
-                "UrbansimPreprocessor.preprocess requires usim_datastore_h5"
-            )
-        self.state.set_sub_stage_progress("preprocessor")
-        return self._preprocess(
-            workspace,
-            previous_records,
-            usim_datastore_h5=usim_datastore_h5,
-            final_skims_omx=final_skims_omx,
-            allow_workspace_skim_fallback=allow_workspace_skim_fallback,
-        )
-
-    def _preprocess(
-        self,
-        workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
-        usim_datastore_h5: Optional[Path] = None,
-        final_skims_omx: Optional[Any] = None,
-        allow_workspace_skim_fallback: bool = True,
-    ) -> UrbanSimPreprocessOutputs:
-        """Retain the legacy preprocessor surface without staging runner inputs."""
-        del (
-            previous_records,
-            usim_datastore_h5,
-            final_skims_omx,
-            allow_workspace_skim_fallback,
-        )
-        usim_mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
-        usim_mutable_data_dir.mkdir(parents=True, exist_ok=True)
-        return UrbanSimPreprocessOutputs(
-            usim_mutable_data_dir=usim_mutable_data_dir,
-        )
+    base_candidate = data_dir / model_data_fname
+    if base_candidate.is_file() or source_uri_path is None:
+        return base_candidate
+    return source_uri_path

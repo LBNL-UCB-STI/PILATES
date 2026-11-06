@@ -133,13 +133,6 @@ def test_no_identity_inputs_for_urbansim():
     assert "identity_inputs" not in result
 
 
-def test_initialization_model_special_case():
-    settings = _make_settings()
-    result = build_step_consist_kwargs("initialization", settings)
-    assert "config" in result
-    assert result["facet_schema_version"] == "initialization_v1"
-
-
 def test_facet_schema_version_routing(tmp_path):
     settings = _make_settings()
 

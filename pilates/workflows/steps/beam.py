@@ -1383,6 +1383,7 @@ def _resolve_beam_postprocess_inputs(
     the separate upstream ActivitySim skim role.
     """
 
+    ensure_beam_mutable_workspace(settings, workspace)
     year = resolve_forecast_year(state)
     if year is None:
         raise RuntimeError("beam_postprocess requires a resolved forecast year.")

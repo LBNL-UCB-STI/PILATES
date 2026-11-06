@@ -2783,10 +2783,37 @@ def ensure_activitysim_mutable_configs(
     settings: PilatesConfig,
     workspace: Optional["Workspace"] = None,
     folder_path: Optional[str] = None,
+    *,
+    workspace_root: Optional[str | Path] = None,
 ) -> Path:
     """
     Idempotently prepare ActivitySim mutable data and config directories in the workspace.
     """
+    mutable_data_rel = str(
+        get_setting(
+            settings,
+            "activitysim.local_mutable_data_folder",
+            "activitysim/data",
+        )
+        or "activitysim/data"
+    )
+    mutable_configs_rel = str(
+        get_setting(
+            settings,
+            "activitysim.local_mutable_configs_folder",
+            "activitysim/configs",
+        )
+        or "activitysim/configs"
+    )
+    root_dir: Optional[str] = (
+        str(workspace_root) if workspace_root is not None else None
+    )
+    if root_dir is None and workspace is not None:
+        try:
+            root_dir = str(workspace.full_path)
+        except AttributeError:
+            root_dir = None
+
     input_dir: Optional[str] = None
     if folder_path is not None:
         input_dir = str(folder_path)
@@ -2794,19 +2821,9 @@ def ensure_activitysim_mutable_configs(
         try:
             input_dir = str(workspace.get_asim_mutable_data_dir())
         except AttributeError:
-            mutable_data_rel = (
-                get_setting(
-                    settings,
-                    "activitysim.local_mutable_data_folder",
-                    "activitysim/data",
-                )
-                or "activitysim/data"
-            )
-            try:
-                input_dir = os.path.join(
-                    str(workspace.full_path), str(mutable_data_rel)
-                )
-            except AttributeError:
+            if root_dir is not None:
+                input_dir = os.path.join(root_dir, mutable_data_rel)
+            else:
                 try:
                     input_dir = os.path.abspath(
                         os.path.join(
@@ -2817,13 +2834,10 @@ def ensure_activitysim_mutable_configs(
                     )
                 except AttributeError:
                     input_dir = None
+    elif root_dir is not None:
+        input_dir = os.path.join(root_dir, mutable_data_rel)
     else:
-        input_dir = str(
-            get_setting(
-                settings, "activitysim.local_mutable_data_folder", "activitysim/data"
-            )
-            or "activitysim/data"
-        )
+        input_dir = mutable_data_rel
     if input_dir is not None:
         os.makedirs(input_dir, exist_ok=True)
 
@@ -2832,56 +2846,17 @@ def ensure_activitysim_mutable_configs(
         try:
             configs_dest_dir = str(workspace.get_asim_mutable_configs_dir())
         except AttributeError:
-            mutable_configs_rel = (
-                get_setting(
-                    settings,
-                    "activitysim.local_mutable_configs_folder",
-                    "activitysim/configs",
-                )
-                or "activitysim/configs"
-            )
-            try:
-                configs_dest_dir = os.path.join(
-                    str(workspace.full_path), str(mutable_configs_rel)
-                )
-            except AttributeError:
-                if input_dir is not None:
-                    configs_dest_dir = os.path.abspath(
-                        os.path.join(
-                            input_dir,
-                            "..",
-                            "..",
-                            str(mutable_configs_rel),
-                        )
-                    )
-    elif input_dir is not None:
-        mutable_configs_rel = (
-            get_setting(
-                settings,
-                "activitysim.local_mutable_configs_folder",
-                "activitysim/configs",
-            )
-            or "activitysim/configs"
-        )
+            if root_dir is not None:
+                configs_dest_dir = os.path.join(root_dir, mutable_configs_rel)
+    elif root_dir is not None and folder_path is None:
+        configs_dest_dir = os.path.join(root_dir, mutable_configs_rel)
+
+    if configs_dest_dir is None and input_dir is not None:
         configs_dest_dir = os.path.abspath(
-            os.path.join(
-                input_dir,
-                "..",
-                "..",
-                str(mutable_configs_rel),
-            )
+            os.path.join(input_dir, "..", "..", mutable_configs_rel)
         )
     if configs_dest_dir is None:
-        return Path(
-            str(
-                get_setting(
-                    settings,
-                    "activitysim.local_mutable_configs_folder",
-                    "activitysim/configs",
-                )
-                or "activitysim/configs"
-            )
-        )
+        return Path(mutable_configs_rel)
 
     region = get_setting(settings, "run.region")
     project_root = find_project_root(start_path=os.path.dirname(__file__))

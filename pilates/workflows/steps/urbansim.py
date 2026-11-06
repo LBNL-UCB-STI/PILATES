@@ -185,8 +185,8 @@ def _resolve_urbansim_postprocess_inputs(
     step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
     base_value = resolve_coupler_value(coupler, USIM_DATASTORE_BASE_H5).value
-    has_base_datastore = base_value is not None and (
-        step_identity is None or isinstance(base_value, Artifact)
+    has_base_datastore = isinstance(base_value, Artifact) or (
+        step_identity is None and isinstance(base_value, (str, Path))
     )
     mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
     input_name = get_usim_datastore_fname(settings, io="input")

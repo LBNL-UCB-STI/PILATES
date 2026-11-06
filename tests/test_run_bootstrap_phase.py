@@ -101,10 +101,9 @@ class TraceCapableTrackerStub:
         )
 
 
-def _settings(cache_enabled=True, code_identity=None):
+def _settings(code_identity=None):
     return SimpleNamespace(
         run=SimpleNamespace(
-            bootstrap_cache_enabled=cache_enabled,
             consist_code_identity=code_identity,
             region="test",
             models=SimpleNamespace(
@@ -799,20 +798,14 @@ def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
     warmstart_path.parent.mkdir(parents=True)
     warmstart_path.write_text("linkstats", encoding="utf-8")
 
-    def _make_beam_preprocessor(model_name, _state):
-        assert model_name == "beam"
-        return SimpleNamespace(
-            existing_beam_exchange_inputs=lambda _workspace: RecordStore(
-                recordList=[
-                    FileRecord(file_path=str(path), short_name=key)
-                    for key, path in exchange_paths.items()
-                ]
-            )
-        )
-
     monkeypatch.setattr(
-        "pilates.workflows.binding.BeamPreprocessor",
-        _make_beam_preprocessor,
+        "pilates.workflows.binding.beam_exchange.register_existing_beam_exchange_inputs",
+        lambda **_kwargs: RecordStore(
+            recordList=[
+                FileRecord(file_path=str(path), short_name=key)
+                for key, path in exchange_paths.items()
+            ]
+        ),
     )
 
     settings = SimpleNamespace(
@@ -2006,8 +1999,18 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
     )
     monkeypatch.setattr(
         run_module,
-        "_preflight_bootstrap_activitysim_skims_admission",
-        lambda *_args, **_kwargs: events.append("skims_admission"),
+        "has_initial_skims_admission_policy",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "requires_prior_beam_skim_handoff",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "preflight_activitysim_initial_skims_admission",
+        lambda **_kwargs: events.append("skims_admission"),
     )
     monkeypatch.setattr(
         run_module,
@@ -2128,8 +2131,18 @@ def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
     )
     monkeypatch.setattr(
         run_module,
-        "_preflight_bootstrap_activitysim_skims_admission",
-        lambda *_args, **_kwargs: events.append("skims_admission"),
+        "has_initial_skims_admission_policy",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "requires_prior_beam_skim_handoff",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "preflight_activitysim_initial_skims_admission",
+        lambda **_kwargs: events.append("skims_admission"),
     )
     monkeypatch.setattr(
         run_module,

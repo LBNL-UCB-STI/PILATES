@@ -2,6 +2,8 @@ import logging
 import os
 from typing import Optional
 
+from pilates.utils.settings_helper import get as get_setting
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,16 +16,16 @@ def resolve_initial_linkstats_path(settings, workspace) -> Optional[str]:
     mutable BEAM region input root, and ``{router_directory}`` is expanded from
     ``beam.router_directory`` when present.
     """
-    beam_settings = getattr(settings, "beam", None)
-    run_settings = getattr(settings, "run", None)
+    beam_settings = get_setting(settings, "beam")
+    run_settings = get_setting(settings, "run")
     if beam_settings is None or run_settings is None:
         return None
 
-    region = getattr(run_settings, "region", None)
+    region = get_setting(run_settings, "region")
     if not region:
         return None
 
-    configured_path = getattr(beam_settings, "warmstart_linkstats_path", None)
+    configured_path = get_setting(beam_settings, "warmstart_linkstats_path")
     if not configured_path:
         return None
 
@@ -33,7 +35,7 @@ def resolve_initial_linkstats_path(settings, workspace) -> Optional[str]:
     )
 
     candidate = os.path.expanduser(os.fspath(configured_path))
-    router_directory = getattr(beam_settings, "router_directory", None)
+    router_directory = get_setting(beam_settings, "router_directory")
     if "{router_directory}" in candidate:
         if not router_directory:
             logger.warning(

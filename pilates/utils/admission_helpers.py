@@ -3,10 +3,36 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
+from urllib.parse import unquote, urlparse
 
 import consist
+
+from pilates.utils.path_utils import find_project_root
+
+
+def resolve_local_source_uri(raw_uri: str | None) -> Path | None:
+    """Resolve a local path or ``file://`` URI relative to the project root."""
+    if not isinstance(raw_uri, str) or not raw_uri.strip():
+        return None
+    uri = raw_uri.strip()
+    if uri.startswith("file://"):
+        parsed = urlparse(uri)
+        if parsed.netloc and parsed.netloc != "localhost":
+            return None
+        local_source = unquote(parsed.path)
+    elif "://" in uri:
+        return None
+    else:
+        local_source = uri
+    candidate = Path(local_source).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    pilates_root = find_project_root(start_path=os.path.dirname(__file__))
+    base_root = Path(pilates_root) if pilates_root else Path.cwd()
+    return (base_root / candidate).resolve()
 
 
 @runtime_checkable
@@ -90,5 +116,6 @@ __all__ = [
     "AdmissionMetadataLogger",
     "extract_admission_reports",
     "persist_admission_report",
+    "resolve_local_source_uri",
     "resolve_tracker_report_dir",
 ]

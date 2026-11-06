@@ -87,7 +87,22 @@ def _export_atlas_table_to_csv(
 def _resolve_atlas_h5_table_key(
     store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
 ) -> str:
-    _ = is_start_year
+    available_keys = set(store.keys())
+    if is_start_year:
+        root_key = f"/{table}"
+        if root_key in available_keys:
+            return root_key
+        raise KeyError(
+            f"Required start-year root table '{root_key}' not found in HDF5 store."
+        )
+    store_name = Path(str(store._path)).name
+    if store_name.startswith("model_data_"):
+        prefixed_key = f"/{year}/{table}"
+        if prefixed_key in available_keys:
+            return prefixed_key
+        raise KeyError(
+            f"Required forecast-year table '{prefixed_key}' not found in HDF5 store '{store_name}'."
+        )
     return resolve_usim_h5_table_key(store, year=year, table=table)
 
 

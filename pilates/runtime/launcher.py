@@ -42,10 +42,15 @@ from pilates.utils.consist_db_snapshot import (
     restore_local_consist_db_from_snapshot,
     seed_local_consist_db_from_shared,
 )
+from pilates.activitysim.admission import (
+    has_initial_skims_admission_policy,
+    preflight_activitysim_initial_skims_admission,
+)
 from pilates.urbansim.admission import (
     preflight_bootstrap_urbansim_datastore_admission,
 )
 from pilates.utils.admission_helpers import extract_admission_reports
+from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime.failure_hints import (
@@ -491,50 +496,6 @@ def _prepare_run_context(
     )
 
 
-def _preflight_bootstrap_urbansim_datastore_admission(
-    prepared: PreparedRunContext,
-) -> None:
-    """Record and enforce datastore admission on the active outer scenario run."""
-    existing_admission_reports = extract_admission_reports(cr.current_run())
-
-    preflight_bootstrap_urbansim_datastore_admission(
-        settings=prepared.settings,
-        metadata_logger=prepared.tracker,
-        workspace_path=Path(prepared.workspace.full_path),
-        report_dir=Path(prepared.archive_run_dir),
-        existing_admission_reports=existing_admission_reports,
-    )
-
-
-def _preflight_bootstrap_activitysim_skims_admission(
-    prepared: PreparedRunContext,
-) -> None:
-    """Record and enforce initial ActivitySim skims admission on the outer scenario run."""
-    from pilates.activitysim.admission import (
-        has_initial_skims_admission_policy,
-        preflight_activitysim_initial_skims_admission,
-    )
-    from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
-
-    if not has_initial_skims_admission_policy(prepared.settings):
-        return
-    if requires_prior_beam_skim_handoff(
-        settings=prepared.settings, state=prepared.state
-    ):
-        return
-
-    existing_admission_reports = extract_admission_reports(cr.current_run())
-
-    preflight_activitysim_initial_skims_admission(
-        settings=prepared.settings,
-        metadata_logger=prepared.tracker,
-        tracker=prepared.tracker,
-        workspace_path=Path(prepared.workspace.full_path),
-        report_dir=Path(prepared.archive_run_dir),
-        existing_admission_reports=existing_admission_reports,
-    )
-
-
 def _emit_pre_scenario_failure(
     prepared: PreparedRunContext,
     error: Exception,
@@ -667,19 +628,44 @@ def main(
                 warn_undefined=True,
                 description=coupler_schema,
             )
-            if not state.data_initialized:
-                _preflight_bootstrap_urbansim_datastore_admission(prepared)
-                _preflight_bootstrap_activitysim_skims_admission(prepared)
+            # Primary rewind runs in _prepare_run_context; this second call is an
+            # idempotent guard when _prepare_run_context is stubbed in unit tests.
+            _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+                state=state,
+            )
+            if not state.data_initialized and (
+                not is_restart_run or _is_at_initial_workflow_boundary(state)
+            ):
+                preflight_bootstrap_urbansim_datastore_admission(
+                    settings=settings,
+                    metadata_logger=tracker,
+                    workspace_path=Path(workspace.full_path),
+                    report_dir=Path(archive_run_dir),
+                    existing_admission_reports=extract_admission_reports(
+                        cr.current_run()
+                    ),
+                )
+                if has_initial_skims_admission_policy(
+                    settings
+                ) and not requires_prior_beam_skim_handoff(
+                    settings=settings, state=state
+                ):
+                    preflight_activitysim_initial_skims_admission(
+                        settings=settings,
+                        metadata_logger=tracker,
+                        tracker=tracker,
+                        workspace_path=Path(workspace.full_path),
+                        report_dir=Path(archive_run_dir),
+                        existing_admission_reports=extract_admission_reports(
+                            cr.current_run()
+                        ),
+                    )
             seed_bootstrap_artifacts_to_coupler(
                 settings=settings,
                 state=state,
                 workspace=workspace,
                 coupler=coupler,
-            )
-            # Primary rewind runs in _prepare_run_context; this second call is an
-            # idempotent guard when _prepare_run_context is stubbed in unit tests.
-            _rewind_uncommitted_activitysim_restart_to_provider_boundary(
-                state=state,
+                scenario=scenario,
             )
             if not is_restart_run:
                 scenario.capture_coupler_snapshot(phase="init")

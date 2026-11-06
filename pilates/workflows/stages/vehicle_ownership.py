@@ -21,9 +21,13 @@ from pilates.workflows.steps import (
 )
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
+from pilates.utils.state_access import iteration_index
 from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -49,16 +53,51 @@ def _validate_population_h5_for_activitysim_year(
     )
 
 
+def _coupler_artifact_filename(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        path = value.path
+        if path:
+            return os.path.basename(str(path))
+    except AttributeError:
+        pass
+    if isinstance(value, (str, os.PathLike)):
+        return os.path.basename(os.fspath(value))
+    return ""
+
+
 def _publish_current_h5_alias(
     *,
     coupler: CouplerProtocol,
     fallback_path: Union[str, os.PathLike],
 ) -> Any:
     """Alias the current H5 role to ATLAS's published population artifact."""
+    current_datastore = resolve_coupler_value(
+        coupler,
+        USIM_DATASTORE_CURRENT_H5,
+    ).value
+    base_datastore = resolve_coupler_value(
+        coupler,
+        USIM_DATASTORE_BASE_H5,
+    ).value
     population_source = resolve_coupler_value(
         coupler,
         USIM_POPULATION_SOURCE_H5,
     ).value
+    if (
+        current_datastore is not None
+        and current_datastore is not population_source
+        and _coupler_artifact_filename(current_datastore)
+        and _coupler_artifact_filename(current_datastore)
+        == _coupler_artifact_filename(base_datastore)
+    ):
+        set_coupler_from_artifact(
+            coupler,
+            USIM_DATASTORE_BASE_H5,
+            current_datastore,
+            fallback=os.fspath(fallback_path),
+        )
     if population_source is None:
         # Keep a path fallback for runtimes without an active output logger.
         population_source = os.fspath(fallback_path)
@@ -151,6 +190,11 @@ def run_vehicle_ownership_stage(
         )
 
     yrs = _atlas_sub_years(state)
+    forecast_datastore_artifact = (
+        resolve_coupler_value(coupler, USIM_FORECAST_OUTPUT).value
+        or resolve_coupler_value(coupler, USIM_POPULATION_SOURCE_H5).value
+        or resolve_coupler_value(coupler, USIM_DATASTORE_H5).value
+    )
 
     for atlas_year in yrs:
         atlas_state = AtlasSubState(state, atlas_year)
@@ -166,7 +210,7 @@ def run_vehicle_ownership_stage(
                 workspace=workspace,
                 stage="vehicle_ownership",
                 year=atlas_year,
-                iteration=getattr(state, "iteration", None),
+                iteration=iteration_index(state),
                 phase="preprocess",
             )
             del preprocess_outputs
@@ -178,7 +222,7 @@ def run_vehicle_ownership_stage(
                 workspace=workspace,
                 stage="vehicle_ownership",
                 year=atlas_year,
-                iteration=getattr(state, "iteration", None),
+                iteration=iteration_index(state),
                 phase="run",
             )
             del run_outputs
@@ -190,14 +234,32 @@ def run_vehicle_ownership_stage(
                 workspace=workspace,
                 stage="vehicle_ownership",
                 year=atlas_year,
-                iteration=getattr(state, "iteration", None),
+                iteration=iteration_index(state),
                 phase="postprocess",
             )
             if atlas_postprocess_outputs.usim_datastore_h5 is not None:
-                _publish_current_h5_alias(
-                    coupler=coupler,
-                    fallback_path=atlas_postprocess_outputs.usim_datastore_h5,
-                )
+                if atlas_year != forecast_year:
+                    warmstart_population_source = resolve_coupler_value(
+                        coupler,
+                        USIM_POPULATION_SOURCE_H5,
+                    ).value
+                    set_coupler_from_artifact(
+                        coupler,
+                        USIM_DATASTORE_BASE_H5,
+                        warmstart_population_source,
+                        fallback=os.fspath(atlas_postprocess_outputs.usim_datastore_h5),
+                    )
+                    if forecast_datastore_artifact is not None:
+                        set_coupler_from_artifact(
+                            coupler,
+                            USIM_DATASTORE_CURRENT_H5,
+                            forecast_datastore_artifact,
+                        )
+                else:
+                    _publish_current_h5_alias(
+                        coupler=coupler,
+                        fallback_path=atlas_postprocess_outputs.usim_datastore_h5,
+                    )
                 if not atlas_state.is_start_year():
                     _validate_population_h5_for_activitysim_year(
                         path=atlas_postprocess_outputs.usim_datastore_h5,

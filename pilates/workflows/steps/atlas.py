@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from consist import (
+    Artifact,
     BindingResult,
     ExecutionOptions,
     OutputSet,
@@ -20,6 +21,7 @@ from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasLaunchContext, AtlasRunner
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
+from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_runtime import require_runtime_kwargs
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.io import get_land_use_model
@@ -33,6 +35,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.binding import ArtifactBindingRule
@@ -180,6 +183,95 @@ def _atlas_postprocess_native_output_paths(
     return outputs
 
 
+def _coupler_value_filename(value: Any) -> str:
+    if isinstance(value, Artifact):
+        raw_path = value.path or value.container_uri or ""
+        return Path(str(raw_path)).name
+    if isinstance(value, (str, Path)):
+        return Path(value).name
+    return ""
+
+
+def _prefer_base_datastore_key(
+    *,
+    state: WorkflowState,
+    land_use_enabled: bool,
+    use_base_datastore: bool,
+) -> bool:
+    if not use_base_datastore:
+        return False
+    if not land_use_enabled:
+        return True
+    try:
+        start_year = state.start_year
+        year = state.year if state.year is not None else state.forecast_year
+    except AttributeError:
+        return True
+    if start_year is not None and year is not None and int(year) == int(start_year):
+        return True
+    try:
+        main_forecast_year = state.main_forecast_year
+    except AttributeError:
+        main_forecast_year = None
+    try:
+        atlas_interval_start_year = state.atlas_interval_start_year
+    except AttributeError:
+        atlas_interval_start_year = None
+    if (
+        year is not None
+        and main_forecast_year is not None
+        and int(year) < int(main_forecast_year)
+        and (
+            atlas_interval_start_year is None
+            or int(year) != int(atlas_interval_start_year)
+        )
+    ):
+        return True
+    return False
+
+
+def _select_atlas_datastore_from_coupler(
+    *,
+    coupler: CouplerProtocol,
+    use_base_datastore: bool,
+    prefer_base_key: bool = True,
+    expected_filename: str,
+) -> Any:
+    if use_base_datastore:
+        candidates = (
+            (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_H5)
+            if prefer_base_key
+            else (USIM_DATASTORE_H5, USIM_DATASTORE_BASE_H5)
+        )
+    else:
+        forecast_candidate = resolve_coupler_value(coupler, USIM_FORECAST_OUTPUT)
+        current_candidate = resolve_coupler_value(coupler, USIM_DATASTORE_H5)
+        if (
+            forecast_candidate.value is not None
+            and _coupler_value_filename(forecast_candidate.value) == expected_filename
+            and _coupler_value_filename(current_candidate.value) != expected_filename
+        ):
+            return forecast_candidate
+        pop_candidate = resolve_coupler_value(coupler, USIM_POPULATION_SOURCE_H5)
+        expected_stem = Path(expected_filename).stem
+        if (
+            pop_candidate.value is not None
+            and _coupler_value_filename(pop_candidate.value).startswith(expected_stem)
+            and _coupler_value_filename(current_candidate.value) != expected_filename
+        ):
+            return pop_candidate
+        candidates = (
+            USIM_DATASTORE_H5,
+            USIM_FORECAST_OUTPUT,
+            USIM_DATASTORE_BASE_H5,
+        )
+    for candidate_key in candidates:
+        resolved = resolve_coupler_value(coupler, candidate_key)
+        if resolved.value is not None:
+            return resolved
+    return resolve_coupler_value(coupler, USIM_DATASTORE_H5)
+
+
 def _resolve_atlas_preprocess_inputs(
     *,
     settings: PilatesConfig,
@@ -195,13 +287,19 @@ def _resolve_atlas_preprocess_inputs(
         get_setting(
             settings,
             "land_use_enabled",
-            get_land_use_model(settings) is not None,
+            get_land_use_model(settings) is not None
+            or get_setting(settings, "urbansim") is not None,
         )
     )
     use_base_datastore = is_start_year(state, settings) or not land_use_enabled
+    prefer_base_key = _prefer_base_datastore_key(
+        state=state,
+        land_use_enabled=land_use_enabled,
+        use_base_datastore=use_base_datastore,
+    )
     usim_input_fname = get_usim_datastore_fname(
         settings,
-        io="input" if use_base_datastore else "output",
+        io="input" if (use_base_datastore and prefer_base_key) else "output",
         year=state.forecast_year,
     )
     atlas_input = Path(workspace.get_usim_mutable_data_dir()) / usim_input_fname
@@ -220,34 +318,37 @@ def _resolve_atlas_preprocess_inputs(
         },
         coupler=coupler,
     )
-    if not land_use_enabled or USIM_DATASTORE_H5 not in (resolved.binding.inputs or {}):
-        datastore_candidates = (
-            (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_H5)
-            if not land_use_enabled
-            else (USIM_DATASTORE_H5, USIM_DATASTORE_BASE_H5)
+    selected_datastore = _select_atlas_datastore_from_coupler(
+        coupler=coupler,
+        use_base_datastore=use_base_datastore,
+        prefer_base_key=prefer_base_key,
+        expected_filename=usim_input_fname,
+    )
+    current_bound = (resolved.binding.inputs or {}).get(USIM_DATASTORE_H5)
+    if selected_datastore.value is not None and (
+        use_base_datastore
+        or current_bound is None
+        or selected_datastore.value is not current_bound
+    ):
+        updated_inputs = dict(resolved.binding.inputs or {})
+        updated_inputs[USIM_DATASTORE_H5] = selected_datastore.value
+        updated_sources = dict(resolved.source_by_role)
+        updated_sources[USIM_DATASTORE_H5] = selected_datastore.source
+        updated_keys = dict(resolved.selected_key_by_role)
+        if selected_datastore.storage_key is not None:
+            updated_keys[USIM_DATASTORE_H5] = selected_datastore.storage_key
+        updated_destinations = dict(resolved.logical_destinations)
+        updated_destinations[USIM_DATASTORE_H5] = Path(atlas_input)
+        return ResolvedStepInputs(
+            step_name=resolved.step_name,
+            binding=BindingResult(inputs=updated_inputs),
+            required_roles=resolved.required_roles,
+            optional_roles=resolved.optional_roles,
+            source_by_role=updated_sources,
+            selected_key_by_role=updated_keys,
+            logical_destinations=updated_destinations,
+            metadata=resolved.metadata,
         )
-        for candidate_key in datastore_candidates:
-            candidate = resolve_coupler_value(coupler, candidate_key)
-            if candidate.value is not None:
-                updated_inputs = dict(resolved.binding.inputs or {})
-                updated_inputs[USIM_DATASTORE_H5] = candidate.value
-                updated_sources = dict(resolved.source_by_role)
-                updated_sources[USIM_DATASTORE_H5] = candidate.source
-                updated_keys = dict(resolved.selected_key_by_role)
-                if candidate.storage_key is not None:
-                    updated_keys[USIM_DATASTORE_H5] = candidate.storage_key
-                updated_destinations = dict(resolved.logical_destinations)
-                updated_destinations[USIM_DATASTORE_H5] = Path(atlas_input)
-                return ResolvedStepInputs(
-                    step_name=resolved.step_name,
-                    binding=BindingResult(inputs=updated_inputs),
-                    required_roles=resolved.required_roles,
-                    optional_roles=resolved.optional_roles,
-                    source_by_role=updated_sources,
-                    selected_key_by_role=updated_keys,
-                    logical_destinations=updated_destinations,
-                    metadata=resolved.metadata,
-                )
     return resolved
 
 
@@ -286,6 +387,36 @@ def _resolve_atlas_postprocess_inputs(
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
     forecast_year = state.forecast_year
+    land_use_enabled = bool(
+        get_setting(
+            settings,
+            "land_use_enabled",
+            get_land_use_model(settings) is not None
+            or get_setting(settings, "urbansim") is not None,
+        )
+    )
+    use_base_datastore = is_start_year(state, settings) or not land_use_enabled
+    prefer_base_key = _prefer_base_datastore_key(
+        state=state,
+        land_use_enabled=land_use_enabled,
+        use_base_datastore=use_base_datastore,
+    )
+    usim_input_fname = get_usim_datastore_fname(
+        settings,
+        io="input" if (use_base_datastore and prefer_base_key) else "output",
+        year=forecast_year,
+    )
+    datastore_dest = (
+        Path(workspace.get_usim_mutable_data_dir()) / usim_input_fname
+        if (use_base_datastore and prefer_base_key)
+        else Path(
+            _urbansim_run_native_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            )[USIM_DATASTORE_H5]
+        )
+    )
     semantic_roles = {
         _ATLAS_HOUSEHOLDV_CSV_INPUT: f"householdv_{forecast_year}",
         _ATLAS_VEHICLES_CSV_INPUT: f"vehicles_{forecast_year}",
@@ -296,19 +427,21 @@ def _resolve_atlas_postprocess_inputs(
         / f"householdv_{forecast_year}.csv",
         _ATLAS_VEHICLES_CSV_INPUT: Path(workspace.get_atlas_output_dir())
         / f"vehicles_{forecast_year}.csv",
-        USIM_DATASTORE_H5: Path(
-            _urbansim_run_native_output_paths(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            )[USIM_DATASTORE_H5]
-        ),
+        USIM_DATASTORE_H5: datastore_dest,
     }
     selected_inputs: dict[str, Any] = {}
     source_by_role: dict[str, str] = {}
     selected_key_by_role: dict[str, str] = {}
     for parameter, semantic_role in semantic_roles.items():
-        resolved = resolve_coupler_value(coupler, semantic_role)
+        if parameter == USIM_DATASTORE_H5:
+            resolved = _select_atlas_datastore_from_coupler(
+                coupler=coupler,
+                use_base_datastore=use_base_datastore,
+                prefer_base_key=prefer_base_key,
+                expected_filename=usim_input_fname,
+            )
+        else:
+            resolved = resolve_coupler_value(coupler, semantic_role)
         source_by_role[parameter] = resolved.source
         if resolved.storage_key is not None:
             selected_key_by_role[parameter] = resolved.storage_key
@@ -383,6 +516,81 @@ def _native_atlas_preprocess(
     )
 
 
+def _ensure_prior_atlas_subyear_continuation_inputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    input_root: Path,
+) -> None:
+    try:
+        forecast_year = int(state.forecast_year)
+        start_year = int(state.start_year)
+    except (AttributeError, TypeError, ValueError):
+        return
+    if forecast_year <= start_year:
+        return
+
+    prior_year = forecast_year - 2
+    prior_dir = Path(input_root) / f"year{prior_year}"
+    has_rdata = (prior_dir / "vehicles_output.RData").is_file() and (
+        prior_dir / "households_output.RData"
+    ).is_file()
+    has_households = (prior_dir / "households.csv").is_file()
+    if has_rdata and has_households:
+        return
+
+    tracker = cr.current_tracker()
+    if tracker is None:
+        return
+
+    prior_state = type(
+        "PriorAtlasSubState",
+        (),
+        {
+            "year": prior_year,
+            "forecast_year": prior_year,
+            "start_year": start_year,
+        },
+    )()
+    if not has_rdata:
+        atlas_runs = tracker.find_runs(
+            year=prior_year,
+            model="atlas_run",
+            stage="vehicle_ownership",
+            phase="run",
+            status="completed",
+        )
+        if atlas_runs:
+            tracker.hydrate_run_outputs(
+                str(atlas_runs[-1].id),
+                target_root=workspace.full_path,
+                keys=[f"atlas_continuation_{prior_year}"],
+                preserve_existing=True,
+                on_missing="warn",
+            )
+    if not has_households:
+        preprocess_runs = tracker.find_runs(
+            year=prior_year,
+            model="atlas_preprocess",
+            stage="vehicle_ownership",
+            phase="preprocess",
+            status="completed",
+        )
+        if preprocess_runs:
+            prepared_destinations = _atlas_preprocess_prepared_input_paths(
+                settings=settings,
+                state=prior_state,
+                workspace=workspace,
+            )
+            tracker.hydrate_run_outputs_to_destinations(
+                str(preprocess_runs[-1].id),
+                destinations_by_key=prepared_destinations,
+                preserve_existing=True,
+                on_missing="warn",
+            )
+
+
 @define_step(
     model="atlas_run",
     name_template="atlas_run__y{year}__i{iteration}__phase_{phase}",
@@ -415,6 +623,12 @@ def _native_atlas_run(
     workspace: Workspace,
     atlas_launch_context: AtlasLaunchContext,
 ) -> None:
+    _ensure_prior_atlas_subyear_continuation_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        input_root=atlas_launch_context.input_root,
+    )
     received_inputs = {
         "atlas_households_csv": atlas_households_csv,
         "atlas_blocks_csv": atlas_blocks_csv,

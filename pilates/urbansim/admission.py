@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Mapping
-from urllib.parse import unquote, urlparse
 
 import consist
 
@@ -19,8 +17,8 @@ from pilates.urbansim.preprocessor import (
 from pilates.utils.admission_helpers import (
     AdmissionMetadataLogger,
     persist_admission_report,
+    resolve_local_source_uri,
 )
-from pilates.utils.path_utils import find_project_root
 
 
 logger = logging.getLogger(__name__)
@@ -30,27 +28,6 @@ _URBANSIM_DATASTORE_REPORT_FILENAME = "usim-datastore-base-h5.json"
 
 class UrbanSimInputAdmissionError(RuntimeError):
     """Raised when configured UrbanSim input-admission policy rejects a file."""
-
-
-def _resolve_local_source_uri(raw_uri: str | None) -> Path | None:
-    if not isinstance(raw_uri, str) or not raw_uri.strip():
-        return None
-    uri = raw_uri.strip()
-    if uri.startswith("file://"):
-        parsed = urlparse(uri)
-        if parsed.netloc and parsed.netloc != "localhost":
-            return None
-        local_source = unquote(parsed.path)
-    elif "://" in uri:
-        return None
-    else:
-        local_source = uri
-    candidate = Path(local_source).expanduser()
-    if candidate.is_absolute():
-        return candidate
-    pilates_root = find_project_root(start_path=os.path.dirname(__file__))
-    base_root = Path(pilates_root) if pilates_root else Path.cwd()
-    return (base_root / candidate).resolve()
 
 
 def preflight_bootstrap_urbansim_datastore_admission(
@@ -88,7 +65,7 @@ def preflight_bootstrap_urbansim_datastore_admission(
     if workspace_candidate.is_file():
         execution_path = workspace_candidate
     else:
-        source_uri_path = _resolve_local_source_uri(expectation.source_uri)
+        source_uri_path = resolve_local_source_uri(expectation.source_uri)
         static_source = resolve_urbansim_initial_datastore_source_path(settings)
         if source_uri_path is not None and source_uri_path.is_file():
             execution_path = source_uri_path

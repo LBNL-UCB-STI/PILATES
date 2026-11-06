@@ -656,6 +656,7 @@ def _activitysim_postprocess_resolver(
     coupler: CouplerProtocol,
     step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
+    ensure_activitysim_mutable_configs(settings, workspace)
     required_roles, optional_roles = resolve_runtime_input_output_overrides(
         step_name="activitysim_postprocess",
         land_use_enabled=_land_use_enabled(state),
@@ -692,6 +693,15 @@ def _activitysim_postprocess_resolver(
     ):
         inputs.pop(USIM_DATASTORE_BASE_H5, None)
         removed_roles.add(USIM_DATASTORE_BASE_H5)
+    elif (
+        isinstance(inputs.get(USIM_DATASTORE_BASE_H5), Artifact)
+        and isinstance(inputs.get(USIM_DATASTORE_CURRENT_H5), Artifact)
+        and inputs[USIM_DATASTORE_BASE_H5].id != inputs[USIM_DATASTORE_CURRENT_H5].id
+    ):
+        base_local = _h5_input_local_path(inputs[USIM_DATASTORE_BASE_H5])
+        curr_local = _h5_input_local_path(inputs[USIM_DATASTORE_CURRENT_H5])
+        if base_local is not None and base_local == curr_local:
+            inputs[USIM_DATASTORE_BASE_H5] = inputs[USIM_DATASTORE_CURRENT_H5]
     if step_identity is not None and all(
         isinstance(value, Artifact) for value in inputs.values()
     ):

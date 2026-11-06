@@ -38,7 +38,8 @@ from consist import (
 )
 from consist.types import BindingResult
 
-from pilates.beam.preprocessor import BeamPreprocessor, ensure_beam_mutable_workspace
+from pilates.beam import beam_exchange
+from pilates.beam.preprocessor import ensure_beam_mutable_workspace
 from pilates.urbansim.preprocessor import (
     resolve_urbansim_initial_datastore_source_path,
 )
@@ -54,7 +55,15 @@ from pilates.utils.io import (
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import is_start_year, uses_input_datastore
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
-from pilates.workflows.coupler_namespace import resolve_input_precedence
+from pilates.workflows.coupler_namespace import (
+    canonical_artifact_key_from_raw_key,
+    resolve_input_precedence,
+    set_coupler_from_artifact,
+)
+from pilates.workflows.input_authority import (
+    requires_prior_beam_linkstats_handoff,
+    requires_prior_beam_skim_handoff,
+)
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (
@@ -767,9 +776,12 @@ def _bootstrap_beam_exchange_inputs(
     except Exception:
         pass
 
-    beam_preprocessor = BeamPreprocessor("beam", state)
     try:
-        record_store = beam_preprocessor.existing_beam_exchange_inputs(workspace)
+        record_store = beam_exchange.register_existing_beam_exchange_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
     except FileNotFoundError as exc:
         logger.warning(
             "Bootstrap could not seed default BEAM inputs into coupler: %s",
@@ -799,10 +811,16 @@ def _bootstrap_beam_exchange_inputs(
 def _bootstrap_beam_warmstart_artifacts(
     *,
     settings: Any,
+    state: Any = None,
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
     if get_traffic_assignment_model(settings) != "beam":
+        return None
+    if state is not None and requires_prior_beam_linkstats_handoff(
+        settings=settings,
+        state=state,
+    ):
         return None
 
     warmstart_path = resolve_initial_linkstats_path(settings, workspace)
@@ -814,9 +832,16 @@ def _bootstrap_beam_warmstart_artifacts(
 def _bootstrap_initial_skims(
     *,
     settings: Any,
+    state: Any = None,
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
+    if state is not None and requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    ):
+        return None
+
     has_skim_consumer = (
         get_activity_demand_model(settings) == "activitysim"
         or get_land_use_model(settings) == "urbansim"
@@ -910,17 +935,6 @@ def _bootstrap_urbansim_initial_datastore(
             resolved_h5 = str(static_source)
 
     if resolved_h5 is None:
-        from pilates.urbansim.admission import _resolve_local_source_uri
-
-        raw_uri = get_setting(
-            settings,
-            "urbansim.admission.initial_datastore.expectation.source_uri",
-        )
-        uri_path = _resolve_local_source_uri(str(raw_uri) if raw_uri else None)
-        if uri_path is not None and uri_path.exists():
-            resolved_h5 = str(uri_path)
-
-    if resolved_h5 is None:
         return None
 
     seeded: Dict[str, str] = {
@@ -980,12 +994,67 @@ def bootstrap_stage_boundary_durability_policy() -> tuple[
     )
 
 
+def _seed_artifact_for_coupler_key(
+    *,
+    key: str,
+    path: str,
+    coupler: CouplerProtocol,
+    scenario: Any = None,
+) -> Artifact | None:
+    canonical_key = canonical_artifact_key_from_raw_key(key)
+    if scenario is not None:
+        try:
+            first_step_started = bool(scenario._first_step_started)
+        except AttributeError:
+            first_step_started = False
+        if not first_step_started:
+            try:
+                return scenario.add_input(
+                    path,
+                    key=canonical_key,
+                    latest_artifact_lookup_done=True,
+                    known_latest_artifact_at_uri=None,
+                )
+            except TypeError:
+                return scenario.add_input(path, key=canonical_key)
+            except AttributeError:
+                pass
+
+    try:
+        tracker = coupler.tracker  # type: ignore[attr-defined]
+    except AttributeError:
+        tracker = None
+    if tracker is None and scenario is not None:
+        try:
+            tracker = scenario._tracker
+        except AttributeError:
+            tracker = None
+    if tracker is None:
+        return None
+
+    try:
+        artifact = tracker.artifacts.create_artifact(
+            path,
+            run_id=None,
+            key=canonical_key,
+            direction="input",
+            latest_artifact_lookup_done=True,
+            known_latest_artifact_at_uri=None,
+        )
+        if tracker.db is not None:
+            tracker.db.upsert_artifact(artifact)
+        return artifact
+    except Exception:
+        return None
+
+
 def seed_bootstrap_artifacts_to_coupler(
     *,
     settings: Any,
     state: Any,
     workspace: Any,
     coupler: CouplerProtocol,
+    scenario: Any = None,
 ) -> None:
     """
     Seed coupler keys for initial static/staged artifacts needed by workflow steps.
@@ -1007,4 +1076,10 @@ def seed_bootstrap_artifacts_to_coupler(
                 continue
             if not path or not os.path.exists(path):
                 continue
-            coupler.set(key, path)
+            artifact = _seed_artifact_for_coupler_key(
+                key=key,
+                path=path,
+                coupler=coupler,
+                scenario=scenario,
+            )
+            set_coupler_from_artifact(coupler, key, artifact, fallback=path)

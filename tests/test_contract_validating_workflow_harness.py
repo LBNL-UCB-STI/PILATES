@@ -18,7 +18,10 @@ from pilates.activitysim.runner import validate_activitysim_zarr_skims
 from pilates.utils import consist_runtime as cr
 from pilates.utils.archive_paths import resolve_archive_run_dir
 from pilates.workflows.artifact_keys import (
+    ASIM_OMX_SKIMS,
     FINAL_SKIMS_OMX,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_H5,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
@@ -993,9 +996,37 @@ def test_stage_orchestrators_and_launcher_happy_path_workflow(tmp_path: Path) ->
 
     archive_run_dir = _latest_run_dir(env.paths.archive_root)
     scratch_run_dir = _latest_run_dir(env.paths.scratch_root)
-    assert (
+    snapshot_db = (
         archive_run_dir / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
-    ).is_file() or (archive_run_dir / ".consist" / "provenance.duckdb").is_file()
+    )
+    if not snapshot_db.is_file():
+        snapshot_db = archive_run_dir / ".consist" / "provenance.duckdb"
+    assert snapshot_db.is_file()
+
+    import duckdb
+
+    with duckdb.connect(str(snapshot_db), read_only=True) as conn:
+        init_snapshot_rows = conn.execute(
+            "SELECT role_key, artifact_id FROM run_coupler_snapshot WHERE phase = 'init'"
+        ).fetchall()
+    init_keys = {row[0] for row in init_snapshot_rows}
+    assert USIM_DATASTORE_BASE_H5 in init_keys
+    assert USIM_DATASTORE_H5 in init_keys
+    assert ASIM_OMX_SKIMS in init_keys
+    assert all(row[1] is not None for row in init_snapshot_rows)
+
+    usim_mutable = scratch_run_dir / "urbansim" / "data"
+    base_store_path = (
+        usim_mutable / f"custom_mpo_{env.settings.urbansim.region_id}_model_data.h5"
+    )
+    forecast_store_path = usim_mutable / "model_data_2017.h5"
+    assert base_store_path.is_file()
+    assert forecast_store_path.is_file()
+    with pd.HDFStore(str(base_store_path), mode="r") as base_store:
+        assert "/households" in base_store.keys()
+    with pd.HDFStore(str(forecast_store_path), mode="r") as forecast_store:
+        assert "/2017/households" in forecast_store.keys()
+        assert "/households" not in forecast_store.keys()
     assert (
         archive_run_dir
         / "consist-recovery"

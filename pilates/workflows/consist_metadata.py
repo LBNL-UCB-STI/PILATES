@@ -167,14 +167,6 @@ def build_step_consist_kwargs(
     """
     model_norm = (model or "").lower()
 
-    if model_norm == "initialization":
-        return {
-            "config": settings.get_initialization_signature(),
-            "facet": build_scenario_facet(settings),
-            "facet_schema_version": "initialization_v1",
-            "facet_index": True,
-        }
-
     builder_key = provenance_builder_key_for_step_name(model_norm)
     if builder_key is not None:
         builder = _CONFIG_BUILDERS.get(builder_key)
@@ -304,17 +296,9 @@ def build_activitysim_identity_inputs(
                 else Path(project_root) / local_configs_folder
             ) / region
             if source_dir.is_dir():
-                mutable_data_rel = (
-                    get_setting(
-                        settings,
-                        "activitysim.local_mutable_data_folder",
-                        "activitysim/data",
-                    )
-                    or "activitysim/data"
-                )
                 ensure_activitysim_mutable_configs(
                     settings,
-                    folder_path=str(Path(workspace_path) / str(mutable_data_rel)),
+                    workspace_root=workspace_path,
                 )
     if not configs_dir.exists():
         raise FileNotFoundError(

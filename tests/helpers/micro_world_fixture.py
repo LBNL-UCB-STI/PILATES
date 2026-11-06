@@ -31,8 +31,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
@@ -107,50 +105,48 @@ class MicroWorldEnv:
 
     def seed_scenario_coupler(self, sc: ScenarioWithCoupler) -> None:
         """Seed initial tracked artifacts into the scenario coupler."""
-        usim_mutable = Path(self.workspace.get_usim_mutable_data_dir())
-        active_h5 = usim_mutable / self.paths.base_h5.name
-        if not active_h5.exists():
-            active_h5 = self.paths.base_h5
-        asim_mutable = Path(self.workspace.get_asim_mutable_data_dir())
-        omx_path = asim_mutable / "skims.omx"
+        from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
+
+        seed_bootstrap_artifacts_to_coupler(
+            settings=self.settings,
+            state=self.state,
+            workspace=self.workspace,
+            coupler=sc.coupler,
+            scenario=sc,
+        )
+        if sc.coupler.get(USIM_POPULATION_SOURCE_H5) is None:
+            current_h5 = sc.coupler.get(USIM_DATASTORE_H5)
+            if current_h5 is not None:
+                sc.coupler.set(USIM_POPULATION_SOURCE_H5, current_h5)
+        if sc.coupler.get(FINAL_SKIMS_OMX) is None:
+            omx_skims = sc.coupler.get(ASIM_OMX_SKIMS)
+            if omx_skims is not None:
+                sc.coupler.set(FINAL_SKIMS_OMX, omx_skims)
+
         zarr_path = Path(self.workspace.get_asim_runtime_cache_dir()) / "skims.zarr"
         atlas_out_dir = Path(self.workspace.get_atlas_output_dir())
         vehicles2_path = atlas_out_dir / f"vehicles2_{self.state.forecast_year}.csv"
-
-        with sc.trace(
-            f"{sc.name}_init",
-            model="initialization",
-            year=self.state.current_year,
-            iteration=self.state.current_inner_iter,
-        ):
-            base_h5_art = cr.log_input(self.paths.base_h5, key=USIM_DATASTORE_BASE_H5)
-            sc.coupler.set_from_artifact(USIM_DATASTORE_BASE_H5, base_h5_art)
-
-            h5_art = cr.log_input(active_h5, key=USIM_DATASTORE_H5)
-            for h5_key in (
-                USIM_DATASTORE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_POPULATION_SOURCE_H5,
+        if zarr_path.exists() or vehicles2_path.exists():
+            with sc.trace(
+                f"{sc.name}_init_extras",
+                model="initialization",
+                year=self.state.current_year,
+                iteration=self.state.current_inner_iter,
             ):
-                sc.coupler.set_from_artifact(h5_key, h5_art)
-
-            if omx_path.exists():
-                omx_art = cr.log_input(omx_path, key=ASIM_OMX_SKIMS)
-                sc.coupler.set_from_artifact(ASIM_OMX_SKIMS, omx_art)
-                sc.coupler.set_from_artifact(FINAL_SKIMS_OMX, omx_art)
-
-            if zarr_path.exists():
-                zarr_art = self.tracker.log_artifact(
-                    zarr_path,
-                    key=ZARR_SKIMS,
-                    direction="output",
-                    driver="zarr",
-                )
-                sc.coupler.set_from_artifact(ZARR_SKIMS, zarr_art)
-
-            if vehicles2_path.exists():
-                veh_art = cr.log_input(vehicles2_path, key=ATLAS_VEHICLES2_OUTPUT)
-                sc.coupler.set_from_artifact(ATLAS_VEHICLES2_OUTPUT, veh_art)
+                if zarr_path.exists() and sc.coupler.get(ZARR_SKIMS) is None:
+                    zarr_art = self.tracker.log_artifact(
+                        zarr_path,
+                        key=ZARR_SKIMS,
+                        direction="output",
+                        driver="zarr",
+                    )
+                    sc.coupler.set_from_artifact(ZARR_SKIMS, zarr_art)
+                if (
+                    vehicles2_path.exists()
+                    and sc.coupler.get(ATLAS_VEHICLES2_OUTPUT) is None
+                ):
+                    veh_art = cr.log_input(vehicles2_path, key=ATLAS_VEHICLES2_OUTPUT)
+                    sc.coupler.set_from_artifact(ATLAS_VEHICLES2_OUTPUT, veh_art)
 
 
 def create_micro_world_tables(base_year: int = 2010) -> dict[str, pd.DataFrame]:
