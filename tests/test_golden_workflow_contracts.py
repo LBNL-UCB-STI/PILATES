@@ -54,7 +54,6 @@ def _initialize(env) -> None:
         workspace=workspace,
         coupler=coupler,
     )
-    state.set_data_initialized(True)
 
 
 @pytest.mark.slow_ci

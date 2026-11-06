@@ -101,11 +101,12 @@ class TraceCapableTrackerStub:
         )
 
 
-def _settings(code_identity=None):
+def _settings(code_identity=None, *, local_data_input_folder=None):
     return SimpleNamespace(
         run=SimpleNamespace(
             consist_code_identity=code_identity,
             region="test",
+            start_year=2017,
             models=SimpleNamespace(
                 land_use="urbansim",
                 activity_demand="activitysim",
@@ -119,7 +120,9 @@ def _settings(code_identity=None):
         urbansim=SimpleNamespace(
             region_mappings={"region_to_region_id": {"test": "000"}},
             input_file_template="usim_{region_id}.h5",
+            input_file_template_year=None,
             output_file_template="usim_{year}.h5",
+            local_data_input_folder=local_data_input_folder,
         ),
     )
 
@@ -129,7 +132,6 @@ def _state():
         start_year=2017,
         current_year=2017,
         forecast_year=2017,
-        data_initialized=False,
     )
 
 
@@ -225,7 +227,9 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_urbansim_roles(
     coupler = DummyCoupler()
 
     bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
-        settings=_settings(),
+        settings=_settings(
+            local_data_input_folder=workspace.get_usim_mutable_data_dir()
+        ),
         state=_state(),
         workspace=workspace,
         coupler=coupler,
@@ -255,7 +259,9 @@ def test_seed_bootstrap_artifacts_to_coupler_preserves_current_urbansim_role(
     coupler = DummyCoupler()
 
     bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
-        settings=_settings(),
+        settings=_settings(
+            local_data_input_folder=workspace.get_usim_mutable_data_dir()
+        ),
         state=_state(),
         workspace=workspace,
         coupler=coupler,
@@ -273,7 +279,6 @@ def test_seed_bootstrap_artifacts_to_coupler_preserves_current_urbansim_role(
                 start_year=2017,
                 current_year=2023,
                 forecast_year=2028,
-                data_initialized=False,
             ),
             None,
         ),
@@ -282,7 +287,6 @@ def test_seed_bootstrap_artifacts_to_coupler_preserves_current_urbansim_role(
                 start_year=2017,
                 current_year=2017,
                 forecast_year=2017,
-                data_initialized=True,
             ),
             "bootstrap datastore",
         ),
@@ -312,7 +316,9 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_current_urbansim_role_onl
     coupler.set("usim_datastore_base_h5", str(staged_h5))
 
     bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
-        settings=_settings(),
+        settings=_settings(
+            local_data_input_folder=workspace.get_usim_mutable_data_dir()
+        ),
         state=state,
         workspace=workspace,
         coupler=coupler,
@@ -343,7 +349,7 @@ def test_seed_bootstrap_artifacts_to_coupler_skips_urbansim_roles_without_consum
     staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
     staged_h5.parent.mkdir(parents=True, exist_ok=True)
     staged_h5.write_text("bootstrap datastore", encoding="utf-8")
-    settings = _settings()
+    settings = _settings(local_data_input_folder=workspace.get_usim_mutable_data_dir())
     settings.run.models = SimpleNamespace(
         land_use=None,
         activity_demand=None,
@@ -720,58 +726,6 @@ def test_seed_bootstrap_artifacts_to_coupler_does_not_probe_router_dir_when_warm
     assert coupler.get("linkstats_warmstart") is None
 
 
-def test_seed_bootstrap_artifacts_to_coupler_consumes_stage_boundary_policy(
-    monkeypatch,
-    tmp_path,
-):
-    class DummyCoupler:
-        def __init__(self):
-            self.values = {}
-
-        def get(self, key):
-            return self.values.get(key)
-
-        def set(self, key, value):
-            self.values[key] = value
-
-        def view(self, _namespace):
-            return self
-
-    workspace = DummyWorkspace(full_path=str(tmp_path))
-    artifact_path = tmp_path / "policy" / "seed.txt"
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_path.write_text("policy", encoding="utf-8")
-
-    policy_rule = SimpleNamespace(
-        name="custom_bootstrap_artifact",
-        semantic_keys=("custom_bootstrap_artifact",),
-        resolve=lambda **_kwargs: {"custom_bootstrap_artifact": str(artifact_path)},
-    )
-    monkeypatch.setattr(
-        bootstrap_runtime,
-        "bootstrap_stage_boundary_durability_policy",
-        lambda: (policy_rule,),
-    )
-
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            region="sfbay",
-            models=SimpleNamespace(activity_demand=None, travel=None),
-        )
-    )
-    state = SimpleNamespace(full_settings=settings)
-    coupler = DummyCoupler()
-
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=coupler,
-    )
-
-    assert coupler.get("custom_bootstrap_artifact") == str(artifact_path)
-
-
 def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
     tmp_path,
     monkeypatch,
@@ -1028,7 +982,6 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
     class StateStub:
         def __init__(self):
             self.run_info_path = None
-            self.data_initialized = False
             self.file_loc = None
             self.mirror_file_loc = None
 
@@ -1190,15 +1143,11 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
     class StateStub:
         def __init__(self):
             self.run_info_path = None
-            self.data_initialized = False
             self.file_loc = None
             self.mirror_file_loc = None
 
         def set_run_info_path(self, path: str) -> None:
             self.run_info_path = path
-
-        def set_data_initialized(self, initialized: bool) -> None:
-            self.data_initialized = initialized
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
@@ -1323,15 +1272,11 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     class StateStub:
         def __init__(self):
             self.run_info_path = None
-            self.data_initialized = False
             self.file_loc = None
             self.mirror_file_loc = None
 
         def set_run_info_path(self, path: str) -> None:
             self.run_info_path = path
-
-        def set_data_initialized(self, initialized: bool) -> None:
-            self.data_initialized = initialized
 
     created_workspaces = []
 
@@ -1437,7 +1382,6 @@ def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(
 
         def __init__(self, run_info_path: str):
             self.run_info_path = run_info_path
-            self.data_initialized = True
             self.is_restart_run = True
             self.file_loc = None
             self.mirror_file_loc = None
@@ -1448,9 +1392,6 @@ def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(
 
         def set_run_info_path(self, path: str) -> None:
             self.run_info_path = path
-
-        def set_data_initialized(self, initialized: bool) -> None:
-            self.data_initialized = initialized
 
     archive_root = tmp_path / "archive-root"
     local_root = tmp_path / "local-root"
@@ -1909,12 +1850,8 @@ class _OuterScenarioStub:
 
 
 class _OuterAdmissionState:
-    def __init__(self, *, data_initialized: bool, run_models: bool) -> None:
-        self.data_initialized = data_initialized
+    def __init__(self, *, run_models: bool) -> None:
         self._run_models = run_models
-
-    def set_data_initialized(self, value: bool) -> None:
-        self.data_initialized = value
 
     def __iter__(self):
         return iter((2020,) if self._run_models else ())
@@ -1929,12 +1866,11 @@ class _OuterAdmissionState:
 def _prepared_outer_admission_run(
     tmp_path: Path,
     *,
-    data_initialized: bool,
+    is_restart_run: bool = False,
     run_models: bool = False,
 ):
     settings = SimpleNamespace()
     state = _OuterAdmissionState(
-        data_initialized=data_initialized,
         run_models=run_models,
     )
     workspace = SimpleNamespace(full_path=str(tmp_path / "workspace"))
@@ -1951,7 +1887,7 @@ def _prepared_outer_admission_run(
         scenario_id="test",
         seed=None,
         cache_epoch=1,
-        is_restart_run=False,
+        is_restart_run=is_restart_run,
         archive_run_dir=str(tmp_path / "archive-run"),
         local_run_dir=str(tmp_path / "local-run"),
         archive_state_path=str(tmp_path / "archive-run" / "run_state.yaml"),
@@ -1969,7 +1905,7 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
 ) -> None:
     """A missing outer-run hook would seed bootstrap outputs before admission."""
     events: list[str] = []
-    prepared = _prepared_outer_admission_run(tmp_path, data_initialized=False)
+    prepared = _prepared_outer_admission_run(tmp_path)
     existing_reports = {"beam_linkstats_warmstart": {"outcome": "verified"}}
     active_outer_run = SimpleNamespace(meta={"admission_reports": existing_reports})
     captured: dict[str, object] = {}
@@ -2055,7 +1991,6 @@ def test_main_strict_bootstrap_admission_rejects_before_seeding_or_model_executi
     events: list[str] = []
     prepared = _prepared_outer_admission_run(
         tmp_path,
-        data_initialized=False,
         run_models=True,
     )
 
@@ -2105,9 +2040,14 @@ def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
 ) -> None:
     """Ordinary resume has no bootstrap datastore to admit."""
     events: list[str] = []
-    prepared = _prepared_outer_admission_run(tmp_path, data_initialized=True)
+    prepared = _prepared_outer_admission_run(tmp_path, is_restart_run=True)
 
     monkeypatch.setattr(run_module, "_prepare_run_context", lambda **_kwargs: prepared)
+    monkeypatch.setattr(
+        run_module.restart_runtime,
+        "restore_restart_coupler_snapshot",
+        lambda **_kwargs: {},
+    )
     monkeypatch.setattr(
         run_module,
         "_build_scenario_runtime_contract",

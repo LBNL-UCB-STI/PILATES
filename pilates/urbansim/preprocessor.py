@@ -267,26 +267,27 @@ def resolve_urbansim_initial_datastore_source_path(
     if source_uri_path is not None and source_uri_path.is_file():
         return source_uri_path
 
-    try:
-        urbansim_cfg = settings.urbansim
-    except AttributeError:
-        return source_uri_path
+    urbansim_cfg = get_setting(settings, "urbansim")
     if urbansim_cfg is None:
         return source_uri_path
 
-    try:
-        region = settings.run.region
-        start_year = settings.run.start_year
-    except AttributeError:
+    region = get_setting(settings, "run.region")
+    if not region:
         return source_uri_path
 
-    region_map = urbansim_cfg.region_mappings.get("region_to_region_id", {})
-    region_id = region_map.get(region)
+    region_map = (
+        get_setting(urbansim_cfg, "region_mappings.region_to_region_id", {}) or {}
+    )
+    region_id = region_map.get(region) if isinstance(region_map, dict) else None
     if region_id is None:
         return source_uri_path
 
+    if not get_setting(urbansim_cfg, "local_data_input_folder"):
+        return source_uri_path
+
     data_dir = _urbansim_source_data_dir(settings)
-    year_template = urbansim_cfg.input_file_template_year
+    start_year = get_setting(settings, "run.start_year")
+    year_template = get_setting(urbansim_cfg, "input_file_template_year")
     if year_template and start_year is not None:
         year_specific_fname = year_template.format(
             region_id=region_id,
@@ -297,7 +298,7 @@ def resolve_urbansim_initial_datastore_source_path(
         if year_candidate.is_file():
             return year_candidate
 
-    base_template = urbansim_cfg.input_file_template
+    base_template = get_setting(urbansim_cfg, "input_file_template")
     if not base_template:
         return source_uri_path
     model_data_fname = base_template.format(region_id=region_id)

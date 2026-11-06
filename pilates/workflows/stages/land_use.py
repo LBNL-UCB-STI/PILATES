@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from consist import Artifact
 
@@ -30,9 +29,6 @@ from pilates.workflows.coupler_namespace import (
 from pilates.utils.state_access import iteration_index
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
 
 
 def run_land_use_stage(

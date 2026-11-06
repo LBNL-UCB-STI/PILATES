@@ -126,7 +126,6 @@ def _mark_initialized(
             scenario.coupler.set_from_artifact(
                 USIM_DATASTORE_H5, current_datastore_artifact
             )
-        state.set_data_initialized(True)
 
 
 def _publish_input_roles(

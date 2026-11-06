@@ -407,72 +407,26 @@ def _activitysim_preprocess_resolver(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
+    # ponytail: use declared_expected_inputs directly without two-way destination rewrites
     ensure_activitysim_mutable_configs(settings, workspace)
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
     )
-    logical_destinations = dict(
-        ActivitysimPreprocessor.declared_expected_inputs(settings, state, workspace)
-    )
-    usim_dest = logical_destinations.get(USIM_POPULATION_SOURCE_H5)
-    if usim_dest is not None:
-        usim_path = Path(usim_dest)
-        if not usim_path.stem.endswith("_population_source"):
-            logical_destinations[USIM_POPULATION_SOURCE_H5] = usim_path.with_name(
-                f"{usim_path.stem}_population_source{usim_path.suffix}"
-            )
-    resolved = _native_activitysim_resolved_inputs(
+    return _native_activitysim_resolved_inputs(
         step_name="activitysim_preprocess",
         required_roles=_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
         optional_roles=(
             () if requires_beam_skim else _ACTIVITYSIM_PREPROCESS_OPTIONAL_ROLES
         ),
-        logical_destinations=logical_destinations,
+        logical_destinations=ActivitysimPreprocessor.declared_expected_inputs(
+            settings, state, workspace
+        ),
         settings=settings,
         state=state,
         workspace=workspace,
         coupler=coupler,
     )
-    population_input = (resolved.binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5)
-    if isinstance(population_input, Artifact):
-        existing_population_path = artifact_to_existing_path(
-            population_input, workspace=workspace
-        ) or artifact_to_path(population_input, workspace=workspace)
-        canonical_datastore_dest = ActivitysimPreprocessor.declared_expected_inputs(
-            settings, state, workspace
-        ).get(USIM_POPULATION_SOURCE_H5)
-        try:
-            workspace_root = Path(workspace.full_path).resolve(strict=False)
-        except AttributeError:
-            workspace_root = None
-        if (
-            existing_population_path is not None
-            and canonical_datastore_dest is not None
-            and Path(existing_population_path).resolve(strict=False)
-            != Path(canonical_datastore_dest).resolve(strict=False)
-            and (
-                workspace_root is None
-                or Path(existing_population_path)
-                .resolve(strict=False)
-                .is_relative_to(workspace_root)
-            )
-        ):
-            updated_destinations = dict(resolved.logical_destinations)
-            updated_destinations[USIM_POPULATION_SOURCE_H5] = Path(
-                existing_population_path
-            )
-            return ResolvedStepInputs(
-                step_name=resolved.step_name,
-                binding=resolved.binding,
-                required_roles=resolved.required_roles,
-                optional_roles=resolved.optional_roles,
-                source_by_role=resolved.source_by_role,
-                selected_key_by_role=resolved.selected_key_by_role,
-                logical_destinations=updated_destinations,
-                metadata=resolved.metadata,
-            )
-    return resolved
 
 
 @runtime_checkable

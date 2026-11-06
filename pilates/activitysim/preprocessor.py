@@ -1993,22 +1993,28 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         Declare the input paths/artifacts this preprocessor expects without disk checks.
         """
         del state
-        region = getattr(getattr(settings, "run", None), "region", None)
-        urbansim_settings = getattr(settings, "urbansim", None)
-        region_mappings = getattr(urbansim_settings, "region_mappings", {}) or {}
-        region_to_region_id = region_mappings.get("region_to_region_id", {})
-        region_id = region_to_region_id.get(region)
-        input_template = getattr(urbansim_settings, "input_file_template", None)
+        region = get_setting(settings, "run.region")
+        region_to_region_id = (
+            get_setting(settings, "urbansim.region_mappings.region_to_region_id", {})
+            or {}
+        )
+        region_id = (
+            region_to_region_id.get(region)
+            if isinstance(region_to_region_id, dict)
+            else None
+        )
+        input_template = get_setting(settings, "urbansim.input_file_template")
         usim_input_path = None
         if region_id is not None and input_template:
             usim_input_fname = input_template.format(region_id=region_id)
+            usim_stem, usim_ext = os.path.splitext(usim_input_fname)
+            # ponytail: declare dedicated *_population_source.h5 destination directly
             usim_input_path = os.path.join(
-                workspace.get_usim_mutable_data_dir(), usim_input_fname
+                workspace.get_usim_mutable_data_dir(),
+                f"{usim_stem}_population_source{usim_ext}",
             )
 
-        skims_fname = getattr(
-            getattr(getattr(settings, "shared", None), "skims", None), "fname", None
-        )
+        skims_fname = get_setting(settings, "shared.skims.fname")
         final_skims_path = None
         if region and skims_fname:
             final_skims_path = os.path.join(

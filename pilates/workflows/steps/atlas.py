@@ -105,14 +105,15 @@ def _atlas_preprocess_native_output_paths(
     )
 
 
-def _atlas_preprocess_prepared_input_paths(
+def _atlas_prepared_input_paths_for_year(
     *,
     settings: PilatesConfig,
-    state: WorkflowState,
     workspace: Workspace,
-) -> Mapping[str, Path]:
+    year: int,
+    start_year: int,
+) -> dict[str, Path]:
     """Project the known prepared CSV members from the declared year root."""
-    root = Path(workspace.get_atlas_mutable_input_dir()) / f"year{state.forecast_year}"
+    root = Path(workspace.get_atlas_mutable_input_dir()) / f"year{year}"
     paths: dict[str, Path] = {
         "atlas_households_csv": root / "households.csv",
         "atlas_blocks_csv": root / "blocks.csv",
@@ -120,13 +121,26 @@ def _atlas_preprocess_prepared_input_paths(
         "atlas_residential_csv": root / "residential.csv",
         "atlas_jobs_csv": root / "jobs.csv",
     }
-    if state.year > state.start_year:
+    if year > start_year:
         paths["atlas_grave_csv"] = root / "grave.csv"
     if settings.atlas.beamac > 0:
-        paths["atlas_accessibility_csv"] = (
-            root / f"accessibility_{state.forecast_year}_tract.csv"
-        )
+        paths["atlas_accessibility_csv"] = root / f"accessibility_{year}_tract.csv"
     return paths
+
+
+def _atlas_preprocess_prepared_input_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Mapping[str, Path]:
+    """Project the known prepared CSV members from the declared year root."""
+    return _atlas_prepared_input_paths_for_year(
+        settings=settings,
+        workspace=workspace,
+        year=int(state.forecast_year),
+        start_year=int(state.start_year),
+    )
 
 
 def _atlas_run_native_output_paths(
@@ -534,6 +548,42 @@ def _native_atlas_preprocess(
     )
 
 
+def hydrate_atlas_subyear_continuation_outputs(
+    *,
+    tracker: Any,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    prior_year: int,
+    start_year: int,
+    atlas_run_id: str | None = None,
+    preprocess_run_id: str | None = None,
+    preserve_existing: bool,
+    on_missing: str,
+) -> None:
+    # ponytail: shared prior-subyear ATLAS continuation hydration used by both restart and native execution
+    if atlas_run_id is not None:
+        tracker.hydrate_run_outputs(
+            str(atlas_run_id),
+            target_root=workspace.full_path,
+            keys=[f"atlas_continuation_{prior_year}"],
+            preserve_existing=preserve_existing,
+            on_missing=on_missing,
+        )
+    if preprocess_run_id is not None:
+        prepared_destinations = _atlas_prepared_input_paths_for_year(
+            settings=settings,
+            workspace=workspace,
+            year=prior_year,
+            start_year=start_year,
+        )
+        tracker.hydrate_run_outputs_to_destinations(
+            str(preprocess_run_id),
+            destinations_by_key=prepared_destinations,
+            preserve_existing=preserve_existing,
+            on_missing=on_missing,
+        )
+
+
 def _ensure_prior_atlas_subyear_continuation_inputs(
     *,
     settings: PilatesConfig,
@@ -562,16 +612,8 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
     if tracker is None:
         return
 
-    prior_state = type(
-        "PriorAtlasSubState",
-        (),
-        {
-            "year": prior_year,
-            "forecast_year": prior_year,
-            "start_year": start_year,
-        },
-    )()
     try:
+        atlas_run_id: str | None = None
         if not has_rdata:
             atlas_runs = tracker.find_runs(
                 year=prior_year,
@@ -581,13 +623,9 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                 status="completed",
             )
             if atlas_runs:
-                tracker.hydrate_run_outputs(
-                    str(atlas_runs[-1].id),
-                    target_root=workspace.full_path,
-                    keys=[f"atlas_continuation_{prior_year}"],
-                    preserve_existing=True,
-                    on_missing="warn",
-                )
+                atlas_run_id = str(atlas_runs[-1].id)
+
+        preprocess_run_id: str | None = None
         if not has_households:
             preprocess_runs = tracker.find_runs(
                 year=prior_year,
@@ -597,17 +635,19 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                 status="completed",
             )
             if preprocess_runs:
-                prepared_destinations = _atlas_preprocess_prepared_input_paths(
-                    settings=settings,
-                    state=prior_state,
-                    workspace=workspace,
-                )
-                tracker.hydrate_run_outputs_to_destinations(
-                    str(preprocess_runs[-1].id),
-                    destinations_by_key=prepared_destinations,
-                    preserve_existing=True,
-                    on_missing="warn",
-                )
+                preprocess_run_id = str(preprocess_runs[-1].id)
+
+        hydrate_atlas_subyear_continuation_outputs(
+            tracker=tracker,
+            settings=settings,
+            workspace=workspace,
+            prior_year=prior_year,
+            start_year=start_year,
+            atlas_run_id=atlas_run_id,
+            preprocess_run_id=preprocess_run_id,
+            preserve_existing=True,
+            on_missing="warn",
+        )
     except AttributeError:
         return
 

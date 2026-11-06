@@ -39,7 +39,6 @@ from consist import (
 from consist.types import BindingResult
 
 from pilates.beam import beam_exchange
-from pilates.beam.preprocessor import ensure_beam_mutable_workspace
 from pilates.urbansim.preprocessor import (
     resolve_urbansim_initial_datastore_source_path,
 )
@@ -242,18 +241,6 @@ class ArtifactBindingRule:
     pass_mode: Literal["auto", "input_key_only", "explicit_only", "metadata_only"] = (
         "auto"
     )
-
-
-@dataclass(frozen=True)
-class StageBoundaryDurabilityRule:
-    """
-    Runtime policy for artifacts that must survive a stage boundary.
-    """
-
-    name: str
-    semantic_keys: tuple[str, ...]
-    resolve: Callable[..., Optional[Mapping[str, str]]]
-    notes: Optional[str] = None
 
 
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
@@ -724,11 +711,7 @@ def _bootstrap_beam_exchange_inputs(
     if get_activity_demand_model(settings) is not None:
         return None
 
-    try:
-        ensure_beam_mutable_workspace(settings, workspace)
-    except Exception:
-        pass
-
+    # ponytail: beam_preprocess owns mutable workspace preparation; seed from existing inputs
     try:
         record_store = beam_exchange.register_existing_beam_exchange_inputs(
             settings=settings,
@@ -789,6 +772,7 @@ def _bootstrap_initial_skims(
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
+    # ponytail: resolve configured initial skims directly without probing usim mutable dir
     if state is not None and requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
@@ -811,40 +795,21 @@ def _bootstrap_initial_skims(
         if isinstance(workspace, WorkspaceRootLike) and workspace.full_path is not None
         else None
     )
-    resolved_skims: Optional[Path] = None
-    if workspace_path is not None:
-        try:
-            candidate = resolve_bootstrap_activitysim_skims_path(
-                settings=settings,
-                workspace_path=workspace_path,
-            )
-            if candidate.is_file():
-                resolved_skims = candidate
-        except Exception:
-            resolved_skims = None
-
-    if resolved_skims is None:
-        usim_dir = _usim_mutable_data_dir(workspace)
-        region = get_setting(settings, "run.region")
-        region_to_id = get_setting(
-            settings, "urbansim.region_mappings.region_to_region_id", {}
+    if workspace_path is None:
+        return None
+    try:
+        candidate = resolve_bootstrap_activitysim_skims_path(
+            settings=settings,
+            workspace_path=workspace_path,
         )
-        region_id = (
-            region_to_id.get(region)
-            if isinstance(region_to_id, Mapping) and region
-            else None
-        )
-        if usim_dir is not None and region_id:
-            usim_skims = Path(usim_dir) / f"skims_mpo_{region_id}.omx"
-            if usim_skims.is_file():
-                resolved_skims = usim_skims
-
-    if resolved_skims is None:
+    except Exception:
+        return None
+    if not candidate.is_file():
         return None
 
-    seeded: Dict[str, str] = {ASIM_OMX_SKIMS: str(resolved_skims)}
+    seeded: Dict[str, str] = {ASIM_OMX_SKIMS: str(candidate)}
     if get_traffic_assignment_model(settings) is None:
-        seeded[FINAL_SKIMS_OMX] = str(resolved_skims)
+        seeded[FINAL_SKIMS_OMX] = str(candidate)
     return seeded
 
 
@@ -852,10 +817,10 @@ def _bootstrap_urbansim_initial_datastore(
     *,
     settings: Any,
     state: Any,
-    workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
     """Publish the initial UrbanSim input H5 at the initial frontier."""
+    # ponytail: resolve exogenous initial datastore directly without probing usim mutable dir
     if not uses_input_datastore(state):
         return None
 
@@ -864,32 +829,14 @@ def _bootstrap_urbansim_initial_datastore(
         or get_activity_demand_model(settings) == "activitysim"
         or get_vehicle_ownership_model(settings) == "atlas"
     )
-    if not requires_urbansim_datastore:
+    if not requires_urbansim_datastore or get_setting(settings, "urbansim") is None:
         return None
 
-    usim_dir = _usim_mutable_data_dir(workspace)
-    if get_setting(settings, "urbansim") is None:
+    static_source = resolve_urbansim_initial_datastore_source_path(settings)
+    if static_source is None or not static_source.exists():
         return None
 
-    from pilates.urbansim.postprocessor import get_usim_datastore_fname
-
-    resolved_h5: Optional[str] = None
-    if usim_dir is not None:
-        staged_input_h5 = os.path.join(
-            usim_dir,
-            get_usim_datastore_fname(settings, io="input"),
-        )
-        if os.path.exists(staged_input_h5):
-            resolved_h5 = staged_input_h5
-
-    if resolved_h5 is None:
-        static_source = resolve_urbansim_initial_datastore_source_path(settings)
-        if static_source is not None and static_source.exists():
-            resolved_h5 = str(static_source)
-
-    if resolved_h5 is None:
-        return None
-
+    resolved_h5 = str(static_source)
     seeded: Dict[str, str] = {
         USIM_DATASTORE_BASE_H5: resolved_h5,
         USIM_DATASTORE_CURRENT_H5: resolved_h5,
@@ -897,54 +844,6 @@ def _bootstrap_urbansim_initial_datastore(
     if get_land_use_model(settings) != "urbansim":
         seeded[USIM_POPULATION_SOURCE_H5] = resolved_h5
     return seeded
-
-
-def bootstrap_stage_boundary_durability_policy() -> tuple[
-    StageBoundaryDurabilityRule, ...
-]:
-    """
-    Stage-boundary durability policy for initial coupler seeding.
-    """
-
-    return (
-        StageBoundaryDurabilityRule(
-            name="urbansim_initial_datastore",
-            semantic_keys=(
-                USIM_DATASTORE_BASE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_POPULATION_SOURCE_H5,
-            ),
-            resolve=_bootstrap_urbansim_initial_datastore,
-            notes=(
-                "The initial workflow frontier consumes the initial "
-                "UrbanSim input datastore as both its immutable base and current role."
-            ),
-        ),
-        StageBoundaryDurabilityRule(
-            name="initial_skims",
-            semantic_keys=(ASIM_OMX_SKIMS, FINAL_SKIMS_OMX),
-            resolve=_bootstrap_initial_skims,
-            notes=(
-                "Seed initial OMX skims at scenario start so cold-scratch and "
-                "non-BEAM workflows resolve OMX skims through the coupler."
-            ),
-        ),
-        StageBoundaryDurabilityRule(
-            name="beam_exchange_inputs",
-            semantic_keys=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
-            resolve=_bootstrap_beam_exchange_inputs,
-            notes=(
-                "BEAM-only runs seed the initial exchange inputs "
-                "from the BEAM workspace or static scenario folder."
-            ),
-        ),
-        StageBoundaryDurabilityRule(
-            name="beam_warmstart",
-            semantic_keys=(LINKSTATS_WARMSTART,),
-            resolve=_bootstrap_beam_warmstart_artifacts,
-            notes="BEAM runs seed the initial linkstats warmstart when configured.",
-        ),
-    )
 
 
 def _seed_artifact_for_coupler_key(
@@ -994,6 +893,14 @@ def _seed_artifact_for_coupler_key(
         return None
 
 
+_BOOTSTRAP_SEED_RESOLVERS = (
+    _bootstrap_urbansim_initial_datastore,
+    _bootstrap_initial_skims,
+    _bootstrap_beam_exchange_inputs,
+    _bootstrap_beam_warmstart_artifacts,
+)
+
+
 def seed_bootstrap_artifacts_to_coupler(
     *,
     settings: Any,
@@ -1003,10 +910,11 @@ def seed_bootstrap_artifacts_to_coupler(
     scenario: Any = None,
 ) -> None:
     """
-    Seed coupler keys for initial static/staged artifacts needed by workflow steps.
+    Seed coupler keys for initial exogenous artifacts needed by workflow steps.
     """
-    for rule in bootstrap_stage_boundary_durability_policy():
-        resolved_artifacts = rule.resolve(
+    # ponytail: drop StageBoundaryDurabilityRule/bootstrap_stage_boundary_durability_policy
+    for resolve in _BOOTSTRAP_SEED_RESOLVERS:
+        resolved_artifacts = resolve(
             settings=settings,
             state=state,
             workspace=workspace,

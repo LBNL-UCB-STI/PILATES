@@ -644,9 +644,9 @@ def main(
             _rewind_uncommitted_activitysim_restart_to_provider_boundary(
                 state=state,
             )
-            if not state.data_initialized and (
-                not is_restart_run or _is_at_initial_workflow_boundary(state)
-            ):
+            # ponytail: bootstrap_initialization is retired; admit initial inputs
+            # directly on fresh start or restart at the initial workflow boundary.
+            if not is_restart_run or _is_at_initial_workflow_boundary(state):
                 preflight_bootstrap_urbansim_datastore_admission(
                     settings=settings,
                     metadata_logger=tracker,
@@ -695,9 +695,6 @@ def main(
                     workspace=workspace,
                     workflow_stage=WorkflowState.Stage,
                 )
-            if not state.data_initialized:
-                state.set_data_initialized(True)
-            if is_restart_run and state.data_initialized:
                 logger.info(
                     "Restart replay mode active: skipping bespoke restart "
                     "hydration and relying on scenario replay plus Consist cache hits."

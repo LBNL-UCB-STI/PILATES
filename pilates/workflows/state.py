@@ -51,7 +51,6 @@ class WorkflowState:
         full_settings: PilatesConfig,
         sub_stage_progress: Optional[str] = None,
         run_info_path: Optional[str] = None,  # new
-        data_initialized: bool = False,
     ):
         # Store basic simulation parameters
         self.start_year = start_year
@@ -68,7 +67,6 @@ class WorkflowState:
         # Preserve whether the run *started* as a restart before launcher later
         # populates ``run_info_path`` for fresh runs too.
         self.is_restart_run = bool(run_info_path)
-        self.data_initialized = data_initialized
 
         self.forecast_year: int | None = None
         self.file_loc = file_loc
@@ -180,7 +178,6 @@ class WorkflowState:
         asim_compiled,
         sub_stage_progress: Optional[str] = None,
         run_info_path: Optional[str] = None,
-        data_initialized: bool = False,
     ):
         stage_name: Optional[str] = None
         if isinstance(current_stage, Enum):
@@ -188,13 +185,13 @@ class WorkflowState:
         elif isinstance(current_stage, str):
             stage_name = current_stage
 
+        # ponytail: drop retired data_initialized flag from run_state.yaml
         to_save = {
             "year": year,
             "stage": stage_name,
             "iteration": iteration,
             "sub_stage_progress": sub_stage_progress,
             "run_info_path": run_info_path,
-            "data_initialized": data_initialized,
         }
         # Historic callers may still provide this positional field. It is
         # intentionally ignored: a node-local Numba cache cannot determine
@@ -210,7 +207,7 @@ class WorkflowState:
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
             logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, 0, False, None, None, False]
+            return [None, None, 0, False, None, None]
         with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
@@ -227,7 +224,6 @@ class WorkflowState:
         asim_compiled = False
         sub_stage_progress = data.get("sub_stage_progress", None)
         run_info_path = data.get("run_info_path", None)
-        data_initialized = data.get("data_initialized", False)
         return [
             year,
             stage,
@@ -235,7 +231,6 @@ class WorkflowState:
             asim_compiled,
             sub_stage_progress,
             run_info_path,
-            data_initialized,
         ]
 
     @classmethod
@@ -263,7 +258,6 @@ class WorkflowState:
                 asim_compiled,
                 sub_stage_progress,
                 run_info_path,
-                data_initialized,
             ] = cls.read_current_stage(file_loc)
         else:
             year = None
@@ -272,7 +266,6 @@ class WorkflowState:
             asim_compiled = False
             sub_stage_progress = None
             run_info_path = None
-            data_initialized = False
 
         resume_major_stage = stage
         resume_sub_stage = None
@@ -304,7 +297,6 @@ class WorkflowState:
             settings,
             sub_stage_progress=sub_stage_progress,
             run_info_path=run_info_path,
-            data_initialized=data_initialized,
         )
 
         out._settings["supply_demand_iters"] = settings.run.supply_demand_iters
@@ -552,7 +544,6 @@ class WorkflowState:
                 False,
                 self.sub_stage_progress,
                 self.run_info_path,
-                self.data_initialized,
             )
 
     def is_enabled(self, stage: Stage) -> bool:
@@ -830,7 +821,3 @@ class WorkflowState:
             self.current_sub_stage = None
             self.sub_stage_progress = None  # new
             # The __next__ method will handle state file removal when it detects completion
-
-    def set_data_initialized(self, value: bool):
-        self.data_initialized = value
-        self.write_state()

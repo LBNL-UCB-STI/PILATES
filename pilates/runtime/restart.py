@@ -13,7 +13,7 @@ from typing import (
     Protocol,
     Sequence,
     Tuple,
-    TypedDict,
+    runtime_checkable,
 )
 
 from pilates.runtime.promote_run_archive import _open_archive_tracker
@@ -43,19 +43,9 @@ RESTART_REMAPPABLE_SCHEMES: Mapping[str, str] = {
 }
 
 
-class WorkflowStageLike(Protocol):
-    supply_demand_loop: Any
-    traffic_assignment: Any
-
-
+@runtime_checkable
 class RestoredSnapshotLike(Protocol):
     pruned_keys: Tuple[str, ...]
-
-
-class RestartArtifactDiagnostic(TypedDict):
-    key: str
-    path: str
-    reason: str
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -74,20 +64,17 @@ def hydrate_restart_atlas_continuation_inputs(
 ) -> None:
     """Hydrate the selected prior ATLAS subyear before strict restart checks."""
 
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+    if get_setting(settings, "run.models.vehicle_ownership", None) != "atlas":
         return
     if (
-        getattr(state, "current_major_stage", None)
+        get_setting(state, "current_major_stage", None)
         != workflow_stage.vehicle_ownership_model
     ):
         return
 
-    start_year = _coerce_int(getattr(state, "start_year", None))
-    atlas_year = _coerce_int(
-        getattr(state, "year", getattr(state, "current_year", None))
-    )
-    run_info_path = getattr(state, "run_info_path", None)
+    start_year = _coerce_int(get_setting(state, "start_year", None))
+    atlas_year = _coerce_int(get_setting(state, "year", current_year(state)))
+    run_info_path = get_setting(state, "run_info_path", None)
     if (
         start_year is None
         or atlas_year is None
@@ -107,7 +94,7 @@ def hydrate_restart_atlas_continuation_inputs(
             f"ATLAS restart requires an archive Consist tracker for {archive_run_dir}"
         )
 
-    iteration = _coerce_int(getattr(state, "iteration", None))
+    iteration = _coerce_int(get_setting(state, "iteration", None))
     facet = _restart_atlas_identity_facet(
         settings=settings,
         state=state,
@@ -115,10 +102,8 @@ def hydrate_restart_atlas_continuation_inputs(
         workspace=workspace,
     )
     cache_epoch = resolve_cache_epoch(settings)
-    preprocess_target = {
-        "model": "atlas_preprocess",
+    base_target: dict[str, Any] = {
         "stage": "vehicle_ownership",
-        "phase": "preprocess",
         "status": "completed",
         "year": prior_atlas_year,
         "cache_epoch": cache_epoch,
@@ -126,59 +111,31 @@ def hydrate_restart_atlas_continuation_inputs(
         "run_scope": archive_run_dir.name,
     }
     if iteration is not None:
-        preprocess_target["iteration"] = iteration
+        base_target["iteration"] = iteration
+
     preprocess_run = _select_exact_completed_restart_run(
         tracker=tracker,
-        target=preprocess_target,
+        target={**base_target, "model": "atlas_preprocess", "phase": "preprocess"},
         step_name="atlas_preprocess",
     )
-
-    atlas_target = {
-        "model": "atlas_run",
-        "stage": "vehicle_ownership",
-        "phase": "run",
-        "status": "completed",
-        "year": prior_atlas_year,
-        "cache_epoch": cache_epoch,
-        "facet": facet,
-        "run_scope": archive_run_dir.name,
-    }
-    if iteration is not None:
-        atlas_target["iteration"] = iteration
     atlas_run = _select_exact_completed_restart_run(
         tracker=tracker,
-        target=atlas_target,
+        target={**base_target, "model": "atlas_run", "phase": "run"},
         step_name="atlas_run",
     )
 
     from pilates.workflows.steps.atlas import (
-        _atlas_preprocess_prepared_input_paths,
+        hydrate_atlas_subyear_continuation_outputs,
     )
 
-    prior_state = type(
-        "RestartAtlasSubState",
-        (),
-        {
-            "year": prior_atlas_year,
-            "forecast_year": prior_atlas_year,
-            "start_year": start_year,
-        },
-    )()
-    prepared_destinations = _atlas_preprocess_prepared_input_paths(
+    hydrate_atlas_subyear_continuation_outputs(
+        tracker=tracker,
         settings=settings,
-        state=prior_state,
         workspace=workspace,
-    )
-    tracker.hydrate_run_outputs(
-        str(atlas_run.id),
-        target_root=workspace.full_path,
-        keys=[f"atlas_continuation_{prior_atlas_year}"],
-        preserve_existing=False,
-        on_missing="raise",
-    )
-    tracker.hydrate_run_outputs_to_destinations(
-        str(preprocess_run.id),
-        destinations_by_key=prepared_destinations,
+        prior_year=prior_atlas_year,
+        start_year=start_year,
+        atlas_run_id=str(atlas_run.id),
+        preprocess_run_id=str(preprocess_run.id),
         preserve_existing=False,
         on_missing="raise",
     )
@@ -195,7 +152,9 @@ def _restart_atlas_identity_facet(
 
     from pilates.workflows.consist_metadata import build_step_consist_kwargs
 
-    workspace_path = getattr(workspace, "full_path", None)
+    workspace_path = (
+        workspace.full_path if isinstance(workspace, WorkspaceRootLike) else None
+    )
     metadata = build_step_consist_kwargs(
         model="atlas_preprocess",
         settings=settings,
@@ -213,7 +172,7 @@ def _restart_atlas_identity_facet(
 def _atlas_parent_forecast_year_for_subyear(*, state: Any, atlas_subyear: int) -> int:
     """Return the scheduler boundary that ended the selected ATLAS interval."""
 
-    schedule = tuple(int(year) for year in getattr(state, "_year_schedule", ()))
+    schedule = tuple(int(year) for year in get_setting(state, "_year_schedule", ()))
     boundary_index = bisect_left(schedule, atlas_subyear)
     if boundary_index == len(schedule) or (
         boundary_index == 0 and atlas_subyear < schedule[0]
@@ -281,7 +240,7 @@ def enforce_resume_rewind_guardrail(
     allow_rewind_resume: bool,
     read_archive_run_state_year_fn: Callable[[str], Optional[int]],
 ) -> None:
-    resume_year = _coerce_int(getattr(state, "current_year", None))
+    resume_year = _coerce_int(get_setting(state, "current_year", None))
     archive_year = read_archive_run_state_year_fn(archive_state_path)
     if resume_year is None or archive_year is None:
         return
@@ -410,14 +369,11 @@ def restore_restart_coupler_snapshot(
     """Restore coupler state from DuckDB, materializing available artifacts and enforcing warmstart policy."""
     candidate_ids: List[str] = []
     output_run_name = get_setting(settings, "run.output_run_name", None)
+    run_info_path = get_setting(state, "run_info_path", None)
     for cand in (
-        getattr(state, "scenario_id", None),
-        (
-            Path(state.run_info_path).resolve().parent.name
-            if getattr(state, "run_info_path", None)
-            else None
-        ),
-        getattr(state, "run_id", None),
+        get_setting(state, "scenario_id", None),
+        Path(run_info_path).resolve().parent.name if run_info_path else None,
+        get_setting(state, "run_id", None),
         output_run_name,
     ):
         if cand and str(cand) not in candidate_ids:
@@ -432,7 +388,7 @@ def restore_restart_coupler_snapshot(
     ) or get_setting(settings, "run.archive_run_dir", None)
     source_root = Path(archive_run_dir_val).resolve() if archive_run_dir_val else None
 
-    coupler_obj = getattr(scenario, "coupler", None)
+    coupler_obj = get_setting(scenario, "coupler", None)
     baseline_coupler: Optional[dict[str, Any]] = (
         dict(coupler_obj) if isinstance(coupler_obj, Mapping) else None
     )
@@ -468,15 +424,16 @@ def restore_restart_coupler_snapshot(
                 break
             pruned_for_sid = (
                 restored.pruned_keys
-                if isinstance(restored, Mapping) and hasattr(restored, "pruned_keys")
+                if isinstance(restored, Mapping)
+                and isinstance(restored, RestoredSnapshotLike)
                 else ()
             )
             if pruned_for_sid and fallback_pruned_result is None:
                 fallback_pruned_result = restored
         if not restored and fallback_pruned_result is not None:
             restored = fallback_pruned_result
-            if coupler_obj is not None:
-                for pruned_key in getattr(restored, "pruned_keys", ()):
+            if coupler_obj is not None and isinstance(restored, RestoredSnapshotLike):
+                for pruned_key in restored.pruned_keys:
                     coupler_obj.pop(pruned_key, None)
     else:
         restored = scenario.restore_coupler_snapshot(
@@ -495,20 +452,17 @@ def restore_restart_coupler_snapshot(
 
     pruned_keys: Sequence[str] = (
         restored.pruned_keys
-        if isinstance(restored, Mapping) and hasattr(restored, "pruned_keys")
+        if isinstance(restored, Mapping) and isinstance(restored, RestoredSnapshotLike)
         else ()
     )
     current_iteration = _coerce_int(iteration_index(state, default=0)) or 0
-    restart_strict = bool(
-        getattr(getattr(settings, "run", None), "restart_strict", False)
-    )
-    beam_settings = getattr(settings, "beam", None)
-    replan_pct = float(getattr(beam_settings, "replan_PercentOfIter", 0.0) or 0.0)
-    discard_plans = bool(getattr(beam_settings, "discard_plans_every_year", False))
+    restart_strict = bool(get_setting(settings, "run.restart_strict", False))
+    replan_pct = float(get_setting(settings, "beam.replan_PercentOfIter", 0.0) or 0.0)
+    discard_plans = bool(get_setting(settings, "beam.discard_plans_every_year", False))
     has_resolved_year = (
         current_year(state) is not None
-        or getattr(state, "forecast_year", None) is not None
-        or callable(getattr(state, "is_start_year", None))
+        or get_setting(state, "forecast_year", None) is not None
+        or callable(get_setting(state, "is_start_year", None))
     )
     requires_cross_year_plans = (
         has_resolved_year and not is_start_year(state, settings) and not discard_plans

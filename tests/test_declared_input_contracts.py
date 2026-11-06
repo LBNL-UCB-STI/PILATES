@@ -141,7 +141,7 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
         assert activitysim_contract == {
             "asim_mutable_configs_dir": os.path.join(tmp_path, "asim", "configs"),
             "usim_population_source_h5": os.path.join(
-                tmp_path, "usim", "data", "usim_123.h5"
+                tmp_path, "usim", "data", "usim_123_population_source.h5"
             ),
             FINAL_SKIMS_OMX: os.path.join(
                 tmp_path, "beam", "input", "test", "skims.omx"

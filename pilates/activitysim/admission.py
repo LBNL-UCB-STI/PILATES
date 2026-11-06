@@ -319,40 +319,9 @@ def resolve_bootstrap_activitysim_skims_path(
     explicit_skims_path: Path | None = None,
 ) -> Path:
     """Resolve the candidate OMX skims path that ActivitySim bootstrap will consume."""
+    # ponytail: prefer exogenous skim sources over activitysim_preprocess's mutable output path
     if explicit_skims_path is not None:
         return Path(explicit_skims_path)
-    asim_cfg = settings.activitysim
-    asim_mutable = (
-        Path(workspace_path) / asim_cfg.local_mutable_data_folder / "skims.omx"
-        if asim_cfg is not None
-        else None
-    )
-    if asim_mutable is not None and asim_mutable.is_file():
-        return asim_mutable
-    beam_cfg = settings.beam
-    skims_cfg = settings.shared.skims
-    if isinstance(skims_cfg, Mapping):
-        skims_fname = skims_cfg.get("fname", "skims.omx")
-    else:
-        try:
-            skims_fname = str(skims_cfg.fname or "skims.omx")
-        except AttributeError:
-            skims_fname = "skims.omx"
-    beam_skims: Path | None = None
-    if beam_cfg is not None:
-        try:
-            mutable_folder = beam_cfg.local_mutable_data_folder
-        except AttributeError:
-            mutable_folder = None
-        if isinstance(mutable_folder, str) and mutable_folder.strip():
-            beam_skims = (
-                Path(workspace_path)
-                / mutable_folder
-                / settings.run.region
-                / skims_fname
-            )
-            if beam_skims.is_file():
-                return beam_skims
 
     policy = _initial_skims_admission_config(settings)
     policy_source_path: Path | None = None
@@ -370,6 +339,16 @@ def resolve_bootstrap_activitysim_skims_path(
         if policy_source_path is not None and policy_source_path.is_file():
             return policy_source_path
 
+    beam_cfg = settings.beam
+    skims_cfg = settings.shared.skims
+    if isinstance(skims_cfg, Mapping):
+        skims_fname = skims_cfg.get("fname", "skims.omx")
+    else:
+        try:
+            skims_fname = str(skims_cfg.fname or "skims.omx")
+        except AttributeError:
+            skims_fname = "skims.omx"
+
     if beam_cfg is not None:
         try:
             local_input_folder = beam_cfg.local_input_folder
@@ -381,6 +360,31 @@ def resolve_bootstrap_activitysim_skims_path(
                 prod_skims = prod_root / settings.run.region / skims_fname
                 if prod_skims.is_file():
                     return prod_skims
+
+    beam_skims: Path | None = None
+    if beam_cfg is not None:
+        try:
+            mutable_folder = beam_cfg.local_mutable_data_folder
+        except AttributeError:
+            mutable_folder = None
+        if isinstance(mutable_folder, str) and mutable_folder.strip():
+            beam_skims = (
+                Path(workspace_path)
+                / mutable_folder
+                / settings.run.region
+                / skims_fname
+            )
+            if beam_skims.is_file():
+                return beam_skims
+
+    asim_cfg = settings.activitysim
+    asim_mutable = (
+        Path(workspace_path) / asim_cfg.local_mutable_data_folder / "skims.omx"
+        if asim_cfg is not None
+        else None
+    )
+    if asim_mutable is not None and asim_mutable.is_file():
+        return asim_mutable
 
     if policy_source_path is not None:
         return policy_source_path
