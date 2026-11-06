@@ -6,8 +6,8 @@ from typing import Callable, Optional
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import ScenarioWithCoupler
-from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.utils.formatting import formatted_print
+from pilates.workflows.state import WorkflowState
 
 from .supply_demand_activity import (
     ActivityDemandPhaseInputs,
@@ -72,18 +72,24 @@ def run_supply_demand_stage(
         cr.current_run_id(),
     )
 
-    total_iters = settings.run.supply_demand_iters
-    if settings.run.models.activity_demand is None and total_iters > 1:
-        resumed_iteration = int(getattr(state, "iteration", 0) or 0)
-        clamped_total_iters = max(1, resumed_iteration + 1)
+    configured_iters = settings.run.supply_demand_iters
+    resumed_iteration = int(state.iteration or 0)
+    if isinstance(state, WorkflowState):
+        total_iters = state.effective_supply_demand_iterations(
+            resumed_iteration=resumed_iteration
+        )
+    elif settings.run.models.activity_demand is None and configured_iters > 1:
+        total_iters = max(1, resumed_iteration + 1)
+    else:
+        total_iters = configured_iters
+    if total_iters != configured_iters:
         logger.warning(
             "BEAM-only supply_demand_iters=%d. Clamping outer supply-demand "
             "iterations to %d because BEAM already manages its own internal "
             "iterations.",
+            configured_iters,
             total_iters,
-            clamped_total_iters,
         )
-        total_iters = clamped_total_iters
     for i in range(state.iteration, total_iters):
         state.iteration = i
         formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")
@@ -103,7 +109,6 @@ def run_supply_demand_stage(
                 inputs=activity_demand_inputs,
                 context=context,
             )
-            flush_archive_queue(timeout=300, fail_on_timeout=False)
             if on_activity_demand_boundary is not None:
                 on_activity_demand_boundary(i)
         elif settings.run.models.activity_demand is not None:
@@ -128,8 +133,6 @@ def run_supply_demand_stage(
                 inputs=traffic_inputs,
                 context=context,
             )
-        # Year/iteration boundary durability checkpoint for restart artifacts.
-        flush_archive_queue(timeout=300, fail_on_timeout=False)
 
         if on_iteration_boundary is not None:
             on_iteration_boundary(i)

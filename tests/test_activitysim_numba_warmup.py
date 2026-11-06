@@ -88,6 +88,7 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
                 num_processes=num_processes,
             )
         ),
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _stage: None,
     )
 
@@ -585,3 +586,228 @@ def test_numba_warmup_mounts_the_staged_zarr_as_its_compile_input(
     assert (launch_context.compile_output_dir / "cache").is_dir()
     assert captured_volumes[str(launch_context.runtime_cache_dir)]["mode"] == "rw"
     assert not compile_zarr.exists()
+
+
+def test_runner_skips_numba_warmup_and_syncs_staged_configs_when_sharrow_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Explicit sharrow=False syncs staged settings.yaml, skips warmup, and omits --persist-sharrow-cache."""
+    import yaml
+    from pilates.workflows.consist_metadata import build_activitysim_identity_config
+
+    workspace = _Workspace(tmp_path)
+    launch_context = _launch_context(tmp_path)
+    for dirname in ("configs", "configs_extended", "configs_sh_compile"):
+        cfg_dir = launch_context.mutable_configs_dir / dirname
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "settings.yaml").write_text(
+            "sharrow: true\nmodels:\n  - initialize_landuse\n",
+            encoding="utf-8",
+        )
+    mp_dir = launch_context.mutable_configs_dir / "configs_mp"
+    mp_dir.mkdir(parents=True, exist_ok=True)
+    (mp_dir / "settings.yaml").write_text("inherit_settings: true\n", encoding="utf-8")
+
+    state = SimpleNamespace(
+        full_settings=SimpleNamespace(
+            activitysim=SimpleNamespace(
+                sharrow=False,
+                persist_sharrow_cache=True,
+                num_processes=8,
+                file_format="parquet",
+                main_configs_dir="configs_extended",
+                household_sample_size=100,
+                chunk_size=0,
+                replan_iters=0,
+                replan_hh_samp_size=0,
+                replan_after="non_mandatory_tour_scheduling",
+                random_seed=42,
+            )
+        ),
+        _activitysim_compile_epoch=None,
+        set_sub_stage_progress=lambda _stage: None,
+    )
+    zarr_path = launch_context.runtime_zarr_path
+    _write_structurally_valid_zarr(zarr_path)
+
+    warmup_calls: list[str] = []
+
+    class _FakeWarmup:
+        def __init__(self, name: str, _state: object) -> None:
+            warmup_calls.append(name)
+
+        def run(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("Warmup should not run when sharrow is disabled")
+
+    monkeypatch.setattr(activitysim_runner, "ActivitysimNumbaWarmup", _FakeWarmup)
+    runner = ActivitysimRunner("activitysim", state)
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda *_args, **_kwargs: ActivitySimRunOutputs(
+            output_dir=Path(workspace.get_asim_output_dir())
+        ),
+    )
+
+    caplog.set_level(logging.INFO, logger=activitysim_runner.__name__)
+    runner.run(
+        _activitysim_inputs(tmp_path),
+        launch_context,
+        skim_mode="zarr",
+        extra_inputs={ZARR_SKIMS: str(zarr_path)},
+        workspace=workspace,
+    )
+
+    assert warmup_calls == []
+    assert "ActivitySim Numba warmup: not required (sharrow disabled)" in [
+        record.getMessage() for record in caplog.records
+    ]
+    for dirname in ("configs", "configs_extended", "configs_sh_compile"):
+        loaded = yaml.safe_load(
+            (launch_context.mutable_configs_dir / dirname / "settings.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert loaded["sharrow"] is False
+    mp_loaded = yaml.safe_load((mp_dir / "settings.yaml").read_text(encoding="utf-8"))
+    assert "sharrow" not in mp_loaded
+
+    args = ActivitysimRunner.get_asim_additional_args(
+        state.full_settings,
+        {"/host/configs": {"bind": "/app/configs"}},
+        compile=False,
+    )
+    assert "--persist-sharrow-cache" not in args
+
+    identity_cfg = build_activitysim_identity_config(state.full_settings)
+    assert identity_cfg["sharrow"] is False
+
+
+def test_runner_respects_staged_settings_yaml_sharrow_false_when_config_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When activitysim.sharrow is None, staged settings.yaml sharrow: false skips warmup."""
+    from pilates.workflows.consist_metadata import build_activitysim_identity_config
+
+    workspace = _Workspace(tmp_path)
+    launch_context = _launch_context(tmp_path)
+    cfg_dir = launch_context.mutable_configs_dir / "configs_extended"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "settings.yaml").write_text("sharrow: false\n", encoding="utf-8")
+
+    state = _runner_state(persist_cache=True, num_processes=4)
+    zarr_path = launch_context.runtime_zarr_path
+    _write_structurally_valid_zarr(zarr_path)
+
+    monkeypatch.setattr(
+        activitysim_runner,
+        "ActivitysimNumbaWarmup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Warmup should not be instantiated")
+        ),
+    )
+    runner = ActivitysimRunner("activitysim", state)
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda *_args, **_kwargs: ActivitySimRunOutputs(
+            output_dir=Path(workspace.get_asim_output_dir())
+        ),
+    )
+
+    caplog.set_level(logging.INFO, logger=activitysim_runner.__name__)
+    runner.run(
+        _activitysim_inputs(tmp_path),
+        launch_context,
+        skim_mode="zarr",
+        extra_inputs={ZARR_SKIMS: str(zarr_path)},
+        workspace=workspace,
+    )
+
+    assert "ActivitySim Numba warmup: not required (sharrow disabled)" in [
+        record.getMessage() for record in caplog.records
+    ]
+    identity_cfg = build_activitysim_identity_config(
+        SimpleNamespace(
+            activitysim=SimpleNamespace(
+                sharrow=None,
+                household_sample_size=100,
+                chunk_size=0,
+                num_processes=4,
+                file_format="parquet",
+                replan_iters=0,
+                replan_hh_samp_size=0,
+                replan_after="non_mandatory_tour_scheduling",
+                random_seed=42,
+            )
+        )
+    )
+    assert "sharrow" not in identity_cfg
+
+
+def test_omx_mode_clears_stale_runtime_zarr_when_warmup_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When warmup is skipped in OMX mode, any stale runtime skims.zarr is removed before _run."""
+    workspace = _Workspace(tmp_path)
+    launch_context = _launch_context(tmp_path)
+    stale_marker = launch_context.runtime_zarr_path / "stale.txt"
+    _write_structurally_valid_zarr(launch_context.runtime_zarr_path)
+    stale_marker.write_text("stale", encoding="utf-8")
+
+    state = SimpleNamespace(
+        full_settings=SimpleNamespace(
+            activitysim=SimpleNamespace(
+                sharrow=False,
+                persist_sharrow_cache=True,
+                num_processes=8,
+            )
+        ),
+        _activitysim_compile_epoch=None,
+        set_sub_stage_progress=lambda _stage: None,
+    )
+    runner = ActivitysimRunner("activitysim", state)
+    observed_stale_during_run: list[bool] = []
+    finalized_zarr = tmp_path / "finalized" / "skims.zarr"
+
+    def fake_run(
+        _inputs: ActivitySimPreprocessOutputs,
+        body_context: ActivitySimLaunchContext,
+        *,
+        skim_mode: str,
+        extra_inputs: object = None,
+    ) -> ActivitySimRunOutputs:
+        del extra_inputs
+        assert skim_mode == "omx"
+        observed_stale_during_run.append(body_context.runtime_zarr_path.exists())
+        _write_structurally_valid_zarr(body_context.runtime_zarr_path)
+        return ActivitySimRunOutputs(output_dir=Path(workspace.get_asim_output_dir()))
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(
+        activitysim_runner,
+        "finalize_activitysim_zarr_skims",
+        lambda runtime_path, _settings, _ws: (
+            finalized_zarr
+            if Path(runtime_path) == launch_context.runtime_zarr_path
+            and not stale_marker.exists()
+            else (_ for _ in ()).throw(
+                AssertionError("Stale runtime zarr was not cleared")
+            )
+        ),
+    )
+
+    outputs = runner.run(
+        _activitysim_inputs(tmp_path),
+        launch_context,
+        skim_mode="omx",
+        workspace=workspace,
+    )
+
+    assert observed_stale_during_run == [False]
+    assert outputs.zarr_skims == finalized_zarr

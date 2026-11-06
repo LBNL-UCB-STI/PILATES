@@ -5,16 +5,16 @@
 | Term | Definition |
 | --- | --- |
 | **Scenario** | A complete multi-year or single-year simulation run managed by a Consist `ScenarioContext`, combining configuration, step execution history, and the artifact coupler. |
-| **Stage** | A major phase of the simulation loop (`initialize`, `land_use`, `demand`, `supply`, `postprocess`) implemented in `pilates/workflows/stages/`. |
-| **Step** | A single tracked unit of execution inside a stage (such as `urbansim_land_use`, `atlas_vehicles`, `activitysim_demand`, or `beam_supply`), defined by a `StepDefinition` in `pilates/workflows/steps/`. |
+| **Stage** | A major phase of the simulation year loop (`land_use`, `vehicle_ownership_model`, `supply_demand_loop`, `postprocessing`) implemented in `pilates/workflows/stages/`. |
+| **Step** | A single tracked unit of execution inside a stage (such as `urbansim_run`, `atlas_preprocess`, `activitysim_run`, or `beam_postprocess`), defined by a `StepDefinition` in `pilates/workflows/steps/`. |
 | **Coupler** | The typed key-value registry (`scenario.coupler`) that passes validated `Artifact` references from upstream steps to downstream steps. See [Artifact Flow](../workflow/artifact_flow.md). |
 | **Artifact** | A versioned file, directory, HDF5 store, Zarr group, or DuckDB table logged with Consist and addressed by a semantic coupler key and portable container URI. |
-| **Facet** | A structured dictionary of configuration parameters extracted from `config.yaml` or adapter files that participates in step cache hashing and cross-run queries. |
-| **Execution Workspace** | The mutable scratch directory (`run.local_workspace_root`) where containers mount input and output folders during step execution. See [Workspace Layout](workspace_layout.md). |
-| **Archive Root** | The durable output directory (`run.output_directory`) containing promoted `stage_outputs/`, `workflow_state.yaml`, and `.consist/provenance.duckdb`. |
-| **Recovery Root** | A read-only historical archive directory listed in `run.recovery_archive_roots` that supplies cached outputs and warm-start artifacts to new runs. |
+| **Facet** | A structured dictionary of configuration parameters or artifact metadata indexed in `provenance.duckdb` (`facet_index=True`) for cross-run queries. |
+| **Execution Workspace** | The mutable scratch directory (`run.local_workspace_root`) where steps stage mutable configs and containers mount input and output folders during execution. See [Workspace Layout](workspace_layout.md). |
+| **Archive Root** | The durable output directory (`run.output_directory`) containing per-year/iteration outputs and optional `consist-recovery/` step mirrors (`RunCompletionArchivePolicy`). |
+| **Recovery Root** | A read-only historical archive directory listed in `run.recovery_archive_roots` that supplies cached outputs for Consist hydration (`cache_hydration="outputs-requested"`). |
 | **Epoch** | A `(year, iteration)` coordinate within a simulation archive representing either a forecast year's land-use step or a demand-supply replanning pass. |
-| **AnalysisSession** | The multi-root discovery interface in `pilates_consist_analysis` that scans directories for `.consist/provenance.duckdb` files and filters runs into a `RunSet`. See [Analysis Overview](../analysis/overview.md). |
+| **AnalysisSession** | The multi-root discovery interface in `pilates_consist_analysis` that scans directories for `provenance.duckdb` files and filters runs into a `RunSet`. See [Analysis Overview](../analysis/overview.md). |
 | **RunSet** | A filtered collection of comparable runs supporting aligned epoch panels, configuration diffs, and baseline delta calculations. |
 
 ## Transportation Co-Simulation Terms

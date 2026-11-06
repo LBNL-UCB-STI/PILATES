@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import (
     Any,
-    ContextManager,
     Dict,
     Iterable,
     Mapping,
@@ -25,16 +24,6 @@ class ArtifactLike(ConsistArtifactLike, Protocol):
 
 
 @runtime_checkable
-class RunLike(Protocol):
-    id: Any
-
-
-@runtime_checkable
-class TrackerPersistenceLike(Protocol):
-    def batch_artifact_writes(self) -> ContextManager[Any]: ...
-
-
-@runtime_checkable
 class ScenarioLike(ConsistScenarioLike, Protocol):
     def collect_by_keys(
         self,
@@ -46,7 +35,6 @@ class ScenarioLike(ConsistScenarioLike, Protocol):
 
 @runtime_checkable
 class TrackerLike(ConsistTrackerLike, Protocol):
-    persistence: TrackerPersistenceLike
     identity: IdentityManager
 
     def log_h5_container(
@@ -77,18 +65,6 @@ class ScenarioWithCoupler(ScenarioLike, Protocol):
     def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
 
     def coupler_schema(self, schema: Any) -> Any: ...
-
-
-@runtime_checkable
-class ScenarioRestorationLike(Protocol):
-    def remember_restored_run_id(
-        self,
-        *,
-        model_name: Optional[str],
-        year: Optional[int],
-        iteration: Optional[int],
-        run_id: Optional[str],
-    ) -> None: ...
 
 
 @runtime_checkable

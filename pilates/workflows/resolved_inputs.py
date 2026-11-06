@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from consist import BindingResult, ResolvedBinding
 
 if TYPE_CHECKING:
-    from pilates.workflows.step_definition import InputContract
+    from pilates.workflows.contracts import InputContract
 
 
 @dataclass(frozen=True, slots=True)

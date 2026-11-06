@@ -3,13 +3,16 @@ from __future__ import annotations
 from bisect import bisect_left
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 import os
 import yaml
 import logging
 
 from pilates.config import PilatesConfig
 from pilates.workflows._profile import ensure_runtime_flags_initialized
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,6 @@ class WorkflowState:
         full_settings: PilatesConfig,
         sub_stage_progress: Optional[str] = None,
         run_info_path: Optional[str] = None,  # new
-        data_initialized: bool = False,
     ):
         # Store basic simulation parameters
         self.start_year = start_year
@@ -65,7 +67,6 @@ class WorkflowState:
         # Preserve whether the run *started* as a restart before launcher later
         # populates ``run_info_path`` for fresh runs too.
         self.is_restart_run = bool(run_info_path)
-        self.data_initialized = data_initialized
 
         self.forecast_year: int | None = None
         self.file_loc = file_loc
@@ -76,11 +77,17 @@ class WorkflowState:
         # still pass the legacy field can load. Numba warmup is node-local
         # acceleration state, not durable workflow state.
         del asim_compiled
+        self._activitysim_compile_epoch: Optional[Path] = None
 
         # Store settings for access by methods that need them
+        supply_demand_iters = 1
+        max_year_intervals = None
+        if isinstance(full_settings, PilatesConfig):
+            supply_demand_iters = full_settings.run.supply_demand_iters
+            max_year_intervals = full_settings.run.max_year_intervals
         self._settings = {
-            "supply_demand_iters": 1,  # Default, will be updated in from_settings
-            "max_year_intervals": None,
+            "supply_demand_iters": supply_demand_iters,
+            "max_year_intervals": max_year_intervals,
             "land_use_enabled": land_use_enabled,
             "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
             "activity_demand_enabled": activity_demand_enabled,
@@ -171,7 +178,6 @@ class WorkflowState:
         asim_compiled,
         sub_stage_progress: Optional[str] = None,
         run_info_path: Optional[str] = None,
-        data_initialized: bool = False,
     ):
         stage_name: Optional[str] = None
         if isinstance(current_stage, Enum):
@@ -179,13 +185,13 @@ class WorkflowState:
         elif isinstance(current_stage, str):
             stage_name = current_stage
 
+        # ponytail: drop retired data_initialized flag from run_state.yaml
         to_save = {
             "year": year,
             "stage": stage_name,
             "iteration": iteration,
             "sub_stage_progress": sub_stage_progress,
             "run_info_path": run_info_path,
-            "data_initialized": data_initialized,
         }
         # Historic callers may still provide this positional field. It is
         # intentionally ignored: a node-local Numba cache cannot determine
@@ -201,7 +207,7 @@ class WorkflowState:
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
             logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, 0, False, None, None, False]
+            return [None, None, 0, False, None, None]
         with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
@@ -218,7 +224,6 @@ class WorkflowState:
         asim_compiled = False
         sub_stage_progress = data.get("sub_stage_progress", None)
         run_info_path = data.get("run_info_path", None)
-        data_initialized = data.get("data_initialized", False)
         return [
             year,
             stage,
@@ -226,22 +231,18 @@ class WorkflowState:
             asim_compiled,
             sub_stage_progress,
             run_info_path,
-            data_initialized,
         ]
 
     @classmethod
-    def from_settings(
-        cls,
-        settings: PilatesConfig,
-    ):
-        ensure_runtime_flags_initialized(settings)
+    def from_settings(cls, settings: PilatesConfig) -> "WorkflowState":
         # Get settings from nested or legacy locations
         start_year = settings.run.start_year
         end_year = settings.run.end_year
         travel_model_freq = settings.run.travel_model_freq
-        runtime_flags = settings.runtime.flags
         runtime_options = settings.runtime.options
 
+        ensure_runtime_flags_initialized(settings)
+        runtime_flags = settings.runtime.flags
         # These are always added at top-level by parse_args_and_settings()
         land_use_enabled = runtime_flags.land_use_enabled
         vehicle_ownership_model_enabled = runtime_flags.vehicle_ownership_model_enabled
@@ -257,7 +258,6 @@ class WorkflowState:
                 asim_compiled,
                 sub_stage_progress,
                 run_info_path,
-                data_initialized,
             ] = cls.read_current_stage(file_loc)
         else:
             year = None
@@ -266,7 +266,6 @@ class WorkflowState:
             asim_compiled = False
             sub_stage_progress = None
             run_info_path = None
-            data_initialized = False
 
         resume_major_stage = stage
         resume_sub_stage = None
@@ -298,7 +297,6 @@ class WorkflowState:
             settings,
             sub_stage_progress=sub_stage_progress,
             run_info_path=run_info_path,
-            data_initialized=data_initialized,
         )
 
         out._settings["supply_demand_iters"] = settings.run.supply_demand_iters
@@ -356,6 +354,49 @@ class WorkflowState:
                 out.end_year,
             )
 
+        return out
+
+    @classmethod
+    def for_planning(
+        cls,
+        settings: PilatesConfig,
+        *,
+        surface: Optional["EnabledWorkflowSurface"] = None,
+    ) -> "WorkflowState":
+        """Construct a fresh, side-effect-free workflow state for static planning."""
+        if surface is not None:
+            land_use_enabled = surface.stage_enabled("land_use")
+            vehicle_ownership_model_enabled = surface.stage_enabled(
+                "vehicle_ownership_model"
+            )
+            activity_demand_enabled = surface.stage_enabled("activity_demand")
+            traffic_assignment_enabled = surface.stage_enabled("traffic_assignment")
+        else:
+            ensure_runtime_flags_initialized(settings)
+            runtime_flags = settings.runtime.flags
+            land_use_enabled = runtime_flags.land_use_enabled
+            vehicle_ownership_model_enabled = (
+                runtime_flags.vehicle_ownership_model_enabled
+            )
+            activity_demand_enabled = runtime_flags.activity_demand_enabled
+            traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
+        out = cls(
+            settings.run.start_year,
+            settings.run.end_year,
+            settings.run.travel_model_freq,
+            land_use_enabled,
+            vehicle_ownership_model_enabled,
+            activity_demand_enabled,
+            traffic_assignment_enabled,
+            settings.run.start_year,
+            None,
+            0,
+            None,
+            None,
+            False,
+            settings,
+        )
+        out.forecast_year = out._compute_forecast_year()
         return out
 
     def _initialize_first_stage(self):
@@ -429,19 +470,62 @@ class WorkflowState:
             return
         self._set_year_schedule(self._year_schedule)
 
+    def _compute_forecast_year_for(self, year: int) -> int:
+        if not self._settings.get("land_use_enabled"):
+            return year
+        if year > self.end_year:
+            return self.end_year
+        schedule_index = self._year_schedule_positions.get(year)
+        if schedule_index is None:
+            return year
+        next_index = schedule_index + 1
+        if next_index >= len(self._year_schedule):
+            return self.end_year
+        return self._year_schedule[next_index]
+
     def _forecast_year_for_current_schedule_position(self) -> int:
         if not self._settings.get("land_use_enabled"):
             return self.current_year
         self._advance_schedule_to_current_year()
         if self._schedule_index is None:
             return self.current_year
-        next_index = self._schedule_index + 1
-        if next_index >= len(self._year_schedule):
-            return self.end_year
-        return self._year_schedule[next_index]
+        return self._compute_forecast_year_for(self.current_year)
 
     def _compute_forecast_year(self) -> int:
         return self._forecast_year_for_current_schedule_position()
+
+    def planned_year_intervals(self) -> List[Dict[str, int]]:
+        """Project the ordered (year, forecast_year) intervals for static planning."""
+        if self.start_year > self.end_year or (
+            bool(self._settings.get("land_use_enabled"))
+            and self.start_year >= self.end_year
+        ):
+            return []
+        max_year_intervals = self._settings.get("max_year_intervals")
+        if max_year_intervals is not None and max_year_intervals <= 0:
+            return []
+        return [
+            {
+                "year": int(year),
+                "forecast_year": int(self._compute_forecast_year_for(int(year))),
+            }
+            for year in self._year_schedule[:max_year_intervals]
+        ]
+
+    def effective_supply_demand_iterations(
+        self,
+        resumed_iteration: Optional[int] = None,
+    ) -> int:
+        """Return supply-demand iteration count after applying single-model clamping."""
+        total_iters = int(self._settings.get("supply_demand_iters", 1) or 0)
+        if self.Stage.activity_demand not in self.enabled_stages and total_iters > 1:
+            base_iteration = (
+                int(self.current_inner_iter or 0)
+                if resumed_iteration is None
+                else int(resumed_iteration or 0)
+            )
+            return max(1, base_iteration + 1)
+        return total_iters
 
     def write_state(self):
         """Save the current state to file"""
@@ -460,7 +544,6 @@ class WorkflowState:
                 False,
                 self.sub_stage_progress,
                 self.run_info_path,
-                self.data_initialized,
             )
 
     def is_enabled(self, stage: Stage) -> bool:
@@ -508,7 +591,7 @@ class WorkflowState:
                 return False
 
             # Check iteration first
-            total_iters = self._settings.get("supply_demand_iters", 1)
+            total_iters = self.effective_supply_demand_iterations()
             if self.current_inner_iter >= total_iters:
                 return False
 
@@ -622,7 +705,9 @@ class WorkflowState:
                     )
                 else:
                     # Last substage of iteration completed
-                    total_iters = self._settings.get("supply_demand_iters", 1)
+                    total_iters = self.effective_supply_demand_iterations(
+                        resumed_iteration=completed_inner_iter
+                    )
                     if completed_inner_iter < total_iters - 1:
                         # Start next iteration
                         self.current_inner_iter = completed_inner_iter + 1
@@ -736,7 +821,3 @@ class WorkflowState:
             self.current_sub_stage = None
             self.sub_stage_progress = None  # new
             # The __next__ method will handle state file removal when it detects completion
-
-    def set_data_initialized(self, value: bool):
-        self.data_initialized = value
-        self.write_state()

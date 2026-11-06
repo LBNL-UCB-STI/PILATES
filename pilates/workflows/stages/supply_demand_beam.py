@@ -5,7 +5,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING
 
 
 from pilates.config.models import PilatesConfig
@@ -15,16 +15,18 @@ from pilates.utils.consist_types import (
 )
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
-    set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
-from pilates.workflows.coupler_namespace import coupler_storage_value
-from consist import Artifact, RunResult, Tracker
-from consist.api import archive_run_output_files
-from consist.protocols import ArtifactRecordLike
+from pilates.workflows.coupler_namespace import (
+    coupler_storage_value,
+    set_coupler_from_artifact,
+)
+from pilates.utils.archive_paths import resolve_archive_run_dir
+from pilates.utils.io import get_traffic_assignment_model
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.steps import (
     beam_full_skim,
     beam_postprocess,
@@ -37,7 +39,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
 )
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -73,120 +75,33 @@ def _full_skim_run_schedule(settings: PilatesConfig) -> str:
     return skim_cfg.run_schedule
 
 
-def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
+def _should_run_full_skim(
+    settings: PilatesConfig,
+    iteration: int,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> bool:
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
         return True
     if schedule == "after_each_iteration":
         return True
     if schedule == "after_final_iteration":
-        total_iters = settings.run.supply_demand_iters
+        if isinstance(state, WorkflowState):
+            total_iters = state.effective_supply_demand_iterations(
+                resumed_iteration=iteration
+            )
+        else:
+            total_iters = int(settings.run.supply_demand_iters)
+            models = vars(settings.run).get("models")
+            if (
+                models is not None
+                and models.activity_demand is None
+                and total_iters > 1
+            ):
+                total_iters = max(1, iteration + 1)
         return iteration == total_iters - 1
     return False
-
-
-def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
-    run_info_path = state.run_info_path
-    if not run_info_path:
-        archive_dir = state.archive_run_dir
-        return Path(archive_dir).expanduser().resolve() if archive_dir else None
-    try:
-        return Path(run_info_path).expanduser().resolve().parent
-    except Exception:
-        return None
-
-
-def _archive_beam_run_outputs_native(
-    *,
-    run_id: str,
-    tracker: Tracker,
-    recovery_root: Path,
-    outputs: Mapping[str, Any],
-) -> None:
-    """Archive beam step output files and directory artifacts to recovery_root."""
-    from pilates.runtime.run_output_archive import _snapshot_directory_artifact
-
-    file_keys: list[str] = []
-    dir_keys: list[str] = []
-    for key, artifact in outputs.items():
-        if isinstance(artifact, (Artifact, ArtifactRecordLike)):
-            if artifact.driver == "artifact_set":
-                continue
-            if (
-                isinstance(artifact.meta, dict)
-                and artifact.meta.get("directory_artifact") is True
-            ):
-                dir_keys.append(key)
-                continue
-            file_keys.append(key)
-
-    if isinstance(tracker, Tracker):
-        persisted_outputs = tracker.get_run_outputs(run_id)
-        ws_mount = tracker.mounts.get("workspace")
-        if ws_mount:
-            ws_path = Path(ws_mount).resolve()
-            for key in [*file_keys, *dir_keys]:
-                artifact = persisted_outputs.get(key) or outputs.get(key)
-                if isinstance(artifact, Artifact):
-                    tracker.set_artifact_recovery_roots(
-                        artifact, [ws_path], append=True
-                    )
-                    existing_artifact = outputs.get(key)
-                    if (
-                        isinstance(existing_artifact, Artifact)
-                        and isinstance(existing_artifact.meta, dict)
-                        and isinstance(artifact.meta, dict)
-                    ):
-                        existing_artifact.meta.update(artifact.meta)
-        resolved_recovery_root = recovery_root.resolve()
-        for key in dir_keys:
-            artifact = persisted_outputs.get(key) or outputs.get(key)
-            if isinstance(artifact, Artifact):
-                _snapshot_directory_artifact(
-                    tracker=tracker,
-                    artifact=artifact,
-                    recovery_root=resolved_recovery_root,
-                )
-                existing_artifact = outputs.get(key)
-                if (
-                    isinstance(existing_artifact, Artifact)
-                    and isinstance(existing_artifact.meta, dict)
-                    and isinstance(artifact.meta, dict)
-                ):
-                    existing_artifact.meta.update(artifact.meta)
-
-    if file_keys or not dir_keys:
-        report = archive_run_output_files(
-            run_id=run_id,
-            recovery_root=recovery_root,
-            tracker=tracker,
-            keys=file_keys if file_keys else None,
-            preserve_existing=True,
-            verify=True,
-            append=True,
-        )
-        if not report.complete:
-            failures = [
-                f"{key}: copy={f.copy_status}, verify={f.verification_status}, msg={f.message}"
-                for key, f in report.items()
-                if not (
-                    f.metadata_committed
-                    and f.verification_status in {"verified", "not_requested"}
-                )
-            ]
-            raise RuntimeError(
-                "Archiving beam_run outputs failed verification or copy: "
-                + "; ".join(failures)
-            )
-
-        for key, archived_file in report.items():
-            existing_artifact = outputs.get(key)
-            if (
-                isinstance(existing_artifact, Artifact)
-                and isinstance(existing_artifact.meta, dict)
-                and isinstance(archived_file.artifact.meta, dict)
-            ):
-                existing_artifact.meta.update(archived_file.artifact.meta)
 
 
 def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
@@ -248,7 +163,18 @@ def _compile_beam_launch_config(
 ) -> BeamLaunchConfig:
     """Create the one derived config tree consumed by the next BEAM process."""
 
+    from pilates.beam.preprocessor import (
+        _prepare_beam_zone_shapefile,
+        ensure_beam_mutable_workspace,
+    )
+
+    ensure_beam_mutable_workspace(settings, workspace)
     source_root = beam_config_root(settings, workspace=workspace)
+    if (
+        get_setting(settings, "shared.geography.zones") is not None
+        and not (source_root / "shape" / "canonical_zones_sorted.geojson").exists()
+    ):
+        _prepare_beam_zone_shapefile(workspace, settings)
     output_dir = (
         Path(workspace.full_path)
         / ".pilates-beam-launch-config"
@@ -294,7 +220,7 @@ def _run_beam_steps(
     settings = context.settings
     state = context.state
     workspace = context.workspace
-    archive_run_dir = _archive_run_dir_for_restart(state)
+    archive_run_dir = resolve_archive_run_dir(workspace=workspace, state=state)
 
     _, preprocess_outputs = execute_step(
         scenario=scenario,
@@ -336,25 +262,6 @@ def _run_beam_steps(
         resolved_inputs=run_inputs,
     )
 
-    # Archive beam_run outputs natively with verify=True
-    base_archive = (
-        archive_run_dir / "consist-recovery"
-        if archive_run_dir is not None
-        else Path(scenario.tracker.run_dir) / "archive"
-    )
-    if not getattr(run_result, "cache_hit", False):
-        recovery_root = (
-            base_archive
-            if base_archive.name == run_result.run.id
-            else base_archive / run_result.run.id
-        )
-        _archive_beam_run_outputs_native(
-            run_id=run_result.run.id,
-            tracker=scenario.tracker,
-            recovery_root=recovery_root,
-            outputs=run_result.outputs,
-        )
-
     logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
     _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
 
@@ -367,7 +274,7 @@ def _run_beam_steps(
     )
     postprocess_inputs.require_complete()
 
-    postprocess_result, _ = execute_step(
+    _, _ = execute_step(
         scenario=scenario,
         definition=beam_postprocess,
         settings=settings,
@@ -379,22 +286,8 @@ def _run_beam_steps(
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
     )
-    if isinstance(postprocess_result, RunResult) and not getattr(
-        postprocess_result, "cache_hit", False
-    ):
-        postprocess_recovery_root = (
-            base_archive
-            if base_archive.name == postprocess_result.run.id
-            else base_archive / postprocess_result.run.id
-        )
-        _archive_beam_run_outputs_native(
-            run_id=postprocess_result.run.id,
-            tracker=scenario.tracker,
-            recovery_root=postprocess_recovery_root,
-            outputs=postprocess_result.outputs,
-        )
 
-    if _should_run_full_skim(settings, iteration):
+    if _should_run_full_skim(settings, iteration, state=state):
         _run_beam_full_skim_step(
             scenario=scenario,
             year=year,
@@ -473,14 +366,13 @@ def _standalone_full_skim_preprocess_outputs(
                     LINKSTATS_WARMSTART,
                     prepared[LINKSTATS_WARMSTART],
                 )
-    if settings is not None:
-        shared_cfg = getattr(settings, "shared", None)
-        geography_cfg = getattr(shared_cfg, "geography", None)
-        zones_cfg = getattr(geography_cfg, "zones", None)
-        if zones_cfg is not None:
-            from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
+    if (
+        settings is not None
+        and get_setting(settings, "shared.geography.zones") is not None
+    ):
+        from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
 
-            _prepare_beam_zone_shapefile(workspace, settings)
+        _prepare_beam_zone_shapefile(workspace, settings)
     return BeamPreprocessOutputs(
         beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
         prepared_inputs=prepared,
@@ -517,6 +409,13 @@ def _run_traffic_assignment_phase(
     state = context.state
     workspace = context.workspace
 
+    traffic_model = get_traffic_assignment_model(settings)
+    if traffic_model is not None and traffic_model != "beam":
+        raise NotImplementedError(
+            f"Runtime traffic_assignment execution for model {traffic_model!r} "
+            "is not yet wired in supply_demand."
+        )
+
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
 
     schedule = _full_skim_run_schedule(settings)
@@ -526,7 +425,7 @@ def _run_traffic_assignment_phase(
             workspace=workspace,
             settings=settings,
         )
-        archive_run_dir = _archive_run_dir_for_restart(state)
+        archive_run_dir = resolve_archive_run_dir(workspace=workspace, state=state)
         launch_config = _compile_beam_launch_config(
             scenario=scenario,
             settings=settings,

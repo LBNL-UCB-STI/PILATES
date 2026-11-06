@@ -11,7 +11,9 @@ from consist import (
     CacheOptions,
     ExecutionOptions,
     OutputArtifactSpec,
+    OutputPolicyOptions,
     OutputSet,
+    RunCompletionArchivePolicy,
     RunResult,
     define_step,
 )
@@ -22,7 +24,7 @@ from consist.models.run import Run
 from pilates.workflows.binding import build_resolved_binding
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import (
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,
@@ -48,26 +50,7 @@ _EXAMPLE_INPUT_CONTRACT = InputContract(
 def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     monkeypatch, tmp_path: Path, cache_hit: bool
 ) -> None:
-    """A completed child run publishes its archived artifacts before projection."""
-
-    class Coupler:
-        def __init__(self) -> None:
-            self.values: dict[str, object] = {}
-
-        def set_from_artifact(self, key: str, artifact: object) -> None:
-            self.values[key] = artifact
-
-    class Tracker:
-        def __init__(self, archived_outputs: dict[str, object]) -> None:
-            self.archived_outputs = archived_outputs
-            self.archive_calls: list[tuple[str, str]] = []
-
-        def archive_run_outputs(
-            self, run_id: str, archive_root: str, *, mode: str
-        ) -> SimpleNamespace:
-            assert mode == "copy"
-            self.archive_calls.append((run_id, archive_root))
-            return SimpleNamespace(outputs=self.archived_outputs)
+    """A completed child run configures RunCompletionArchivePolicy before projection."""
 
     @define_step(model="example", outputs=["bundle"])
     def example(*, settings, state, workspace) -> None:
@@ -81,19 +64,14 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
         config_hash=None,
         git_hash=None,
     )
-    original_outputs = {
-        "bundle": Artifact(
-            key="bundle", container_uri="workspace://bundle", driver="other"
-        )
-    }
     archived_outputs = {
         "bundle": Artifact(
             key="bundle", container_uri="workspace://archived/bundle", driver="other"
         )
     }
-    run_result = RunResult(run=run, outputs=original_outputs, cache_hit=cache_hit)
-    coupler = Coupler()
-    scenario = SimpleNamespace(coupler=coupler, tracker=Tracker(archived_outputs))
+    run_result = RunResult(run=run, outputs=archived_outputs, cache_hit=cache_hit)
+    coupler = SimpleNamespace(values={"bundle": archived_outputs["bundle"]})
+    scenario = SimpleNamespace(coupler=coupler, tracker=SimpleNamespace())
     seen: dict[str, object] = {}
     scenario.run = lambda **kwargs: seen.update(kwargs) or run_result
     definition = StepDefinition(
@@ -110,16 +88,18 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     archive_root = tmp_path / "archive"
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path / "local"),
+        archive_run_dir=str(archive_root),
+    )
 
     result, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
-        workspace="workspace",
+        workspace=workspace,
         stage="stage",
         year=None,
         iteration=None,
@@ -127,9 +107,14 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     )
 
     assert seen["output_sets"] == output_sets
-    assert scenario.tracker.archive_calls == [
-        (run_id, str(archive_root / "consist-recovery" / run_id))
-    ]
+    assert seen["output_policy"] == OutputPolicyOptions(
+        run_completion_archive=RunCompletionArchivePolicy(
+            archive_root=(
+                archive_root / "consist-recovery" / "example__stage"
+            ).resolve(),
+            mode="copy",
+        ),
+    )
     assert result.outputs == archived_outputs
     assert result.cache_hit is cache_hit
     assert projected.received_outputs == archived_outputs
@@ -139,16 +124,6 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
 def test_execute_step_skips_archival_when_normalized_roots_are_equal(
     monkeypatch, tmp_path: Path
 ) -> None:
-    class Tracker:
-        def __init__(self) -> None:
-            self.archive_calls: list[tuple[str, str]] = []
-
-        def archive_run_outputs(
-            self, run_id: str, archive_root: str, *, mode: str
-        ) -> SimpleNamespace:
-            self.archive_calls.append((run_id, archive_root))
-            raise AssertionError("equal local and archive roots must not archive")
-
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
         return None
@@ -165,11 +140,12 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         )
     }
     result = RunResult(run=run, outputs=outputs)
-    tracker = Tracker()
+    seen: dict[str, object] = {}
     scenario = SimpleNamespace(
-        coupler=SimpleNamespace(update=lambda _: None), tracker=tracker
+        coupler=SimpleNamespace(update=lambda _: None),
+        tracker=SimpleNamespace(),
     )
-    scenario.run = lambda **_: result
+    scenario.run = lambda **kwargs: seen.update(kwargs) or result
     definition = StepDefinition(
         name="example",
         function=example,
@@ -180,23 +156,27 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     shared_root = tmp_path / "shared"
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(shared_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(shared_root / "."))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "true")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True))
+    workspace = SimpleNamespace(
+        full_path=str(shared_root),
+        archive_run_dir=str(shared_root / "."),
+    )
 
     received_result, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
-        workspace="workspace",
+        workspace=workspace,
         stage="stage",
         year=None,
         iteration=None,
         phase=None,
     )
 
-    assert tracker.archive_calls == []
+    assert seen["output_policy"] == OutputPolicyOptions(
+        run_completion_archive=None,
+    )
     assert received_result is result
     assert projected == outputs
 
@@ -205,10 +185,6 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
     monkeypatch, tmp_path: Path
 ) -> None:
     """A staging step can retain its local handoff without archive-copying it."""
-
-    class Tracker:
-        def archive_run_outputs(self, *_args, **_kwargs) -> SimpleNamespace:
-            raise AssertionError("staging outputs must not enter recovery archival")
 
     @define_step(model="example", outputs=["staging_root"])
     def example(*, settings, state, workspace) -> None:
@@ -229,11 +205,12 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
             )
         },
     )
+    seen: dict[str, object] = {}
     scenario = SimpleNamespace(
         coupler=SimpleNamespace(update=lambda _: None),
-        tracker=Tracker(),
+        tracker=SimpleNamespace(),
     )
-    scenario.run = lambda **_: result
+    scenario.run = lambda **kwargs: seen.update(kwargs) or result
     definition = StepDefinition(
         name="staging",
         function=example,
@@ -244,22 +221,27 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
         input_contract=_EXAMPLE_INPUT_CONTRACT,
         archive_outputs=False,
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(tmp_path / "archive"))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path / "local"),
+        archive_run_dir=str(tmp_path / "archive"),
+    )
 
     received_result, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
-        workspace="workspace",
+        workspace=workspace,
         stage="stage",
         year=None,
         iteration=None,
         phase=None,
     )
 
+    assert seen["output_policy"] == OutputPolicyOptions(
+        run_completion_archive=None,
+    )
     assert received_result is result
     assert projected == result.outputs
 
@@ -308,12 +290,12 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
         ),
         archive_outputs=False,
     )
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "0")
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=False))
 
     _, projected = execute_step(
         scenario=scenario,
         definition=definition,
-        settings="settings",
+        settings=settings,
         state="state",
         workspace="workspace",
         stage="stage",
@@ -329,29 +311,70 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
     assert projected == result.outputs
 
 
+def test_execute_step_enable_archive_copy_false_authoritatively_disables_archival(
+    tmp_path: Path,
+) -> None:
+    """When enable_archive_copy=False, execute_step disables archival even with distinct workspace/archive roots."""
+
+    @define_step(model="example", outputs=["result"])
+    def example(*, settings, state, workspace) -> None:
+        return None
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    result = RunResult(
+        run=Run(
+            id="example-run",
+            model_name="example",
+            config_hash=None,
+            git_hash=None,
+        ),
+        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+    )
+    seen: dict[str, object] = {}
+    scenario = SimpleNamespace(
+        coupler=SimpleNamespace(update=lambda _: None),
+        tracker=SimpleNamespace(),
+    )
+    scenario.run = lambda **kwargs: seen.update(kwargs) or result
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="example", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda outputs, **_: outputs,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+        archive_outputs=True,
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(enable_archive_copy=False))
+    workspace = SimpleNamespace(
+        full_path=str(local_root),
+        archive_run_dir=str(archive_root),
+    )
+    state = SimpleNamespace(archive_run_dir=str(archive_root))
+
+    execute_step(
+        scenario=scenario,
+        definition=definition,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="stage",
+        year=2030,
+        iteration=0,
+        phase="run",
+    )
+
+    assert seen["output_policy"] == OutputPolicyOptions(
+        run_completion_archive=None,
+    )
+
+
 def test_urbansim_run_archives_only_scalar_forecast_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The active UrbanSim run uses central archival without publishing staging."""
-
-    class Coupler:
-        def __init__(self) -> None:
-            self.values: dict[str, object] = {}
-
-        def set_from_artifact(self, key: str, artifact: object) -> None:
-            self.values[key] = artifact
-
-    class ArchiveTracker:
-        def __init__(self, archived_outputs: dict[str, Artifact]) -> None:
-            self.archived_outputs = archived_outputs
-            self.archive_calls: list[tuple[str, str]] = []
-
-        def archive_run_outputs(
-            self, run_id: str, archive_root: str, *, mode: str
-        ) -> SimpleNamespace:
-            assert mode == "copy"
-            self.archive_calls.append((run_id, archive_root))
-            return SimpleNamespace(outputs=self.archived_outputs)
 
     local_root = tmp_path / "local"
     archive_root = tmp_path / "archive"
@@ -369,28 +392,28 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         config_hash=None,
         git_hash=None,
     )
-    outputs = {
-        key: Artifact(key=key, container_uri=str(forecast_h5), driver="other")
-        for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
-    }
     archived_outputs = {
         key: Artifact(
             key=key,
             container_uri=f"workspace://archived/{forecast_h5.name}",
             driver="other",
         )
-        for key in outputs
+        for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
     }
-    coupler = Coupler()
-    tracker = ArchiveTracker(archived_outputs)
-    scenario = SimpleNamespace(coupler=coupler, tracker=tracker)
-    scenario.run = lambda **_kwargs: RunResult(run=run, outputs=outputs)
+    coupler = SimpleNamespace(values=dict(archived_outputs))
+    seen: dict[str, object] = {}
+    scenario = SimpleNamespace(coupler=coupler, tracker=SimpleNamespace())
+    scenario.run = lambda **kwargs: (
+        seen.update(kwargs) or RunResult(run=run, outputs=archived_outputs)
+    )
     settings = SimpleNamespace(
-        urbansim=SimpleNamespace(output_file_template="output_{year}.h5")
+        run=SimpleNamespace(enable_archive_copy=True),
+        urbansim=SimpleNamespace(output_file_template="output_{year}.h5"),
     )
     state = SimpleNamespace(forecast_year=2030)
     workspace = SimpleNamespace(
         full_path=str(workspace_root),
+        archive_run_dir=str(archive_root),
         get_usim_mutable_data_dir=lambda: str(forecast_h5.parent),
     )
     resolved = ResolvedStepInputs(
@@ -405,9 +428,6 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
             )
         },
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
 
     result, projected = execute_step(
         scenario=scenario,
@@ -423,9 +443,19 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
     )
 
     assert URBANSIM_RUN.archive_outputs is True
-    assert tracker.archive_calls == [
-        (run_id, str(archive_root / "consist-recovery" / run_id))
-    ]
+    assert seen["output_policy"] == OutputPolicyOptions(
+        run_completion_archive=RunCompletionArchivePolicy(
+            archive_root=(
+                archive_root
+                / "consist-recovery"
+                / "urbansim_run__land_use__y2030__i0__run"
+            ).resolve(),
+            mode="copy",
+        ),
+    )
+    assert seen["output_paths"] == {
+        USIM_DATASTORE_H5: str(forecast_h5),
+    }
     assert result.outputs == archived_outputs
     assert projected.usim_datastore_h5 == forecast_h5
     assert set(coupler.values) == {USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT}
@@ -453,9 +483,6 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         return archived
 
     monkeypatch.setattr(tracker, "archive_run_outputs", capture_archive)
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
 
     @define_step(model="archive_probe")
     def archive_probe(*, settings, state, workspace, ctx) -> None:
@@ -477,10 +504,7 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         project_outputs=lambda outputs, **_: outputs,
         output_paths=lambda **_: {
             "summary": "bundle/summary.csv",
-            "skims": OutputArtifactSpec(
-                path="bundle/skims.zarr",
-                meta={"directory_artifact": True},
-            ),
+            "skims": OutputArtifactSpec.for_directory("bundle/skims.zarr"),
         },
         output_sets=lambda **_: {
             "bundle": OutputSet(root="bundle", include="**/*", recursive=True)
@@ -493,9 +517,9 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         result, projected = execute_step(
             scenario=scenario,
             definition=definition,
-            settings=object(),
-            state=object(),
-            workspace=object(),
+            settings=SimpleNamespace(run=SimpleNamespace(enable_archive_copy=True)),
+            state=SimpleNamespace(archive_run_dir=str(archive_root)),
+            workspace=SimpleNamespace(full_path=str(local_root)),
             stage="test",
             year=2030,
             iteration=0,
@@ -503,17 +527,22 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
         )
 
     archived = captured["archived"]
-    recovery_root = archive_root / "consist-recovery" / str(result.run.id)
+    recovery_root = (
+        archive_root / "consist-recovery" / "archive_probe__test__y2030__i0__run"
+    )
     assert archived.paths["bundle"] == archived["bundle"]
     assert archived.paths["summary"] == archived["bundle"] / "summary.csv"
     assert archived.paths["skims"] == archived["bundle"] / "skims.zarr"
     assert archived.paths["bundle"].is_relative_to(recovery_root)
     assert (archived.paths["skims"] / "nested" / "0.0").read_bytes() == b"skim"
-    assert projected == result.outputs == archived.outputs
-    assert scenario.coupler.get("bundle") == archived.outputs["bundle"]
+    assert projected == result.outputs
+    assert {k: a.meta for k, a in result.outputs.items()} == {
+        k: a.meta for k, a in archived.outputs.items()
+    }
+    assert scenario.coupler.get("bundle") == result.outputs["bundle"]
     assert all(
         artifact.recovery_roots == [str(recovery_root.resolve())]
-        for artifact in archived.outputs.values()
+        for artifact in result.outputs.values()
     )
 
     parent = archived.outputs["bundle"]
@@ -528,6 +557,24 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
     assert all(
         artifact.recovery_roots == [str(recovery_root.resolve())]
         for artifact in [parent, *members, manifest]
+    )
+
+    with tracker.scenario("archive-probe-replay") as replay_scenario:
+        replay_result, _ = execute_step(
+            scenario=replay_scenario,
+            definition=definition,
+            settings=object(),
+            state=object(),
+            workspace=object(),
+            stage="test",
+            year=2030,
+            iteration=0,
+            phase="run",
+        )
+    assert replay_result.cache_hit is True
+    assert all(
+        artifact.recovery_roots == [str(recovery_root.resolve())]
+        for artifact in replay_result.outputs.values()
     )
 
     shutil.rmtree(tracker.run_artifact_dir(result.run))
@@ -570,7 +617,7 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
         )
 
     settings = SimpleNamespace(
-        run=SimpleNamespace(region="test"),
+        run=SimpleNamespace(region="test", enable_archive_copy=True),
         urbansim=SimpleNamespace(
             command_template="urbansim {0}",
             input_file_template="input_{region_id}.h5",
@@ -585,6 +632,7 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
         year=2030,
         current_year=2030,
         forecast_year=2030,
+        archive_run_dir=str(archive_root),
         set_sub_stage_progress=lambda _stage: None,
     )
     workspace = SimpleNamespace(
@@ -600,9 +648,6 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
             pass
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
     population_source = (
         workspace_root / "urbansim" / "data" / "output_2030_population_source.h5"
     )
@@ -629,7 +674,14 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
     source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
     assert source == population_source
     assert result.outputs[USIM_POPULATION_SOURCE_H5].recovery_roots == [
-        str((archive_root / "consist-recovery" / str(result.run.id)).resolve())
+        str(workspace_root.resolve()),
+        str(
+            (
+                archive_root
+                / "consist-recovery"
+                / "urbansim_postprocess__land_use__y2030__i0__postprocess"
+            ).resolve()
+        ),
     ]
     source.unlink()
     tracker.hydrate_run_outputs(
@@ -1044,3 +1096,118 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
             code_identity="callable_source",
         ),
     ]
+
+
+def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
+    tmp_path: Path,
+) -> None:
+    local_root = tmp_path / "local"
+    workspace_root = local_root / "workspace"
+    archive_run_dir = tmp_path / "archive"
+    workspace_root.mkdir(parents=True)
+    archive_run_dir.mkdir(parents=True)
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+        hashing_strategy="fast",
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            enable_archive_copy=True,
+            consist_code_identity="callable_module",
+        )
+    )
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        workspace_root=workspace_root,
+        archive_run_dir=archive_run_dir,
+    )
+    payload_value = {"text": "v1\n"}
+
+    @define_step(model="example", outputs=["result"])
+    def example(*, settings, state, workspace):
+        del settings, state
+        out = workspace.workspace_root / "outputs" / "result.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload_value["text"], encoding="utf-8")
+        return {"result": out}
+
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="example", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda outputs, **_: outputs["result"],
+        archive_outputs=True,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+
+    with tracker.scenario("rerun-archive-v1") as scenario_1:
+        _, art_1 = execute_step(
+            scenario=scenario_1,
+            definition=definition,
+            settings=settings,
+            state="state",
+            workspace=workspace,
+            stage="supply_demand",
+            year=2015,
+            iteration=0,
+            phase="preprocess",
+        )
+
+    expected_archive_file = (
+        archive_run_dir
+        / "consist-recovery"
+        / "example__supply_demand__y2015__i0__preprocess"
+        / "outputs"
+        / "result.txt"
+    )
+    assert expected_archive_file.read_text(encoding="utf-8") == "v1\n"
+
+    # Simulate a code patch / config change causing the step to re-run into the same archive_run_dir
+    payload_value["text"] = "v2-modified\n"
+
+    @define_step(
+        model="example",
+        outputs=["result"],
+        config={"patch": 2},
+    )
+    def example_v2(*, settings, state, workspace):
+        del settings, state
+        out = workspace.workspace_root / "outputs" / "result.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload_value["text"], encoding="utf-8")
+        return {"result": out}
+
+    definition_v2 = StepDefinition(
+        name="example",
+        function=example_v2,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="example", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda outputs, **_: outputs["result"],
+        archive_outputs=True,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+
+    with tracker.scenario("rerun-archive-v2") as scenario_2:
+        _, art_2 = execute_step(
+            scenario=scenario_2,
+            definition=definition_v2,
+            settings=settings,
+            state="state",
+            workspace=workspace,
+            stage="supply_demand",
+            year=2015,
+            iteration=0,
+            phase="preprocess",
+        )
+
+    assert expected_archive_file.read_text(encoding="utf-8") == "v2-modified\n"
+    expected_root = str(expected_archive_file.parent.parent.resolve())
+    assert expected_root in art_2.meta.get("recovery_roots", [])
+    refreshed_art_1 = tracker.get_run_outputs(str(art_1.run_id))["result"]
+    assert expected_root not in refreshed_art_1.meta.get("recovery_roots", [])

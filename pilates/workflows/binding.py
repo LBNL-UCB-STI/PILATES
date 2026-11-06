@@ -25,7 +25,8 @@ from typing import (
     Literal,
     Mapping,
     Optional,
-    Sequence,
+    Protocol,
+    runtime_checkable,
 )
 
 from consist import (
@@ -37,22 +38,40 @@ from consist import (
 )
 from consist.types import BindingResult
 
-from pilates.beam.preprocessor import BeamPreprocessor
-from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
-from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import (
-    resolve_input_precedence,
+from pilates.beam import beam_exchange
+from pilates.urbansim.preprocessor import (
+    resolve_urbansim_initial_datastore_source_path,
 )
+from pilates.utils.archive_paths import WorkspaceRootLike
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
-from pilates.utils.io import get_traffic_assignment_model
-from pilates.utils.state_access import uses_input_datastore
+from pilates.utils.io import (
+    get_activity_demand_model,
+    get_land_use_model,
+    get_traffic_assignment_model,
+    get_vehicle_ownership_model,
+)
+from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.state_access import is_start_year, uses_input_datastore
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.workflows.coupler_namespace import (
+    canonical_artifact_key_from_raw_key,
+    resolve_coupler_value,
+    resolve_input_precedence,
+    set_coupler_from_artifact,
+)
+from pilates.workflows.input_authority import (
+    requires_prior_beam_linkstats_handoff,
+    requires_prior_beam_skim_handoff,
+)
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (
+    ASIM_OMX_SKIMS,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    FINAL_SKIMS_OMX,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -69,8 +88,37 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface
 
-_CANDIDATE_PATHS_METADATA_KEY = "candidate_paths_by_semantic_key"
 _RESOLVED_VALUES_METADATA_KEY = "resolved_values_by_semantic_key"
+
+
+@runtime_checkable
+class _HasIsEnabled(Protocol):
+    def is_enabled(self, stage: Any) -> bool: ...
+
+
+@runtime_checkable
+class _HasStageEnum(Protocol):
+    @property
+    def Stage(self) -> Any: ...
+
+
+@runtime_checkable
+class _HasLandUseStage(Protocol):
+    @property
+    def land_use(self) -> Any: ...
+
+
+@runtime_checkable
+class _HasUsimMutableDataDir(Protocol):
+    def get_usim_mutable_data_dir(self) -> str: ...
+
+
+def _usim_mutable_data_dir(workspace: Any) -> Optional[str]:
+    if isinstance(workspace, _HasUsimMutableDataDir) and callable(
+        workspace.get_usim_mutable_data_dir
+    ):
+        return workspace.get_usim_mutable_data_dir()
+    return None
 
 
 def build_resolved_binding(
@@ -149,32 +197,30 @@ def build_resolved_binding(
     return builder.freeze()
 
 
-def _ordered_unique(*groups: Sequence[str]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(key for group in groups for key in group))
-
-
-def _workflow_stage_enabled(state: Any, stage_name: str) -> bool:
-    is_enabled = getattr(state, "is_enabled", None)
-    stage_enum = getattr(state, "Stage", None)
-    if not callable(is_enabled) or stage_enum is None:
+def _is_land_use_stage_enabled(state: Any) -> bool:
+    if not isinstance(state, _HasIsEnabled) or not isinstance(state, _HasStageEnum):
         return False
-    stage_value = getattr(stage_enum, stage_name, None)
+    if not callable(state.is_enabled) or state.Stage is None:
+        return False
+    stage_enum = state.Stage
+    stage_value: Any = None
+    if isinstance(stage_enum, _HasLandUseStage):
+        stage_value = stage_enum.land_use
+    elif isinstance(stage_enum, Mapping):
+        stage_value = stage_enum.get("land_use")
     if stage_value is None:
         return False
     try:
-        return bool(is_enabled(stage_value))
+        return bool(state.is_enabled(stage_value))
     except Exception:
         return False
 
 
 def _requires_exact_activitysim_population_year(state: Any) -> bool:
-    if not _workflow_stage_enabled(state, "land_use"):
-        return False
-    is_start_year = getattr(state, "is_start_year", None)
-    if not callable(is_start_year):
+    if not _is_land_use_stage_enabled(state):
         return False
     try:
-        return not bool(is_start_year())
+        return not is_start_year(state)
     except Exception:
         return False
 
@@ -197,60 +243,7 @@ class ArtifactBindingRule:
     )
 
 
-@dataclass(frozen=True)
-class StageBoundaryDurabilityRule:
-    """
-    Runtime policy for artifacts that must survive a stage boundary.
-    """
-
-    name: str
-    semantic_keys: tuple[str, ...]
-    resolve: Callable[..., Optional[Mapping[str, str]]]
-    notes: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class RestartArtifactRequirementRule:
-    """
-    Runtime policy for artifacts that restart preflight should keep present.
-    """
-
-    name: str
-    semantic_keys: tuple[str, ...]
-    resolve: Callable[..., Optional[Mapping[str, str]]]
-    notes: Optional[str] = None
-
-
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
-
-FallbackPolicyClass = Literal[
-    "bootstrap",
-    "recovery",
-    "format_selection",
-    "legacy_compatibility",
-]
-FallbackPolicyEndState = Literal["retain", "replace_with_producer_handoff", "delete"]
-FallbackIdentitySource = Literal[
-    "tracked_artifact",
-    "admitted_local_file",
-    "pinned_run_member",
-    "none",
-]
-
-
-@dataclass(frozen=True)
-class FallbackProviderInventoryEntry:
-    """Declared authority and retirement policy for one generic provider."""
-
-    identifier: str
-    consuming_steps: tuple[str, ...]
-    semantic_roles: tuple[str, ...]
-    trigger: str
-    candidate_order: tuple[str, ...]
-    identity_source: FallbackIdentitySource
-    policy_class: FallbackPolicyClass
-    intended_end_state: FallbackPolicyEndState
-    focused_tests: tuple[str, ...]
 
 
 def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule, ...]:
@@ -301,69 +294,6 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
     )
 
 
-def activitysim_datastore_selection_rules() -> tuple[ArtifactBindingRule, ...]:
-    """
-    Backward-compatible wrapper for callers that still use the old helper name.
-    Resolves to the UrbanSim datastore for the requested planner-year.
-    """
-    return (
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_POPULATION_SOURCE_H5,
-                USIM_FORECAST_OUTPUT,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ),
-            fallback_provider="urbansim_inputs_for_year",
-        ),
-    )
-
-
-def urbansim_datastore_selection_rules(
-    *,
-    fallback_provider: str = "urbansim_inputs_for_year",
-) -> tuple[ArtifactBindingRule, ...]:
-    """
-    Shared current/base datastore selection policy for UrbanSim input assembly.
-    """
-    return (
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_BASE_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_DATASTORE_BASE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-            ),
-            fallback_provider=fallback_provider,
-        ),
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ),
-            fallback_provider=fallback_provider,
-        ),
-    )
-
-
-def _candidate_paths_metadata(
-    *paths_by_semantic_key: tuple[str, Sequence[Optional[Path]]],
-) -> Dict[str, list[str]]:
-    metadata: Dict[str, list[str]] = {}
-    for semantic_key, paths in paths_by_semantic_key:
-        ordered_paths = [str(path) for path in paths if path is not None and str(path)]
-        if ordered_paths:
-            metadata[semantic_key] = list(dict.fromkeys(ordered_paths))
-    return metadata
-
-
 def _population_source_snapshot_path(path: Path) -> Path:
     return path.with_name(f"{path.stem}_population_source{path.suffix}")
 
@@ -377,83 +307,62 @@ def _urbansim_datastore_candidates_for_year(
 ) -> Optional[Mapping[str, Any]]:
     if settings is None or state is None or workspace is None or year is None:
         return None
-    get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
-    is_start_year = getattr(state, "is_start_year", None)
-    if not callable(get_usim_dir) or not callable(is_start_year):
+    usim_dir = _usim_mutable_data_dir(workspace)
+    if usim_dir is None:
         return None
 
     from pilates.urbansim import postprocessor as usim_post
 
-    usim_data_dir = Path(get_usim_dir())
+    usim_data_dir = Path(usim_dir)
     input_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="input"
     )
-    input_archive_path = archive_fallback_path(
-        state=state,
-        workspace=workspace,
-        local_path=input_path,
-    )
-    base_path = first_existing_path(input_path, input_archive_path)
-    candidate_paths = _candidate_paths_metadata(
-        (USIM_DATASTORE_BASE_H5, (input_path, input_archive_path)),
-    )
-    land_use_enabled = _workflow_stage_enabled(state, "land_use")
+    if input_path.exists():
+        base_path: Optional[Path] = input_path
+    else:
+        static_source = resolve_urbansim_initial_datastore_source_path(settings)
+        base_path = (
+            static_source
+            if static_source is not None and static_source.exists()
+            else None
+        )
+    land_use_enabled = _is_land_use_stage_enabled(state)
 
     mapping: Dict[str, Any] = {}
     if base_path is not None:
         mapping[USIM_DATASTORE_BASE_H5] = str(base_path)
 
     if not land_use_enabled:
-        candidate_paths.update(
-            _candidate_paths_metadata(
-                (USIM_DATASTORE_CURRENT_H5, (input_path, input_archive_path)),
-                (USIM_POPULATION_SOURCE_H5, (input_path, input_archive_path)),
-            )
-        )
         if base_path is not None:
             mapping[USIM_DATASTORE_CURRENT_H5] = str(base_path)
             mapping[USIM_POPULATION_SOURCE_H5] = str(base_path)
-        if candidate_paths:
-            mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
         return mapping or None
 
-    start_year = getattr(state, "start_year", None)
-    is_base_year = (year == start_year) if start_year is not None else is_start_year()
+    start_year = get_setting(state, "start_year")
+    is_base_year = (
+        (year == start_year)
+        if start_year is not None
+        else is_start_year(state, settings)
+    )
 
     if is_base_year:
-        candidate_paths.update(
-            _candidate_paths_metadata(
-                (USIM_DATASTORE_CURRENT_H5, (input_path, input_archive_path)),
-                (USIM_POPULATION_SOURCE_H5, (input_path, input_archive_path)),
-            )
-        )
         if base_path is not None:
             mapping[USIM_DATASTORE_CURRENT_H5] = str(base_path)
             mapping[USIM_POPULATION_SOURCE_H5] = str(base_path)
-        if candidate_paths:
-            mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
         return mapping or None
 
     output_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="output", year=year
     )
-    output_archive_path = archive_fallback_path(
-        state=state,
-        workspace=workspace,
-        local_path=output_path,
-    )
-    current_path = first_existing_path(output_path, output_archive_path)
+    current_path = output_path if output_path.exists() else None
     population_source_path = _population_source_snapshot_path(output_path)
-    population_source_archive_path = archive_fallback_path(
-        state=state,
-        workspace=workspace,
-        local_path=population_source_path,
-    )
-    population_path = first_existing_path(
-        population_source_path,
-        population_source_archive_path,
-        output_path,
-        output_archive_path,
+    population_path = next(
+        (
+            p
+            for p in (population_source_path, output_path)
+            if p is not None and p.exists()
+        ),
+        None,
     )
     if population_path is not None and population_path == current_path:
         logger.warning(
@@ -462,59 +371,12 @@ def _urbansim_datastore_candidates_for_year(
             year,
             current_path,
         )
-    candidate_paths.update(
-        _candidate_paths_metadata(
-            (USIM_DATASTORE_CURRENT_H5, (output_path, output_archive_path)),
-            (
-                USIM_FORECAST_OUTPUT,
-                (
-                    population_source_path,
-                    population_source_archive_path,
-                    output_path,
-                    output_archive_path,
-                ),
-            ),
-            (
-                USIM_POPULATION_SOURCE_H5,
-                (
-                    population_source_path,
-                    population_source_archive_path,
-                    output_path,
-                    output_archive_path,
-                ),
-            ),
-        )
-    )
     if current_path is not None:
         mapping[USIM_DATASTORE_CURRENT_H5] = str(current_path)
     if population_path is not None:
         mapping[USIM_FORECAST_OUTPUT] = str(population_path)
         mapping[USIM_POPULATION_SOURCE_H5] = str(population_path)
-    if candidate_paths:
-        mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
     return mapping or None
-
-
-def _urbansim_inputs_for_year(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    year: Optional[int],
-    **_: Any,
-) -> Optional[Mapping[str, Any]]:
-    """Planner-year UrbanSim datastore selector.
-
-    This is the one fallback provider that intentionally consumes the caller
-    supplied ``year``; the rule contract is literally "for the requested
-    year", so the binding layer forwards that year unchanged.
-    """
-    return _urbansim_datastore_candidates_for_year(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=year,
-    )
 
 
 def _activitysim_input_datastore(
@@ -526,19 +388,22 @@ def _activitysim_input_datastore(
     """Canonical yearless ActivitySim input datastore role."""
     if settings is None or workspace is None:
         return None
-    get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
-    if not callable(get_usim_dir):
+    usim_dir = _usim_mutable_data_dir(workspace)
+    if usim_dir is None:
         return None
 
     from pilates.activitysim.postprocessor import get_usim_datastore_fname
 
     candidate = os.path.join(
-        get_usim_dir(),
+        usim_dir,
         get_usim_datastore_fname(settings, io="input"),
     )
-    if not os.path.exists(candidate):
-        return None
-    return {USIM_DATASTORE_BASE_H5: candidate}
+    if os.path.exists(candidate):
+        return {USIM_DATASTORE_BASE_H5: candidate}
+    static_source = resolve_urbansim_initial_datastore_source_path(settings)
+    if static_source is not None and static_source.exists():
+        return {USIM_DATASTORE_BASE_H5: str(static_source)}
+    return None
 
 
 def _activitysim_population_source(
@@ -556,12 +421,6 @@ def _activitysim_population_source(
     """
     target_year = resolve_forecast_year(state)
     explicit_inputs = dict(explicit_fallback_inputs or {})
-    candidate_paths: Dict[str, list[str]] = {}
-
-    def _with_metadata(mapping: Dict[str, Any]) -> Optional[Mapping[str, Any]]:
-        if candidate_paths:
-            mapping[_CANDIDATE_PATHS_METADATA_KEY] = dict(candidate_paths)
-        return mapping or None
 
     def _with_population_tables(mapping: Dict[str, Any]) -> Optional[Mapping[str, Any]]:
         selected = mapping.get(USIM_POPULATION_SOURCE_H5)
@@ -586,25 +445,16 @@ def _activitysim_population_source(
                         selected_path,
                         exc,
                     )
-        return _with_metadata(mapping)
+        return mapping or None
 
     if USIM_POPULATION_SOURCE_H5 in explicit_inputs:
         candidate = explicit_inputs.get(USIM_POPULATION_SOURCE_H5)
         if candidate:
             return _with_population_tables({USIM_POPULATION_SOURCE_H5: candidate})
 
-    if not _workflow_stage_enabled(state, "land_use"):
+    if not _is_land_use_stage_enabled(state):
         base_candidate = explicit_inputs.get(USIM_DATASTORE_BASE_H5)
         current_candidate = explicit_inputs.get(USIM_DATASTORE_CURRENT_H5)
-        ordered_candidates = [
-            str(path)
-            for path in (base_candidate, current_candidate)
-            if path is not None and str(path)
-        ]
-        if ordered_candidates:
-            candidate_paths[USIM_POPULATION_SOURCE_H5] = list(
-                dict.fromkeys(ordered_candidates)
-            )
         selected = base_candidate or current_candidate
         if selected:
             return _with_population_tables({USIM_POPULATION_SOURCE_H5: selected})
@@ -614,7 +464,6 @@ def _activitysim_population_source(
         )
         base_path = None if not base_inputs else base_inputs.get(USIM_DATASTORE_BASE_H5)
         if base_path:
-            candidate_paths[USIM_POPULATION_SOURCE_H5] = [str(base_path)]
             return _with_population_tables({USIM_POPULATION_SOURCE_H5: base_path})
         return None
 
@@ -626,17 +475,6 @@ def _activitysim_population_source(
     )
     if not candidates:
         return None
-    raw_candidate_paths = candidates.get(_CANDIDATE_PATHS_METADATA_KEY)
-    if isinstance(raw_candidate_paths, Mapping):
-        pop_paths = raw_candidate_paths.get(USIM_POPULATION_SOURCE_H5)
-        if isinstance(pop_paths, Sequence) and not isinstance(pop_paths, (str, bytes)):
-            ordered = [
-                str(path) for path in pop_paths if path is not None and str(path)
-            ]
-            if ordered:
-                candidate_paths[USIM_POPULATION_SOURCE_H5] = list(
-                    dict.fromkeys(ordered)
-                )
     selected = candidates.get(USIM_POPULATION_SOURCE_H5)
     if selected:
         return _with_population_tables({USIM_POPULATION_SOURCE_H5: selected})
@@ -644,78 +482,17 @@ def _activitysim_population_source(
 
 
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
-    "urbansim_inputs_for_year": _urbansim_inputs_for_year,
     "activitysim_input_datastore": _activitysim_input_datastore,
     "activitysim_population_source": _activitysim_population_source,
 }
 
 
-# This inventory classifies the authority of the current generic providers.  It
-# deliberately does not alter their selection behavior; subsequent slices use
-# these entries to replace raw-path fallback with explicit producer handoffs.
-FALLBACK_PROVIDER_INVENTORY: tuple[FallbackProviderInventoryEntry, ...] = (
-    FallbackProviderInventoryEntry(
-        identifier="urbansim_inputs_for_year",
-        consuming_steps=("activitysim_preprocess", "atlas_preprocess"),
-        semantic_roles=(
-            USIM_DATASTORE_BASE_H5,
-            USIM_DATASTORE_CURRENT_H5,
-            USIM_FORECAST_OUTPUT,
-            USIM_POPULATION_SOURCE_H5,
-        ),
-        trigger=(
-            "the requested UrbanSim datastore is absent from explicit inputs "
-            "and the coupler"
-        ),
-        candidate_order=(
-            "configured local input datastore",
-            "archive copy of the input datastore",
-            "local forecast-year population-source snapshot",
-            "archive copy of the population-source snapshot",
-            "configured local forecast output",
-            "archive copy of the forecast output",
-        ),
-        identity_source="none",
-        policy_class="legacy_compatibility",
-        intended_end_state="replace_with_producer_handoff",
-        focused_tests=("tests/test_workflow_binding.py",),
-    ),
-    FallbackProviderInventoryEntry(
-        identifier="activitysim_input_datastore",
-        consuming_steps=("activitysim_postprocess",),
-        semantic_roles=(USIM_DATASTORE_BASE_H5,),
-        trigger="no explicit or coupler-backed ActivitySim input datastore exists",
-        candidate_order=("configured mutable UrbanSim input datastore",),
-        identity_source="none",
-        policy_class="bootstrap",
-        intended_end_state="replace_with_producer_handoff",
-        focused_tests=("tests/test_activitysim_step_definitions.py",),
-    ),
-    FallbackProviderInventoryEntry(
-        identifier="activitysim_population_source",
-        consuming_steps=("activitysim_preprocess", "activitysim_postprocess"),
-        semantic_roles=(
-            USIM_POPULATION_SOURCE_H5,
-            USIM_POPULATION_HOUSEHOLDS_TABLE,
-            USIM_POPULATION_PERSONS_TABLE,
-            USIM_POPULATION_JOBS_TABLE,
-            USIM_POPULATION_BLOCKS_TABLE,
-        ),
-        trigger=(
-            "no explicit or coupler-backed forecast-year population source exists"
-        ),
-        candidate_order=(
-            "explicit population source",
-            "explicit base or current datastore outside land-use",
-            "configured mutable UrbanSim input datastore outside land-use",
-            "forecast-year UrbanSim datastore candidates",
-        ),
-        identity_source="none",
-        policy_class="legacy_compatibility",
-        intended_end_state="replace_with_producer_handoff",
-        focused_tests=("tests/test_activitysim_step_definitions.py",),
-    ),
-)
+def workflow_step_spec_for_step_name(step_name: str) -> Any:
+    from pilates.workflows.catalog import (
+        workflow_step_spec_for_step_name as _catalog_step_spec,
+    )
+
+    return _catalog_step_spec(step_name)
 
 
 def artifact_rules_for_step_name(
@@ -725,8 +502,6 @@ def artifact_rules_for_step_name(
 ) -> tuple[ArtifactBindingRule, ...]:
     """Return catalog-derived native selection rules with step-defined overrides."""
     del settings
-    from pilates.workflows.catalog import workflow_step_spec_for_step_name
-
     spec = workflow_step_spec_for_step_name(step_name)
     if spec is None:
         return ()
@@ -789,35 +564,6 @@ def _lookup_fallback_inputs(
     return combined or None
 
 
-def _split_candidate_paths_metadata(
-    fallback_inputs: Optional[Mapping[str, Any]],
-) -> tuple[Optional[Mapping[str, Any]], Dict[str, list[str]]]:
-    if not fallback_inputs:
-        return None, {}
-    raw_candidate_paths = fallback_inputs.get(_CANDIDATE_PATHS_METADATA_KEY)
-    if not isinstance(raw_candidate_paths, Mapping):
-        return fallback_inputs, {}
-
-    cleaned = dict(fallback_inputs)
-    cleaned.pop(_CANDIDATE_PATHS_METADATA_KEY, None)
-    candidate_paths_by_semantic_key: Dict[str, list[str]] = {}
-    for semantic_key, candidate_paths in raw_candidate_paths.items():
-        if not isinstance(semantic_key, str):
-            continue
-        if not isinstance(candidate_paths, Sequence) or isinstance(
-            candidate_paths, (str, bytes)
-        ):
-            continue
-        ordered_paths = [
-            str(path) for path in candidate_paths if path is not None and str(path)
-        ]
-        if ordered_paths:
-            candidate_paths_by_semantic_key[semantic_key] = list(
-                dict.fromkeys(ordered_paths)
-            )
-    return cleaned or None, candidate_paths_by_semantic_key
-
-
 def _resolve_rule_binding(
     *,
     rule: ArtifactBindingRule,
@@ -829,7 +575,7 @@ def _resolve_rule_binding(
     workspace: Any,
     year: Optional[int],
     surface: Optional["EnabledWorkflowSurface"],
-) -> tuple[str, Optional[str], Optional[Any], Optional[str], Dict[str, list[str]]]:
+) -> tuple[str, Optional[str], Optional[Any], Optional[str]]:
     candidates = rule.preferred_keys or (rule.semantic_key,)
     scoped_coupler = coupler if rule.allow_coupler else None
     for candidate in candidates:
@@ -845,7 +591,7 @@ def _resolve_rule_binding(
             continue
         if rule.pass_mode == "input_key_only" and resolved.source == "explicit":
             continue
-        return resolved.source, selected_key, resolved.value, candidate, {}
+        return resolved.source, selected_key, resolved.value, candidate
 
     rule_fallback_inputs = (
         _lookup_fallback_inputs(
@@ -861,11 +607,8 @@ def _resolve_rule_binding(
         if rule.allow_fallback or rule.fallback_provider
         else None
     )
-    rule_fallback_inputs, candidate_paths_by_semantic_key = (
-        _split_candidate_paths_metadata(rule_fallback_inputs)
-    )
     if rule_fallback_inputs is None:
-        return "missing", None, None, None, candidate_paths_by_semantic_key
+        return "missing", None, None, None
 
     for candidate in candidates:
         resolved = resolve_input_precedence(
@@ -882,9 +625,8 @@ def _resolve_rule_binding(
             candidate,
             resolved.value,
             candidate,
-            candidate_paths_by_semantic_key,
         )
-    return "missing", None, None, None, candidate_paths_by_semantic_key
+    return "missing", None, None, None
 
 
 def resolve_artifact_roles(
@@ -911,7 +653,6 @@ def resolve_artifact_roles(
     inputs: Dict[str, Any] = {}
     source_by_role: Dict[str, str] = {}
     selected_key_by_role: Dict[str, str] = {}
-    candidate_paths_by_role: Dict[str, list[str]] = {}
     resolved_values_by_role: Dict[str, Any] = {}
 
     for role, is_required in [
@@ -921,21 +662,18 @@ def resolve_artifact_roles(
         rule = rule_by_role.get(role) or ArtifactBindingRule(
             semantic_key=role, required=is_required
         )
-        source, selected_key, value, matched_candidate, candidate_paths = (
-            _resolve_rule_binding(
-                rule=rule,
-                coupler=coupler,
-                explicit_inputs=explicit_inputs,
-                fallback_inputs=fallback_inputs,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                year=year,
-                surface=surface,
-            )
+        source, selected_key, value, matched_candidate = _resolve_rule_binding(
+            rule=rule,
+            coupler=coupler,
+            explicit_inputs=explicit_inputs,
+            fallback_inputs=fallback_inputs,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=year,
+            surface=surface,
         )
         source_by_role[role] = source
-        candidate_paths_by_role.update(candidate_paths)
         if selected_key is not None:
             selected_key_by_role[role] = matched_candidate or selected_key
         if source != "missing" and rule.pass_mode == "metadata_only":
@@ -944,8 +682,6 @@ def resolve_artifact_roles(
             inputs[role] = value
 
     metadata: Dict[str, Any] = {}
-    if candidate_paths_by_role:
-        metadata[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths_by_role
     if resolved_values_by_role:
         metadata[_RESOLVED_VALUES_METADATA_KEY] = resolved_values_by_role
     return ResolvedStepInputs(
@@ -972,23 +708,16 @@ def _bootstrap_beam_exchange_inputs(
 ) -> Optional[Mapping[str, str]]:
     if get_traffic_assignment_model(settings) != "beam":
         return None
-
-    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
-    if activity_demand_model is not None:
+    if get_activity_demand_model(settings) is not None:
         return None
 
-    beam_preprocessor = BeamPreprocessor("beam", state)
-    existing_inputs = getattr(beam_preprocessor, "existing_beam_exchange_inputs", None)
-    if not callable(existing_inputs):
-        logger.debug(
-            "BEAM preprocessor does not expose existing_beam_exchange_inputs(); "
-            "skipping bootstrap coupler seeding."
-        )
-        return None
-
+    # ponytail: beam_preprocess owns mutable workspace preparation; seed from existing inputs
     try:
-        record_store = existing_inputs(workspace)
+        record_store = beam_exchange.register_existing_beam_exchange_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
     except FileNotFoundError as exc:
         logger.warning(
             "Bootstrap could not seed default BEAM inputs into coupler: %s",
@@ -998,14 +727,17 @@ def _bootstrap_beam_exchange_inputs(
 
     allowed_keys = {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}
     artifacts: Dict[str, str] = {}
+    base_path = (
+        str(workspace.full_path)
+        if isinstance(workspace, WorkspaceRootLike) and workspace.full_path is not None
+        else None
+    )
     if record_store is not None:
         for record in record_store.all_records():
-            key = getattr(record, "short_name", None)
+            key = record.short_name
             if key not in allowed_keys:
                 continue
-            path = record.get_absolute_path(
-                base_path=getattr(workspace, "full_path", None)
-            )
+            path = record.get_absolute_path(base_path=base_path)
             if not path or not os.path.exists(path):
                 continue
             artifacts[key] = path
@@ -1015,10 +747,16 @@ def _bootstrap_beam_exchange_inputs(
 def _bootstrap_beam_warmstart_artifacts(
     *,
     settings: Any,
+    state: Any = None,
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
     if get_traffic_assignment_model(settings) != "beam":
+        return None
+    if state is not None and requires_prior_beam_linkstats_handoff(
+        settings=settings,
+        state=state,
+    ):
         return None
 
     warmstart_path = resolve_initial_linkstats_path(settings, workspace)
@@ -1027,320 +765,171 @@ def _bootstrap_beam_warmstart_artifacts(
     return {LINKSTATS_WARMSTART: warmstart_path}
 
 
+def _bootstrap_initial_skims(
+    *,
+    settings: Any,
+    state: Any = None,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    # ponytail: resolve configured initial skims directly without probing usim mutable dir
+    if state is not None and requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    ):
+        return None
+
+    has_skim_consumer = (
+        get_activity_demand_model(settings) == "activitysim"
+        or get_land_use_model(settings) == "urbansim"
+        or get_vehicle_ownership_model(settings) == "atlas"
+        or get_traffic_assignment_model(settings) == "beam"
+    )
+    if not has_skim_consumer:
+        return None
+
+    from pilates.activitysim.admission import resolve_bootstrap_activitysim_skims_path
+
+    workspace_path = (
+        Path(str(workspace.full_path))
+        if isinstance(workspace, WorkspaceRootLike) and workspace.full_path is not None
+        else None
+    )
+    if workspace_path is None:
+        return None
+    try:
+        candidate = resolve_bootstrap_activitysim_skims_path(
+            settings=settings,
+            workspace_path=workspace_path,
+        )
+    except Exception:
+        return None
+    if not candidate.is_file():
+        return None
+
+    seeded: Dict[str, str] = {ASIM_OMX_SKIMS: str(candidate)}
+    if get_traffic_assignment_model(settings) is None:
+        seeded[FINAL_SKIMS_OMX] = str(candidate)
+    return seeded
+
+
 def _bootstrap_urbansim_initial_datastore(
     *,
     settings: Any,
     state: Any,
-    workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
-    """Publish the bootstrap-staged UrbanSim input H5 at the initial frontier."""
+    """Publish the initial UrbanSim input H5 at the initial frontier."""
+    # ponytail: resolve exogenous initial datastore directly without probing usim mutable dir
     if not uses_input_datastore(state):
         return None
 
-    models = getattr(getattr(settings, "run", None), "models", None)
     requires_urbansim_datastore = (
-        getattr(models, "land_use", None) == "urbansim"
-        or getattr(models, "activity_demand", None) == "activitysim"
-        or getattr(models, "vehicle_ownership", None) == "atlas"
+        get_land_use_model(settings) == "urbansim"
+        or get_activity_demand_model(settings) == "activitysim"
+        or get_vehicle_ownership_model(settings) == "atlas"
     )
-    if not requires_urbansim_datastore:
+    if not requires_urbansim_datastore or get_setting(settings, "urbansim") is None:
         return None
 
-    get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    if not callable(get_usim_data_dir) or urbansim_cfg is None:
+    static_source = resolve_urbansim_initial_datastore_source_path(settings)
+    if static_source is None or not static_source.exists():
         return None
 
-    from pilates.urbansim.postprocessor import get_usim_datastore_fname
-
-    staged_input_h5 = os.path.join(
-        get_usim_data_dir(),
-        get_usim_datastore_fname(settings, io="input"),
-    )
-    if not os.path.exists(staged_input_h5):
-        return None
-    return {
-        USIM_DATASTORE_BASE_H5: staged_input_h5,
-        USIM_DATASTORE_CURRENT_H5: staged_input_h5,
+    resolved_h5 = str(static_source)
+    seeded: Dict[str, str] = {
+        USIM_DATASTORE_BASE_H5: resolved_h5,
+        USIM_DATASTORE_CURRENT_H5: resolved_h5,
     }
+    if get_land_use_model(settings) != "urbansim":
+        seeded[USIM_POPULATION_SOURCE_H5] = resolved_h5
+    return seeded
 
 
-def bootstrap_stage_boundary_durability_policy() -> tuple[
-    StageBoundaryDurabilityRule, ...
-]:
-    """
-    Stage-boundary durability policy for bootstrap seeding.
+def _seed_artifact_for_coupler_key(
+    *,
+    key: str,
+    path: str,
+    coupler: CouplerProtocol,
+    scenario: Any = None,
+) -> Artifact | None:
+    canonical_key = canonical_artifact_key_from_raw_key(key)
+    if scenario is not None:
+        try:
+            first_step_started = bool(scenario._first_step_started)
+        except AttributeError:
+            first_step_started = False
+        if not first_step_started:
+            try:
+                return scenario.add_input(path, key=canonical_key)
+            except AttributeError:
+                pass
 
-    The returned rules are consumable by runtime bootstrap code and keep the
-    policy inspectable without hard-coding path inventories in the runtime.
-    """
+    try:
+        tracker = coupler.tracker  # type: ignore[attr-defined]
+    except AttributeError:
+        tracker = None
+    if tracker is None and scenario is not None:
+        try:
+            tracker = scenario._tracker
+        except AttributeError:
+            tracker = None
+    if tracker is None:
+        return None
 
-    return (
-        StageBoundaryDurabilityRule(
-            name="urbansim_initial_datastore",
-            semantic_keys=(USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5),
-            resolve=_bootstrap_urbansim_initial_datastore,
-            notes=(
-                "The initial workflow frontier consumes the bootstrap-staged "
-                "UrbanSim input datastore as both its immutable base and current role."
-            ),
-        ),
-        StageBoundaryDurabilityRule(
-            name="beam_exchange_inputs",
-            semantic_keys=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
-            resolve=_bootstrap_beam_exchange_inputs,
-            notes=(
-                "BEAM-only bootstrap should seed the mutable exchange inputs "
-                "already staged inside the BEAM workspace."
-            ),
-        ),
-        StageBoundaryDurabilityRule(
-            name="beam_warmstart",
-            semantic_keys=(LINKSTATS_WARMSTART,),
-            resolve=_bootstrap_beam_warmstart_artifacts,
-            notes="BEAM-only bootstrap should seed the initial linkstats warmstart when configured.",
-        ),
-    )
+    try:
+        artifact = tracker.artifacts.create_artifact(
+            path,
+            run_id=None,
+            key=canonical_key,
+            direction="input",
+            latest_artifact_lookup_done=True,
+            known_latest_artifact_at_uri=None,
+        )
+        if tracker.db is not None:
+            tracker.db.upsert_artifact(artifact)
+        return artifact
+    except Exception:
+        return None
 
 
-def _restart_urbansim_required_artifacts(
+_BOOTSTRAP_SEED_RESOLVERS = (
+    _bootstrap_urbansim_initial_datastore,
+    _bootstrap_initial_skims,
+    _bootstrap_beam_exchange_inputs,
+    _bootstrap_beam_warmstart_artifacts,
+)
+
+
+def seed_bootstrap_artifacts_to_coupler(
     *,
     settings: Any,
     state: Any,
     workspace: Any,
-    get_usim_datastore_fname_fn: Callable[..., str],
-    workflow_stage: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    current_stage = getattr(state, "current_major_stage", None)
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    requires_usim_base_h5 = (
-        getattr(model_cfg, "land_use", None) == "urbansim"
-        or getattr(model_cfg, "activity_demand", None) == "activitysim"
-    )
-    if not requires_usim_base_h5:
-        return None
-
-    usim_data_dir = workspace.get_usim_mutable_data_dir()
-    usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
-    local_base_path = Path(usim_data_dir) / usim_base_fname
-    fallback_base_path = archive_fallback_path(
-        state=state,
-        workspace=workspace,
-        local_path=local_base_path,
-    )
-    existing_base = first_existing_path(local_base_path, fallback_base_path)
-    base_target = (
-        str(existing_base) if existing_base is not None else str(local_base_path)
-    )
-    required: Dict[str, str] = {USIM_DATASTORE_BASE_H5: base_target}
-
-    region = getattr(getattr(settings, "run", None), "region", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    if (
-        current_stage
-        in {
-            None,
-            workflow_stage.land_use,
-        }
-        and region
-        and urbansim_cfg is not None
-    ):
-        region_id = (
-            getattr(urbansim_cfg, "region_mappings", {})
-            .get("region_to_region_id", {})
-            .get(region)
-        )
-        if region_id:
-            required.update(
-                {
-                    "omx_skims": os.path.join(
-                        usim_data_dir, f"skims_mpo_{region_id}.omx"
-                    ),
-                    "hh_size": os.path.join(usim_data_dir, f"hsize_ct_{region_id}.csv"),
-                    "income_rates": os.path.join(
-                        usim_data_dir, f"income_rates_{region_id}.csv"
-                    ),
-                    "relmap": os.path.join(usim_data_dir, f"relmap_{region_id}.csv"),
-                    "schools": os.path.join(usim_data_dir, "schools_2010.csv"),
-                    "school_districts": os.path.join(
-                        usim_data_dir, "blocks_school_districts_2010.csv"
-                    ),
-                }
-            )
-
-    return required or None
-
-
-def _restart_activitysim_required_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
-    workflow_stage: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    current_stage = getattr(state, "current_major_stage", None)
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "activity_demand", None) != "activitysim":
-        return None
-    if current_stage not in {
-        None,
-        workflow_stage.supply_demand_loop,
-        workflow_stage.activity_demand,
-        workflow_stage.activity_demand_directly_from_land_use,
-    }:
-        return None
-
-    asim_configs_dir = workspace.get_asim_mutable_configs_dir()
-    main_configs_dir = (
-        getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
-        or "configs"
-    )
-    required: Dict[str, str] = {}
-    for dirname in required_asim_config_dirs_fn(main_configs_dir):
-        required[f"activitysim_config_settings_yaml_{dirname}"] = os.path.join(
-            asim_configs_dir,
-            dirname,
-            "settings.yaml",
-        )
-    if _workflow_stage_enabled(state, "land_use"):
-        datastore_candidates = _urbansim_datastore_candidates_for_year(
+    coupler: CouplerProtocol,
+    scenario: Any = None,
+) -> None:
+    """
+    Seed coupler keys for initial exogenous artifacts needed by workflow steps.
+    """
+    # ponytail: drop StageBoundaryDurabilityRule/bootstrap_stage_boundary_durability_policy
+    for resolve in _BOOTSTRAP_SEED_RESOLVERS:
+        resolved_artifacts = resolve(
             settings=settings,
             state=state,
             workspace=workspace,
-            year=resolve_forecast_year(state),
         )
-        if datastore_candidates:
-            for semantic_key in (
-                USIM_POPULATION_SOURCE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-            ):
-                path = datastore_candidates.get(semantic_key)
-                if path:
-                    required[semantic_key] = str(path)
-    return required or None
-
-
-def _restart_beam_required_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    workflow_stage: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    current_stage = getattr(state, "current_major_stage", None)
-    if get_traffic_assignment_model(settings) != "beam":
-        return None
-    if current_stage not in {
-        workflow_stage.supply_demand_loop,
-        workflow_stage.traffic_assignment,
-    }:
-        return None
-
-    get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
-    region = getattr(getattr(settings, "run", None), "region", None)
-    if not callable(get_beam_input_dir) or not region:
-        return None
-
-    beam_input_dir = get_beam_input_dir()
-    beam_cfg = getattr(settings, "beam", None)
-    beam_config_name = getattr(beam_cfg, "config", None)
-    required: Dict[str, str] = {
-        "beam_mutable_data_dir": beam_input_dir,
-        "beam_region_input_dir": os.path.join(beam_input_dir, region),
-    }
-    if beam_config_name:
-        required["beam_primary_config_file"] = os.path.join(
-            beam_input_dir, region, beam_config_name
-        )
-    return required or None
-
-
-def restart_required_local_artifact_policy() -> tuple[
-    RestartArtifactRequirementRule, ...
-]:
-    """
-    Stage-aware restart artifact policy.
-
-    Restart preflight consumes this policy to keep its required-local-artifact
-    inventory inspectable without open-coding the stage branches in runtime
-    logic.
-    """
-
-    return (
-        RestartArtifactRequirementRule(
-            name="urbansim_restart_artifacts",
-            semantic_keys=(
-                USIM_DATASTORE_BASE_H5,
-                "omx_skims",
-                "hh_size",
-                "income_rates",
-                "relmap",
-                "schools",
-                "school_districts",
-            ),
-            resolve=_restart_urbansim_required_artifacts,
-            notes=(
-                "UrbanSim restart should keep the mutable base datastore, "
-                "land-use datastore handle, and local lookup inputs required "
-                "to resume UrbanSim entry stages."
-            ),
-        ),
-        RestartArtifactRequirementRule(
-            name="activitysim_restart_configs",
-            semantic_keys=(
-                USIM_POPULATION_SOURCE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-            ),
-            resolve=_restart_activitysim_required_artifacts,
-            notes=(
-                "ActivitySim restart should keep the mutable config tree for "
-                "stage entries that can re-enter ActivitySim directly, along "
-                "with the explicit UrbanSim H5 roles needed after the "
-                "population-source role split."
-            ),
-        ),
-        RestartArtifactRequirementRule(
-            name="beam_restart_inputs",
-            semantic_keys=(
-                "beam_mutable_data_dir",
-                "beam_region_input_dir",
-                "beam_primary_config_file",
-            ),
-            resolve=_restart_beam_required_artifacts,
-            notes=(
-                "BEAM restart should preserve the mutable input tree and primary "
-                "config for resumed traffic assignment."
-            ),
-        ),
-    )
-
-
-def is_restart_prebootstrap_deferred_artifact_key(key: str) -> bool:
-    """
-    Return True when bootstrap is expected to recreate the missing artifact.
-
-    These keys are still validated after bootstrap in strict restart mode, but
-    pre-bootstrap diagnostics should treat them as deferred hydration work
-    rather than immediate restart failures.
-    """
-    if not key:
-        return False
-    if key.startswith("activitysim_config_settings_yaml_"):
-        return True
-    return key in {
-        "beam_mutable_data_dir",
-        "beam_region_input_dir",
-        "beam_primary_config_file",
-        "usim_datastore_base_h5",
-        "omx_skims",
-        "hh_size",
-        "income_rates",
-        "relmap",
-        "schools",
-        "school_districts",
-    }
+        if not resolved_artifacts:
+            continue
+        for key, path in resolved_artifacts.items():
+            if resolve_coupler_value(coupler, key).value is not None:
+                continue
+            if not path or not os.path.exists(path):
+                continue
+            artifact = _seed_artifact_for_coupler_key(
+                key=key,
+                path=path,
+                coupler=coupler,
+                scenario=scenario,
+            )
+            set_coupler_from_artifact(coupler, key, artifact, fallback=path)

@@ -7,18 +7,18 @@ PILATES coordinates four urban and transportation models across discrete simulat
 A simulation run passes through four runtime layers:
 
 1. **Entry point (`run.py`)**: Parses command-line arguments and delegates execution to `pilates.runtime.launcher.main()`.
-2. **Runtime launcher and state loop (`pilates/runtime/launcher.py` and `workflow_state.py`)**: Resolves the active `PilatesConfig`, workspace directories, and Consist `Tracker`. The launcher opens a top-level Consist `ScenarioContext` (`with tracker.scenario(...) as scenario:`), runs the pre-scenario `bootstrap` initialization phase, and constructs a `WorkflowState` state machine. `WorkflowState` advances through each forecast interval $(t, t + \Delta t)$ and yields the ordered stages for that year.
+2. **Runtime launcher and state loop (`pilates/runtime/launcher.py` and `pilates/workflows/state.py`)**: Resolves the active `PilatesConfig`, workspace directories, and Consist `Tracker`. The launcher constructs a `WorkflowState` state machine, opens a top-level Consist `ScenarioContext` (`with tracker.scenario(...) as scenario:`), runs preflight admission and initial coupler seeding (`seed_bootstrap_artifacts_to_coupler`), and advances through each forecast interval $(t, t + \Delta t)$ to yield the ordered stages for that year.
 3. **Stage runners (`pilates/workflows/stages/`)**: Each stage runner (`run_land_use_stage`, `run_atlas_stage`, `run_supply_demand_loop`, `run_postprocessing_stage`) manages stage-level state, sub-loops, and model enablement checks. Stage runners invoke canonical workflow steps rather than calling container binaries or file manipulators in stage code.
-4. **Step execution and provenance (`pilates/workflows/step_execution.py`)**: `execute_step()` binds declared upstream artifacts from `scenario.coupler`, resolves step identity (`StepIdentity`), materializes required inputs into the workspace, and calls `scenario.run()` to execute or hydrate the step. Upon completion, `execute_step()` archives declared outputs into the year/iteration archive, updates `scenario.coupler`, and projects validated `StepOutputsBase` paths back to the stage runner.
+4. **Step execution and provenance (`pilates/workflows/step_execution.py`)**: `execute_step()` binds declared upstream artifacts from `scenario.coupler`, resolves step identity (`StepIdentity`), materializes required inputs into the workspace, and calls `scenario.run()` to execute or hydrate the step (`cache_hydration="outputs-requested"`, scoped under `<parent_run_id>/<model>/<run_id>`). When `enable_archive_copy` is enabled, Consist's `RunCompletionArchivePolicy` mirrors outputs to `<archive_root>/consist-recovery/<scope>`. Upon completion, `execute_step()` updates `scenario.coupler` and projects validated `StepOutputsBase` paths back to the stage runner.
 
 ```mermaid
 flowchart TD
     CLI["run.py"] --> Launcher["pilates/runtime/launcher.py<br/>Tracker + ScenarioContext"]
-    Launcher --> Bootstrap["Bootstrap Phase<br/>(initialize_data)"]
-    Bootstrap --> State["WorkflowState<br/>Year Loop: t -> t + Δt"]
+    Launcher --> Seed["Preflight Admission +<br/>seed_bootstrap_artifacts_to_coupler()"]
+    Seed --> State["WorkflowState<br/>Year Loop: t -> t + Δt"]
     State --> Stage1["1. land_use<br/>(pilates/workflows/stages/land_use.py)"]
-    State --> Stage2["2. vehicle_ownership_model<br/>(pilates/workflows/stages/atlas.py)"]
-    State --> Stage3["3. supply_demand_loop<br/>(pilates/workflows/stages/traffic.py)"]
+    State --> Stage2["2. vehicle_ownership_model<br/>(pilates/workflows/stages/vehicle_ownership.py)"]
+    State --> Stage3["3. supply_demand_loop<br/>(pilates/workflows/stages/supply_demand.py)"]
     State --> Stage4["4. postprocessing<br/>(pilates/workflows/stages/postprocessing.py)"]
     Stage1 & Stage2 & Stage3 --> Exec["execute_step()<br/>(pilates/workflows/step_execution.py)"]
     Exec --> Consist["Consist scenario.run()<br/>+ Coupler Publication"]
@@ -26,17 +26,16 @@ flowchart TD
 
 ## Stages and Canonical Steps
 
-`WorkflowState` advances each simulation year through four major orchestration stages after the one-time `bootstrap` phase. Within the step catalog (`pilates/workflows/catalog.py`), the `supply_demand_loop` stage divides into two catalog stages (`activity_demand` and `traffic_assignment`) that repeat for each inner replanning iteration.
+`WorkflowState` advances each simulation year through four major orchestration stages after initial coupler seeding. Within the step catalog (`pilates/workflows/catalog.py`), the `supply_demand_loop` stage divides into two catalog stages (`activity_demand` and `traffic_assignment`) that repeat for each inner replanning iteration.
 
 Every tracked step belongs to one of three execution phases:
 
-- **`preprocess`**: Translates canonical coupler artifacts into model-native workspace inputs.
+- **`preprocess`**: Translates canonical coupler artifacts into model-native workspace inputs (and idempotently prepares mutable model configs/static inputs).
 - **`run`**: Executes the domain model (inside a container or local Python environment) and emits model-native outputs.
 - **`postprocess`**: Validates model outputs, merges or transforms tables into canonical archive artifacts, and publishes updated keys to `scenario.coupler`.
 
 | Orchestration Stage | Catalog Stage | Canonical Step Name | Phase | Tracked in Consist | Execution Condition |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `bootstrap` | *(pre-scenario)* | `initialize_data` | `run` | Yes (`initialization`) | Runs once before the year loop starts. |
 | `land_use` | `land_use` | `urbansim_run` | `run` | Yes | `land_use_enabled` (`travel_model_only=False` and `urbansim` configured). |
 | `land_use` | `land_use` | `urbansim_postprocess` | `postprocess` | Yes | `land_use_enabled`. |
 | `vehicle_ownership_model` | `vehicle_ownership_model` | `atlas_preprocess` | `preprocess` | Yes | `atlas_enabled` (`atlas` configured) for each scheduled ATLAS sub-year. |
@@ -55,7 +54,7 @@ Every tracked step belongs to one of three execution phases:
 
 ```mermaid
 flowchart LR
-    Boot["Bootstrap<br/>Base HDF5 + Skims + Warmstart"] --> LU["1. Land Use (UrbanSim)<br/>Forecast year t + Δt"]
+    Seed["Initial Coupler Seeding<br/>Base HDF5 + Skims + Warmstart"] --> LU["1. Land Use (UrbanSim)<br/>Forecast year t + Δt"]
     LU --> ATLAS["2. Vehicle Ownership (ATLAS)<br/>Sub-step loop u <= t + Δt"]
     ATLAS --> ASIM["3a. Activity Demand (ActivitySim)<br/>Tours, trips, plans"]
     ASIM --> BEAM["3b. Traffic Assignment (BEAM)<br/>Network simulation + skims"]
@@ -64,20 +63,20 @@ flowchart LR
     Post -- "Advance year t" --> LU
 ```
 
-### Bootstrap (`initialize_data`)
+### Initial Coupler Seeding and Step-Owned Staging
 
-Before entering the year loop, `run_bootstrap_phase()` seeds the workspace and registers initial artifacts in `scenario.coupler`:
+Before entering the year loop, `pilates/runtime/launcher.py` runs preflight input admission and calls `seed_bootstrap_artifacts_to_coupler()` (`pilates/workflows/binding.py`) to register initial read-only artifacts in `scenario.coupler`:
 
-- Copies mutable configuration directories (`asim_mutable_data_dir`, `beam_mutable_data_dir`) into the workspace.
-- Validates and registers the base-year UrbanSim datastore (`usim_datastore_h5` / `usim_datastore_base_h5`) and initial travel skims (`omx_skims`).
-- Registers optional BEAM warm-start linkstats (`linkstats_warmstart`) and plan archives when configured.
+- Validates and registers the base-year UrbanSim datastore (`usim_datastore_base_h5`, `usim_datastore_h5`, and `usim_population_source_h5` when land-use is disabled) and initial travel skims (`omx_skims`, plus `final_skims_omx` when traffic assignment is disabled).
+- Registers optional BEAM-only inputs (`plans_beam_in`, `households_beam_in`, `persons_beam_in`) and warm-start linkstats (`linkstats_warmstart`) when configured.
+- Each model then owns idempotent mutable-workspace and static-input staging inside its own step/resolver (`stage_urbansim_run_workspace`, `stage_selected_atlas_static_inputs`, `ensure_activitysim_mutable_configs`, and `ensure_beam_mutable_workspace`).
 
 ### Stage 1: Land Use (`land_use`)
 
 UrbanSim forecasts household, person, job, and real-estate development from base year $t$ to forecast year $t + \Delta t$ using zone-to-zone travel accessibility skims (`omx_skims`) from the prior year.
 
-- **`urbansim_run`**: Stages the current UrbanSim HDF5 datastore (`usim_datastore_h5`) and `omx_skims` into the UrbanSim data directory, runs the UrbanSim container for forecast year $t + \Delta t$, and writes `model_data_{forecast_year}.h5` (`usim_forecast_output`).
-- **`urbansim_postprocess`**: Extracts forecast `households`, `persons`, `jobs`, and `blocks` tables from `usim_forecast_output` alongside base-year fallback tables from `usim_datastore_base_h5`, publishing `usim_population_source_h5` and the extracted population tables for downstream consumers.
+- **`urbansim_run`**: Idempotently stages static UrbanSim inputs (`stage_urbansim_run_workspace`) and materializes the current UrbanSim HDF5 datastore (`usim_datastore_h5`) and `final_skims_omx` / `omx_skims` into the UrbanSim data directory, runs the UrbanSim container for forecast year $t + \Delta t$, and writes `model_data_{forecast_year}.h5` (`usim_forecast_output`).
+- **`urbansim_postprocess`**: Extracts forecast `households`, `persons`, `jobs`, and `blocks` tables from `usim_forecast_output` alongside base-year fallback tables from `usim_datastore_base_h5`, publishing `usim_population_source_h5` and the extracted population tables for downstream consumers while `run_land_use_stage()` preserves `usim_datastore_base_h5` and `usim_population_source_h5` in `scenario.coupler`.
 
 When `travel_model_only: true` is set in the scenario configuration, `WorkflowState` skips `land_use` and downstream stages read population tables from the base UrbanSim datastore (`usim_datastore_h5`).
 

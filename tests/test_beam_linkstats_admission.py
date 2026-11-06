@@ -428,7 +428,7 @@ def test_beam_identity_config_uses_portable_admission_fingerprint(
     tmp_path: Path,
 ) -> None:
     from pilates.config.models import BeamLinkstatsAdmissionConfig
-    from pilates.utils.consist_config import build_beam_identity_config
+    from pilates.workflows.consist_metadata import build_beam_identity_config
 
     cfg_host_a = BeamLinkstatsAdmissionConfig(
         mode="strict",

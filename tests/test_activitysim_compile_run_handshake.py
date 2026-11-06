@@ -27,8 +27,8 @@ from pilates.activitysim.runner import (
     asim_compile_output_dir,
 )
 from pilates.utils import consist_runtime as cr
+from pilates.workflows.contracts import InputContract, StepDefinition
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import InputContract, StepDefinition
 from pilates.workflows.step_execution import execute_step
 
 
@@ -124,6 +124,7 @@ def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
         full_settings=_matrix_settings(num_processes=2 if preparation_required else 1),
         current_year=2018,
         current_inner_iter=0,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)
@@ -253,6 +254,7 @@ def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_contain
     )
     state = SimpleNamespace(
         full_settings=settings,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)

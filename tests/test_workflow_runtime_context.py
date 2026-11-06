@@ -121,10 +121,6 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
             None,
         )[1],
     )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand.flush_archive_queue",
-        lambda *args, **kwargs: None,
-    )
     run_supply_demand_stage(
         scenario=SimpleNamespace(),
         year=2018,
@@ -180,10 +176,6 @@ def test_supply_demand_snapshots_after_activitysim_before_beam(
         "pilates.workflows.stages.supply_demand._run_traffic_assignment_phase",
         lambda **_kwargs: events.append("beam"),
     )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand.flush_archive_queue",
-        lambda **_kwargs: events.append("flush"),
-    )
 
     run_supply_demand_stage(
         scenario=SimpleNamespace(),
@@ -192,7 +184,7 @@ def test_supply_demand_snapshots_after_activitysim_before_beam(
         context=context,
     )
 
-    assert events[:4] == ["activitysim", "flush", "snapshot", "beam"]
+    assert events[:3] == ["activitysim", "snapshot", "beam"]
 
 
 def test_supply_demand_fails_closed_for_uncommitted_restart_without_handoff(
@@ -270,10 +262,6 @@ def test_run_postprocessing_stage_uses_runtime_context(
             captured.update(kwargs),
             (SimpleNamespace(), SimpleNamespace()),
         )[1],
-    )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.postprocessing.flush_archive_queue",
-        lambda *args, **kwargs: None,
     )
 
     run_postprocessing_stage(

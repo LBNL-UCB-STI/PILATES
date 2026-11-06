@@ -2,7 +2,7 @@
 Pydantic models for PILATES configuration.
 
 This module defines the structure and validation for PILATES configuration files.
-Consist-specific identity and facet mapping lives in pilates.utils.consist_config.
+Consist-specific identity and facet mapping lives in pilates.workflows.consist_metadata.
 """
 
 import argparse
@@ -10,22 +10,17 @@ import copy
 import logging
 import os
 from pathlib import Path
-import re
 import sys
-from dataclasses import dataclass, field as dataclass_field
 from typing import (
-    Annotated,
     Any,
     Dict,
     List,
     Literal,
-    Mapping,
     Optional,
     Sequence,
     Union,
 )
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -35,38 +30,35 @@ from pydantic import (
 )
 import yaml
 
-from pilates.activitysim.config_roots import ActivitySimConfigRoot
+from .activitysim import (
+    ActivitySimAdmissionConfig,
+    ActivitySimConfig,
+    ActivitySimConfigRoot,
+    ActivitySimDatabaseConfig,
+    required_activitysim_config_roots,
+)
+from .admission import (
+    AdmissionExpectation,
+    AdmissionPolicyConfig,
+    DeclaredDigestExpectation,
+    PriorRunExpectation,
+    admission_policy_fingerprint,
+)
+from .beam import (
+    BeamAdmissionConfig,
+    BeamArtifactFormatsConfig,
+    BeamConfig,
+    BeamLinkstatsAdmissionConfig,
+    FullSkimsCreatorConfig,
+)
+from .runtime import (
+    _FLAG_FIELD_NAMES,
+    PilatesRuntime,
+    RuntimeFlags,
+    RuntimeOptions,
+)
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RuntimeFlags:
-    """Derived runtime enablement flags attached after config load."""
-
-    land_use_enabled: bool = False
-    vehicle_ownership_model_enabled: bool = False
-    activity_demand_enabled: bool = False
-    traffic_assignment_enabled: bool = False
-    replanning_enabled: bool = False
-
-
-@dataclass
-class RuntimeOptions:
-    """Ephemeral runtime options attached outside the persisted config schema."""
-
-    state_file_loc: Optional[str] = None
-    settings_file: Optional[str] = None
-    allow_rewind_resume: bool = False
-
-
-@dataclass
-class PilatesRuntime:
-    """Typed runtime state associated with a loaded ``PilatesConfig`` instance."""
-
-    flags: RuntimeFlags = dataclass_field(default_factory=RuntimeFlags)
-    options: RuntimeOptions = dataclass_field(default_factory=RuntimeOptions)
-    flags_initialized: bool = False
 
 
 # =============================================================================
@@ -142,12 +134,6 @@ class RunConfig(BaseModel):
     )
     enable_archive_copy: bool = Field(
         False, description="Copy logged outputs to archive root as they are produced"
-    )
-    bootstrap_cache_enabled: bool = Field(
-        True,
-        description=(
-            "Enable cache probing for the pre-scenario bootstrap initialization phase"
-        ),
     )
     restart_strict: bool = Field(
         False,
@@ -426,147 +412,6 @@ class InfrastructureConfig(BaseModel):
 # =============================================================================
 
 
-class PriorRunExpectation(BaseModel):
-    """Select one persisted artifact from a completed Consist run."""
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    kind: Literal["prior_run"] = "prior_run"
-    expected_run_id: str = Field(
-        ...,
-        validation_alias=AliasChoices("expected_run_id", "run_id"),
-        description="Completed Consist run supplying the expected artifact.",
-    )
-    artifact_key: str = Field(
-        ..., description="Exact persisted artifact key on expected_run_id."
-    )
-    direction: Literal["input", "output", "any"] = Field(
-        "any",
-        validation_alias=AliasChoices("expected_direction", "direction"),
-        description="Whether the expected artifact on expected_run_id is an input, output, or either.",
-    )
-    source_tracker_db: Optional[str] = Field(
-        None,
-        description="Optional path to an external Consist DuckDB database when expected_run_id lives in another tracker.",
-    )
-    expected_bytes_path: Optional[str] = Field(
-        None,
-        description="Optional immutable historical bytes for hash re-verification.",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_conflicting_aliases(cls, data: Any) -> Any:
-        if not isinstance(data, Mapping):
-            return data
-        payload = dict(data)
-        if "run_id" in payload and "expected_run_id" in payload:
-            if payload["run_id"] != payload["expected_run_id"]:
-                raise ValueError(
-                    "Conflicting 'run_id' and 'expected_run_id' values in PriorRunExpectation."
-                )
-            payload.pop("run_id")
-        if "direction" in payload and "expected_direction" in payload:
-            if payload["direction"] != payload["expected_direction"]:
-                raise ValueError(
-                    "Conflicting 'direction' and 'expected_direction' values in PriorRunExpectation."
-                )
-            payload.pop("expected_direction")
-        return payload
-
-    @field_validator("expected_run_id", "artifact_key")
-    @classmethod
-    def _validate_non_empty_identifier(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError(
-                "PriorRunExpectation requires non-empty 'expected_run_id' and 'artifact_key'."
-            )
-        return text
-
-    @property
-    def run_id(self) -> str:
-        """Alias matching Consist's PriorRunExpectation.run_id."""
-        return self.expected_run_id
-
-    @property
-    def expected_direction(self) -> Literal["input", "output", "any"]:
-        """Alias matching Consist's PriorRunExpectation.expected_direction."""
-        return self.direction
-
-
-class DeclaredDigestExpectation(BaseModel):
-    """Select one immutable raw-file identity declared outside a prior run."""
-
-    kind: Literal["declared_digest"] = "declared_digest"
-    identity: str = Field(
-        ...,
-        description="Canonical sha256:file identity for the expected raw bytes.",
-    )
-    source_uri: Optional[str] = Field(
-        None,
-        description="Optional opaque source location retained outside cache identity.",
-    )
-    source_label: Optional[str] = Field(
-        None,
-        description="Optional human-readable source label retained outside cache identity.",
-    )
-    provenance_sidecar_path: Optional[str] = Field(
-        None,
-        description="Optional path to a .provenance.json sidecar retained outside cache identity.",
-    )
-
-    @field_validator("identity")
-    @classmethod
-    def validate_identity(cls, value: str) -> str:
-        """Require one canonical raw-file or logical-matrices SHA-256 identity before runtime."""
-        if not re.fullmatch(r"sha256:(file|logical_matrices):[0-9a-f]{64}", value):
-            raise ValueError(
-                "identity must be sha256:file:<64 lowercase hexadecimal characters> or "
-                "sha256:logical_matrices:<64 lowercase hexadecimal characters>"
-            )
-        return value
-
-
-AdmissionExpectation = Annotated[
-    Union[PriorRunExpectation, DeclaredDigestExpectation],
-    Field(discriminator="kind"),
-]
-
-
-class AdmissionPolicyConfig(BaseModel):
-    """Typed inbound-admission policy shared by model-specific configuration."""
-
-    mode: Literal["warn", "strict"] = Field(
-        "warn", description="Warn or stop when the configured expectation differs."
-    )
-    expectation: AdmissionExpectation
-
-
-def admission_policy_fingerprint(
-    policy: Optional[AdmissionPolicyConfig],
-) -> Optional[Dict[str, str]]:
-    """Return the portable cache selector for an admission policy.
-
-    Runtime, report, and host-path details deliberately remain outside the
-    fingerprint. Only policy mode and immutable expectation selectors affect
-    cache identity.
-    """
-    if policy is None:
-        return None
-
-    expectation = policy.expectation
-    fingerprint = {"mode": policy.mode, "kind": expectation.kind}
-    if isinstance(expectation, DeclaredDigestExpectation):
-        fingerprint["identity"] = expectation.identity
-    else:
-        fingerprint["expected_run_id"] = expectation.expected_run_id
-        fingerprint["artifact_key"] = expectation.artifact_key
-        if expectation.direction != "any":
-            fingerprint["direction"] = expectation.direction
-    return fingerprint
-
-
 class UrbanSimAdmissionConfig(BaseModel):
     """Optional inbound-admission policy for the UrbanSim bootstrap datastore."""
 
@@ -625,381 +470,6 @@ class AtlasConfig(BaseModel):
     taxfactor: int = Field(1, description="Tax credit incentive: 0=NO, 1=YES")
     discIncent: int = Field(0, description="Discount incentive: 0=NO, 1=YES")
     command_template: str = Field(..., description="Command template")
-
-
-class ActivitySimDatabaseConfig(BaseModel):
-    """ActivitySim database input mode configuration."""
-
-    enabled: bool = Field(False, description="Enable database input mode")
-    use_processed_data: bool = Field(
-        True, description="Use pre-processed data (fast path)"
-    )
-    year: Optional[int] = Field(None, description="Year for data retrieval")
-
-
-class ActivitySimAdmissionConfig(BaseModel):
-    """Optional inbound-admission policy for ActivitySim bootstrap skims."""
-
-    initial_skims: Optional[AdmissionPolicyConfig] = Field(
-        None,
-        description="Optional expectation for the initial ActivitySim OMX skims.",
-    )
-
-
-class ActivitySimConfig(BaseModel):
-    """ActivitySim activity-based demand model configuration."""
-
-    household_sample_size: int = Field(
-        0, description="Household sample size (0 = full population)"
-    )
-    chunk_size: int = Field(12_000_000_000, description="Memory chunk size")
-    num_processes: int = Field(25, description="Number of parallel processes")
-    file_format: Literal["parquet", "csv"] = Field(
-        "parquet", description="Output file format"
-    )
-    persist_sharrow_cache: Optional[bool] = Field(
-        None,
-        description=(
-            "Persist ActivitySim sharrow/numba compile cache directory. "
-            "When unset, defaults to enabled for parquet format."
-        ),
-    )
-    local_input_folder: str
-    local_mutable_data_folder: str
-    local_output_folder: str
-    local_configs_folder: str
-    local_mutable_configs_folder: str
-    validation_folder: str
-    clipped_geoms_path: Optional[str] = Field(
-        None,
-        description="Path to BEAM's clipped zone geometries for constraining activity locations.",
-    )
-    subdir: str = Field("configs", description="Config subdirectory")
-    main_configs_dir: str = Field(
-        "configs_extended", description="Main configs directory"
-    )
-
-    @field_validator("main_configs_dir")
-    @classmethod
-    def validate_main_configs_dir(cls, value: str) -> str:
-        return ActivitySimConfigRoot.parse(value).as_posix()
-
-    region_mappings: Dict[str, Any] = Field(
-        default_factory=dict, description="Region-specific mappings"
-    )
-    from_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(
-        default_factory=dict, description="UrbanSim → ActivitySim column mappings"
-    )
-    to_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(
-        default_factory=dict, description="ActivitySim → UrbanSim column mappings"
-    )
-    output_tables: Dict[str, Any] = Field(
-        default_factory=dict, description="Output table configuration"
-    )
-    command_template: str = Field(..., description="Command template")
-    database: ActivitySimDatabaseConfig = Field(
-        default_factory=ActivitySimDatabaseConfig,
-        description="Database input configuration",
-    )
-    replan_iters: int = Field(0, description="Replanning iterations")
-    replan_hh_samp_size: int = Field(0, description="Replanning household sample size")
-    replan_after: str = Field(
-        "non_mandatory_tour_scheduling", description="Replan after this step"
-    )
-    random_seed: Optional[int] = Field(
-        None, description="Base random number generator seed"
-    )
-    workplace_reassignment_share: float = Field(
-        0.0,
-        description=(
-            "Share of workers with valid workplace assignments to mark for "
-            "mandatory workplace re-assignment in ActivitySim preprocess."
-        ),
-        ge=0.0,
-        le=1.0,
-    )
-    school_reassignment_share: float = Field(
-        0.0,
-        description=(
-            "Share of students with valid school assignments to mark for "
-            "mandatory school re-assignment in ActivitySim preprocess."
-        ),
-        ge=0.0,
-        le=1.0,
-    )
-    final_plans_folder: str = Field(..., description="Final plans output folder")
-    admission: Optional[ActivitySimAdmissionConfig] = Field(
-        None,
-        description="Optional inbound-admission policy; omitted means disabled.",
-    )
-
-    def to_consist_facet(self) -> Dict[str, Any]:
-        facet: Dict[str, Any] = {
-            "household_sample_size": self.household_sample_size,
-            "chunk_size": self.chunk_size,
-            "num_processes": self.num_processes,
-            "file_format": self.file_format,
-            "persist_sharrow_cache": self.persist_sharrow_cache,
-            "replan_iters": self.replan_iters,
-            "replan_hh_samp_size": self.replan_hh_samp_size,
-            "replan_after": self.replan_after,
-            "random_seed": self.random_seed,
-            "workplace_reassignment_share": self.workplace_reassignment_share,
-            "school_reassignment_share": self.school_reassignment_share,
-            "database": self.database.model_dump() if self.database else None,
-        }
-        if self.admission is not None:
-            facet["admission"] = {
-                "initial_skims": admission_policy_fingerprint(
-                    self.admission.initial_skims
-                )
-            }
-        return facet
-
-
-class FullSkimsCreatorConfig(BaseModel):
-    """Configuration for BEAM FullSkimsCreatorApp (full-skim mode)."""
-
-    run_schedule: Literal[
-        "standalone",
-        "after_each_iteration",
-        "after_final_iteration",
-        "disabled",
-    ] = Field(
-        "standalone",
-        description=(
-            "When to run full-skim. "
-            "'standalone' replaces normal BEAM runs, "
-            "'after_each_iteration' runs after each BEAM iteration, "
-            "'after_final_iteration' runs after the final BEAM iteration, "
-            "'disabled' never runs."
-        ),
-    )
-    router_type: str = Field("r5+gh", description="Router: r5, r5+gh, or gh")
-    skims_geo_type: str = Field("taz", description="Geography: taz or h3")
-    skims_kind: Literal["activitySimOmx", "activitySimZarr", "activitySim", "od"] = (
-        Field(
-            "activitySimOmx",
-            description=(
-                "Skim output format: activitySimOmx, activitySimZarr, "
-                "activitySim, or od"
-            ),
-        )
-    )
-    peak_hours: List[float] = Field(
-        default_factory=lambda: [8.5], description="Peak hours (8.5 = 8:30 AM)"
-    )
-    modes_to_build: Dict[str, bool] = Field(
-        default_factory=lambda: {"drive": True, "walk": True, "transit": True},
-        description="Modes to generate skims for",
-    )
-    parallelism_thread_ratio: Optional[float] = Field(
-        None,
-        description=(
-            "Ratio of CPU cores to use (0.0-1.0). "
-            "Default behavior is auto-compute when unset."
-        ),
-        ge=0.0,
-        le=1.0,
-    )
-    bifurcate_tolls: bool = Field(
-        True,
-        description=(
-            "When true, auto trips are routed twice: once toll-free (SOV) "
-            "and once toll-permitted (SOVTOLL)."
-        ),
-    )
-    generate_return_trips: bool = Field(
-        True,
-        description=(
-            "When true, generates both outbound Drive-Transit-Walk and "
-            "inbound Walk-Transit-Drive itineraries."
-        ),
-    )
-    toll_file_path: Optional[str] = Field(
-        None,
-        description="Optional path to toll-prices.csv (overrides beam.agentsim.toll.filePath).",
-    )
-    directory2: Optional[str] = Field(
-        None,
-        description="Optional path to secondary R5 network directory for dual-router mode.",
-    )
-    od_skims_path: Optional[str] = Field(
-        None,
-        description="Optional path to an existing skim .csv.gz to reuse pre-computed OD pairs or warm-start.",
-    )
-    input_path: Optional[str] = Field(
-        None,
-        description="Optional path to a custom OD pairs CSV with origin,destination columns.",
-    )
-    linkstats_path: Optional[str] = Field(
-        None,
-        description="Optional explicit path to congested linkstats.csv.gz or .parquet.",
-    )
-    calculation_timeout_hours: int = Field(
-        72,
-        ge=1,
-        description=(
-            "Timeout in hours for BackgroundFullSkimsCreator "
-            "(beam.urbansim.backgroundODSkimsCreator.calculationTimeoutHours)."
-        ),
-    )
-
-    def to_consist_facet(self) -> Dict[str, Any]:
-        return {
-            "run_schedule": self.run_schedule,
-            "router_type": self.router_type,
-            "skims_geo_type": self.skims_geo_type,
-            "skims_kind": self.skims_kind,
-            "peak_hours": list(self.peak_hours),
-            "modes_to_build": dict(self.modes_to_build),
-            "parallelism_thread_ratio": self.parallelism_thread_ratio,
-            "bifurcate_tolls": self.bifurcate_tolls,
-            "generate_return_trips": self.generate_return_trips,
-            "toll_file_path": self.toll_file_path,
-            "directory2": self.directory2,
-            "od_skims_path": self.od_skims_path,
-            "input_path": self.input_path,
-            "linkstats_path": self.linkstats_path,
-        }
-
-
-class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):
-    """Explicit prior-run or declared-digest expectation for one staged BEAM warm-start file."""
-
-    expectation: AdmissionExpectation
-
-
-class BeamAdmissionConfig(BaseModel):
-    """Optional inbound-admission settings for BEAM runtime roles."""
-
-    linkstats: Optional[BeamLinkstatsAdmissionConfig] = Field(
-        None,
-        description="Optional prior-run or declared-digest admission for staged warm-start linkstats.",
-    )
-
-
-class BeamArtifactFormatsConfig(BaseModel):
-    """Preferred interchange formats for artifacts produced by BEAM."""
-
-    activitysim_skims: Literal["zarr", "omx"] = Field(
-        "zarr", description="BEAM activity-sim skimmer output format"
-    )
-    exchange: Literal["parquet", "csv"] = Field(
-        "parquet", description="BEAM exchange-scenario population input format"
-    )
-    events: Literal["parquet", "csv.gz"] = Field(
-        "parquet", description="BEAM events output format"
-    )
-    linkstats: Literal["parquet", "csv.gz"] = Field(
-        "parquet", description="BEAM linkstats output format"
-    )
-
-
-class BeamConfig(BaseModel):
-    """BEAM transportation network simulation configuration."""
-
-    config: str = Field(..., description="Main BEAM config file")
-    sample: float = Field(1.0, description="Population sample fraction", ge=0.0, le=1.0)
-    replanning_portion: float = Field(
-        0.4, description="Replanning portion", ge=0.0, le=1.0
-    )
-    memory: str = Field("180g", description="JVM memory allocation")
-    local_input_folder: str
-    local_mutable_data_folder: str
-    local_output_folder: str
-    scenario_folder: str
-    router_directory: str
-    warmstart_linkstats_path: Optional[str] = Field(
-        None,
-        description=(
-            "Optional path to the initial BEAM warm-start linkstats file. "
-            "If relative, it is resolved against the mutable BEAM region input root."
-        ),
-    )
-    activitysim_skims_file_base_name: str = Field(
-        "skimsActivitySimOD",
-        min_length=1,
-        description=(
-            "BEAM activity-sim skimmer fileBaseName. BEAM appends its current "
-            "marker and the configured artifact-format extension."
-        ),
-    )
-    artifact_formats: BeamArtifactFormatsConfig = Field(
-        default_factory=BeamArtifactFormatsConfig,
-        description=(
-            "PILATES-owned preferred formats applied to the canonical BEAM launch "
-            "configuration."
-        ),
-    )
-    admission: Optional[BeamAdmissionConfig] = Field(
-        None,
-        description="Optional inbound-admission policy; omitted means disabled.",
-    )
-    skims_shapefile: str
-    skim_zone_source_id_col: str
-    skim_zone_geoid_col: str
-    discard_plans_every_year: bool = Field(
-        False, description="Discard plans every year"
-    )
-    max_plans_memory: int = Field(5, description="Max plans in memory")
-    plan_memory_beta: float = Field(
-        1.0,
-        description="Logit scale parameter (brainExpBeta) for ExpBetaPlanSelector in PILATES plan merging.",
-    )
-    new_plan_selection_policy: Literal["force_new", "exp_beta", "probabilistic_new"] = (
-        Field(
-            "force_new",
-            description=(
-                "How to select the active plan when ActivitySim adds a new candidate plan: "
-                "'force_new' always selects the newly generated plan; "
-                "'exp_beta' assigns transient new_plan_initial_score (default 0.0) to unexecuted plans and samples via ExpBetaPlanSelector; "
-                "'probabilistic_new' forces the new plan with probability new_plan_adoption_rate and otherwise uses exp_beta."
-            ),
-        )
-    )
-    new_plan_initial_score: float = Field(
-        0.0,
-        description="Transient prior score assigned to unexecuted plans during ExpBetaPlanSelector sampling.",
-    )
-    new_plan_adoption_rate: float = Field(
-        1.0,
-        ge=0.0,
-        le=1.0,
-        description="Probability of forcing the newly generated ActivitySim plan when policy is 'probabilistic_new'.",
-    )
-    plan_selection_random_seed: int = Field(
-        42,
-        description="Base random seed for deterministic, reproducible plan selection across iterations.",
-    )
-    simulated_hwy_paths: List[str] = Field(
-        default_factory=list, description="Simulated highway paths"
-    )
-    asim_hwy_measure_map: Dict[str, Optional[str]] = Field(
-        default_factory=dict, description="Highway measure mappings"
-    )
-    asim_transit_measure_map: Dict[str, Optional[str]] = Field(
-        default_factory=dict, description="Transit measure mappings"
-    )
-    asim_ridehail_measure_map: Dict[str, Optional[str]] = Field(
-        default_factory=dict, description="Ridehail measure mappings"
-    )
-    ridehail_path_map: Dict[str, str] = Field(
-        default_factory=dict, description="Ridehail path mappings"
-    )
-    skim_previous_weight: float = Field(
-        0.9,
-        description=(
-            "Weight on previous skims when blending trip counts. "
-            "New counts are always fully applied."
-        ),
-        ge=0.0,
-        le=1.0,
-    )
-    full_skim: Optional[FullSkimsCreatorConfig] = Field(
-        None,
-        description="Optional full-skim mode configuration.",
-    )
 
 
 # =============================================================================
@@ -1123,14 +593,84 @@ class PilatesConfig(BaseModel):
             raise ValueError(
                 "activity_demand model is enabled but activitysim config is missing"
             )
-        if self.run.models.travel and not self.beam:
+        if self.run.models.travel == "beam" and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
+        self._sync_runtime_flags()
         return self
+
+    def model_copy(
+        self,
+        *,
+        update: Optional[Dict[str, Any]] = None,
+        deep: bool = False,
+    ) -> "PilatesConfig":
+        """Return a copy with an isolated ``PilatesRuntime`` instance."""
+        flag_overrides: Dict[str, bool] = {}
+        remaining_update = update
+        if update is not None:
+            flag_overrides = {
+                key: bool(val)
+                for key, val in update.items()
+                if key in _FLAG_FIELD_NAMES
+            }
+            if flag_overrides:
+                remaining_update = {
+                    key: val
+                    for key, val in update.items()
+                    if key not in _FLAG_FIELD_NAMES
+                }
+        copied = super().model_copy(update=remaining_update, deep=deep)
+        copied._runtime = self._runtime.copy()
+        for flag_name, flag_val in flag_overrides.items():
+            copied._runtime.flags.set_override(flag_name, flag_val)
+        copied._sync_runtime_flags()
+        return copied
+
+    def _sync_runtime_flags(self) -> PilatesRuntime:
+        """Compute default runtime flags from current config state and sync non-overridden fields."""
+        extra = self.__pydantic_extra__ or {}
+        if self.__pydantic_extra__:
+            for flag_name in tuple(_FLAG_FIELD_NAMES):
+                if flag_name in self.__pydantic_extra__:
+                    flag_val = self.__pydantic_extra__.pop(flag_name)
+                    self._runtime.flags.set_override(flag_name, bool(flag_val))
+        warm_start_skims = bool(extra.get("warm_start_skims", False))
+        static_skims = bool(extra.get("static_skims", False))
+        try:
+            replan_iters = (
+                int(self.activitysim.replan_iters)
+                if self.activitysim is not None
+                else int(extra.get("replan_iters", 0) or 0)
+            )
+        except AttributeError:
+            replan_iters = int(extra.get("replan_iters", 0) or 0)
+        land_use_enabled = bool(self.run.models.land_use) and not warm_start_skims
+        vehicle_ownership_model_enabled = bool(self.run.models.vehicle_ownership)
+        activity_demand_model = self.run.models.activity_demand
+        activity_demand_enabled = bool(activity_demand_model)
+        travel_model = (
+            self.run.models.__dict__.get("traffic_assignment")
+            or extra.get("traffic_assignment")
+            or self.run.models.travel
+            or extra.get("travel_model")
+        )
+        traffic_assignment_enabled = bool(travel_model) and not static_skims
+        replanning_enabled = (replan_iters > 0) and not (
+            activity_demand_enabled and activity_demand_model == "polaris"
+        )
+        self._runtime.flags.sync_defaults(
+            land_use_enabled=land_use_enabled,
+            vehicle_ownership_model_enabled=vehicle_ownership_model_enabled,
+            activity_demand_enabled=activity_demand_enabled,
+            traffic_assignment_enabled=traffic_assignment_enabled,
+            replanning_enabled=replanning_enabled,
+        )
+        return self._runtime
 
     @property
     def runtime(self) -> PilatesRuntime:
-        """Typed runtime metadata derived after config load."""
-        return self._runtime
+        """Typed runtime metadata derived live from the configuration."""
+        return self._sync_runtime_flags()
 
     @property
     def land_use_enabled(self) -> bool:
@@ -1138,8 +678,7 @@ class PilatesConfig(BaseModel):
 
     @land_use_enabled.setter
     def land_use_enabled(self, value: bool) -> None:
-        self.runtime.flags.land_use_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.land_use_enabled = value
 
     @property
     def vehicle_ownership_model_enabled(self) -> bool:
@@ -1147,8 +686,7 @@ class PilatesConfig(BaseModel):
 
     @vehicle_ownership_model_enabled.setter
     def vehicle_ownership_model_enabled(self, value: bool) -> None:
-        self.runtime.flags.vehicle_ownership_model_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.vehicle_ownership_model_enabled = value
 
     @property
     def activity_demand_enabled(self) -> bool:
@@ -1156,8 +694,7 @@ class PilatesConfig(BaseModel):
 
     @activity_demand_enabled.setter
     def activity_demand_enabled(self, value: bool) -> None:
-        self.runtime.flags.activity_demand_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.activity_demand_enabled = value
 
     @property
     def traffic_assignment_enabled(self) -> bool:
@@ -1165,8 +702,7 @@ class PilatesConfig(BaseModel):
 
     @traffic_assignment_enabled.setter
     def traffic_assignment_enabled(self, value: bool) -> None:
-        self.runtime.flags.traffic_assignment_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.traffic_assignment_enabled = value
 
     @property
     def replanning_enabled(self) -> bool:
@@ -1174,32 +710,31 @@ class PilatesConfig(BaseModel):
 
     @replanning_enabled.setter
     def replanning_enabled(self, value: bool) -> None:
-        self.runtime.flags.replanning_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.replanning_enabled = value
 
     @property
     def state_file_loc(self) -> Optional[str]:
-        return self.runtime.options.state_file_loc
+        return self._runtime.options.state_file_loc
 
     @state_file_loc.setter
     def state_file_loc(self, value: Optional[str]) -> None:
-        self.runtime.options.state_file_loc = value
+        self._runtime.options.state_file_loc = value
 
     @property
     def settings_file(self) -> Optional[str]:
-        return self.runtime.options.settings_file
+        return self._runtime.options.settings_file
 
     @settings_file.setter
     def settings_file(self, value: Optional[str]) -> None:
-        self.runtime.options.settings_file = value
+        self._runtime.options.settings_file = value
 
     @property
     def allow_rewind_resume(self) -> bool:
-        return self.runtime.options.allow_rewind_resume
+        return self._runtime.options.allow_rewind_resume
 
     @allow_rewind_resume.setter
     def allow_rewind_resume(self, value: bool) -> None:
-        self.runtime.options.allow_rewind_resume = bool(value)
+        self._runtime.options.allow_rewind_resume = bool(value)
 
     def get_enabled_models(self) -> List[str]:
         """Get list of enabled model names."""
@@ -1248,6 +783,15 @@ class PilatesConfig(BaseModel):
                 },
                 # Determines which sub-models are active
                 "enabled_models": self.run.models,
+                "runtime_flags": {
+                    "land_use_enabled": bool(self.land_use_enabled),
+                    "vehicle_ownership_model_enabled": bool(
+                        self.vehicle_ownership_model_enabled
+                    ),
+                    "activity_demand_enabled": bool(self.activity_demand_enabled),
+                    "traffic_assignment_enabled": bool(self.traffic_assignment_enabled),
+                    "replanning_enabled": bool(self.replanning_enabled),
+                },
             },
             "urbansim_admission": (
                 {
@@ -1458,6 +1002,48 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         PilatesConfig(**resolved)
     sys.stdout.write(yaml.safe_dump(resolved, sort_keys=False))
     return 0
+
+
+__all__ = [
+    "ActivitySimAdmissionConfig",
+    "ActivitySimConfig",
+    "ActivitySimConfigRoot",
+    "ActivitySimDatabaseConfig",
+    "AdmissionExpectation",
+    "AdmissionPolicyConfig",
+    "AtlasConfig",
+    "BeamAdmissionConfig",
+    "BeamArtifactFormatsConfig",
+    "BeamConfig",
+    "BeamLinkstatsAdmissionConfig",
+    "DatabaseConfig",
+    "DeclaredDigestExpectation",
+    "DockerConfig",
+    "FullSkimsCreatorConfig",
+    "GeographyConfig",
+    "InfrastructureConfig",
+    "ModelSelection",
+    "PilatesConfig",
+    "PilatesRuntime",
+    "PostprocessingConfig",
+    "PriorRunExpectation",
+    "RunConfig",
+    "RuntimeFlags",
+    "RuntimeOptions",
+    "SharedConfig",
+    "SkimsConfig",
+    "UrbanSimAdmissionConfig",
+    "UrbanSimConfig",
+    "WorkflowConfig",
+    "ZoneSourceConfig",
+    "ZonesConfig",
+    "admission_policy_fingerprint",
+    "load_config",
+    "main",
+    "required_activitysim_config_roots",
+    "resolve_config_dict",
+    "validate_config",
+]
 
 
 if __name__ == "__main__":

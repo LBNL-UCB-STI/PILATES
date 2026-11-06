@@ -51,7 +51,7 @@ from tests.workflow_contract_harness import (
     write_file as _write_file,
     write_parquet as _write_parquet,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 def _reconfigure_models(
@@ -126,7 +126,6 @@ def _mark_initialized(
             scenario.coupler.set_from_artifact(
                 USIM_DATASTORE_H5, current_datastore_artifact
             )
-        state.set_data_initialized(True)
 
 
 def _publish_input_roles(

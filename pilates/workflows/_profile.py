@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Dict
 
+from pilates.config.models import PilatesConfig
 from pilates.utils.io import apply_runtime_flags, compute_model_enabled_flags
 
 
@@ -46,6 +47,16 @@ def workflow_profile_from_flags(enabled_flags: Dict[str, bool]) -> WorkflowProfi
 
 def ensure_runtime_flags_initialized(settings: Any) -> Dict[str, bool]:
     """Ensure runtime enablement flags exist on ``settings`` and return them."""
+    if isinstance(settings, PilatesConfig):
+        return {
+            "land_use_enabled": bool(settings.land_use_enabled),
+            "vehicle_ownership_model_enabled": bool(
+                settings.vehicle_ownership_model_enabled
+            ),
+            "activity_demand_enabled": bool(settings.activity_demand_enabled),
+            "traffic_assignment_enabled": bool(settings.traffic_assignment_enabled),
+            "replanning_enabled": bool(settings.replanning_enabled),
+        }
     runtime = getattr(settings, "runtime", None)
     runtime_flags = getattr(runtime, "flags", None)
     flags_initialized = bool(getattr(runtime, "flags_initialized", False))

@@ -23,7 +23,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, atlas, urbansim
-from pilates.workflows import step_consist_meta
+from pilates.workflows import consist_metadata as step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
 from pilates.urbansim.outputs import (
     UrbanSimPreprocessOutputs as NativeUrbanSimPreprocessOutputs,
@@ -42,7 +42,7 @@ from pilates.workflows.steps.urbansim import (
     URBANSIM_RUN,
 )
 from pilates.workflows.step_execution import execute_step
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 def _settings() -> SimpleNamespace:
@@ -556,7 +556,9 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     archive_root = tmp_path / "archive"
     workspace_root = tmp_path / "workspace"
     workspace = _workspace(workspace_root)
+    workspace.archive_run_dir = str(archive_root)
     settings = _settings()
+    settings.run.enable_archive_copy = True
     state = _state()
     tracker = Tracker(
         run_dir=local_root / "consist-runs",
@@ -564,9 +566,6 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
         hashing_strategy="full",
         mounts={"workspace": workspace.full_path},
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
 
     source_h5 = tmp_path / "source" / "output_2030.h5"
     source_h5.parent.mkdir(parents=True)
@@ -642,11 +641,20 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     recovery_root = archive_root / "consist-recovery"
     assert all(
         prepared_result.outputs[key].recovery_roots
-        == [str((recovery_root / str(prepared_result.run.id)).resolve())]
+        == [
+            str(workspace_root.resolve()),
+            str(
+                (
+                    recovery_root
+                    / "atlas_preprocess__vehicle_ownership__y2030__i1__preprocess"
+                ).resolve()
+            ),
+        ]
         for key in prepared_keys
     )
     assert continuation_result.outputs["atlas_continuation_2030"].recovery_roots == [
-        str((recovery_root / str(continuation_result.run.id)).resolve())
+        str(workspace_root.resolve()),
+        str((recovery_root / "atlas_run__vehicle_ownership__y2030__i1__run").resolve()),
     ]
 
     year_root = Path(workspace.get_atlas_mutable_input_dir()) / "year2030"

@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import Mapping, Protocol
+from typing import Mapping
 
 import consist
 
@@ -18,21 +18,20 @@ from pilates.config.models import (
     DeclaredDigestExpectation,
     PriorRunExpectation,
 )
+from pilates.utils.admission_helpers import (
+    AdmissionMetadataLogger,
+    persist_admission_report,
+)
 
 
 logger = logging.getLogger(__name__)
 _LINKSTATS_ROLE = "beam_linkstats_warmstart"
+_LINKSTATS_REPORT_FILENAME = "beam-linkstats-warmstart.json"
 LINKSTATS_PROVENANCE_SCHEMA_VERSION = "pilates.linkstats_provenance.v1"
 
 
 class BeamInputAdmissionError(RuntimeError):
     """Raised when configured BEAM input-admission policy rejects a file."""
-
-
-class AdmissionMetadataTracker(Protocol):
-    """Minimal tracker capability used to retain a preflight report."""
-
-    def log_meta(self, **metadata: object) -> None: ...
 
 
 def linkstats_provenance_sidecar_path(linkstats_path: Path | str) -> Path:
@@ -185,7 +184,7 @@ def _check_declared_digest_linkstats_expectation(
 def preflight_staged_linkstats_admission(
     *,
     tracker: consist.Tracker,
-    metadata_logger: AdmissionMetadataTracker,
+    metadata_logger: AdmissionMetadataLogger,
     existing_admission_reports: Mapping[str, object],
     settings: PilatesConfig,
     launch_reference: BeamLaunchPathReference,
@@ -258,17 +257,22 @@ def preflight_staged_linkstats_admission(
             f"Unsupported BEAM linkstats admission expectation: {type(expectation)!r}"
         )
 
-    _persist_admission_report(
+    persist_admission_report(
+        report=report,
         report_dir=report_dir,
+        report_filename=_LINKSTATS_REPORT_FILENAME,
+        role=_LINKSTATS_ROLE,
         metadata_logger=metadata_logger,
         existing_admission_reports=existing_admission_reports,
-        report=report,
-        sidecar_provenance=sidecar_payload,
+        extra_payload={"sidecar_provenance": sidecar_payload},
     )
 
     if report.outcome == "verified":
         return report
-    observations = tuple(getattr(report, "observations", ()) or ())
+    try:
+        observations = tuple(report.observations or ())
+    except AttributeError:
+        observations = ()
     obs_suffix = f" ({', '.join(observations)})" if observations else ""
     if linkstats_config.mode == "strict":
         raise BeamInputAdmissionError(
@@ -296,24 +300,3 @@ def reject_or_warn_for_missing_staged_linkstats(*, settings: PilatesConfig) -> N
     if linkstats_config.mode == "strict":
         raise BeamInputAdmissionError(message)
     logger.warning("%s Continuing because mode=warn.", message)
-
-
-def _persist_admission_report(
-    *,
-    report_dir: Path,
-    metadata_logger: AdmissionMetadataTracker,
-    existing_admission_reports: Mapping[str, object],
-    report: consist.admission.AdmissionReport,
-    sidecar_provenance: Mapping[str, object] | None = None,
-) -> None:
-    """Write deterministic sidecar and run metadata before policy can reject."""
-    payload = json.loads(report.canonical_json())
-    if sidecar_provenance is not None:
-        payload["sidecar_provenance"] = dict(sidecar_provenance)
-    serialized = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    report_path = Path(report_dir) / "admission" / "beam-linkstats-warmstart.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(serialized + "\n", encoding="utf-8")
-    admission_reports = dict(existing_admission_reports)
-    admission_reports[_LINKSTATS_ROLE] = payload
-    metadata_logger.log_meta(admission_reports=admission_reports)

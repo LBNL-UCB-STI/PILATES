@@ -11,12 +11,10 @@ from typing import Any, Dict, Mapping, Optional
 import h5py
 import pandas as pd
 
-from pilates.workflows.artifact_keys import (
-    USIM_POPULATION_BLOCKS_TABLE,
-    USIM_POPULATION_HOUSEHOLDS_TABLE,
-    USIM_POPULATION_JOBS_TABLE,
-    USIM_POPULATION_PERSONS_TABLE,
-)
+USIM_POPULATION_HOUSEHOLDS_TABLE = "usim_population_households_table"
+USIM_POPULATION_PERSONS_TABLE = "usim_population_persons_table"
+USIM_POPULATION_JOBS_TABLE = "usim_population_jobs_table"
+USIM_POPULATION_BLOCKS_TABLE = "usim_population_blocks_table"
 
 logger = logging.getLogger(__name__)
 

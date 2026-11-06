@@ -73,6 +73,6 @@ On Slurm clusters, submit runs through `hpc/job_runner.sh` rather than invoking 
 
 ## Related Pages
 
-- Read [Scenario Lifecycle](scenario_lifecycle.md) for startup, bootstrap, year-loop execution, and restart rules.
+- Read [Scenario Lifecycle](scenario_lifecycle.md) for startup, coupler seeding, year-loop execution, and restart rules.
 - Consult [Configuration Reference](configuration_reference.md) for YAML field definitions.
 - See [HPC Overview](hpc_overview.md) and [Lawrencium](lawrencium.md) for cluster storage and environment variables.

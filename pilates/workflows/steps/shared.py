@@ -14,11 +14,10 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Iterable,
     Mapping,
-    Optional,
+    Protocol,
     Sequence,
-    Set,
+    runtime_checkable,
 )
 
 from consist import (
@@ -32,6 +31,7 @@ from consist import (
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -40,16 +40,17 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.binding import build_resolved_binding
-from pilates.workflows.catalog import (
-    WORKFLOW_STEP_SPECS,
-    workflow_step_spec_for_step_name,
-)
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
+
+
+@runtime_checkable
+class _HasPathAttr(Protocol):
+    path: Any
 
 
 def _persisted_output_path(
@@ -58,7 +59,7 @@ def _persisted_output_path(
     step_name: str,
     key: str,
     declared_outputs: Mapping[str, Any],
-    workspace: Workspace,
+    workspace: Any,
 ) -> Path:
     """Return one output only when it exists at its declared destination.
 
@@ -75,21 +76,34 @@ def _persisted_output_path(
             f"{step_name} output {key!r} has no declared destination"
         ) from exc
 
-    if isinstance(output_spec, os.PathLike):
-        path = Path(output_spec)
-    elif isinstance(output_spec, str):
-        if output_spec.startswith("workspace://"):
-            path = Path(workspace.full_path) / output_spec[
-                len("workspace://") :
-            ].lstrip("/")
-        elif "://" in output_spec:
+    declared_path = (
+        output_spec.path if isinstance(output_spec, _HasPathAttr) else output_spec
+    )
+    if isinstance(declared_path, os.PathLike):
+        path = Path(declared_path)
+    elif isinstance(declared_path, str):
+        if declared_path.startswith("workspace://"):
+            workspace_root = get_setting(workspace, "full_path")
+            if workspace_root is None:
+                raise RuntimeError(
+                    f"{step_name} output {key!r} cannot resolve its workspace destination"
+                )
+            path = Path(workspace_root) / declared_path[len("workspace://") :].lstrip(
+                "/"
+            )
+        elif "://" in declared_path:
             raise RuntimeError(
                 f"{step_name} output {key!r} has a non-local declared destination"
             )
         else:
-            path = Path(output_spec)
+            path = Path(declared_path)
             if not path.is_absolute():
-                path = Path(workspace.full_path) / path
+                workspace_root = get_setting(workspace, "full_path")
+                if workspace_root is None:
+                    raise RuntimeError(
+                        f"{step_name} output {key!r} cannot resolve its relative destination"
+                    )
+                path = Path(workspace_root) / path
     else:
         raise RuntimeError(
             f"{step_name} output {key!r} has an invalid declared destination"
@@ -100,6 +114,9 @@ def _persisted_output_path(
             f"{step_name} output {key!r} is missing at declared destination {path}"
         )
     return path
+
+
+_path_from_output = _persisted_output_path
 
 
 def _validation_context(
@@ -278,7 +295,7 @@ def _activitysim_output_facet_meta(
         family = "zarr_skims"
     if family is None:
         return {}
-    return {
+    result: Dict[str, Any] = {
         "facet": {
             "artifact_family": family,
             **snapshot_meta,
@@ -288,80 +305,7 @@ def _activitysim_output_facet_meta(
         "facet_schema_version": "v1",
         "facet_index": True,
     }
-
-
-def _declared_step_model(step_func: Callable[..., Any]) -> Optional[str]:
-    meta = getattr(step_func, "__consist_step__", None)
-    model = getattr(meta, "model", None)
-    if isinstance(model, str) and model:
-        return model
-    return None
-
-
-def _declared_step_name(step_func: Callable[..., Any]) -> Optional[str]:
-    """Return the registered native identity for a decorated step callable."""
-    for spec in WORKFLOW_STEP_SPECS:
-        if spec.definition.function is step_func:
-            return spec.step_name
-    return None
-
-
-def validate_workflow_step_contracts(
-    *,
-    declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
-    allow_untracked_declared: Optional[Set[str]] = None,
-    require_all_tracked_declared: bool = True,
-) -> None:
-    """Validate native decorated steps against the catalog contract."""
-    if declared_steps is None:
-        return
-
-    errors: list[str] = []
-    declared_by_name: Dict[str, Callable[..., Any]] = {}
-    for step in declared_steps:
-        model = _declared_step_model(step)
-        if model is None:
-            errors.append(
-                "Declared step callable is missing __consist_step__.model metadata"
-            )
-            continue
-        name = _declared_step_name(step) or model
-        if name in declared_by_name:
-            errors.append(f"Duplicate declared step identity: {name}")
-            continue
-        declared_by_name[name] = step
-
-    expected_names = {spec.step_name for spec in WORKFLOW_STEP_SPECS}
-    declared_names = set(declared_by_name)
-    if require_all_tracked_declared:
-        missing = expected_names - declared_names
-        if missing:
-            errors.append(
-                "Native definitions missing from declared steps: "
-                + ", ".join(sorted(missing))
-            )
-    allowed = {"postprocessing"} | set(allow_untracked_declared or ())
-    unexpected = declared_names - expected_names - allowed
-    if unexpected:
-        errors.append("Undeclared native step models: " + ", ".join(sorted(unexpected)))
-
-    for name, step in declared_by_name.items():
-        spec = workflow_step_spec_for_step_name(name)
-        if spec is None:
-            continue
-        step_meta = getattr(step, "__consist_step__", None)
-        schema_outputs = (
-            getattr(step_meta, "schema_outputs", ()) if step_meta is not None else ()
-        )
-        if schema_outputs is not None and not set(spec.output_keys).issubset(
-            set(schema_outputs)
-        ):
-            errors.append(
-                f"Step '{name}' metadata schema outputs omit catalog outputs "
-                + ", ".join(sorted(set(spec.output_keys) - set(schema_outputs)))
-            )
-
-    if errors:
-        raise RuntimeError(
-            "Workflow step contract validation failed:\n- " + "\n- ".join(errors)
-        )
+    if short_name == ZARR_SKIMS:
+        result["driver"] = "zarr"
+        result["directory"] = True
+    return result

@@ -4,8 +4,11 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
 
-from pilates.activitysim.preprocessor import required_asim_config_dirs
+from pilates.utils.io import (
+    get_traffic_assignment_model,
+)
 from pilates.workflows.catalog import (
+    configured_model_for_attr,
     schema_step_specs,
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
@@ -48,15 +51,28 @@ def _enabled_schema_step_names_from_profile(
     include_optional: bool,
 ) -> FrozenSet[str]:
     enabled_steps = set()
+    traffic_model = (
+        get_traffic_assignment_model(settings) if settings is not None else None
+    )
+    beam_traffic_enabled = profile.traffic_assignment_enabled and (
+        traffic_model is None or traffic_model == "beam"
+    )
     for spec in schema_step_specs(include_optional=include_optional):
         flag_attr = spec.enabled_flag_attr
         model_attr = spec.enabled_model_attr
         if flag_attr is None or model_attr is None:
             enabled_steps.add(spec.step_name)
             continue
+        configured_model = configured_model_for_attr(settings, model_attr)
+        if (
+            spec.enabled_model_value is not None
+            and configured_model is not None
+            and configured_model != spec.enabled_model_value
+        ):
+            continue
         if profile.model_enabled(flag_attr):
             enabled_steps.add(spec.step_name)
-    if profile.traffic_assignment_enabled:
+    if beam_traffic_enabled:
         schedule = _full_skim_run_schedule(settings)
         if schedule == "standalone":
             enabled_steps.discard("beam_run")
@@ -142,8 +158,6 @@ class EnabledWorkflowSurface:
     enabled_model_names: FrozenSet[str]
     enabled_stage_names: FrozenSet[str]
     step_surfaces: Mapping[str, StepRuntimeSurface]
-    bootstrap_owned_artifact_keys: FrozenSet[str]
-    restart_prebootstrap_deferred_artifact_keys: FrozenSet[str]
     _required_enabled_step_names: FrozenSet[str] = field(
         default_factory=frozenset,
         repr=False,
@@ -175,12 +189,6 @@ class EnabledWorkflowSurface:
             else self._required_enabled_step_names
         )
 
-    def is_bootstrap_owned_artifact_key(self, key: str) -> bool:
-        return str(key) in self.bootstrap_owned_artifact_keys
-
-    def is_restart_prebootstrap_deferred_artifact_key(self, key: str) -> bool:
-        return str(key) in self.restart_prebootstrap_deferred_artifact_keys
-
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the surface for debugging and failure diagnostics."""
         return {
@@ -189,10 +197,6 @@ class EnabledWorkflowSurface:
             "enabled_step_names": sorted(self.enabled_step_names),
             "enabled_model_names": sorted(self.enabled_model_names),
             "enabled_stage_names": sorted(self.enabled_stage_names),
-            "bootstrap_owned_artifact_keys": sorted(self.bootstrap_owned_artifact_keys),
-            "restart_prebootstrap_deferred_artifact_keys": sorted(
-                self.restart_prebootstrap_deferred_artifact_keys
-            ),
             "step_surfaces": {
                 name: surface.to_dict()
                 for name, surface in sorted(self.step_surfaces.items())
@@ -240,51 +244,6 @@ def _enabled_stage_names(profile: WorkflowProfile) -> FrozenSet[str]:
     if profile.supply_demand_loop_enabled:
         stage_names.append("supply_demand_loop")
     return frozenset(stage_names)
-
-
-def _bootstrap_owned_artifact_keys(settings: Any) -> FrozenSet[str]:
-    keys = []
-    models = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand = (
-        getattr(models, "activity_demand", None) if models is not None else None
-    )
-    land_use = getattr(models, "land_use", None) if models is not None else None
-    vehicle_ownership = (
-        getattr(models, "vehicle_ownership", None) if models is not None else None
-    )
-    traffic_assignment = None
-    if models is not None:
-        traffic_assignment = getattr(models, "traffic_assignment", None) or getattr(
-            models, "travel", None
-        )
-
-    if (
-        land_use == "urbansim"
-        or activity_demand == "activitysim"
-        or vehicle_ownership == "atlas"
-    ):
-        keys.append("usim_datastore_base_h5")
-
-    if activity_demand == "activitysim":
-        main_configs_dir = (
-            getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
-            or "configs"
-        )
-        keys.extend(
-            f"activitysim_config_settings_yaml_{dirname}"
-            for dirname in required_asim_config_dirs(main_configs_dir)
-        )
-
-    if traffic_assignment == "beam":
-        keys.extend(
-            (
-                "beam_mutable_data_dir",
-                "beam_region_input_dir",
-                "beam_primary_config_file",
-            )
-        )
-
-    return frozenset(keys)
 
 
 def _make_input_role_policy(
@@ -471,8 +430,6 @@ def build_enabled_workflow_surface(
         profile=profile,
     )
 
-    bootstrap_owned_artifact_keys = _bootstrap_owned_artifact_keys(settings)
-
     return EnabledWorkflowSurface(
         profile=profile,
         run_mode=run_mode,
@@ -480,7 +437,5 @@ def build_enabled_workflow_surface(
         enabled_model_names=_enabled_model_names(settings),
         enabled_stage_names=_enabled_stage_names(profile),
         step_surfaces=step_surfaces,
-        bootstrap_owned_artifact_keys=bootstrap_owned_artifact_keys,
-        restart_prebootstrap_deferred_artifact_keys=bootstrap_owned_artifact_keys,
         _required_enabled_step_names=required_enabled_step_names,
     )

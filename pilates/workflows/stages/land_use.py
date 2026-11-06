@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from pathlib import Path
+
+from consist import Artifact
 
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import ScenarioWithCoupler
@@ -14,13 +16,19 @@ from pilates.workflows.steps import (
 )
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_INPUT_ARCHIVE_PREFIX,
     USIM_POPULATION_SOURCE_H5,
 )
+from pilates.workflows.coupler_namespace import (
+    resolve_coupler_value,
+    set_coupler_from_artifact,
+)
+from pilates.utils.state_access import iteration_index
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
 
 
 def run_land_use_stage(
@@ -66,6 +74,10 @@ def run_land_use_stage(
     formatted_print(f"LAND USE MODEL FOR YEAR {year}")
     logger.info("[land_use] year=%s run_id=%s", year, cr.current_run_id())
 
+    prior_datastore_artifact = resolve_coupler_value(
+        scenario.coupler, USIM_DATASTORE_H5
+    ).value
+
     # Definitions own semantic selection.  The stage intentionally sequences
     # native executions only; it neither constructs bindings nor replays output
     # records through a holder.
@@ -77,9 +89,38 @@ def run_land_use_stage(
         workspace=workspace,
         stage="land_use",
         year=year,
-        iteration=getattr(state, "iteration", None),
+        iteration=iteration_index(state),
         phase="run",
     )
+    forecast_datastore_artifact = resolve_coupler_value(
+        scenario.coupler, USIM_DATASTORE_H5
+    ).value
+    if isinstance(forecast_datastore_artifact, Artifact):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_FORECAST_OUTPUT,
+            forecast_datastore_artifact,
+        )
+    elif isinstance(forecast_datastore_artifact, (str, Path)):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_FORECAST_OUTPUT,
+            None,
+            fallback=str(forecast_datastore_artifact),
+        )
+    if isinstance(prior_datastore_artifact, Artifact):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            prior_datastore_artifact,
+        )
+    elif isinstance(prior_datastore_artifact, (str, Path)):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            None,
+            fallback=str(prior_datastore_artifact),
+        )
     _, postprocess_outputs = execute_step(
         scenario=scenario,
         definition=urbansim_postprocess,
@@ -88,9 +129,27 @@ def run_land_use_stage(
         workspace=workspace,
         stage="land_use",
         year=year,
-        iteration=getattr(state, "iteration", None),
+        iteration=iteration_index(state),
         phase="postprocess",
     )
+    archive_key = f"{USIM_INPUT_ARCHIVE_PREFIX}{year}"
+    archived_base_artifact = resolve_coupler_value(
+        scenario.coupler,
+        archive_key,
+    ).value
+    if isinstance(archived_base_artifact, Artifact):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            archived_base_artifact,
+        )
+    elif isinstance(archived_base_artifact, (str, Path)):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            None,
+            fallback=str(archived_base_artifact),
+        )
 
     population_source_snapshot = postprocess_outputs.processed_outputs.get(
         USIM_POPULATION_SOURCE_H5

@@ -52,9 +52,10 @@ queried later.
 
 At runtime:
 
-- **Bootstrap & Admission:** Resolves scenario YAML inheritance (`base:`),
-  stages initial datasets, and runs receiving-side admission checks (digest and
-  provenance verification) on external or prior-run inputs.
+- **Startup Seeding & Admission:** Resolves scenario YAML inheritance (`base:`),
+  seeds initial artifacts into `scenario.coupler`, and runs receiving-side
+  admission checks (digest and provenance verification) on external or prior-run
+  inputs before model execution.
 - **Stage & Loop Orchestration:** Steps through forecast years and inner
   supply-demand iterations (for example, `urbansim` → `atlas` →
   `activitysim` ↔ `beam`, or custom model combinations configured in

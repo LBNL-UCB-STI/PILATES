@@ -10,7 +10,7 @@ from consist import (
     resolve_step_contract,
 )
 from pilates.config.models import BeamArtifactFormatsConfig
-from pilates.runtime.archive_paths import resolve_workspace_uri_path
+from pilates.utils.archive_paths import resolve_workspace_uri_path
 
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -166,13 +166,9 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         hashing_strategy="full",
         mounts={"workspace": str(tmp_path)},
     )
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
     monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
-    monkeypatch.setattr(beam_steps, "enqueue_archive_copy", lambda **_kwargs: None)
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda **_kwargs: {"config": {"model": "beam"}, "identity_inputs": []},
     )
 
@@ -225,6 +221,7 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         return SimpleNamespace(
             run=SimpleNamespace(
                 region="test-region",
+                enable_archive_copy=True,
                 models=SimpleNamespace(traffic_assignment=None, travel=None),
             ),
             beam=SimpleNamespace(
@@ -245,6 +242,7 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         config.write_text("beam {}\n", encoding="utf-8")
         return SimpleNamespace(
             full_path=str(root),
+            archive_run_dir=str(archive_root),
             get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         )
 
@@ -565,7 +563,7 @@ def test_native_beam_definitions_resolve_consist_contracts(
     )
     monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {},
     )
 
@@ -2022,12 +2020,6 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
     monkeypatch.setattr(
         "pilates.beam.postprocessor.BeamPostprocessor", FakePostprocessor
     )
-    archive_keys: list[str] = []
-    monkeypatch.setattr(
-        beam_steps,
-        "enqueue_archive_copy",
-        lambda *, key, path, workspace: archive_keys.append(key),
-    )
     settings = SimpleNamespace(
         activitysim=None,
         run=SimpleNamespace(models=SimpleNamespace(land_use=None)),
@@ -2052,10 +2044,6 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
         "events_parquet_2030_2_type_PathTraversal": "events",
         "path_traversal_links_2030_2": "links",
     }
-    assert archive_keys == [
-        "events_parquet_2030_2_type_PathTraversal",
-        "path_traversal_links_2030_2",
-    ]
 
 
 def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
@@ -2332,3 +2320,260 @@ def test_beam_preprocess_projector_rejects_stale_mount_when_current_destination_
             workspace=workspace,
             resolved_inputs=_empty_resolved_inputs(),
         )
+
+
+def test_beam_provenance_set_output_meta_persists_during_run_and_resists_stale_workspace_sidecars(
+    tmp_path: Path,
+) -> None:
+    """_emit_skim_provenance_sidecars persists meta via set_output_meta and project_outputs resists stale workspace sidecars."""
+    from pilates.beam.skim_provenance import (
+        read_skim_provenance_sidecar,
+        skim_provenance_sidecar_path,
+    )
+    from pilates.utils import consist_runtime as cr
+
+    workspace_root = tmp_path / "workspace"
+    omx_path = workspace_root / "beam" / "skims.omx"
+    omx_path.parent.mkdir(parents=True, exist_ok=True)
+    omx_path.write_bytes(b"omx-content")
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(scenario="baseline", region="sfbay"))
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+
+    def _produce_skims() -> None:
+        beam_steps._emit_skim_provenance_sidecars(
+            step_name="beam_postprocess",
+            declared_outputs={"final_skims_omx": omx_path},
+            source_paths={"final_skims_omx": omx_path},
+            settings=settings,
+            state=state,
+            context=None,
+            skim_keys=("final_skims_omx",),
+        )
+
+    with cr.use_tracker(tracker):
+        run_result = tracker.run(
+            fn=_produce_skims,
+            name="skim_producer_run",
+            output_paths={"final_skims_omx": omx_path},
+        )
+
+    logged_artifact = run_result.outputs["final_skims_omx"]
+    persisted_artifact = tracker.get_run_outputs(run_result.run.id)["final_skims_omx"]
+    assert "skim_provenance" in logged_artifact.meta
+    assert "skim_provenance" in persisted_artifact.meta
+    authoritative_run_id = persisted_artifact.meta["skim_provenance"]["producer"][
+        "run_id"
+    ]
+    assert authoritative_run_id == run_result.run.id
+    assert str(persisted_artifact.meta.get("admission_file_identity", "")).startswith(
+        "sha256:file:"
+    )
+    sidecar_path = skim_provenance_sidecar_path(omx_path)
+    assert (
+        read_skim_provenance_sidecar(sidecar_path)["producer"]["run_id"]
+        == authoritative_run_id
+    )
+
+
+def test_beam_preprocess_project_outputs_prefers_artifact_meta_over_stale_workspace_sidecar(
+    tmp_path: Path,
+) -> None:
+    """_project_beam_preprocess_outputs keeps artifact.meta['linkstats_provenance'] authoritative over a stale sidecar."""
+    from consist import Artifact
+    from pilates.beam.admission import (
+        LINKSTATS_PROVENANCE_SCHEMA_VERSION,
+        read_linkstats_provenance_sidecar,
+        write_linkstats_provenance_sidecar,
+    )
+
+    beam_input = tmp_path / "beam-input"
+    outputs_root = beam_input / ".pilates-consist-outputs" / "beam_preprocess"
+    outputs_root.mkdir(parents=True, exist_ok=True)
+    plans_path = outputs_root / "plans_beam_in.csv.gz"
+    households_path = outputs_root / "households_beam_in.csv.gz"
+    persons_path = outputs_root / "persons_beam_in.csv.gz"
+    warmstart_path = outputs_root / "linkstats_warmstart.parquet"
+    for p in (plans_path, households_path, persons_path, warmstart_path):
+        p.write_text("data\n", encoding="utf-8")
+
+    stale_prov = {
+        "schema_version": LINKSTATS_PROVENANCE_SCHEMA_VERSION,
+        "producer": {"run_id": "stale-workspace-run"},
+    }
+    write_linkstats_provenance_sidecar(warmstart_path, stale_prov)
+
+    authoritative_prov = {
+        "schema_version": LINKSTATS_PROVENANCE_SCHEMA_VERSION,
+        "producer": {"run_id": "cached-authoritative-run"},
+    }
+    warmstart_artifact = Artifact(
+        key=LINKSTATS_WARMSTART,
+        container_uri=str(warmstart_path),
+        driver="parquet",
+        meta={"linkstats_provenance": authoritative_prov},
+    )
+
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_beam_mutable_data_dir=lambda: str(beam_input),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(inputs={LINKSTATS_WARMSTART: warmstart_artifact}),
+        metadata={
+            "native_output_keys": (
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+                LINKSTATS_WARMSTART,
+            )
+        },
+    )
+    projected = beam_steps._project_beam_preprocess_outputs(
+        {
+            BEAM_PLANS_IN: plans_path,
+            BEAM_HOUSEHOLDS_IN: households_path,
+            BEAM_PERSONS_IN: persons_path,
+            LINKSTATS_WARMSTART: warmstart_artifact,
+        },
+        settings=SimpleNamespace(activitysim=None),
+        state=SimpleNamespace(iteration=0),
+        workspace=workspace,
+        resolved_inputs=resolved_inputs,
+    )
+
+    assert warmstart_artifact.meta["linkstats_provenance"] == authoritative_prov
+    assert (
+        projected.prepared_input_metadata[LINKSTATS_WARMSTART]["linkstats_provenance"]
+        == authoritative_prov
+    )
+    assert (
+        read_linkstats_provenance_sidecar(
+            beam_steps.linkstats_provenance_sidecar_path(warmstart_path)
+        )
+        == authoritative_prov
+    )
+
+
+def test_beam_postprocess_split_output_paths_recovers_events_from_recovery_roots_when_scratch_missing(
+    tmp_path: Path,
+) -> None:
+    """P0-2: _beam_postprocess_split_output_paths uses artifact_to_existing_path so wiped scratch falls back to recovery_roots."""
+    import pandas as pd
+    from consist import Artifact, Tracker
+    from pilates.utils import consist_runtime as cr
+
+    workspace_root = tmp_path / "scratch_workspace"
+    beam_output_dir = workspace_root / "beam" / "output"
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    archive_root = tmp_path / "archive_root"
+    archived_events = archive_root / "beam" / "output" / "events.parquet"
+    archived_events.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"type": ["PathTraversal", "ModeChoice"]}).to_parquet(
+        archived_events, index=False
+    )
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+    )
+    events_artifact = Artifact(
+        key="events_parquet_2020_0",
+        container_uri="workspace://beam/output/events.parquet",
+        driver="parquet",
+        meta={"recovery_roots": [str(archive_root)]},
+    )
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        get_beam_output_dir=lambda: str(beam_output_dir),
+    )
+
+    with cr.use_tracker(tracker):
+        split_outputs = beam_steps._beam_postprocess_split_output_paths(
+            selected_events_key="events_parquet_2020_0",
+            inputs={"events_parquet_2020_0": events_artifact},
+            year=2020,
+            iteration=0,
+            workspace=workspace,
+        )
+
+    assert "events_parquet_2020_0_type_PathTraversal" in split_outputs
+    assert "events_parquet_2020_0_type_ModeChoice" in split_outputs
+    assert "path_traversal_links_2020_0" in split_outputs
+
+
+def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_recovery_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P0-3: _project_beam_run_outputs populates output.path on direct-zarr Artifact after scratch-wipe hydration."""
+    from consist import Artifact, Tracker
+    from pilates.utils import consist_runtime as cr
+
+    workspace_root = tmp_path / "scratch_workspace"
+    beam_output_dir = workspace_root / "beam" / "output"
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    archive_root = tmp_path / "archive_root"
+    archived_zarr = archive_root / "beam" / "output" / "0.skimsOD_Aggregated.zarr"
+    archived_zarr.mkdir(parents=True, exist_ok=True)
+    (archived_zarr / ".zgroup").write_text('{"zarr_format": 2}', encoding="utf-8")
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(workspace_root)},
+    )
+    zarr_artifact = Artifact(
+        key="raw_od_skims_zarr_2020_0",
+        container_uri="workspace://beam/output/0.skimsOD_Aggregated.zarr",
+        driver="zarr",
+        meta={"recovery_roots": [str(archive_root)]},
+    )
+    assert not Path(zarr_artifact.path).exists()
+
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
+
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        get_beam_output_dir=lambda: str(beam_output_dir),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(
+            linkstats_format="parquet",
+            events_format="parquet",
+            skims_format="zarr",
+            artifact_formats=SimpleNamespace(activitysim_skims="zarr"),
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.zarr")),
+    )
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_run",
+        binding=BindingResult(inputs={}),
+    )
+
+    with cr.use_tracker(tracker):
+        projected = beam_steps._project_beam_run_outputs(
+            {
+                "raw_od_skims_zarr_2020_0": zarr_artifact,
+            },
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            resolved_inputs=resolved_inputs,
+        )
+
+    assert zarr_artifact.path is not None
+    assert Path(zarr_artifact.path).exists()
+    assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == Path(zarr_artifact.path)

@@ -147,21 +147,6 @@ class RecordStore:
         """Return all records in the store."""
         return list(self.records.values())
 
-    def all_unique_ids(self) -> List[str]:
-        """Return all unique IDs in the store."""
-        return list(self.records.keys())
-
-    def remove_record_type(self, short_name: str) -> None:
-        """Remove all records with the given short_name."""
-        for record in list(self.all_records()):
-            if getattr(record, "short_name", None) == short_name:
-                logger.info(f"Removing record type {short_name} from record store")
-                del self.records[record.unique_id]
-
-    def get_record(self, unique_id: str) -> Optional[Any]:
-        """Get a record by unique_id."""
-        return self.records.get(unique_id)
-
     def __add__(self, other: "RecordStore") -> "RecordStore":
         """Merge two RecordStores (returns new instance, doesn't mutate)."""
         if not isinstance(other, RecordStore):
@@ -175,16 +160,6 @@ class RecordStore:
             raise TypeError("Operand must be a RecordStore")
         self.records.update(other.records)
         return self
-
-    @classmethod
-    def from_file_records(cls, record_hashes: List[str], file_records: Dict[str, Any]):
-        """
-        Construct a RecordStore from a list of record hashes and a mapping.
-
-        Only hashes present in the supplied mapping are included.
-        """
-        records = [file_records[h] for h in record_hashes if h in file_records]
-        return cls(recordList=records)
 
     def to_mapping(self) -> Dict[str, str]:
         """

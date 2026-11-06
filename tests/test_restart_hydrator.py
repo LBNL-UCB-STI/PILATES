@@ -8,39 +8,6 @@ import pytest
 from pilates.runtime import restart as restart_runtime
 
 
-def test_prebootstrap_missing_artifacts_are_split_by_surface():
-    surface = SimpleNamespace(
-        is_restart_prebootstrap_deferred_artifact_key=lambda key: (
-            key == "bootstrap_owned"
-        )
-    )
-    artifacts = [
-        {"key": "runtime_owned", "path": "/tmp/runtime", "reason": "runtime"},
-        {"key": "bootstrap_owned", "path": "/tmp/bootstrap", "reason": "bootstrap"},
-    ]
-
-    blocking, deferred = restart_runtime.split_prebootstrap_missing_artifacts(
-        artifacts,
-        surface=surface,
-    )
-
-    assert blocking == [artifacts[0]]
-    assert deferred == [artifacts[1]]
-
-
-def test_enforce_postbootstrap_missing_artifacts_raises_when_strict():
-    artifacts = [
-        {"key": "runtime_owned", "path": "/tmp/runtime", "reason": "runtime"},
-    ]
-    settings = SimpleNamespace(run=SimpleNamespace(restart_strict=True))
-
-    with pytest.raises(RuntimeError, match="Strict restart preflight failed"):
-        restart_runtime.enforce_postbootstrap_missing_artifacts(
-            artifacts,
-            settings=settings,
-        )
-
-
 def test_restore_restart_coupler_snapshot_from_captured_snapshot(tmp_path):
     db_path = str(tmp_path / "provenance.duckdb")
     run_dir = tmp_path / "run"
@@ -238,12 +205,13 @@ def test_restore_restart_coupler_snapshot_handles_beam_input_uri_and_skips_exter
         assert not (fresh_ws / "inputs").exists()
 
 
-def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_preserves_completed_beam():
+def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_rewinds_completed_beam():
     from pilates.runtime.launcher import (
         _rewind_uncommitted_activitysim_restart_to_provider_boundary,
     )
 
     class _FakeStage:
+        land_use = "land_use"
         activity_demand = "activity_demand"
         supply_demand_loop = "supply_demand_loop"
         traffic_assignment = "traffic_assignment"
@@ -255,12 +223,14 @@ def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_preserves_c
         current_sub_stage="traffic_assignment",
         sub_stage_progress="beam_run_completed",
         is_enabled=lambda stage: True,
-        major_stage_order=("supply_demand_loop",),
+        major_stage_order=("land_use", "supply_demand_loop"),
     )
 
     rewound = _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
-    assert rewound is False
-    assert state.current_major_stage == "supply_demand_loop"
+    assert rewound is True
+    assert state.current_major_stage == "land_use"
+    assert state.current_sub_stage is None
+    assert state.sub_stage_progress is None
 
 
 def test_restore_restart_coupler_snapshot_stages_from_recovery_roots(tmp_path):
@@ -511,3 +481,74 @@ def test_restore_restart_coupler_snapshot_stages_directory_artifacts_and_enforce
                 state=cross_year_state,
                 workspace=workspace,
             )
+
+
+def test_restore_restart_coupler_snapshot_respects_before_step_ordinal_on_multi_year_rewind(
+    tmp_path,
+):
+    from pathlib import Path
+    from pilates.workflows.state import WorkflowState
+    from tests.helpers.micro_world_fixture import build_micro_world
+
+    env = build_micro_world(
+        tmp_path / "multi_year_rewind",
+        start_year=2015,
+        end_year=2019,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+    )
+    db_path = str(tmp_path / "provenance.duckdb")
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    h5_2015 = ws / "model_data_2015.h5"
+    h5_2015.write_text("end-of-2015-h5\n", encoding="utf-8")
+    h5_2017 = ws / "model_data_2017.h5"
+    h5_2017.write_text("mid-2017-urbansim-h5\n", encoding="utf-8")
+
+    tracker = consist.Tracker(run_dir=ws, db_path=db_path)
+    with tracker.scenario("multi_year_scenario") as sc:
+
+        def step_2015_beam():
+            art = tracker.log_artifact(h5_2015, key="usim_datastore_h5")
+            sc.coupler.set("usim_datastore_h5", art)
+
+        def step_2017_urbansim():
+            art = tracker.log_artifact(h5_2017, key="usim_datastore_h5")
+            sc.coupler.set("usim_datastore_h5", art)
+
+        sc.run(
+            step_2015_beam,
+            name="beam_postprocess_2017",
+            stage="supply_demand",
+            year=2017,
+            iteration=0,
+        )
+        sc.capture_coupler_snapshot(phase="post")
+        sc.run(
+            step_2017_urbansim,
+            name="urbansim_postprocess_2017",
+            stage="land_use",
+            year=2017,
+            iteration=0,
+        )
+        sc.capture_coupler_snapshot(phase="post")
+
+    # Simulate a restart in year 2017 rewound to Stage.land_use (forecast_year=2019)
+    state = env.state
+    state.current_year = 2017
+    state.current_major_stage = WorkflowState.Stage.land_use
+    state.current_inner_iter = 0
+    state.scenario_id = "multi_year_scenario"
+
+    with tracker.scenario("multi_year_scenario_restart") as sc_restart:
+        restored = restart_runtime.restore_restart_coupler_snapshot(
+            scenario=sc_restart,
+            tracker=tracker,
+            settings=env.settings,
+            state=state,
+            workspace=SimpleNamespace(full_path=ws, archive_run_dir=ws),
+        )
+        assert "usim_datastore_h5" in restored
+        assert Path(restored["usim_datastore_h5"].abs_path).name == "model_data_2015.h5"

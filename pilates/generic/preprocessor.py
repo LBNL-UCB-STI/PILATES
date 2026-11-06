@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Generic, Optional, Tuple, TYPE_CHECKING, TypeVar
+from typing import Generic, Optional, TYPE_CHECKING, TypeVar
 
-from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
     from pilates.workspace import Workspace
 
 
@@ -25,17 +23,6 @@ class GenericPreprocessor(ABC, Generic[PreprocessInputsT, PreprocessOutputsT]):
     ):
         self.model_name = model_name
         self.state = state
-        self.required_input_data: list[str] = []
-
-    @abstractmethod
-    def copy_data_to_mutable_location(
-        self,
-        settings: PilatesConfig,
-        output_dir: str,
-        workspace: Optional["Workspace"] = None,
-    ) -> Tuple[RecordStore, RecordStore]:
-        """Copy immutable seed inputs into the mutable workspace."""
-        raise NotImplementedError
 
     def preprocess(
         self,

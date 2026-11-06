@@ -68,25 +68,24 @@ python -m pilates.config.models path/to/scenario.yaml --validate
 | `output_run_name` | `str \| null` (`null`) | Custom prefix included in the generated `pilates-run--<region>--<name>--<timestamp>` directory. |
 | `local_workspace_root` | `str \| null` (`null`) | Parent directory for the mutable run workspace. When `null`, the workspace lives inside the archive run directory. Supports environment variable expansion. |
 | `recovery_archive_roots` | `list[str]` (`[]`) | Cold storage destinations (such as project NFS) for post-run promotion via `promote_run_archive`. |
-| `enable_archive_copy` | `bool` (`true`) | Copies logged artifacts from the mutable workspace into the archive run directory during execution. |
-| `restart_strict` | `bool` (`false`) | Fails fast after bootstrap on restart if required local workspace artifacts remain missing. |
+| `enable_archive_copy` | `bool` (`false`) | Copies logged step outputs from the mutable workspace into `<archive_run_dir>/consist-recovery/<scope>` via Consist's native `RunCompletionArchivePolicy` when `local_workspace_root` differs from `output_directory`. |
+| `restart_strict` | `bool` (`false`) | Fails fast on restart if required restart artifacts remain missing after startup hydration/preflight checks. |
 
 ### Consist Provenance and Caching Controls
 
 | Field | Type / Default | Purpose |
 | --- | --- | --- |
-| `bootstrap_cache_enabled` | `bool` (`false`) | Enables Consist cache lookups during the pre-scenario bootstrap staging steps. |
 | `consist_db_local_run` | `bool` (`true`) | Stores the active DuckDB provenance database inside the run directory (`.consist/<consist_db_filename>`) instead of writing to `shared.database.path`. |
 | `consist_db_filename` | `str` (`provenance.duckdb`) | Basename for the run-local DuckDB file (must not contain path separators). |
 | `consist_db_snapshot_enabled` | `bool` (`true`) | Snapshots the active provenance DB to `.consist/snapshots/` during execution and shutdown. |
-| `consist_db_snapshot_interval_seconds` | `int` (`3600`) | Minimum elapsed seconds between periodic DB snapshots (`0` snapshots at every check). |
-| `consist_db_snapshot_on_outer_iteration` | `bool` (`true`) | Writes a DB snapshot at the end of each outer simulation year. |
-| `consist_db_snapshot_keep_last` | `int` (`5`) | Number of timestamped snapshots retained under `.consist/snapshots/history/`. |
+| `consist_db_snapshot_interval_seconds` | `int` (`600`) | Minimum elapsed seconds between periodic DB snapshots (`0` snapshots at every check). |
+| `consist_db_snapshot_on_outer_iteration` | `bool` (`true`) | Writes a DB snapshot at the end of each supply-demand outer iteration boundary. |
+| `consist_db_snapshot_keep_last` | `int` (`3`) | Number of timestamped snapshots retained under `.consist/snapshots/history/`. |
 | `consist_db_restore_on_start` | `bool` (`true`) | Restores the run-local DB from the latest archived snapshot when restarting an existing run. |
 | `consist_db_restore_strict` | `bool` (`false`) | Raises an error if DB snapshot restore fails during restart startup. |
 | `consist_db_seed_from_shared_on_start` | `bool` (`false`) | Seeds a new run-local DB from `shared.database.path` at startup so historical runs are available for cache hits and `prior_run` admission checks. |
 | `consist_db_seed_strict` | `bool` (`false`) | Raises an error if seeding from `shared.database.path` fails. |
-| `consist_code_identity` | `str` (`repo_git`) | Consist code-versioning mode (`repo_git`, `callable_module`, or `callable_source`). |
+| `consist_code_identity` | `str \| null` (`callable_module`) | Consist code-versioning mode (`repo_git`, `callable_module`, or `callable_source`; `null` falls back to `repo_git`). |
 | `consist_hashing_strategy` | `str` (`fast`) | Artifact digest strategy (`fast` metadata-aware hashing or `full` byte hashing). |
 
 ## `shared` Section
@@ -114,4 +113,4 @@ python -m pilates.config.models path/to/scenario.yaml --validate
 
 - Read [Configuration Basics](../start-here/configuration_basics.md) for the high-level layout and workspace split.
 - Check [CLI](cli.md) for command-line flags and config validation commands.
-- See [Scenario Lifecycle](scenario_lifecycle.md) for startup, bootstrap, and restart mechanics.
+- See [Scenario Lifecycle](scenario_lifecycle.md) for startup, coupler seeding, and restart mechanics.

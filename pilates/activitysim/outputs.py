@@ -26,7 +26,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.outputs_base import (
     OutputValidator,
     StepOutputsBase,
@@ -567,7 +566,7 @@ class _ActivitySimPostprocessOutputsValidator:
         return [
             ValidationResult(
                 message=(
-                    "usim_input_next/usim_datastore_h5 is required when land use is "
+                    "usim_datastore_h5 is required when land use is "
                     "enabled because ActivitySim postprocess must update the "
                     "UrbanSim datastore for downstream steps."
                 ),
@@ -595,11 +594,8 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     processed_output_hashes : dict
         Mapping of short_name to known content hashes for copied outputs.
     usim_datastore_key : str, optional
-        Canonical coupler key for the current UrbanSim datastore handoff.
-        Legacy manifests may record phase-specific aliases such as
-        ``usim_input_next``; this class normalizes those aliases back to the
-        stable ``usim_datastore_h5`` contract when re-publishing or
-        reconstructing typed outputs.
+        Canonical coupler key for the current UrbanSim datastore handoff
+        (``usim_datastore_h5``).
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
@@ -673,11 +669,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         )
         for record in record_store.all_records():
             short_name = getattr(record, "short_name", "") or ""
-            canonical_short_name = resolve_artifact_key(short_name)
-            if (
-                short_name.startswith("usim_input_")
-                or canonical_short_name == USIM_DATASTORE_H5
-            ):
+            if short_name.startswith("usim_input_") or short_name == USIM_DATASTORE_H5:
                 usim_key = USIM_DATASTORE_H5
                 usim_path = record.get_absolute_path(base_path=workspace.full_path)
                 continue

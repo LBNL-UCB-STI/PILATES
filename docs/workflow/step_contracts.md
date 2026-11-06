@@ -66,7 +66,7 @@ Every step in `pilates/workflows/steps/` combines three pieces: a **`StepDefinit
     1. The `@define_step` callable that Consist invokes on a cache miss.
     2. Inspects `scenario.coupler` and returns a frozen `ResolvedStepInputs` snapshot before the step starts.
     3. Converts Consist's persisted `RunResult.outputs` into a validated `BeamPreprocessOutputs` dataclass.
-    4. Ordered fallback candidates: prefers ActivitySim's `beam_plans_asim_out` when ActivitySim is enabled, or falls back to bootstrap `plans_beam_in` in traffic-assignment-only runs.
+    4. Ordered fallback candidates: prefers ActivitySim's `beam_plans_asim_out` when ActivitySim is enabled, or falls back to initial coupler-seeded `plans_beam_in` in traffic-assignment-only runs.
     5. Optional upstream handoff: bound when ATLAS (`vehicle_ownership`) is enabled, and cleanly omitted when ATLAS is disabled.
 
 === "2. Run the Step Body (`@define_step`)"
@@ -252,12 +252,12 @@ _, preprocess_outputs = execute_step(
 )
 ```
 
-Before calling `scenario.run()`, `execute_step()` computes the step's cache signature from three Consist configuration channels built by `pilates/utils/consist_config.py`:
+Before calling `scenario.run()`, `execute_step()` computes the step's cache signature from three Consist configuration channels built by `pilates/workflows/consist_metadata.py`:
 
 | Channel | Consist Parameter | In Cache Hash? | What It Captures |
 | :--- | :--- | :--- | :--- |
 | **Identity Config** | `config` | Yes | Canonical simulation parameters that change model outputs (sample sizes, replanning parameters, command templates, admission policies). |
-| **Identity Inputs** | `identity_inputs` | Yes | Digests of mutable workspace config trees outside the artifact graph (`asim_mutable_configs` for ActivitySim; `beam_conf/*` and linkstats expectations for BEAM). |
+| **Identity Inputs** | `identity_inputs` | Yes | Digests of mutable workspace config trees outside the artifact graph (`asim_mutable_configs` for ActivitySim; `beam_conf/*` and linkstats expectations for BEAM; static input sources for UrbanSim and ATLAS). |
 | **Queryable Facet** | `facet` | No | Indexed metadata written to `provenance.duckdb` (`facet_index=True`) for cross-run SQL queries. |
 
 Once Consist compares the step signature (inputs + `config` + `identity_inputs` + code identity) against `provenance.duckdb`, execution follows one of two paths:
@@ -266,10 +266,10 @@ Once Consist compares the step signature (inputs + `config` + `identity_inputs` 
 
     When no matching run exists in `provenance.duckdb` (or `cache_mode` forces execution):
 
-    1. **Materialize inputs**: Consist copies the bound input artifacts into the workspace paths declared in `resolved_inputs.logical_destinations`.
-    2. **Run step function**: Consist invokes `definition.function` (`@define_step`), which runs the preprocessor, container runner, or postprocessor and writes outputs to the workspace.
-    3. **Record provenance**: Consist hashes the newly written output files, logs them in `consist.json` and `provenance.duckdb`, and returns `RunResult`.
-    4. **Archive & publish**: `execute_step()` copies outputs to the year/iteration archive (`archive_completed_run()`) and updates `scenario.coupler`.
+    1. **Materialize inputs**: Consist copies the bound input artifacts into the workspace paths declared in `resolved_inputs.logical_destinations`, while the step resolver idempotently stages any required mutable configs or static inputs.
+    2. **Run step function**: Consist invokes `definition.function` (`@define_step`) under a step-scoped run subdirectory (`<parent_run_id>/<model>/<run_id>`), which runs the preprocessor, container runner, or postprocessor and writes outputs to the workspace.
+    3. **Record provenance & optional archive mirror**: Consist hashes the newly written output files, logs them in `consist.json` and `provenance.duckdb`, optionally mirrors outputs via `RunCompletionArchivePolicy` (`<archive_root>/consist-recovery/<scope>`) when `enable_archive_copy` is enabled, and returns `RunResult`.
+    4. **Publish to coupler**: `execute_step()` binds declared outputs into `scenario.coupler`.
     5. **Project & validate**: `definition.project_outputs()` builds the `StepOutputsBase` instance and runs file existence and semantic `OutputValidator` checks.
 
 === "Cache Hit (Hydrated Execution)"
@@ -277,9 +277,9 @@ Once Consist compares the step signature (inputs + `config` + `identity_inputs` 
     When `scenario.cache_mode == "reuse"` and the input/config digests match a prior completed run:
 
     1. **Skip step function**: Consist does **not** invoke `definition.function` or launch the model container.
-    2. **Hydrate outputs to workspace**: Consist restores the cached output files directly into the step's workspace destination paths (`cache_hydration="outputs-requested"`).
+    2. **Hydrate outputs to workspace**: Consist restores the cached output files directly into the step's requested workspace destination paths (`cache_hydration="outputs-requested"`), and optionally mirrors them via `RunCompletionArchivePolicy` when `enable_archive_copy` is enabled.
        - *Safety fallback*: If an archived file from the prior run is missing or unreadable on disk, `cache_hydration_failure="miss"` automatically falls back to a fresh execution.
-    3. **Archive & publish**: `execute_step()` runs the exact same `archive_completed_run()` and `scenario.coupler` publication step as a fresh run.
+    3. **Publish to coupler**: `execute_step()` updates `scenario.coupler` with the hydrated artifacts just like a fresh run.
     4. **Project & validate**: `definition.project_outputs()` constructs and validates the exact same `StepOutputsBase` dataclass.
 
 !!! important "Downstream Invariant"
@@ -293,7 +293,7 @@ When adding or debugging a workflow step, you will primarily interact with four 
 
 === "`StepDefinition`"
 
-    Defined in `pilates/workflows/step_definition.py` and instantiated in `pilates/workflows/steps/*.py`.
+    Defined in `pilates/workflows/contracts.py` and instantiated in `pilates/workflows/steps/*.py`.
 
     | Field | Type | Purpose |
     | :--- | :--- | :--- |
@@ -307,7 +307,7 @@ When adding or debugging a workflow step, you will primarily interact with four 
     | `binding_rules` | `tuple[ArtifactBindingRule, ...]` | Step-owned rules mapping semantic roles to candidate coupler keys. |
     | `optional_output_keys` | `tuple[str, ...]` | Output keys that may be omitted when optional model features are inactive. |
     | `preflight_identity` | `bool` | When `True`, resolves `StepIdentity` before calling `resolve_inputs`. |
-    | `archive_outputs` | `bool` | When `True` (default), archives outputs and publishes them to `scenario.coupler` after `scenario.run()`. |
+    | `archive_outputs` | `bool` | When `True` (default), enables optional `RunCompletionArchivePolicy` mirroring and publishes outputs to `scenario.coupler` after `scenario.run()`. |
 
 === "`ArtifactBindingRule`"
 
@@ -319,7 +319,7 @@ When adding or debugging a workflow step, you will primarily interact with four 
     | `required` | `bool` | Whether `require_complete()` should fail if the role cannot be bound. |
     | `preferred_keys` | `tuple[str, ...]` | Ordered candidate keys checked from left to right in `scenario.coupler`. |
     | `allow_fallback` | `bool` | Whether the resolver may query `fallback_provider` when coupler keys are absent. |
-    | `fallback_provider` | `str \| None` | Named fallback strategy for bootstrap or standalone stage runs. |
+    | `fallback_provider` | `str \| None` | Named fallback strategy for initial-year or standalone stage runs. |
     | `pass_mode` | `Literal[...]` | Controls whether the artifact is passed as a path/key (`"auto"`) or recorded as `"metadata_only"`. |
 
 === "`ResolvedStepInputs`"
@@ -345,7 +345,7 @@ When adding or debugging a workflow step, you will primarily interact with four 
     | `stage_name` & `phase` | `str` | Owning workflow stage (`land_use`, `vehicle_ownership_model`, `activity_demand`, `traffic_assignment`, `postprocessing`) and phase (`preprocess`, `run`, `postprocess`). |
     | `order` & `depends_on` | `int`, `Tuple[str, ...]` | Deterministic execution index and upstream step dependencies. |
     | `enabled_flag_attr` & `enabled_model_attr` | `Optional[str]` | Attributes on `WorkflowState` and `PilatesConfig` that gate whether the step runs. |
-    | `provenance` | `Optional[WorkflowStepProvenanceSpec]` | Selects the config builder in `pilates/utils/consist_config.py`. |
+    | `provenance` | `Optional[WorkflowStepProvenanceSpec]` | Selects the config builder in `pilates/workflows/consist_metadata.py`. |
     | `dynamic_input_families` / `dynamic_output_families` | `Tuple[str, ...]` | Parameterized coupler key patterns (e.g., `householdv_{forecast_year}`) expanded at runtime. |
 
 ## Related Documentation

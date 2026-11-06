@@ -35,8 +35,8 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import ConfigContract, InputContract
-from pilates.workflows.step_consist_meta import (
+from pilates.workflows.contracts import ConfigContract, InputContract
+from pilates.workflows.consist_metadata import (
     activitysim_config_root_dirs,
     consist_step_meta,
 )
@@ -202,7 +202,7 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
         config_root.mkdir(parents=True)
         _write_file(config_root / "settings.yaml")
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {},
     )
 
@@ -266,7 +266,7 @@ def test_activitysim_preprocess_adapter_tolerates_partial_legacy_config_tree(
     main_root = Path(workspace.get_asim_mutable_configs_dir()) / "configs"
     _write_file(main_root / "settings.yaml")
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {},
     )
 
@@ -304,7 +304,7 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
     for name, definition in STEP_DEFINITIONS.items():
         contract = definition.input_contract
 
-        if name == "beam_preprocess":
+        if name in {"beam_preprocess", "urbansim_postprocess"}:
             assert contract.status == "complete"
             assert contract.reason is None
         else:
@@ -331,7 +331,7 @@ def test_report_mode_records_contract_without_changing_decorated_config(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda model, settings, workspace_path=None: {
             "config": {"model": model},
             "facet": {"existing": True},
@@ -372,7 +372,7 @@ def test_beam_preprocess_merges_only_its_resolver_owned_identity_closure(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {"config": {"existing": "adapter-input"}},
     )
     closure = {
@@ -410,7 +410,7 @@ def test_report_mode_records_unavailable_payload_contract(
         config_contract=ConfigContract.payload(),
     )
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {"facet": {"existing": True}},
     )
 
@@ -445,7 +445,7 @@ def test_native_steps_declare_static_consist_metadata() -> None:
         },
         "urbansim_postprocess": {
             "inputs": {USIM_DATASTORE_H5},
-            "optional": set(),
+            "optional": {USIM_DATASTORE_BASE_H5},
             "schema_outputs": {USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5},
         },
         "atlas_preprocess": {

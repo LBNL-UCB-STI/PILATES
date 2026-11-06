@@ -20,7 +20,7 @@ def _seed_minimal_repo(repo_root: Path) -> None:
             """
             from typing import Any
 
-            from pilates.workflows.step_definition import StepDefinition
+            from pilates.workflows.contracts import StepDefinition
 
             from .postprocessing import (
                 postprocessing as postprocessing_definition,
@@ -226,7 +226,7 @@ def test_scaffolded_step_module_imports_with_native_input_contracts(
     from consist.core.step_context import StepContext
 
     monkeypatch.setattr(
-        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        "pilates.workflows.consist_metadata.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {},
     )
 

@@ -9,7 +9,7 @@ from pilates.atlas.preprocessor import (
 )
 from pilates.atlas.outputs import AtlasPreprocessOutputs, AtlasRunOutputs
 from pilates.generic.runner import GenericRunner
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 logger = logging.getLogger(__name__)

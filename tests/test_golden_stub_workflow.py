@@ -83,7 +83,7 @@ from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from tests.workflow_contract_harness import build_runtime_context
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 EXPECTED_STAGE_MODELS = (
@@ -375,9 +375,9 @@ def golden_stub_env(tmp_path, monkeypatch):
     """
 
     consist = pytest.importorskip("consist")
-    from pilates.workflows import step_consist_meta as step_consist_meta_module
+    from pilates.workflows import consist_metadata as consist_metadata_module
 
-    original_consist_step_meta = step_consist_meta_module.consist_step_meta
+    original_consist_step_meta = consist_metadata_module.consist_step_meta
 
     def _patched_consist_step_meta(model):
         meta = dict(original_consist_step_meta(model))
@@ -386,7 +386,7 @@ def golden_stub_env(tmp_path, monkeypatch):
         return meta
 
     monkeypatch.setattr(
-        step_consist_meta_module,
+        consist_metadata_module,
         "consist_step_meta",
         _patched_consist_step_meta,
     )
@@ -461,11 +461,16 @@ def golden_stub_env(tmp_path, monkeypatch):
     usim_input_path = usim_dir / settings.urbansim.input_file_template.format(
         region_id=region_id
     )
+    usim_source_input_path = (
+        urbansim_source_dir
+        / settings.urbansim.input_file_template.format(region_id=region_id)
+    )
     usim_output_path = usim_dir / settings.urbansim.output_file_template.format(
         year=state.forecast_year
     )
     usim_merged_path = usim_dir / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     _write_usim_toy_h5(usim_input_path)
+    _write_usim_toy_h5(usim_source_input_path)
     _write_usim_toy_h5(usim_output_path)
     _write_usim_toy_h5(usim_merged_path, with_year_prefix=2019)
     _write_usim_toy_h5(usim_dir / "usim_2017.h5")
@@ -984,7 +989,6 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     promoted_plans = Path(golden_stub_env["promoted_plans"])
 
     # Phase 0: initialization contract represented explicitly in this golden test.
-    assert state.data_initialized is False
     init_marker = Path(workspace.full_path) / ".golden_init_marker.txt"
     with scenario.trace(
         "initialization",
@@ -996,8 +1000,6 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
         cr.log_input(usim_input_path, key="golden_init_source")
         _write_file(init_marker, "initialized")
         cr.log_output(init_marker, key="golden_init_marker")
-        state.set_data_initialized(True)
-    assert state.data_initialized is True
     assert init_marker.exists()
 
     # Phase 1: land-use stage publishes UrbanSim datastore handles.

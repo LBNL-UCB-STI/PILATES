@@ -46,7 +46,7 @@ from pilates.workflows.stages.supply_demand_beam import (
 )
 from pilates.workflows.steps.beam import beam_run
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 _TEST_ZONE_IDS = ["101", "102"]
 _TEST_TIME_PERIODS = ["EA", "AM", "MD", "PM", "EV"]
@@ -97,6 +97,7 @@ def _create_test_environment(
             "end_year": 2021,
             "output_directory": str(ws_root),
             "output_run_name": sim_name,
+            "enable_archive_copy": True,
             "models": {
                 "land_use": None,
                 "travel": "beam",
@@ -158,7 +159,12 @@ def _create_test_environment(
             "region_mappings": {"region_to_subdir": {"test-region": "test"}},
         }
     cfg = PilatesConfig(**data)
-    ws = Workspace(cfg, str(ws_root), sim_name)
+    ws = Workspace(
+        cfg,
+        str(ws_root),
+        sim_name,
+        archive_run_dir=str(base_dir / "archive"),
+    )
 
     # Set up mutable inputs
     region_mutable = Path(ws.get_beam_mutable_data_dir()) / cfg.run.region
@@ -920,16 +926,22 @@ def test_scenario_7_archive_copy_failure_raises(tmp_path: Path) -> None:
     """Scenario 7: Archive failure after beam_run raises loudly; archive not treated as present."""
     env = _create_test_environment(tmp_path)
     container_stub = _make_container_stub()
+    orig_archive = Tracker.archive_current_run_outputs
 
-    def failing_archive(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Simulated disk full during archive copy")
+    def failing_archive(
+        self: Tracker, archive_root: Path, *args: Any, **kwargs: Any
+    ) -> Any:
+        if "beam_run" in str(archive_root):
+            raise RuntimeError("Simulated disk full during archive copy")
+        return orig_archive(self, archive_root, *args, **kwargs)
 
     # Monkeypatch 1: Container stub
     # Monkeypatch 2: Archive fault injection hook
     with patch.object(BeamRunner, "run_container", container_stub):
-        with patch(
-            "pilates.workflows.stages.supply_demand_beam._archive_beam_run_outputs_native",
-            side_effect=failing_archive,
+        with patch.object(
+            Tracker,
+            "archive_current_run_outputs",
+            failing_archive,
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
                 for k, art in env["seed_artifacts"].items():

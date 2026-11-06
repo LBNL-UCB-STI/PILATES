@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from typing import Any, Dict, Mapping
 
 from consist import (
+    Artifact,
     ExecutionOptions,
     StepIdentity,
     define_step,
@@ -14,30 +16,38 @@ from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs as NativeUrbanSimPostprocessOutputs,
 )
 from pilates.urbansim.outputs import UrbanSimRunOutputs as NativeUrbanSimRunOutputs
-from pilates.urbansim.postprocessor import UrbansimPostprocessor
-from pilates.urbansim.preprocessor import stage_urbansim_run_workspace
+from pilates.urbansim.postprocessor import (
+    UrbansimPostprocessor,
+    get_usim_datastore_fname,
+)
+from pilates.urbansim.preprocessor import (
+    resolve_urbansim_initial_datastore_source_path,
+    stage_urbansim_run_workspace,
+)
 from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
 from pilates.utils.consist_runtime import require_runtime_kwargs
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
+    USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_ARCHIVE_PREFIX,
     USIM_INPUT_MERGED_PREFIX,
     USIM_POPULATION_SOURCE_H5,
 )
+from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_consist_meta import consist_step_meta
-from pilates.workflows.step_definition import (
+from pilates.workflows.consist_metadata import consist_step_meta
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,
 )
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 from .shared import (
     _execution_options_with_launch_context,
@@ -174,11 +184,17 @@ def _resolve_urbansim_postprocess_inputs(
     coupler: CouplerProtocol,
     step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
+    base_value = resolve_coupler_value(coupler, USIM_DATASTORE_BASE_H5).value
+    has_base_datastore = isinstance(base_value, Artifact) or (
+        step_identity is None and isinstance(base_value, (str, Path))
+    )
+    mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
+    input_name = get_usim_datastore_fname(settings, io="input")
     return _resolve_native_inputs(
         step_name="urbansim_postprocess",
         function=_native_urbansim_postprocess,
         required_roles=(USIM_DATASTORE_H5,),
-        optional_roles=(),
+        optional_roles=((USIM_DATASTORE_BASE_H5,) if has_base_datastore else ()),
         logical_destinations={
             USIM_DATASTORE_H5: Path(
                 _urbansim_run_native_output_paths(
@@ -186,7 +202,8 @@ def _resolve_urbansim_postprocess_inputs(
                     state=state,
                     workspace=workspace,
                 )[USIM_DATASTORE_H5]
-            )
+            ),
+            USIM_DATASTORE_BASE_H5: mutable_data_dir / input_name,
         },
         coupler=coupler,
         step_identity=step_identity,
@@ -199,8 +216,7 @@ _URBANSIM_RUN_INPUT_CONTRACT = InputContract(
     config_contract=ConfigContract.payload(),
 )
 _URBANSIM_POSTPROCESS_INPUT_CONTRACT = InputContract(
-    status="incomplete",
-    reason="previous mutable UrbanSim input H5 remains a model-visible read",
+    status="complete",
     config_contract=ConfigContract.payload(),
 )
 
@@ -243,6 +259,7 @@ def _native_urbansim_run(
     model="urbansim_postprocess",
     name_template="urbansim_postprocess__y{year}__i{iteration}__phase_{phase}",
     inputs={USIM_DATASTORE_H5: None},
+    optional_input_keys=(USIM_DATASTORE_BASE_H5,),
     schema_outputs=[USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5],
     output_paths=_native_contract_output_paths(
         _urbansim_postprocess_native_output_paths
@@ -255,11 +272,24 @@ def _native_urbansim_run(
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_urbansim_postprocess(
     usim_datastore_h5: Path,
+    usim_datastore_base_h5: Path | None = None,
     *,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
+    mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
+    base_destination = mutable_data_dir / get_usim_datastore_fname(settings, io="input")
+    if not base_destination.exists():
+        source_base = (
+            Path(usim_datastore_base_h5)
+            if usim_datastore_base_h5 is not None
+            and Path(usim_datastore_base_h5).is_file()
+            else resolve_urbansim_initial_datastore_source_path(settings)
+        )
+        if source_base is not None and source_base.is_file():
+            base_destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_base, base_destination)
     UrbansimPostprocessor("urbansim", state).postprocess(
         NativeUrbanSimRunOutputs(usim_datastore_h5=usim_datastore_h5),
         workspace,

@@ -8,11 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pilates.workflows.step_definition import StepDefinition
-
-from .shared import (
-    validate_workflow_step_contracts as validate_workflow_step_contracts,
-)
+from pilates.workflows.contracts import StepDefinition
 from .activitysim import (
     activitysim_postprocess as activitysim_postprocess,
     activitysim_preprocess as activitysim_preprocess,

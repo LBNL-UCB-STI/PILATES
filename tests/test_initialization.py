@@ -1,418 +1,77 @@
-import os
-from pathlib import Path
+"""Unit tests for step-owned workspace preparation helpers that replaced Initialization."""
 
+from __future__ import annotations
+
+from pathlib import Path
 from types import SimpleNamespace
 
-from pilates.generic.initialization import (
-    Initialization,
-    build_bootstrap_artifact_summary,
-)
-from pilates.generic.records import RecordStore, FileRecord
-import json
-
-# ----------------------------------------------------------------------
-# Dummy objects to replace real model components
-# ----------------------------------------------------------------------
-
-
-class DummyPreprocessor:
-    """A simple preprocessor that returns deterministic RecordStore objects."""
-
-    def __init__(self, *_, **__):
-        pass
-
-    def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
-        # Return two RecordStore objects with known records
-        in_record = FileRecord(
-            unique_id="in1",
-            short_name="input",
-            file_path="/tmp/input",
-        )
-        out_record = FileRecord(
-            unique_id="out1",
-            short_name="output",
-            file_path="/tmp/output",
-        )
-        return RecordStore(recordList=[in_record]), RecordStore(recordList=[out_record])
-
-    def preprocess(self, workspace, previous_records=None):
-        return RecordStore()
-
-
-def _patch_preprocessors(monkeypatch, factory_fn=None):
-    """Patch all preprocessor classes used by Initialization."""
-    if factory_fn is None:
-        factory_fn = lambda _model_name, _state=None, **_kw: DummyPreprocessor()
-    for cls_name in (
-        "BeamPreprocessor",
-        "UrbansimPreprocessor",
-        "AtlasPreprocessor",
-        "ActivitysimPreprocessor",
-    ):
-        monkeypatch.setattr(
-            f"pilates.generic.initialization.{cls_name}",
-            lambda model_name, state=None, **_kw: factory_fn(model_name, state),
-        )
-
-
-# ----------------------------------------------------------------------
-# Minimal workspace stub required by Initialization.run
-# ----------------------------------------------------------------------
+from pilates.activitysim.preprocessor import ensure_activitysim_mutable_configs
+from pilates.atlas.preprocessor import stage_selected_atlas_static_inputs
+from pilates.beam.preprocessor import ensure_beam_mutable_workspace
+from pilates.urbansim.preprocessor import resolve_urbansim_initial_datastore_source_path
 
 
 class DummyWorkspace:
-    def __init__(self):
-        self.input_data = {}
-        self.output_data = {}
-        self.beam_mutable_dir = "/tmp/beam"
-        self.usim_mutable_dir = "/tmp/usim"
-        self.atlas_mutable_input_dir = "/tmp/atlas_in"
-        self.atlas_output_dir = "/tmp/atlas_out"
-        self.activitysim_mutable_dir = "/tmp/asim"
-        self.full_path = "/tmp"
+    def __init__(self, root: Path):
+        self.full_path = str(root)
+        self.beam_mutable_dir = str(root / "beam" / "input")
+        self.usim_mutable_dir = str(root / "urbansim" / "data")
+        self.atlas_mutable_input_dir = str(root / "atlas" / "atlas_input")
+        self.atlas_output_dir = str(root / "atlas" / "atlas_output")
+        self.activitysim_mutable_dir = str(root / "activitysim" / "data")
+        self.activitysim_configs_dir = str(root / "activitysim" / "configs")
 
-    def get_beam_mutable_data_dir(self):
+    def get_beam_mutable_data_dir(self) -> str:
         return self.beam_mutable_dir
 
-    def get_usim_mutable_data_dir(self):
+    def get_usim_mutable_data_dir(self) -> str:
         return self.usim_mutable_dir
 
-    def get_atlas_mutable_input_dir(self):
+    def get_atlas_mutable_input_dir(self) -> str:
         return self.atlas_mutable_input_dir
 
-    def get_atlas_output_dir(self):
+    def get_atlas_output_dir(self) -> str:
         return self.atlas_output_dir
 
-    def get_asim_mutable_data_dir(self):
+    def get_asim_mutable_data_dir(self) -> str:
         return self.activitysim_mutable_dir
 
-
-# ----------------------------------------------------------------------
-# Tests
-# ----------------------------------------------------------------------
+    def get_asim_mutable_configs_dir(self) -> str:
+        return self.activitysim_configs_dir
 
 
-def test_initialization_runs_beam_and_urbansim(monkeypatch):
-    """
-    Verify that Initialization.run aggregates input/output records for
-    beam and urbansim models using the dummy preprocessor.
-    """
-    from pilates.utils import consist_runtime as cr
-
-    cr.set_enabled(False)
-
-    try:
-        _patch_preprocessors(monkeypatch)
-
-        init = Initialization("init", None)
-        workspace = DummyWorkspace()
-        settings = SimpleNamespace(
-            run=SimpleNamespace(
-                models=SimpleNamespace(
-                    travel="beam",
-                    activity_demand="dummy_activity",
-                    vehicle_ownership="dummy_vehicle",
-                    land_use="urbansim",
-                ),
-                start_year=2020,
-            ),
-            shared=SimpleNamespace(
-                database=SimpleNamespace(),
-                skims=SimpleNamespace(zone_type="block_group"),
-                geography=SimpleNamespace(
-                    zones=SimpleNamespace(
-                        source_file="/tmp/canonical_zones.geojson",
-                        activitysim_index_col="TAZ",
-                        zone_type="block_group",
-                        canonical_id_col="zone_key",
-                    )
-                ),
-            ),
-        )
-
-        # Create a dummy canonical_zones.geojson in the mocked mutable directory
-        canonical_zones_path = os.path.join(
-            workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson"
-        )
-        os.makedirs(os.path.dirname(canonical_zones_path), exist_ok=True)
-        dummy_geojson_content = {"type": "FeatureCollection", "features": []}
-        with open(canonical_zones_path, "w") as f:
-            json.dump(dummy_geojson_content, f)
-
-        # Update settings to point to this dummy file
-        settings.shared.geography.zones.source_file = canonical_zones_path
-
-        # Run initialization – should not raise any exception
-        init.run(settings, workspace)
-
-        # Initialization returns the copied records and does not maintain a
-        # duplicate runtime cache on the workspace.
-        assert workspace.input_data == {}
-        assert workspace.output_data == {}
-    finally:
-        cr.set_enabled(None)
-
-
-def test_initialization_runs_beam_when_only_traffic_assignment_is_set(monkeypatch):
-    from pilates.utils import consist_runtime as cr
-
-    cr.set_enabled(False)
-    try:
-        _patch_preprocessors(monkeypatch)
-
-        init = Initialization("init", None)
-        workspace = DummyWorkspace()
-        settings = SimpleNamespace(
-            run=SimpleNamespace(
-                models=SimpleNamespace(
-                    travel=None,
-                    traffic_assignment="beam",
-                    activity_demand=None,
-                    vehicle_ownership=None,
-                    land_use=None,
-                ),
-                start_year=2020,
-            ),
-            shared=SimpleNamespace(
-                database=SimpleNamespace(),
-                geography=SimpleNamespace(zones=None),
-            ),
-        )
-
-        records = init.run(settings, workspace)
-
-        assert len(records.all_records()) == 2
-    finally:
-        cr.set_enabled(None)
-
-
-def test_initialization_handles_missing_models_gracefully(monkeypatch):
-    """
-    If a model key is missing from settings, Initialization should simply skip it
-    without raising errors.
-    """
-    _patch_preprocessors(monkeypatch)
-
-    init = Initialization("init", None)
-    workspace = DummyWorkspace()
-    # Settings only contains a model that is not in the loop (e.g., no beam)
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel="none",
-                land_use=None,
-                activity_demand=None,
-                vehicle_ownership=None,
-            ),
-            start_year=2020,
-        ),
-        shared=SimpleNamespace(
-            skims=SimpleNamespace(zone_type="block_group"),
-            geography=SimpleNamespace(
-                zones=SimpleNamespace(
-                    source_file="/tmp/canonical_zones.geojson",
-                    activitysim_index_col="TAZ",
-                    zone_type="block_group",
-                    canonical_id_col="zone_key",
-                )
-            ),
-        ),
-    )
-
-    # Create a dummy canonical_zones.geojson in the mocked mutable directory
-    canonical_zones_path = os.path.join(
-        workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson"
-    )
-    os.makedirs(os.path.dirname(canonical_zones_path), exist_ok=True)
-    dummy_geojson_content = {"type": "FeatureCollection", "features": []}
-    with open(canonical_zones_path, "w") as f:
-        json.dump(dummy_geojson_content, f)
-
-    # Update settings to point to this dummy file
-    settings.shared.geography.zones.source_file = canonical_zones_path
-
-    # Should complete without exception
-    init.run(settings, workspace)
-
-    # No data should have been added to workspace dictionaries
-    assert workspace.input_data == {}
-    assert workspace.output_data == {}
-
-
-def test_initialization_logs_copy_records(monkeypatch, tmp_path):
-    """
-    Initialization should log each copied input/output record via Consist
-    using the RecordStore keys (sanitized when needed).
-    """
-
-    class DummyLoggingPreprocessor:
-        def __init__(self, input_path, output_path):
-            self.input_path = input_path
-            self.output_path = output_path
-
-        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
-            in_record = FileRecord(
-                unique_id="in1",
-                short_name="bad key",
-                file_path=str(self.input_path),
-            )
-            out_record = FileRecord(
-                unique_id="out1",
-                short_name="output_ok",
-                file_path=str(self.output_path),
-            )
-            return RecordStore(recordList=[in_record]), RecordStore(
-                recordList=[out_record]
-            )
-
-    input_path = tmp_path / "source.txt"
-    output_path = tmp_path / "dest.txt"
-    input_path.write_text("source")
-    output_path.write_text("dest")
-
-    _patch_preprocessors(
-        monkeypatch,
-        lambda _model_name, _state=None: DummyLoggingPreprocessor(
-            input_path, output_path
-        ),
-    )
-
-    logged_inputs = []
-    logged_outputs = []
-
-    def _log_input(path, key=None, **_kwargs):
-        logged_inputs.append((path, key))
-
-    def _log_output(path, key=None, **_kwargs):
-        logged_outputs.append((path, key))
-
-    monkeypatch.setattr("pilates.generic.initialization.cr.log_input", _log_input)
-    monkeypatch.setattr("pilates.generic.initialization.cr.log_output", _log_output)
-
-    init = Initialization("init", None)
-    workspace = DummyWorkspace()
-    workspace.full_path = str(tmp_path)
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel="beam",
-                activity_demand=None,
-                vehicle_ownership=None,
-                land_use="urbansim",
-            ),
-            start_year=2020,
-        )
-    )
+def test_ensure_activitysim_mutable_configs_creates_required_dirs_and_copies_zones(
+    tmp_path: Path,
+) -> None:
+    workspace = DummyWorkspace(tmp_path / "workspace")
     zones_path = tmp_path / "canonical_zones.geojson"
-    zones_path.write_text("{}")
-    settings.shared = SimpleNamespace(
-        geography=SimpleNamespace(
-            zones=SimpleNamespace(
-                source_file=str(zones_path),
-                activitysim_index_col="TAZ",
-                zone_type="block_group",
-                canonical_id_col="zone_key",
-            )
-        )
+    zones_path.write_text(
+        '{"type": "FeatureCollection", "features": []}', encoding="utf-8"
     )
 
-    init.run(settings, workspace)
-
-    assert (str(input_path), "bad_key") in logged_inputs
-    assert (str(output_path), "output_ok") in logged_outputs
-
-
-def test_build_bootstrap_artifact_summary_counts_records_by_model():
-    workspace = DummyWorkspace()
-    copied_records = RecordStore(
-        recordList=[
-            FileRecord(
-                unique_id="in1",
-                short_name="beam_in",
-                file_path="/tmp/in",
-                metadata={"model": "beam", "bootstrap_direction": "input"},
-            ),
-            FileRecord(
-                unique_id="out1",
-                short_name="beam_out1",
-                file_path="/tmp/out1",
-                metadata={"model": "beam", "bootstrap_direction": "output"},
-            ),
-            FileRecord(
-                unique_id="out2",
-                short_name="beam_out2",
-                file_path="/tmp/out2",
-                metadata={"model": "beam", "bootstrap_direction": "output"},
-            ),
-        ]
+    asim_configs_src = tmp_path / "asim_configs_src"
+    (asim_configs_src / "test_region" / "configs").mkdir(parents=True)
+    (asim_configs_src / "test_region" / "configs" / "settings.yaml").write_text(
+        "models:\n  - initialize_landuse\n", encoding="utf-8"
     )
-
-    summary = build_bootstrap_artifact_summary(workspace, copied_records)
-
-    assert summary["models"] == ["beam"]
-    assert summary["input_records_by_model"] == {"beam": 1}
-    assert summary["output_records_by_model"] == {"beam": 2}
-    assert summary["input_records_total"] == 1
-    assert summary["output_records_total"] == 2
-    assert summary["copied_records_total"] == 3
-
-
-def test_initialization_summary_counts_canonical_zones_under_activitysim(
-    monkeypatch, tmp_path
-):
-    from pilates.activitysim.preprocessor import ActivitysimPreprocessor
-    from pilates.utils import consist_runtime as cr
-
-    cr.set_enabled(False)
-
-    def _make_preprocessor(model_name, state):
-        if model_name == "activitysim":
-            return ActivitysimPreprocessor(model_name="activitysim", state=state)
-        return DummyPreprocessor()
-
-    _patch_preprocessors(monkeypatch, _make_preprocessor)
-    monkeypatch.setattr(
-        "pilates.activitysim.preprocessor._copytree_if_needed",
-        lambda *args, **kwargs: None,
+    (asim_configs_src / "common").mkdir(parents=True)
+    (asim_configs_src / "common" / "constants.yaml").write_text(
+        "sample: 1\n", encoding="utf-8"
     )
-    monkeypatch.setattr(
-        "pilates.activitysim.preprocessor._ensure_required_asim_config_dirs",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        "pilates.activitysim.preprocessor._disable_activitysim_vehicle_ownership_models_for_atlas",
-        lambda *args, **kwargs: None,
-    )
-
-    workspace = DummyWorkspace()
-    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
-    workspace.beam_mutable_dir = str(tmp_path / "beam")
-    workspace.usim_mutable_dir = str(tmp_path / "usim")
-    workspace.atlas_mutable_input_dir = str(tmp_path / "atlas_in")
-    workspace.atlas_output_dir = str(tmp_path / "atlas_out")
-
-    zones_path = tmp_path / "canonical_zones.geojson"
-    zones_path.write_text("{}")
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
-            region="sfbay",
-            models=SimpleNamespace(
-                travel="beam",
-                activity_demand="activitysim",
-                vehicle_ownership=None,
-                land_use="urbansim",
-            ),
-            start_year=2020,
+            region="test_region",
+            models=SimpleNamespace(vehicle_ownership=None),
         ),
         activitysim=SimpleNamespace(
-            local_configs_folder=str(tmp_path / "asim_configs"),
+            local_configs_folder=str(asim_configs_src),
             local_mutable_configs_folder="activitysim/configs",
+            local_mutable_data_folder="activitysim/data",
             main_configs_dir="configs",
             clipped_geoms_path=None,
         ),
         shared=SimpleNamespace(
-            skims=SimpleNamespace(zone_type="block_group"),
             geography=SimpleNamespace(
                 zones=SimpleNamespace(
                     source_file=str(zones_path),
@@ -420,301 +79,109 @@ def test_initialization_summary_counts_canonical_zones_under_activitysim(
                     zone_type="block_group",
                     canonical_id_col="zone_key",
                 )
-            ),
+            )
         ),
     )
 
-    try:
-        init = Initialization("init", None)
-        copied_records = init.run(settings, workspace)
-        summary = build_bootstrap_artifact_summary(workspace, copied_records)
-
-        assert summary["input_records_by_model"]["activitysim"] == 1
-        assert summary["output_records_by_model"]["activitysim"] == 1
-        assert "activitysim" in summary["models"]
-    finally:
-        cr.set_enabled(None)
+    configs_dir = ensure_activitysim_mutable_configs(settings, workspace)
+    assert configs_dir == Path(workspace.get_asim_mutable_configs_dir())
+    assert (configs_dir / "configs" / "settings.yaml").is_file()
+    assert (configs_dir / "configs_common" / "constants.yaml").is_file()
+    assert (
+        Path(workspace.get_asim_mutable_data_dir()) / "canonical_zones.geojson"
+    ).is_file()
 
 
-def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_activitysim_enabled(
-    monkeypatch, tmp_path
-):
-    from pilates.utils import consist_runtime as cr
-
-    cr.set_enabled(False)
-
-    class _CountingPreprocessor:
-        def __init__(self, model_name, calls):
-            self.model_name = model_name
-            self.calls = calls
-
-        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
-            self.calls.append((self.model_name, output_dir, workspace))
-            record = FileRecord(
-                unique_id=f"{self.model_name}-out",
-                short_name=f"{self.model_name}_output",
-                file_path=str(tmp_path / f"{self.model_name}.txt"),
-            )
-            return RecordStore(), RecordStore(recordList=[record])
-
-    calls = []
-    _patch_preprocessors(
-        monkeypatch,
-        lambda model_name, _state=None: _CountingPreprocessor(model_name, calls),
+def test_ensure_beam_mutable_workspace_preserves_existing_files(
+    tmp_path: Path,
+) -> None:
+    workspace = DummyWorkspace(tmp_path / "workspace")
+    prod_dir = tmp_path / "beam_prod" / "sfbay"
+    (prod_dir / "urbansim").mkdir(parents=True)
+    (prod_dir / "sfbay.conf").write_text("beam.conf = 1\n", encoding="utf-8")
+    (prod_dir / "urbansim" / "plans.csv.gz").write_text(
+        "static_plans\n", encoding="utf-8"
     )
 
-    workspace = DummyWorkspace()
-    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
-    workspace.usim_mutable_dir = str(tmp_path / "usim")
+    dest_plans = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / "sfbay"
+        / "urbansim"
+        / "plans.csv.gz"
+    )
+    dest_plans.parent.mkdir(parents=True, exist_ok=True)
+    dest_plans.write_text("step_generated_plans\n", encoding="utf-8")
 
     settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel="none",
-                activity_demand="activitysim",
-                vehicle_ownership=None,
-                land_use="urbansim",
-            ),
-            start_year=2020,
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(
+            local_input_folder=str(tmp_path / "beam_prod"),
+            local_mutable_data_folder="beam/input",
         ),
         shared=SimpleNamespace(
+            skims=SimpleNamespace(fname="skims.omx"),
             geography=SimpleNamespace(zones=None),
         ),
+        activitysim=None,
     )
 
-    try:
-        init = Initialization("init", None)
-        init.run(settings, workspace)
-
-        urbansim_calls = [call for call in calls if call[0] == "urbansim"]
-        activitysim_calls = [call for call in calls if call[0] == "activitysim"]
-
-        assert len(urbansim_calls) == 1
-        assert len(activitysim_calls) == 1
-        assert activitysim_calls[0][1] == workspace.get_asim_mutable_data_dir()
-        assert activitysim_calls[0][2] is workspace
-    finally:
-        cr.set_enabled(None)
+    dest_region = ensure_beam_mutable_workspace(settings, workspace)
+    assert (dest_region / "sfbay.conf").is_file()
+    assert dest_plans.read_text(encoding="utf-8") == "step_generated_plans\n"
 
 
-def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_path):
-    from pilates.utils import consist_runtime as cr
+def test_stage_selected_atlas_static_inputs_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    src_file = tmp_path / "src" / "cpi.csv"
+    src_file.parent.mkdir(parents=True)
+    src_file.write_text("year,cpi\n2015,1.0\n", encoding="utf-8")
 
-    cr.set_enabled(False)
-
-    class _ActivitySimPreprocessor:
-        def __init__(self, calls):
-            self.calls = calls
-
-        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
-            self.calls.append((output_dir, workspace))
-            return RecordStore(), RecordStore()
-
-    calls = []
-
-    def _make_preprocessor(model_name, _state=None):
-        if model_name == "activitysim":
-            return _ActivitySimPreprocessor(calls)
-        return DummyPreprocessor()
-
-    _patch_preprocessors(monkeypatch, _make_preprocessor)
-    monkeypatch.setattr(
-        "pilates.generic.initialization.stage_synthetic_population",
-        lambda settings, output_dir: (RecordStore(), RecordStore()),
+    dest_dir = tmp_path / "atlas_input"
+    selected = (("cpi.csv", src_file),)
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        atlas=SimpleNamespace(
+            local_data_input_folder=str(tmp_path / "src"),
+            default_data_input_folder=str(tmp_path / "src"),
+        ),
     )
 
-    workspace = DummyWorkspace()
-    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
-    zones_path = tmp_path / "canonical_zones.geojson"
-    zones_path.write_text("{}", encoding="utf-8")
+    stage_selected_atlas_static_inputs(
+        settings=settings,
+        output_dir=str(dest_dir),
+        selected_sources=selected,
+    )
+    assert (dest_dir / "cpi.csv").read_text(encoding="utf-8") == "year,cpi\n2015,1.0\n"
+
+    # Modify destination and verify idempotent call does not overwrite existing file
+    (dest_dir / "cpi.csv").write_text("modified\n", encoding="utf-8")
+    stage_selected_atlas_static_inputs(
+        settings=settings,
+        output_dir=str(dest_dir),
+        selected_sources=selected,
+    )
+    assert (dest_dir / "cpi.csv").read_text(encoding="utf-8") == "modified\n"
+
+
+def test_resolve_urbansim_initial_datastore_source_path_prefers_year_template(
+    tmp_path: Path,
+) -> None:
+    usim_dir = tmp_path / "urbansim_data"
+    usim_dir.mkdir(parents=True)
+    year_h5 = usim_dir / "custom_mpo_06197001_model_data_2015.h5"
+    base_h5 = usim_dir / "custom_mpo_06197001_model_data.h5"
+    year_h5.write_text("year", encoding="utf-8")
+    base_h5.write_text("base", encoding="utf-8")
 
     settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel=None,
-                activity_demand="activitysim",
-                vehicle_ownership=None,
-                land_use=None,
-            ),
-            start_year=2020,
-        ),
-        shared=SimpleNamespace(
-            geography=SimpleNamespace(
-                zones=SimpleNamespace(
-                    source_file=str(zones_path),
-                    activitysim_index_col="TAZ",
-                    zone_type="block_group",
-                    canonical_id_col="zone_key",
-                )
-            ),
-        ),
-    )
-
-    try:
-        init = Initialization("init", None)
-        init.run(settings, workspace)
-
-        assert calls == [(workspace.get_asim_mutable_data_dir(), workspace)]
-    finally:
-        cr.set_enabled(None)
-
-
-def test_initialization_beam_only_does_not_stage_disabled_models(monkeypatch, tmp_path):
-    from pilates.utils import consist_runtime as cr
-
-    cr.set_enabled(False)
-
-    class _CountingPreprocessor:
-        def __init__(self, model_name, calls):
-            self.model_name = model_name
-            self.calls = calls
-
-        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
-            self.calls.append((self.model_name, output_dir, workspace))
-            record = FileRecord(
-                unique_id=f"{self.model_name}-out",
-                short_name=f"{self.model_name}_output",
-                file_path=str(tmp_path / f"{self.model_name}.txt"),
-            )
-            return RecordStore(), RecordStore(recordList=[record])
-
-    calls = []
-    _patch_preprocessors(
-        monkeypatch,
-        lambda model_name, _state=None: _CountingPreprocessor(model_name, calls),
-    )
-
-    workspace = DummyWorkspace()
-    workspace.beam_mutable_dir = str(tmp_path / "beam")
-    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
-    workspace.usim_mutable_dir = str(tmp_path / "usim")
-    workspace.atlas_mutable_input_dir = str(tmp_path / "atlas_in")
-    workspace.atlas_output_dir = str(tmp_path / "atlas_out")
-
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel="beam",
-                activity_demand=None,
-                vehicle_ownership=None,
-                land_use=None,
-            ),
-            start_year=2020,
-            region="seattle",
-        ),
-        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
-        activitysim=SimpleNamespace(file_format="parquet"),
-        shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
-    )
-
-    try:
-        init = Initialization("init", None)
-        copied_records = init.run(settings, workspace)
-
-        assert [call[0] for call in calls] == ["beam"]
-        summary = build_bootstrap_artifact_summary(workspace, copied_records)
-        assert summary["models"] == ["beam"]
-        assert "activitysim" not in summary["input_records_by_model"]
-        assert "urbansim" not in summary["input_records_by_model"]
-        assert "atlas" not in summary["input_records_by_model"]
-    finally:
-        cr.set_enabled(None)
-
-
-def test_initialization_activitysim_beam_stages_only_required_model_families(
-    monkeypatch, tmp_path
-):
-    from pilates.utils import consist_runtime as cr
-
-    cr.set_enabled(False)
-
-    class _CountingPreprocessor:
-        def __init__(self, model_name, calls):
-            self.model_name = model_name
-            self.calls = calls
-
-        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
-            self.calls.append((self.model_name, output_dir, workspace))
-            record = FileRecord(
-                unique_id=f"{self.model_name}-out",
-                short_name=f"{self.model_name}_output",
-                file_path=str(tmp_path / f"{self.model_name}.txt"),
-            )
-            return RecordStore(), RecordStore(recordList=[record])
-
-    calls = []
-    _patch_preprocessors(
-        monkeypatch,
-        lambda model_name, _state=None: _CountingPreprocessor(model_name, calls),
-    )
-
-    usim_data_dir = tmp_path / "urbansim_data"
-    usim_data_dir.mkdir(parents=True)
-    h5_file = usim_data_dir / "custom_mpo_53033001_model_data_2020.h5"
-    h5_file.write_text("h5_bytes", encoding="utf-8")
-    meta_file = usim_data_dir / "custom_mpo_53033001_model_data_2020.h5.metadata.json"
-    meta_file.write_text('{"meta": true}', encoding="utf-8")
-
-    workspace = DummyWorkspace()
-    workspace.beam_mutable_dir = str(tmp_path / "beam")
-    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
-    workspace.usim_mutable_dir = str(tmp_path / "usim")
-    workspace.atlas_mutable_input_dir = str(tmp_path / "atlas_in")
-    workspace.atlas_output_dir = str(tmp_path / "atlas_out")
-    zones_path = tmp_path / "canonical_zones.geojson"
-    zones_path.write_text("{}", encoding="utf-8")
-
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel="beam",
-                activity_demand="activitysim",
-                vehicle_ownership=None,
-                land_use=None,
-            ),
-            start_year=2020,
-            region="seattle",
-        ),
+        run=SimpleNamespace(region="sfbay", start_year=2015),
         urbansim=SimpleNamespace(
-            region_id="53033001",
-            local_data_input_folder=str(usim_data_dir),
+            local_data_input_folder=str(usim_dir),
             input_file_template="custom_mpo_{region_id}_model_data.h5",
             input_file_template_year="custom_mpo_{region_id}_model_data_{start_year}.h5",
-            region_mappings={"region_to_region_id": {"seattle": "53033001"}},
-        ),
-        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
-        activitysim=SimpleNamespace(file_format="parquet"),
-        shared=SimpleNamespace(
-            geography=SimpleNamespace(
-                zones=SimpleNamespace(
-                    source_file=str(zones_path),
-                    activitysim_index_col="TAZ",
-                    zone_type="block_group",
-                    canonical_id_col="zone_key",
-                )
-            )
+            region_mappings={"region_to_region_id": {"sfbay": "06197001"}},
         ),
     )
 
-    try:
-        init = Initialization("init", None)
-        copied_records = init.run(settings, workspace)
-
-        assert [call[0] for call in calls] == [
-            "beam",
-            "activitysim",
-        ]
-        assert (
-            Path(workspace.usim_mutable_dir) / "custom_mpo_53033001_model_data.h5"
-        ).exists()
-        assert (
-            Path(workspace.usim_mutable_dir)
-            / "custom_mpo_53033001_model_data.h5.metadata.json"
-        ).exists()
-        summary = build_bootstrap_artifact_summary(workspace, copied_records)
-        assert "beam" in summary["models"]
-        assert "activitysim" in summary["models"]
-        assert "urbansim" not in summary["models"]
-        assert "atlas" not in summary["models"]
-    finally:
-        cr.set_enabled(None)
+    assert resolve_urbansim_initial_datastore_source_path(settings) == year_h5

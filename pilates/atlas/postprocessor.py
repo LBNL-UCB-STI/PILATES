@@ -8,7 +8,7 @@ import zlib
 import numpy as np
 import pandas as pd
 
-from pilates.atlas.inputs import atlas_selected_scenario
+from pilates.atlas.static_inputs import atlas_selected_scenario
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
@@ -19,7 +19,7 @@ from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 
 logger = logging.getLogger(__name__)
@@ -128,6 +128,12 @@ def resolve_atlas_vehicle_type_mapping_path(
     candidates = []
     if workspace is not None:
         candidates.append(Path(workspace.get_atlas_mutable_input_dir()) / mapping_name)
+        try:
+            candidates.append(
+                Path(workspace.get_atlas_static_input_dir()) / mapping_name
+            )
+        except AttributeError:
+            pass
     candidates.append(Path(__file__).resolve().parent / "atlas_input" / mapping_name)
 
     for candidate in candidates:

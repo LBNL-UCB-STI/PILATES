@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Dict, Optional, Type
 
 from sqlmodel import SQLModel
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 from pilates.database.schema.activitysim_schema import (
     AccessibilityAsimOut,
@@ -166,15 +165,14 @@ def get_schema_for_key(key: Optional[str]) -> Optional[Type[SQLModel]]:
     """Look up a curated schema for a given artifact key."""
     if not key:
         return None
-    resolved_key = resolve_artifact_key(key)
-    exact = _SCHEMA_BY_KEY.get(resolved_key)
+    exact = _SCHEMA_BY_KEY.get(key)
     if exact is not None:
         return exact
-    split_event_schema = _schema_for_events_parquet_split_key(resolved_key)
+    split_event_schema = _schema_for_events_parquet_split_key(key)
     if split_event_schema is not None:
         return split_event_schema
     for prefix, schema in _SCHEMA_BY_PREFIX.items():
-        if resolved_key.startswith(prefix):
+        if key.startswith(prefix):
             return schema
     return None
 

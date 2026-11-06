@@ -5,7 +5,7 @@ from typing import Generic, Optional, TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 
 PostprocessInputsT = TypeVar("PostprocessInputsT")
@@ -22,7 +22,6 @@ class GenericPostprocessor(ABC, Generic[PostprocessInputsT, PostprocessOutputsT]
     ):
         self.model_name = model_name
         self.state = state
-        self.required_input_data: list[str] = []
 
     def postprocess(
         self,

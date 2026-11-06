@@ -13,14 +13,12 @@ from typing import (
     Protocol,
     Sequence,
     Tuple,
-    TypedDict,
+    runtime_checkable,
 )
 
 from pilates.runtime.promote_run_archive import _open_archive_tracker
 from pilates.runtime.scenario_runtime import resolve_cache_epoch
-from pilates.utils.coupler_helpers import (
-    resolve_existing_path,
-)
+from pilates.utils.archive_paths import WorkspaceRootLike, resolve_archive_run_dir
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import current_year, is_start_year, iteration_index
 from pilates.workflows.artifact_keys import (
@@ -29,7 +27,6 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
-from pilates.workflows.binding import restart_required_local_artifact_policy
 
 logger = logging.getLogger(__name__)
 
@@ -46,19 +43,9 @@ RESTART_REMAPPABLE_SCHEMES: Mapping[str, str] = {
 }
 
 
-class WorkflowStageLike(Protocol):
-    supply_demand_loop: Any
-    traffic_assignment: Any
-
-
+@runtime_checkable
 class RestoredSnapshotLike(Protocol):
     pruned_keys: Tuple[str, ...]
-
-
-class RestartArtifactDiagnostic(TypedDict):
-    key: str
-    path: str
-    reason: str
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -66,86 +53,6 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def restart_required_local_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    surface: Any = None,
-    get_usim_datastore_fname_fn: Callable[..., str],
-    required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
-    atlas_static_input_relpaths_fn: Callable[[Any], Sequence[str]],
-    workflow_stage: Any,
-) -> List[RestartArtifactDiagnostic]:
-    """Build the local restart artifact inventory used by preflight checks.
-
-    This stays operational rather than semantic: the surface decides which
-    frontier/bootstrap classifications are active, while this function keeps the
-    existing path resolution and local-materialization checks.
-    """
-    required: List[RestartArtifactDiagnostic] = []
-    for rule in restart_required_local_artifact_policy():
-        resolved = rule.resolve(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            get_usim_datastore_fname_fn=get_usim_datastore_fname_fn,
-            required_asim_config_dirs_fn=required_asim_config_dirs_fn,
-            atlas_static_input_relpaths_fn=atlas_static_input_relpaths_fn,
-            workflow_stage=workflow_stage,
-        )
-        if not resolved:
-            continue
-        for key, path in resolved.items():
-            if path is None:
-                continue
-            required.append(
-                {
-                    "key": key,
-                    "path": path,
-                    "reason": (
-                        f"Restart policy '{rule.name}' requires {key}"
-                        + (f" ({rule.notes})" if rule.notes else "")
-                    ),
-                }
-            )
-    return required
-
-
-def find_missing_restart_local_artifacts(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    surface: Any = None,
-    restart_required_local_artifacts_fn: Callable[..., List[RestartArtifactDiagnostic]],
-) -> List[RestartArtifactDiagnostic]:
-    """Resolve the restart inventory against local/archive materialization state."""
-    missing: List[RestartArtifactDiagnostic] = []
-    kwargs = {
-        "settings": settings,
-        "state": state,
-        "workspace": workspace,
-    }
-    if surface is not None:
-        kwargs["surface"] = surface
-    for artifact in restart_required_local_artifacts_fn(**kwargs):
-        path = os.path.realpath(artifact["path"])
-        resolved_path = resolve_existing_path(
-            path,
-            workspace=workspace,
-        )
-        if resolved_path is None or not os.path.exists(resolved_path):
-            missing.append(
-                {
-                    "key": artifact["key"],
-                    "path": path,
-                    "reason": artifact["reason"],
-                }
-            )
-    return missing
 
 
 def hydrate_restart_atlas_continuation_inputs(
@@ -157,20 +64,17 @@ def hydrate_restart_atlas_continuation_inputs(
 ) -> None:
     """Hydrate the selected prior ATLAS subyear before strict restart checks."""
 
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+    if get_setting(settings, "run.models.vehicle_ownership", None) != "atlas":
         return
     if (
-        getattr(state, "current_major_stage", None)
+        get_setting(state, "current_major_stage", None)
         != workflow_stage.vehicle_ownership_model
     ):
         return
 
-    start_year = _coerce_int(getattr(state, "start_year", None))
-    atlas_year = _coerce_int(
-        getattr(state, "year", getattr(state, "current_year", None))
-    )
-    run_info_path = getattr(state, "run_info_path", None)
+    start_year = _coerce_int(get_setting(state, "start_year", None))
+    atlas_year = _coerce_int(get_setting(state, "year", current_year(state)))
+    run_info_path = get_setting(state, "run_info_path", None)
     if (
         start_year is None
         or atlas_year is None
@@ -190,7 +94,7 @@ def hydrate_restart_atlas_continuation_inputs(
             f"ATLAS restart requires an archive Consist tracker for {archive_run_dir}"
         )
 
-    iteration = _coerce_int(getattr(state, "iteration", None))
+    iteration = _coerce_int(get_setting(state, "iteration", None))
     facet = _restart_atlas_identity_facet(
         settings=settings,
         state=state,
@@ -198,10 +102,8 @@ def hydrate_restart_atlas_continuation_inputs(
         workspace=workspace,
     )
     cache_epoch = resolve_cache_epoch(settings)
-    preprocess_target = {
-        "model": "atlas_preprocess",
+    base_target: dict[str, Any] = {
         "stage": "vehicle_ownership",
-        "phase": "preprocess",
         "status": "completed",
         "year": prior_atlas_year,
         "cache_epoch": cache_epoch,
@@ -209,59 +111,31 @@ def hydrate_restart_atlas_continuation_inputs(
         "run_scope": archive_run_dir.name,
     }
     if iteration is not None:
-        preprocess_target["iteration"] = iteration
+        base_target["iteration"] = iteration
+
     preprocess_run = _select_exact_completed_restart_run(
         tracker=tracker,
-        target=preprocess_target,
+        target={**base_target, "model": "atlas_preprocess", "phase": "preprocess"},
         step_name="atlas_preprocess",
     )
-
-    atlas_target = {
-        "model": "atlas_run",
-        "stage": "vehicle_ownership",
-        "phase": "run",
-        "status": "completed",
-        "year": prior_atlas_year,
-        "cache_epoch": cache_epoch,
-        "facet": facet,
-        "run_scope": archive_run_dir.name,
-    }
-    if iteration is not None:
-        atlas_target["iteration"] = iteration
     atlas_run = _select_exact_completed_restart_run(
         tracker=tracker,
-        target=atlas_target,
+        target={**base_target, "model": "atlas_run", "phase": "run"},
         step_name="atlas_run",
     )
 
     from pilates.workflows.steps.atlas import (
-        _atlas_preprocess_prepared_input_paths,
+        hydrate_atlas_subyear_continuation_outputs,
     )
 
-    prior_state = type(
-        "RestartAtlasSubState",
-        (),
-        {
-            "year": prior_atlas_year,
-            "forecast_year": prior_atlas_year,
-            "start_year": start_year,
-        },
-    )()
-    prepared_destinations = _atlas_preprocess_prepared_input_paths(
+    hydrate_atlas_subyear_continuation_outputs(
+        tracker=tracker,
         settings=settings,
-        state=prior_state,
         workspace=workspace,
-    )
-    tracker.hydrate_run_outputs(
-        str(atlas_run.id),
-        target_root=workspace.full_path,
-        keys=[f"atlas_continuation_{prior_atlas_year}"],
-        preserve_existing=False,
-        on_missing="raise",
-    )
-    tracker.hydrate_run_outputs_to_destinations(
-        str(preprocess_run.id),
-        destinations_by_key=prepared_destinations,
+        prior_year=prior_atlas_year,
+        start_year=start_year,
+        atlas_run_id=str(atlas_run.id),
+        preprocess_run_id=str(preprocess_run.id),
         preserve_existing=False,
         on_missing="raise",
     )
@@ -276,9 +150,11 @@ def _restart_atlas_identity_facet(
 ) -> dict[str, Any]:
     """Reconstruct the native ATLAS producer facet for one archived subyear."""
 
-    from pilates.utils.consist_config import build_step_consist_kwargs
+    from pilates.workflows.consist_metadata import build_step_consist_kwargs
 
-    workspace_path = getattr(workspace, "full_path", None)
+    workspace_path = (
+        workspace.full_path if isinstance(workspace, WorkspaceRootLike) else None
+    )
     metadata = build_step_consist_kwargs(
         model="atlas_preprocess",
         settings=settings,
@@ -296,7 +172,7 @@ def _restart_atlas_identity_facet(
 def _atlas_parent_forecast_year_for_subyear(*, state: Any, atlas_subyear: int) -> int:
     """Return the scheduler boundary that ended the selected ATLAS interval."""
 
-    schedule = tuple(int(year) for year in getattr(state, "_year_schedule", ()))
+    schedule = tuple(int(year) for year in get_setting(state, "_year_schedule", ()))
     boundary_index = bisect_left(schedule, atlas_subyear)
     if boundary_index == len(schedule) or (
         boundary_index == 0 and atlas_subyear < schedule[0]
@@ -340,80 +216,6 @@ def _select_exact_completed_restart_run(
     return candidates[0]
 
 
-def format_missing_artifact_summary(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-) -> str:
-    if not artifacts:
-        return "none"
-    return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
-
-
-def split_prebootstrap_missing_artifacts(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-    *,
-    surface: Any,
-) -> Tuple[List[RestartArtifactDiagnostic], List[RestartArtifactDiagnostic]]:
-    blocking_missing = [
-        item
-        for item in artifacts
-        if not surface.is_restart_prebootstrap_deferred_artifact_key(
-            item.get("key", "")
-        )
-    ]
-    deferred_missing = [
-        item
-        for item in artifacts
-        if surface.is_restart_prebootstrap_deferred_artifact_key(item.get("key", ""))
-    ]
-    return blocking_missing, deferred_missing
-
-
-def log_prebootstrap_missing_artifacts(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-    *,
-    surface: Any,
-) -> None:
-    if not artifacts:
-        return
-    blocking_missing, deferred_missing = split_prebootstrap_missing_artifacts(
-        artifacts,
-        surface=surface,
-    )
-    if blocking_missing:
-        logger.warning(
-            "Restart diagnostic found missing local workspace inputs while "
-            "data_initialized=True: %s",
-            format_missing_artifact_summary(blocking_missing),
-        )
-    if deferred_missing:
-        logger.info(
-            "Restart diagnostic deferring bootstrap-owned workspace inputs "
-            "until bootstrap hydration: %s",
-            format_missing_artifact_summary(deferred_missing),
-        )
-
-
-def enforce_postbootstrap_missing_artifacts(
-    artifacts: Sequence[RestartArtifactDiagnostic],
-    *,
-    settings: Any,
-) -> None:
-    if artifacts:
-        logger.warning(
-            "Restart diagnostic still sees missing local workspace inputs "
-            "after restart bootstrap: %s",
-            format_missing_artifact_summary(artifacts),
-        )
-    if artifacts and bool(
-        getattr(getattr(settings, "run", None), "restart_strict", False)
-    ):
-        raise RuntimeError(
-            "Strict restart preflight failed; required restart artifacts are "
-            "still missing after restart bootstrap. missing="
-            + format_missing_artifact_summary(artifacts)
-        )
-
-
 def read_archive_run_state_year(
     state_path: str,
     *,
@@ -438,7 +240,7 @@ def enforce_resume_rewind_guardrail(
     allow_rewind_resume: bool,
     read_archive_run_state_year_fn: Callable[[str], Optional[int]],
 ) -> None:
-    resume_year = _coerce_int(getattr(state, "current_year", None))
+    resume_year = _coerce_int(get_setting(state, "current_year", None))
     archive_year = read_archive_run_state_year_fn(archive_state_path)
     if resume_year is None or archive_year is None:
         return
@@ -456,6 +258,106 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
+def _resolve_restart_before_step_ordinal(
+    *,
+    tracker: Any,
+    scenario_run_id: str,
+    state: Any,
+) -> Optional[int]:
+    """Return the earliest step_ordinal at or after the resumed workflow frontier, if any."""
+    from pilates.workflows.state import WorkflowState
+
+    if not isinstance(state, WorkflowState):
+        return None
+    from consist import Tracker
+    from consist.models.run import Run, RunCouplerSnapshot
+    from sqlmodel import col, select
+
+    if not isinstance(tracker, Tracker) or tracker.db is None:
+        return None
+
+    cur_year = state.current_year
+    fcast_year = state.forecast_year
+    cur_iter = int(state.iteration or 0)
+    major_stage = state.current_major_stage
+
+    try:
+        with tracker.db.session_scope() as session:
+            rows = session.exec(
+                select(
+                    RunCouplerSnapshot.step_ordinal,
+                    Run.stage,
+                    Run.year,
+                    Run.iteration,
+                )
+                .join(Run, col(RunCouplerSnapshot.run_id) == col(Run.id))
+                .where(
+                    col(RunCouplerSnapshot.scenario_run_id) == scenario_run_id,
+                    col(RunCouplerSnapshot.phase) == "post",
+                )
+            ).all()
+    except Exception:
+        return None
+
+    if not rows:
+        return None
+
+    max_land_use_ord = max(
+        (
+            int(step_ord)
+            for step_ord, r_stage, r_year, _ in rows
+            if r_stage == "land_use" and r_year == cur_year
+        ),
+        default=0,
+    )
+    matching_ordinals: list[int] = []
+    for step_ord, r_stage, r_year, r_iter in rows:
+        ord_int = int(step_ord)
+        r_iter_int = int(r_iter or 0)
+        if major_stage == WorkflowState.Stage.land_use:
+            if (
+                r_stage == "land_use" and r_year is not None and r_year >= cur_year
+            ) or (
+                r_stage == "supply_demand"
+                and r_year is not None
+                and fcast_year is not None
+                and r_year >= fcast_year
+            ):
+                matching_ordinals.append(ord_int)
+        elif major_stage == WorkflowState.Stage.vehicle_ownership_model:
+            if (
+                (r_stage == "land_use" and r_year is not None and r_year > cur_year)
+                or (
+                    r_stage == "vehicle_ownership"
+                    and ord_int > max_land_use_ord
+                    and r_year is not None
+                    and r_year >= cur_year
+                )
+                or (
+                    r_stage == "supply_demand"
+                    and r_year is not None
+                    and fcast_year is not None
+                    and r_year >= fcast_year
+                )
+            ):
+                matching_ordinals.append(ord_int)
+        elif major_stage == WorkflowState.Stage.supply_demand_loop:
+            if (r_stage == "land_use" and r_year is not None and r_year > cur_year) or (
+                r_stage == "supply_demand"
+                and r_year is not None
+                and fcast_year is not None
+                and (
+                    r_year > fcast_year
+                    or (r_year == fcast_year and r_iter_int >= cur_iter)
+                )
+            ):
+                matching_ordinals.append(ord_int)
+
+    if not matching_ordinals:
+        return None
+    return min(matching_ordinals)
+
+
 def restore_restart_coupler_snapshot(
     *,
     scenario: Any,
@@ -465,36 +367,28 @@ def restore_restart_coupler_snapshot(
     workspace: Any,
 ) -> Mapping[str, Any]:
     """Restore coupler state from DuckDB, materializing available artifacts and enforcing warmstart policy."""
-    del tracker
     candidate_ids: List[str] = []
     output_run_name = get_setting(settings, "run.output_run_name", None)
+    run_info_path = get_setting(state, "run_info_path", None)
     for cand in (
-        getattr(state, "scenario_id", None),
-        (
-            Path(state.run_info_path).resolve().parent.name
-            if getattr(state, "run_info_path", None)
-            else None
-        ),
-        getattr(state, "run_id", None),
+        get_setting(state, "scenario_id", None),
+        Path(run_info_path).resolve().parent.name if run_info_path else None,
+        get_setting(state, "run_id", None),
         output_run_name,
     ):
         if cand and str(cand) not in candidate_ids:
             candidate_ids.append(str(cand))
 
-    workspace_full_path = getattr(workspace, "full_path", None)
-    target_root = Path(workspace_full_path) if workspace_full_path else None
-    archive_run_dir_val = (
-        getattr(workspace, "archive_run_dir", None)
-        or get_setting(settings, "run.archive_run_dir", None)
-        or (
-            Path(state.run_info_path).parent
-            if getattr(state, "run_info_path", None)
-            else None
-        )
+    workspace_full_path = (
+        workspace.full_path if isinstance(workspace, WorkspaceRootLike) else None
     )
+    target_root = Path(workspace_full_path) if workspace_full_path else None
+    archive_run_dir_val = resolve_archive_run_dir(
+        workspace=workspace, state=state
+    ) or get_setting(settings, "run.archive_run_dir", None)
     source_root = Path(archive_run_dir_val).resolve() if archive_run_dir_val else None
 
-    coupler_obj = getattr(scenario, "coupler", None)
+    coupler_obj = get_setting(scenario, "coupler", None)
     baseline_coupler: Optional[dict[str, Any]] = (
         dict(coupler_obj) if isinstance(coupler_obj, Mapping) else None
     )
@@ -506,29 +400,40 @@ def restore_restart_coupler_snapshot(
             if baseline_coupler is not None and coupler_obj is not None:
                 coupler_obj.clear()
                 coupler_obj.update(baseline_coupler)
-            restored = scenario.restore_coupler_snapshot(
-                phase="post",
+            before_ord = _resolve_restart_before_step_ordinal(
+                tracker=tracker,
                 scenario_run_id=sid,
-                clear_existing=False,
-                fallback_to_completed_outputs=True,
-                target_root=target_root,
-                source_root=source_root,
-                remappable_schemes=RESTART_REMAPPABLE_SCHEMES,
-                prune_unrecoverable=True,
+                state=state,
             )
+            if before_ord == 1:
+                continue
+            restore_kwargs: dict[str, Any] = {
+                "phase": "post",
+                "scenario_run_id": sid,
+                "clear_existing": False,
+                "fallback_to_completed_outputs": True,
+                "target_root": target_root,
+                "source_root": source_root,
+                "remappable_schemes": RESTART_REMAPPABLE_SCHEMES,
+                "prune_unrecoverable": True,
+            }
+            if before_ord is not None and before_ord > 1:
+                restore_kwargs["before_step_ordinal"] = before_ord
+            restored = scenario.restore_coupler_snapshot(**restore_kwargs)
             if restored:
                 break
             pruned_for_sid = (
                 restored.pruned_keys
-                if isinstance(restored, Mapping) and hasattr(restored, "pruned_keys")
+                if isinstance(restored, Mapping)
+                and isinstance(restored, RestoredSnapshotLike)
                 else ()
             )
             if pruned_for_sid and fallback_pruned_result is None:
                 fallback_pruned_result = restored
         if not restored and fallback_pruned_result is not None:
             restored = fallback_pruned_result
-            if coupler_obj is not None:
-                for pruned_key in getattr(restored, "pruned_keys", ()):
+            if coupler_obj is not None and isinstance(restored, RestoredSnapshotLike):
+                for pruned_key in restored.pruned_keys:
                     coupler_obj.pop(pruned_key, None)
     else:
         restored = scenario.restore_coupler_snapshot(
@@ -547,20 +452,17 @@ def restore_restart_coupler_snapshot(
 
     pruned_keys: Sequence[str] = (
         restored.pruned_keys
-        if isinstance(restored, Mapping) and hasattr(restored, "pruned_keys")
+        if isinstance(restored, Mapping) and isinstance(restored, RestoredSnapshotLike)
         else ()
     )
     current_iteration = _coerce_int(iteration_index(state, default=0)) or 0
-    restart_strict = bool(
-        getattr(getattr(settings, "run", None), "restart_strict", False)
-    )
-    beam_settings = getattr(settings, "beam", None)
-    replan_pct = float(getattr(beam_settings, "replan_PercentOfIter", 0.0) or 0.0)
-    discard_plans = bool(getattr(beam_settings, "discard_plans_every_year", False))
+    restart_strict = bool(get_setting(settings, "run.restart_strict", False))
+    replan_pct = float(get_setting(settings, "beam.replan_PercentOfIter", 0.0) or 0.0)
+    discard_plans = bool(get_setting(settings, "beam.discard_plans_every_year", False))
     has_resolved_year = (
         current_year(state) is not None
-        or getattr(state, "forecast_year", None) is not None
-        or callable(getattr(state, "is_start_year", None))
+        or get_setting(state, "forecast_year", None) is not None
+        or callable(get_setting(state, "is_start_year", None))
     )
     requires_cross_year_plans = (
         has_resolved_year and not is_start_year(state, settings) and not discard_plans

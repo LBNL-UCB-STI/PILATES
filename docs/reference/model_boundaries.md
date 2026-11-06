@@ -6,10 +6,10 @@ PILATES couples four domain simulators across forecast years and replanning iter
 
 | Model | Domain Role | Workflow Stage | Primary Inputs | Primary Outputs |
 | --- | --- | --- | --- | --- |
-| **UrbanSim** | Land use and demographic forecasting | `land_use` | Base/prior-year HDF5 model store, accessibility skims (`ZARR_SKIMS` or `OMX_SKIMS`) | Forecasted households, persons, jobs, buildings, blocks, and land-use tables |
-| **ATLAS** | Household vehicle fleet synthesis | `land_use` (vehicle ownership step) | UrbanSim demographic tables (`households`, `persons`, `blocks`) | Synthesized household vehicle counts and fleet attributes (`vehicles.csv`, `households.csv`) |
-| **ActivitySim** | Activity-based travel demand | `demand` | Land use, households, persons, tours/vehicles, and network skims | Disaggregate `final_households`, `final_persons`, `final_tours`, `final_trips`, `final_land_use` |
-| **BEAM** | Multi-modal agent-based network supply | `supply` | ActivitySim plans (`persons`, `households`, `plans`/`tours`/`trips`), road and transit networks | Origin-destination skims (`FINAL_SKIMS_OMX`, `ZARR_SKIMS`), `BEAM_LINKSTATS`, `BEAM_EVENTS` |
+| **UrbanSim** | Land use and demographic forecasting | `land_use` | Base/prior-year HDF5 model store (`usim_datastore_h5`), accessibility skims (`final_skims_omx` / `omx_skims`) | Forecasted households, persons, jobs, buildings, blocks, and land-use tables (`usim_forecast_output`, `usim_population_source_h5`) |
+| **ATLAS** | Household vehicle fleet synthesis | `vehicle_ownership_model` | UrbanSim demographic tables (`usim_datastore_h5`, `usim_datastore_base_h5`) | Updated HDF5 vehicle counts (`usim_h5_updated`, `usim_population_source_h5`) and fleet table (`atlas_vehicles2_output`) |
+| **ActivitySim** | Activity-based travel demand | `supply_demand_loop` (`activity_demand`) | Land use, households, persons (`land_use_asim_in`, `households_asim_in`, `persons_asim_in`), and network skims (`zarr_skims` or `omx_skims`) | Disaggregate `households_asim_out`, `persons_asim_out`, `tours_asim_out`, `trips_asim_out`, `beam_plans_asim_out` |
+| **BEAM** | Multi-modal agent-based network supply | `supply_demand_loop` (`traffic_assignment`) | ActivitySim plans (`plans_beam_in`, `households_beam_in`, `persons_beam_in`), optional ATLAS vehicles (`vehicles_beam_in`), road and transit networks | Origin-destination skims (`final_skims_omx`, `zarr_skims`, `omx_skims`), `linkstats`, `beam_plans_out`, `beam_experienced_plans_xml` |
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ flowchart LR
 
 ### Code Entry Points
 
-- Step definition: `pilates/workflows/steps/urbansim.py`
+- Step definition: `pilates/workflows/steps/urbansim.py` (`urbansim_run`, `urbansim_postprocess`)
 - Adapter modules: `pilates/urbansim/{preprocessor,runner,postprocessor,outputs}.py`
 - Stage caller: `pilates/workflows/stages/land_use.py`
 
@@ -36,19 +36,19 @@ flowchart LR
 
 | Input | Coupler Key / Source | Format |
 | --- | --- | --- |
-| Base-year or prior-year model store | `URBANSIM_INPUT_STORE` (`custom_mpo_<region>_model_data.h5`) | HDF5 |
-| Travel time and cost skims | `ZARR_SKIMS` (preferred) or `OMX_SKIMS` / `FINAL_SKIMS_OMX` | Zarr or OMX |
-| Canonical zone mapping | `pilates/utils/zone_utils.py` | CSV / Parquet |
+| Base-year or prior-year model store | `usim_datastore_h5` / `usim_datastore_base_h5` (`custom_mpo_<region>_model_data.h5`) | HDF5 |
+| Travel time and cost skims | `final_skims_omx` or `omx_skims` | OMX |
+| Static UrbanSim inputs | Staged idempotently by `stage_urbansim_run_workspace` and tracked via `selected_urbansim_static_input_sources` | CSV / YAML |
 
 ### Container Mounts and Working Directories
 
 - Host data directory mounts into `/data` inside the UrbanSim container.
-- The preprocessor writes the travel model skim table (`travel_data.csv` or HDF5 travel data node) and base-year store into the step working directory before container startup.
+- `stage_urbansim_run_workspace` and `urbansim_run` materialize the current HDF5 datastore, travel skims (`final_skims.omx`), and static input files into the UrbanSim mutable data directory before container startup.
 
 ### Published Outputs
 
-- Year-tagged demographic and land-use tables (`households`, `persons`, `jobs`, `buildings`, `blocks`, `zones`) stored in the output HDF5 store and extracted to CSV/Parquet for downstream consumers.
-- Coupler keys: `URBANSIM_OUTPUT_STORE`, `URBANSIM_HOUSEHOLDS`, `URBANSIM_PERSONS`, `URBANSIM_JOBS`, `URBANSIM_BUILDINGS`, `URBANSIM_BLOCKS`.
+- Year-tagged demographic and land-use tables (`households`, `persons`, `jobs`, `buildings`, `blocks`) stored in the output HDF5 store and extracted for downstream consumers.
+- Coupler keys: `usim_datastore_h5`, `usim_forecast_output`, `usim_population_source_h5`, `usim_input_merged_{year}`, `usim_input_archive_{year}`, while `run_land_use_stage` preserves `usim_datastore_base_h5` and `usim_population_source_h5`.
 
 ---
 
@@ -56,25 +56,26 @@ flowchart LR
 
 ### Code Entry Points
 
-- Step definition: `pilates/workflows/steps/atlas.py`
+- Step definition: `pilates/workflows/steps/atlas.py` (`atlas_preprocess`, `atlas_run`, `atlas_postprocess`)
 - Adapter modules: `pilates/atlas/{preprocessor,runner,postprocessor,outputs}.py`
-- Stage caller: `pilates/workflows/stages/land_use.py`
+- Stage caller: `pilates/workflows/stages/vehicle_ownership.py`
 
 ### Upstream Inputs and Coupler Keys
 
 | Input | Coupler Key / Source | Format |
 | --- | --- | --- |
-| Forecasted households and persons | `URBANSIM_OUTPUT_STORE` / `URBANSIM_HOUSEHOLDS`, `URBANSIM_PERSONS` | HDF5 / CSV |
-| Geographic block and zone lookup | `URBANSIM_BLOCKS` and canonical zone mapping | CSV |
+| Forecasted households, persons, blocks, residential, jobs | `usim_datastore_h5` and `usim_datastore_base_h5` | HDF5 / CSV |
+| Travel skims (optional) | `final_skims_omx` / `omx_skims` | OMX |
+| Static ATLAS inputs | Staged idempotently by `stage_selected_atlas_static_inputs` and tracked via `selected_atlas_static_input_sources` | CSV / RData |
 
 ### Container Mounts and Working Directories
 
-- Host input directory (`pilates/atlas/atlas_input/<year>/`) and output directory (`pilates/atlas/atlas_output/<year>/`) mount into the ATLAS container.
-- Execution runs only when `land_use.vehicle_ownership_model_enabled: true`.
+- Host input directory (`pilates/atlas/atlas_input/year<year>/`) and output directory (`pilates/atlas/atlas_output/`) mount into the ATLAS container.
+- Execution runs for each scheduled sub-year when `atlas` is configured and enabled (`state.atlas_enabled`).
 
 ### Published Outputs
 
-- `ATLAS_HOUSEHOLDS` (`households.csv` with updated vehicle ownership counts) and `ATLAS_VEHICLES` (`vehicles.csv` with body type, vintage, and powertrain attributes).
+- `householdv_{year}`, `vehicles_{year}`, `usim_h5_updated`, `usim_population_source_h5` (HDF5 datastore with updated `cars` and `vehicl` columns), and `atlas_vehicles2_output` (`vehicles_{year}.csv` with body type, vintage, and powertrain attributes).
 
 ---
 
@@ -82,27 +83,27 @@ flowchart LR
 
 ### Code Entry Points
 
-- Step definition: `pilates/workflows/steps/activitysim.py`
+- Step definition: `pilates/workflows/steps/activitysim.py` (`activitysim_preprocess`, `activitysim_run`, `activitysim_postprocess`)
 - Adapter modules: `pilates/activitysim/{preprocessor,runner,postprocessor,outputs}.py`
-- Stage caller: `pilates/workflows/stages/demand.py`
+- Stage caller: `pilates/workflows/stages/supply_demand_activity.py`
 
 ### Upstream Inputs and Coupler Keys
 
 | Input | Coupler Key / Source | Format |
 | --- | --- | --- |
-| Land use and demographics | `URBANSIM_HOUSEHOLDS`, `URBANSIM_PERSONS`, `URBANSIM_JOBS`, `URBANSIM_BUILDINGS` | HDF5 / CSV |
-| Vehicle fleet (optional) | `ATLAS_HOUSEHOLDS`, `ATLAS_VEHICLES` | CSV |
-| Network skims | `ZARR_SKIMS` (preferred) or `OMX_SKIMS` / `FINAL_SKIMS_OMX` | Zarr or OMX |
-| Model configuration | `activitysim` config directory (`settings.yaml`, expression tables, land-use configuration) | YAML / CSV |
+| Land use and demographics | `usim_population_source_h5` (or fallback `usim_h5_updated` / `usim_datastore_h5`) | HDF5 / CSV |
+| Preprocessed ActivitySim CSVs | `land_use_asim_in`, `households_asim_in`, `persons_asim_in` | CSV |
+| Network skims | `zarr_skims` (preferred when cached) or `omx_skims` / `final_skims_omx` | Zarr or OMX |
+| Model configuration | Mutable ActivitySim config directory prepared idempotently by `ensure_activitysim_mutable_configs` | YAML / CSV |
 
 ### Container Mounts and Working Directories
 
 - ActivitySim mounts three directories: `configs` (`/configs`), `data` (`/data`), and `output` (`/output`).
-- The preprocessor builds `households.csv`, `persons.csv`, `land_use.csv`, and aligned 0-based skims in `/data` before launching ActivitySim. See [Zone and Skim Alignment](zone_and_skim_alignment.md) for zone indexing details.
+- `activitysim_preprocess` builds `households.csv`, `persons.csv`, `land_use.csv`, and aligned 0-based skims (`skims.omx`) in `/data` before launching ActivitySim. See [Zone and Skim Alignment](zone_and_skim_alignment.md) for zone indexing details.
 
 ### Published Outputs
 
-- Coupler keys: `ASIM_HOUSEHOLDS` (`final_households.csv`), `ASIM_PERSONS` (`final_persons.csv`), `ASIM_TOURS` (`final_tours.csv`), `ASIM_TRIPS` (`final_trips.csv`), `ASIM_LAND_USE` (`final_land_use.csv`), and `ASIM_PLANS` (`final_plans.csv`).
+- Coupler keys: `households_asim_out`, `persons_asim_out`, `tours_asim_out`, `trips_asim_out`, `beam_plans_asim_out`, `zarr_skims`, and `usim_input_merged_{year}`.
 - Optional DuckDB ingestion tables registered in `pilates/database/schema/registry.py`. See [Database and Schemas](database_and_schemas.md).
 
 ---
@@ -111,24 +112,24 @@ flowchart LR
 
 ### Code Entry Points
 
-- Step definition: `pilates/workflows/steps/beam.py`
+- Step definition: `pilates/workflows/steps/beam.py` (`beam_preprocess`, `beam_run`, `beam_postprocess`, `beam_full_skim`)
 - Adapter modules: `pilates/beam/{preprocessor,runner,postprocessor,outputs}.py`
-- Stage caller: `pilates/workflows/stages/supply.py`
+- Stage caller: `pilates/workflows/stages/supply_demand_beam.py`
 
 ### Upstream Inputs and Coupler Keys
 
 | Input | Coupler Key / Source | Format |
 | --- | --- | --- |
-| Disaggregate demand plans | `ASIM_HOUSEHOLDS`, `ASIM_PERSONS`, `ASIM_PLANS`, `ASIM_TOURS`, `ASIM_TRIPS` | CSV / CSV.GZ |
-| Vehicle fleet (optional) | `ATLAS_VEHICLES` | CSV |
-| Prior iteration linkstats / skims | `BEAM_LINKSTATS`, `FINAL_SKIMS_OMX` (on replanning iterations or warm starts) | CSV.GZ / OMX |
-| Scenario configuration and network | BEAM `.conf` file, MATSim network XML, and GTFS transit feeds | HOCON / XML / ZIP |
+| Disaggregate demand plans | `beam_plans_asim_out` / `plans_beam_in`, `households_asim_out` / `households_beam_in`, `persons_asim_out` / `persons_beam_in` | CSV / CSV.GZ |
+| Vehicle fleet (optional) | `atlas_vehicles2_output` -> `vehicles_beam_in` | CSV |
+| Prior iteration linkstats / plans | `linkstats_warmstart`, `beam_output_plans_xml`, `beam_output_experienced_plans_xml` | CSV.GZ / XML.GZ |
+| Scenario configuration and network | Mutable BEAM workspace prepared idempotently by `ensure_beam_mutable_workspace` (`.conf`, network XML, transit feeds) | HOCON / XML / ZIP |
 
 ### Container Mounts and Working Directories
 
-- BEAM mounts the regional scenario folder and writes simulation outputs under `beam_output/<region>/<year>_iter_<iteration>/`.
-- The postprocessor converts raw BEAM origin-destination skim CSVs (`*.csv.gz`) into consolidated OMX (`FINAL_SKIMS_OMX`) and Zarr (`ZARR_SKIMS`) matrices for the next replanning iteration or forecast year.
+- BEAM mounts the regional scenario folder and writes simulation outputs under `beam_output/<region>/year-<year>-iteration-<iteration>/`.
+- `beam_postprocess` converts raw BEAM origin-destination skim CSVs (`*.csv.gz`) into consolidated OMX (`final_skims_omx`, `omx_skims`) and Zarr (`zarr_skims`) matrices for the next replanning iteration or forecast year.
 
 ### Published Outputs
 
-- Coupler keys: `FINAL_SKIMS_OMX`, `ZARR_SKIMS`, `BEAM_LINKSTATS`, `BEAM_EVENTS`, and `BEAM_OUTPUT_DIR`.
+- Coupler keys: `final_skims_omx`, `omx_skims`, `zarr_skims`, `linkstats`, `linkstats_warmstart`, `beam_network_final`, `beam_plans_out`, `beam_output_plans_xml`, `beam_experienced_plans_xml`, and `beam_output_experienced_plans_xml`.

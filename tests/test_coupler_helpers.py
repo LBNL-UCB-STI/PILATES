@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from pilates.utils import coupler_helpers
+from pilates.workflows.coupler_namespace import set_coupler_from_artifact
 
 
 def test_artifact_to_path_ignores_uri(tmp_path) -> None:
@@ -64,7 +65,7 @@ class HistoricalArtifact:
 
 def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
     coupler = CouplerWithSetFromArtifact()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler, "usim_datastore_h5", "artifact", fallback="fallback"
     )
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", "artifact")]
@@ -72,23 +73,26 @@ def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
 
 def test_set_coupler_from_artifact_falls_back_to_set() -> None:
     coupler = CouplerWithSetOnly()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler, "usim_datastore_h5", None, fallback="/tmp/path.h5"
     )
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
-def test_set_coupler_from_artifact_resolves_alias_key() -> None:
+def test_set_coupler_from_artifact_canonicalizes_namespaced_key() -> None:
     coupler = CouplerWithSetOnly()
-    coupler_helpers.set_coupler_from_artifact(
-        coupler, "asim_households_in", None, fallback="/tmp/households.csv"
+    set_coupler_from_artifact(
+        coupler,
+        "activitysim/households_asim_in",
+        None,
+        fallback="/tmp/households.csv",
     )
     assert coupler.calls == [("set", "households_asim_in", "/tmp/households.csv")]
 
 
 def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> None:
     coupler = CouplerWithNamespaceView()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler,
         "linkstats_warmstart",
         None,
@@ -110,9 +114,9 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
     coupler = CouplerWithNamespaceView()
     artifact = SimpleNamespace(id="artifact-1")
 
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler,
-        "usim_h5_updated",
+        "usim_datastore_h5",
         artifact,
         fallback="/tmp/path.h5",
     )
@@ -124,8 +128,6 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
     monkeypatch,
     tmp_path,
 ) -> None:
-    monkeypatch.delenv("PILATES_LOCAL_RUN_DIR", raising=False)
-    monkeypatch.delenv("PILATES_ARCHIVE_RUN_DIR", raising=False)
     current_local = tmp_path / "current-run"
     rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
     expected_local = current_local / rel_path
@@ -181,3 +183,58 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
             "validate_content_hash": "if-present",
         }
     ]
+
+
+def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tracker_inactive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from consist import Artifact
+    from consist.models.artifact import set_tracker_ref
+
+    current_local = tmp_path / "run-current"
+    current_local.mkdir()
+    expected_local = current_local / "beam" / "output" / "0.events.parquet"
+
+    class _TrackerStub:
+        def resolve_uri(self, uri: str) -> str:
+            rel_path = uri.removeprefix("workspace://")
+            return str(tmp_path / "missing-run" / rel_path)
+
+        def materialize_artifact(
+            self,
+            requested_artifact: object,
+            *,
+            target_root: str | Path,
+            source_root: str | Path | None = None,
+            preserve_existing: bool = True,
+            on_missing: str = "warn",
+            allow_external_paths: bool | None = None,
+            validate_content_hash: str = "if-present",
+        ) -> object:
+            expected_local.parent.mkdir(parents=True, exist_ok=True)
+            expected_local.write_text("events", encoding="utf-8")
+            return SimpleNamespace(
+                path=expected_local,
+                status="materialized_from_recovery_root",
+                resolvable=True,
+            )
+
+    tracker_stub = _TrackerStub()
+    artifact = Artifact(
+        key="events_parquet_2015_0",
+        container_uri="workspace://beam/output/0.events.parquet",
+        driver="parquet",
+        run_id="beam_run_1",
+        meta={},
+    )
+    set_tracker_ref(artifact, tracker_stub)
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: None)
+
+    resolved = coupler_helpers.artifact_to_existing_path(
+        artifact,
+        workspace=SimpleNamespace(full_path=current_local),
+    )
+
+    assert resolved == str(expected_local)
+    assert expected_local.read_text(encoding="utf-8") == "events"

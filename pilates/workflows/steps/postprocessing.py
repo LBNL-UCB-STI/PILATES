@@ -13,12 +13,12 @@ from consist import (
 from pilates.config.models import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import (
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 _POSTPROCESSING_INPUT_CONTRACT = InputContract(

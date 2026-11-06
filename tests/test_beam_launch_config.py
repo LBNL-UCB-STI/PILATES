@@ -415,7 +415,7 @@ def test_beam_run_adapter_uses_the_compiled_launch_tree(tmp_path: Path) -> None:
     from consist.core.step_context import StepContext
 
     from pilates.beam.launch_config import BeamLaunchConfig
-    from pilates.workflows.step_consist_meta import consist_step_meta
+    from pilates.workflows.consist_metadata import consist_step_meta
 
     settings = _settings()
     launch_root = tmp_path / "launch" / "seattle"
@@ -461,7 +461,7 @@ def test_beam_adapter_omits_activitysim_alias_without_activitysim_config(
 
     from pilates.beam.launch_config import BeamLaunchConfig
     from pilates.workspace import Workspace
-    from pilates.workflows.step_consist_meta import consist_step_meta
+    from pilates.workflows.consist_metadata import consist_step_meta
 
     settings = _settings()
     settings.activitysim = None
@@ -496,7 +496,7 @@ def test_beam_preprocess_adapter_defers_generated_vehicles_destination(
     from consist.core.step_context import StepContext
 
     from pilates.beam.launch_config import BeamLaunchConfig
-    from pilates.workflows.step_consist_meta import consist_step_meta
+    from pilates.workflows.consist_metadata import consist_step_meta
 
     settings = _settings()
     workspace = SimpleNamespace(
@@ -576,7 +576,7 @@ def test_beam_preprocess_adapter_identity_is_portable_and_content_sensitive(
     """Equivalent staged config trees retain one adapter identity across roots."""
     from consist.core.step_context import StepContext
 
-    from pilates.workflows.step_consist_meta import consist_step_meta
+    from pilates.workflows.consist_metadata import consist_step_meta
 
     tracker = Tracker(
         run_dir=tmp_path / "runs",
@@ -625,7 +625,7 @@ def test_beam_preprocess_step_identity_uses_portable_closure_shape(
     from consist.core.step_context import StepContext
 
     from pilates.workflows.resolved_inputs import ResolvedStepInputs
-    from pilates.workflows.step_consist_meta import consist_step_meta
+    from pilates.workflows.consist_metadata import consist_step_meta
     from pilates.workflows.steps.beam import (
         _beam_preprocess_identity_payload,
     )

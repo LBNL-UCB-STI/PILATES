@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cached_property
 import hashlib
-import inspect
 import json
 import os
 from pathlib import Path
@@ -210,8 +209,12 @@ class EpochViews:
 
     @cached_property
     def skim_summary(self) -> pd.DataFrame:
-        if not hasattr(self.tracker, "openmatrix_metadata"):
-            raise RuntimeError("Tracker does not expose openmatrix metadata views.")
+        try:
+            openmatrix_metadata = self.tracker.openmatrix_metadata
+        except AttributeError as exc:
+            raise RuntimeError(
+                "Tracker does not expose openmatrix metadata views."
+            ) from exc
 
         run_ids = sorted(self.epoch.run_ids().values())
         concept_keys = self._discover_skim_concept_keys(run_ids)
@@ -229,7 +232,6 @@ class EpochViews:
             )
 
         frames: list[pd.DataFrame] = []
-        openmatrix_metadata = self.tracker.openmatrix_metadata
         for concept_key in concept_keys:
             try:
                 metadata_view = openmatrix_metadata(concept_key)
@@ -273,13 +275,17 @@ class EpochViews:
         return output
 
     def query(self, sql: str) -> pd.DataFrame:
-        db = getattr(self.tracker, "db", None)
-        if db is None or not hasattr(db, "query"):
-            raise RuntimeError("Tracker DB query interface is not available.")
-        result = db.query(sql.format(views=self))
-        if not hasattr(result, "df"):
-            raise RuntimeError("Tracker DB query result does not expose .df().")
-        return result.df()
+        try:
+            query_fn = self.tracker.db.query
+        except AttributeError as exc:
+            raise RuntimeError("Tracker DB query interface is not available.") from exc
+        result = query_fn(sql.format(views=self))
+        try:
+            return result.df()
+        except AttributeError as exc:
+            raise RuntimeError(
+                "Tracker DB query result does not expose .df()."
+            ) from exc
 
     def _view(self, model: str, logical_name: str) -> str:
         model_key = str(model).strip().lower()
@@ -301,7 +307,10 @@ class EpochViews:
         )
         artifact_family = family_spec["artifact_family"]
 
-        run_id = str(getattr(run, "id", "") or "").strip()
+        try:
+            run_id = str(run.id or "").strip()
+        except AttributeError:
+            run_id = ""
         if not run_id:
             raise RuntimeError(
                 f"Epoch run for model '{model_key}' does not expose a valid run id."
@@ -331,52 +340,29 @@ class EpochViews:
                 f"artifact_family={artifact_family})."
             )
 
-        params = [f"{model_key}.artifact_family={artifact_family}"]
-        predicates = _build_artifact_predicates(self.tracker, params)
-        attach_facets = ["artifact_family"]
+        try:
+            create_grouped_view = self.tracker.create_grouped_view
+        except AttributeError as exc:
+            raise RuntimeError(
+                "Tracker does not expose grouped view creation methods "
+                "(expected create_grouped_view)."
+            ) from exc
 
-        create_hybrid = _resolve_grouped_hybrid_creator(self.tracker)
-        if callable(create_hybrid):
-            kwargs = {
-                "view_name": view_name,
-                "schema_id": schema_id,
-                "predicates": predicates,
-                "namespace": model_key,
-                "attach_facets": attach_facets,
-                "include_system_columns": True,
-                "mode": "hybrid",
-                "if_exists": "replace",
-                "missing_files": "warn",
-                "run_id": run_id,
-                "model": model_key,
-            }
-            _call_with_supported_kwargs(create_hybrid, kwargs)
-            self._cache[cache_key] = view_name
-            return view_name
-
-        create_grouped_view = getattr(self.tracker, "create_grouped_view", None)
-        if callable(create_grouped_view):
-            kwargs = {
-                "view_name": view_name,
-                "schema_id": schema_id,
-                "namespace": model_key,
-                "params": params,
-                "attach_facets": attach_facets,
-                "include_system_columns": True,
-                "mode": "hybrid",
-                "if_exists": "replace",
-                "missing_files": "warn",
-                "run_id": run_id,
-                "model": model_key,
-            }
-            _call_with_supported_kwargs(create_grouped_view, kwargs)
-            self._cache[cache_key] = view_name
-            return view_name
-
-        raise RuntimeError(
-            "Tracker does not expose grouped view creation methods "
-            "(expected view_factory.create_grouped_hybrid_view or create_grouped_view)."
+        create_grouped_view(
+            view_name=view_name,
+            schema_id=schema_id,
+            namespace=model_key,
+            params=[f"{model_key}.artifact_family={artifact_family}"],
+            attach_facets=["artifact_family"],
+            include_system_columns=True,
+            mode="hybrid",
+            if_exists="replace",
+            missing_files="warn",
+            run_id=run_id,
+            model=model_key,
         )
+        self._cache[cache_key] = view_name
+        return view_name
 
     def _resolve_schema_id(
         self,
@@ -394,20 +380,6 @@ class EpochViews:
             schema_id = _artifact_schema_id(artifact)
             if schema_id:
                 return schema_id
-
-        selector = getattr(self.tracker, "select_artifact_schema_for_artifact", None)
-        if callable(selector):
-            for artifact in artifacts:
-                artifact_id = getattr(artifact, "id", None)
-                if artifact_id is None:
-                    continue
-                try:
-                    selected = selector(artifact_id=artifact_id)
-                except Exception:
-                    continue
-                schema_id = str(getattr(selected, "schema_id", "") or "").strip()
-                if schema_id:
-                    return schema_id
         return None
 
     def _artifacts_for_run_family(
@@ -420,44 +392,35 @@ class EpochViews:
     ) -> list[Any]:
         collected: list[Any] = []
 
-        by_params = getattr(self.tracker, "find_artifacts_by_params", None)
-        if callable(by_params):
-            try:
-                matches = _call_with_supported_kwargs(
-                    by_params,
-                    {
-                        "params": [f"{model}.artifact_family={artifact_family}"],
-                        "namespace": model,
-                        "limit": limit,
-                    },
-                )
-                if matches:
-                    collected.extend(list(matches))
-            except Exception:
-                pass
+        try:
+            matches = self.tracker.find_artifacts_by_params(
+                params=[f"{model}.artifact_family={artifact_family}"],
+                namespace=model,
+                limit=limit,
+            )
+            if matches:
+                collected.extend(list(matches))
+        except Exception:
+            pass
 
-        find_artifacts = getattr(self.tracker, "find_artifacts", None)
-        if callable(find_artifacts):
-            for kwargs in (
-                {"creator": run_id, "limit": limit},
-                {"consumer": run_id, "limit": limit},
-                {"limit": limit},
-            ):
-                try:
-                    matches = _call_with_supported_kwargs(find_artifacts, kwargs)
-                except Exception:
-                    continue
-                if matches:
-                    collected.extend(list(matches))
-                    if kwargs.get("creator") == run_id:
-                        break
+        for kwargs in (
+            {"creator": run_id, "limit": limit},
+            {"consumer": run_id, "limit": limit},
+            {"limit": limit},
+        ):
+            try:
+                matches = self.tracker.find_artifacts(**kwargs)
+            except Exception:
+                continue
+            if matches:
+                collected.extend(list(matches))
+                if kwargs.get("creator") == run_id:
+                    break
 
         deduped: list[Any] = []
         seen: set[str] = set()
         for artifact in collected:
-            artifact_id = str(getattr(artifact, "id", "") or "").strip()
-            if not artifact_id:
-                artifact_id = str(getattr(artifact, "key", "") or "").strip()
+            artifact_id = str(artifact.id or artifact.key or "").strip()
             if not artifact_id or artifact_id in seen:
                 continue
             seen.add(artifact_id)
@@ -465,7 +428,7 @@ class EpochViews:
 
         run_filtered: list[Any] = []
         for artifact in deduped:
-            artifact_run_id = str(getattr(artifact, "run_id", "") or "").strip()
+            artifact_run_id = str(artifact.run_id or "").strip()
             if artifact_run_id and artifact_run_id != run_id:
                 continue
             run_filtered.append(artifact)
@@ -486,8 +449,9 @@ class EpochViews:
         concept_key: str,
         run_ids: list[str],
     ) -> Optional[pd.DataFrame]:
-        get_matrices = getattr(metadata_view, "get_matrices", None)
-        if not callable(get_matrices):
+        try:
+            get_matrices = metadata_view.get_matrices
+        except AttributeError:
             return None
         calls = [
             {"run_ids": run_ids or None, "year": int(self.epoch.year)},
@@ -514,24 +478,19 @@ class EpochViews:
         if configured:
             concept_keys.append(str(configured))
 
-        find_artifacts = getattr(self.tracker, "find_artifacts", None)
-        if callable(find_artifacts):
-            for run_id in run_ids:
-                try:
-                    artifacts = _call_with_supported_kwargs(
-                        find_artifacts,
-                        {"creator": run_id, "limit": 5000},
-                    )
-                except Exception:
+        for run_id in run_ids:
+            try:
+                artifacts = self.tracker.find_artifacts(creator=run_id, limit=5000)
+            except Exception:
+                continue
+            for artifact in artifacts or []:
+                driver = str(artifact.driver or "").strip().lower()
+                key = str(artifact.key or "").strip()
+                if not key:
                     continue
-                for artifact in artifacts or []:
-                    driver = str(getattr(artifact, "driver", "") or "").strip().lower()
-                    key = str(getattr(artifact, "key", "") or "").strip()
-                    if not key:
-                        continue
-                    if driver != "openmatrix" and "skim" not in key.lower():
-                        continue
-                    concept_keys.append(key)
+                if driver != "openmatrix" and "skim" not in key.lower():
+                    continue
+                concept_keys.append(key)
 
         output: list[str] = []
         seen: set[str] = set()
@@ -614,11 +573,14 @@ def _stable_view_name(
 
 
 def _artifact_schema_id(artifact: Any) -> Optional[str]:
-    direct = str(getattr(artifact, "schema_id", "") or "").strip()
+    try:
+        direct = str(artifact.schema_id or "").strip()
+    except AttributeError:
+        direct = ""
     if direct:
         return direct
 
-    meta = getattr(artifact, "meta", None)
+    meta = artifact.meta
     if not isinstance(meta, Mapping):
         return None
 
@@ -640,16 +602,12 @@ def _artifact_matches_family(
     observed = _artifact_family(artifact, model=model)
     if observed:
         return observed == artifact_family
-    key = str(getattr(artifact, "key", "") or "").strip().lower()
+    key = str(artifact.key or "").strip().lower()
     return artifact_family.lower() in key if key else False
 
 
 def _artifact_family(artifact: Any, *, model: str) -> Optional[str]:
-    direct = str(getattr(artifact, "artifact_family", "") or "").strip()
-    if direct:
-        return direct
-
-    meta = getattr(artifact, "meta", None)
+    meta = artifact.meta
     if not isinstance(meta, Mapping):
         return None
 
@@ -674,54 +632,6 @@ def _artifact_family(artifact: Any, *, model: str) -> Optional[str]:
         return str(fallback).strip() or None
 
     return None
-
-
-def _resolve_grouped_hybrid_creator(tracker: Any) -> Optional[Any]:
-    view_factory = getattr(tracker, "view_factory", None)
-    creator = getattr(view_factory, "create_grouped_hybrid_view", None)
-    return creator if callable(creator) else None
-
-
-def _build_artifact_predicates(tracker: Any, params: list[str]) -> list[dict[str, Any]]:
-    if not params:
-        return []
-    parser = getattr(tracker, "_parse_artifact_param_expression", None)
-    if callable(parser):
-        return [parser(param) for param in params]
-    output: list[dict[str, Any]] = []
-    for param in params:
-        lhs, _, rhs = str(param).partition("=")
-        namespace = None
-        key_path = lhs
-        if "." in lhs:
-            namespace, key_path = lhs.split(".", 1)
-        output.append(
-            {
-                "namespace": namespace,
-                "key_path": key_path,
-                "op": "=",
-                "kind": "str",
-                "value": rhs,
-            }
-        )
-    return output
-
-
-def _call_with_supported_kwargs(func: Any, kwargs: Mapping[str, Any]) -> Any:
-    try:
-        signature = inspect.signature(func)
-    except (TypeError, ValueError):
-        return func(**dict(kwargs))
-    accepts_var_kw = any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
-    )
-    if accepts_var_kw:
-        return func(**dict(kwargs))
-    filtered = {
-        key: value for key, value in kwargs.items() if key in signature.parameters
-    }
-    return func(**filtered)
 
 
 __all__ = [

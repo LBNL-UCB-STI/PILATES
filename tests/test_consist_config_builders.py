@@ -8,8 +8,11 @@ from pilates.config.models import (
     BeamAdmissionConfig,
     BeamLinkstatsAdmissionConfig,
 )
-from pilates.utils import consist_config as consist_config_module
-from pilates.utils.consist_config import _CONFIG_BUILDERS, build_step_consist_kwargs
+from pilates.workflows import consist_metadata as consist_config_module
+from pilates.workflows.consist_metadata import (
+    _CONFIG_BUILDERS,
+    build_step_consist_kwargs,
+)
 from pilates.workflows import catalog
 
 
@@ -75,25 +78,20 @@ def test_all_models_registered():
     assert set(_CONFIG_BUILDERS.keys()) == expected
 
 
-def test_builders_expose_required_methods():
-    required = {
-        "build_identity_config",
-        "build_facet",
-        "build_identity_inputs",
-        "get_facet_schema_version",
-        "requires_workspace_path",
-    }
+def test_builders_expose_required_fields():
     for name, builder in _CONFIG_BUILDERS.items():
-        missing = [attr for attr in required if not hasattr(builder, attr)]
-        assert not missing, f"Builder {name} missing: {missing}"
+        assert callable(builder.identity_config_fn), name
+        assert callable(builder.facet_fn), name
+        assert isinstance(builder.default_schema_version, str), name
+        assert isinstance(builder.step_schema_versions, dict), name
 
 
 def test_workspace_path_requirement_flags():
-    assert _CONFIG_BUILDERS["activitysim"].requires_workspace_path is True
-    assert _CONFIG_BUILDERS["beam"].requires_workspace_path is True
-    assert _CONFIG_BUILDERS["urbansim"].requires_workspace_path is False
-    assert _CONFIG_BUILDERS["atlas"].requires_workspace_path is False
-    assert _CONFIG_BUILDERS["postprocessing"].requires_workspace_path is False
+    assert _CONFIG_BUILDERS["activitysim"].identity_inputs_fn is not None
+    assert _CONFIG_BUILDERS["beam"].identity_inputs_fn is not None
+    assert _CONFIG_BUILDERS["urbansim"].identity_inputs_fn is None
+    assert _CONFIG_BUILDERS["atlas"].identity_inputs_fn is None
+    assert _CONFIG_BUILDERS["postprocessing"].identity_inputs_fn is None
 
 
 def test_activitysim_requires_workspace_path():
@@ -133,13 +131,6 @@ def test_no_identity_inputs_for_urbansim():
     settings = _make_settings()
     result = build_step_consist_kwargs("urbansim_run", settings)
     assert "identity_inputs" not in result
-
-
-def test_initialization_model_special_case():
-    settings = _make_settings()
-    result = build_step_consist_kwargs("initialization", settings)
-    assert "config" in result
-    assert result["facet_schema_version"] == "initialization_v1"
 
 
 def test_facet_schema_version_routing(tmp_path):
@@ -227,8 +218,9 @@ def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):
             workspace_path=str(tmp_path),
         )
         legacy_key = step_name.split("_")[0]
-        expected_schema_version = _CONFIG_BUILDERS[legacy_key].get_facet_schema_version(
-            step_name
+        builder = _CONFIG_BUILDERS[legacy_key]
+        expected_schema_version = builder.step_schema_versions.get(
+            step_name, builder.default_schema_version
         )
         assert result["facet_schema_version"] == expected_schema_version
 
@@ -276,9 +268,10 @@ def test_catalog_dispatch_uses_provenance_builder_key(monkeypatch):
     )
 
     result = build_step_consist_kwargs("urbansim_run", settings)
-    assert result["facet_schema_version"] == _CONFIG_BUILDERS[
-        "atlas"
-    ].get_facet_schema_version("urbansim_run")
+    atlas_builder = _CONFIG_BUILDERS["atlas"]
+    assert result["facet_schema_version"] == atlas_builder.step_schema_versions.get(
+        "urbansim_run", atlas_builder.default_schema_version
+    )
 
 
 def test_invalid_catalog_provenance_builder_key_fails_fast(monkeypatch):

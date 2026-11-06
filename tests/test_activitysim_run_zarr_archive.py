@@ -102,6 +102,7 @@ def test_omx_preparation_rejects_missing_or_invalid_zarr_before_body(
         full_settings=_preparation_settings(),
         current_year=2018,
         current_inner_iter=0,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)
@@ -251,11 +252,11 @@ def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tm
         full_settings=settings,
         current_year=2018,
         current_inner_iter=0,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)
     zarr_path = Path(asim_runtime_zarr_path(workspace))
-    archived: list[tuple[str, Path]] = []
 
     monkeypatch.setattr(
         runner,
@@ -274,11 +275,6 @@ def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tm
     monkeypatch.setattr(
         "pilates.activitysim.runner.finalize_activitysim_zarr_skims", _finalize
     )
-    monkeypatch.setattr(
-        "pilates.activitysim.runner.enqueue_archive_copy",
-        lambda *, key, path: archived.append((key, Path(path))),
-        raising=False,
-    )
 
     outputs = runner.run(
         ActivitySimPreprocessOutputs(
@@ -294,7 +290,6 @@ def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tm
 
     assert outputs.zarr_skims == zarr_path
     assert (zarr_path / ".zgroup").exists()
-    assert archived == []
 
 
 def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
@@ -306,12 +301,12 @@ def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
         full_settings=settings,
         current_year=2018,
         current_inner_iter=0,
+        _activitysim_compile_epoch=None,
         set_sub_stage_progress=lambda _progress: None,
     )
     runner = ActivitysimRunner("activitysim", state)
     zarr_path = Path(asim_runtime_zarr_path(workspace))
     zarr_path.mkdir(parents=True)
-    archived: list[tuple[str, Path]] = []
 
     monkeypatch.setattr(
         runner,
@@ -320,13 +315,8 @@ def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
             output_dir=Path(workspace.get_asim_output_dir())
         ),
     )
-    monkeypatch.setattr(
-        "pilates.activitysim.runner.enqueue_archive_copy",
-        lambda *, key, path: archived.append((key, Path(path))),
-        raising=False,
-    )
 
-    runner.run(
+    outputs = runner.run(
         ActivitySimPreprocessOutputs(
             mutable_data_dir=tmp_path,
             land_use_table=tmp_path / "land_use.csv",
@@ -338,7 +328,7 @@ def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
         extra_inputs={"zarr_skims": zarr_path},
     )
 
-    assert archived == []
+    assert outputs.zarr_skims is None
 
 
 def test_declared_expected_inputs_aligns_zarr_skims_to_runtime_cache(

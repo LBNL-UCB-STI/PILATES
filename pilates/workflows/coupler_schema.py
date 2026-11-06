@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 from consist.utils import collect_step_schema
 
-from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.atlas.static_inputs import atlas_static_input_relpaths
 from pilates.config.models import PilatesConfig
 from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.coupler_namespace import namespaced_alias_for_key
@@ -35,13 +35,11 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    USIM_H5_UPDATED,
     USIM_POPULATION_SOURCE_H5,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_BLOCKS_TABLE,
-    USIM_INPUT_NEXT,
     ZARR_SKIMS,
 )
 from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
@@ -69,8 +67,6 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     USIM_POPULATION_BLOCKS_TABLE: (
         "Resolved blocks table path inside the UrbanSim population-source H5."
     ),
-    USIM_H5_UPDATED: "UrbanSim datastore updated by ATLAS postprocess.",
-    USIM_INPUT_NEXT: "UrbanSim datastore for the next iteration produced by ActivitySim.",
     ASIM_MUTABLE_DATA_DIR: "ActivitySim mutable data directory from preprocess.",
     ATLAS_OUTPUT_DIR: "ATLAS output directory for the current sub-year.",
     BEAM_MUTABLE_DATA_DIR: "BEAM mutable data directory populated for the run.",
@@ -125,7 +121,6 @@ _NAMESPACED_INIT_KEYS = {
     "urbansim": {
         "usim_data_reference": "UrbanSim reference datastore input.",
         "usim_datastore_base_h5": "UrbanSim base datastore in mutable workspace.",
-        "usim_datastore_current_h5": "UrbanSim current datastore in mutable workspace.",
         "usim_datastore_h5": "UrbanSim datastore in mutable workspace.",
         "omx_skims": "UrbanSim OMX skims input.",
         "hh_size": "UrbanSim household size input CSV.",

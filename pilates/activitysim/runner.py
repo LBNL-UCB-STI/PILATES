@@ -6,7 +6,16 @@ import json
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any, Literal, Mapping
+from typing import (
+    Tuple,
+    Optional,
+    Dict,
+    Any,
+    Literal,
+    Mapping,
+    Protocol,
+    runtime_checkable,
+)
 
 import xarray as xr
 import zarr
@@ -14,11 +23,15 @@ import zarr
 from pilates.config import PilatesConfig
 from pilates.activitysim.config_roots import (
     ActivitySimConfigRoot,
+    configured_activitysim_main_configs_dir,
+    configured_activitysim_sharrow,
     required_activitysim_config_roots,
+    resolve_activitysim_sharrow_enabled,
+    sync_activitysim_sharrow_configs,
 )
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
@@ -154,40 +167,6 @@ class ActivitySimPreparationResult:
 
 
 @dataclass(frozen=True, slots=True)
-class _ActivitySimCompileEpoch:
-    """One process-local private Numba cache for a live workflow state."""
-
-    state: "WorkflowState"
-    cache_dir: Path
-
-
-class ActivitySimCompileEpochRegistry:
-    """Keep successful private compile epochs out of workflow identity.
-
-    Entries intentionally retain the live workflow state object and compare by
-    object identity. A workspace pathname cannot prove that this Python process
-    prepared the cache, while a live state object identifies one invocation.
-    """
-
-    def __init__(self) -> None:
-        self._epochs: list[_ActivitySimCompileEpoch] = []
-
-    def get(self, state: "WorkflowState") -> Path | None:
-        for epoch in self._epochs:
-            if epoch.state is state:
-                return epoch.cache_dir
-        return None
-
-    def record(self, state: "WorkflowState", cache_dir: Path) -> None:
-        if self.get(state) is not None:
-            raise RuntimeError("ActivitySim compile epoch already recorded for state")
-        self._epochs.append(_ActivitySimCompileEpoch(state=state, cache_dir=cache_dir))
-
-
-_ACTIVITYSIM_COMPILE_EPOCHS = ActivitySimCompileEpochRegistry()
-
-
-@dataclass(frozen=True, slots=True)
 class ActivitySimConfigStagingPlan:
     """Runtime-only source roots copied into an ActivitySim launch tree."""
 
@@ -287,6 +266,37 @@ def _asim_container_environment() -> Dict[str, str]:
     return env
 
 
+def sharrow_enabled(
+    settings: PilatesConfig,
+    *,
+    launch_context: Optional[ActivitySimLaunchContext] = None,
+    configs_root: str | Path | None = None,
+) -> bool:
+    """Return whether ActivitySim sharrow mode is active for ``settings``."""
+    resolved_configs_root: str | Path | None = configs_root
+    if resolved_configs_root is None and launch_context is not None:
+        resolved_configs_root = launch_context.mutable_configs_dir
+    return resolve_activitysim_sharrow_enabled(
+        settings,
+        configs_root=resolved_configs_root,
+    )
+
+
+@runtime_checkable
+class _ActivitysimFileFormatLike(Protocol):
+    file_format: Any
+
+
+@runtime_checkable
+class _ActivitysimPersistFlagLike(Protocol):
+    persist_sharrow_cache: Any
+
+
+@runtime_checkable
+class _SettingsWithActivitysimLike(Protocol):
+    activitysim: Any
+
+
 def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
     """
     Return whether ActivitySim should persist sharrow/numba compile caches.
@@ -297,13 +307,54 @@ def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
     - Otherwise fall back to historical behavior where parquet mode persists
       sharrow cache by default.
     """
-    activitysim_cfg = getattr(settings, "activitysim", None)
+    if not isinstance(settings, _SettingsWithActivitysimLike):
+        return False
+    activitysim_cfg = settings.activitysim
     if activitysim_cfg is None:
         return False
-    explicit_flag = getattr(activitysim_cfg, "persist_sharrow_cache", None)
-    if explicit_flag is not None:
-        return bool(explicit_flag)
-    return getattr(activitysim_cfg, "file_format", None) == "parquet"
+    if (
+        isinstance(activitysim_cfg, _ActivitysimPersistFlagLike)
+        and activitysim_cfg.persist_sharrow_cache is not None
+    ):
+        return bool(activitysim_cfg.persist_sharrow_cache)
+    if isinstance(activitysim_cfg, _ActivitysimFileFormatLike):
+        return activitysim_cfg.file_format == "parquet"
+    return False
+
+
+def activitysim_persists_zarr_skims(
+    settings: PilatesConfig,
+    *,
+    launch_context: Optional[ActivitySimLaunchContext] = None,
+    configs_root: str | Path | None = None,
+) -> bool:
+    """Return whether ActivitySim is configured to persist ``skims.zarr`` on OMX runs."""
+    if not sharrow_enabled(
+        settings,
+        launch_context=launch_context,
+        configs_root=configs_root,
+    ):
+        return False
+    if not isinstance(settings, _SettingsWithActivitysimLike):
+        return True
+    activitysim_cfg = settings.activitysim
+    if activitysim_cfg is None:
+        return True
+    file_format = (
+        activitysim_cfg.file_format
+        if isinstance(activitysim_cfg, _ActivitysimFileFormatLike)
+        else None
+    )
+    explicit_flag = (
+        activitysim_cfg.persist_sharrow_cache
+        if isinstance(activitysim_cfg, _ActivitysimPersistFlagLike)
+        else None
+    )
+    if file_format is None and explicit_flag is None:
+        return True
+    if file_format is not None and file_format != "parquet":
+        return False
+    return persist_sharrow_cache_enabled(settings)
 
 
 def asim_sharrow_cache_dir(workspace: Workspace) -> str:
@@ -668,8 +719,23 @@ class ActivitysimRunner(GenericRunner):
         transition. It carries the already selected skim mode/path straight to
         the body while replacing only its non-identity cache root.
         """
+        sync_activitysim_sharrow_configs(
+            launch_context.mutable_configs_dir,
+            main_configs_dir=configured_activitysim_main_configs_dir(
+                self.state.full_settings
+            ),
+            sharrow=configured_activitysim_sharrow(self.state.full_settings),
+        )
         if skip_numba_warmup:
             logger.info("ActivitySim Numba warmup: not required (explicit rewind skip)")
+            return ActivitySimPreparationResult(
+                launch_context=launch_context,
+                skim_mode=skim_mode,
+                zarr_input_path=zarr_input_path,
+                generated_zarr_path=None,
+            )
+        if not sharrow_enabled(self.state.full_settings, launch_context=launch_context):
+            logger.info("ActivitySim Numba warmup: not required (sharrow disabled)")
             return ActivitySimPreparationResult(
                 launch_context=launch_context,
                 skim_mode=skim_mode,
@@ -695,7 +761,7 @@ class ActivitysimRunner(GenericRunner):
                 generated_zarr_path=None,
             )
 
-        existing_epoch = _ACTIVITYSIM_COMPILE_EPOCHS.get(self.state)
+        existing_epoch = self.state._activitysim_compile_epoch
         if existing_epoch is not None:
             logger.info("ActivitySim Numba warmup: reused private epoch")
             epoch_context = replace(launch_context, shared_cache_dir=existing_epoch)
@@ -747,9 +813,11 @@ class ActivitysimRunner(GenericRunner):
             body_skim_mode = "zarr"
             body_zarr_input_path = str(generated_zarr_path)
         if existing_epoch is None:
-            _ACTIVITYSIM_COMPILE_EPOCHS.record(
-                self.state, epoch_context.shared_cache_dir
-            )
+            if self.state._activitysim_compile_epoch is not None:
+                raise RuntimeError(
+                    "ActivitySim compile epoch already recorded for state"
+                )
+            self.state._activitysim_compile_epoch = epoch_context.shared_cache_dir
         return ActivitySimPreparationResult(
             launch_context=epoch_context,
             skim_mode=body_skim_mode,
@@ -803,6 +871,8 @@ class ActivitysimRunner(GenericRunner):
         )
         if preparation.zarr_input_path is not None:
             staged_extra_inputs[ZARR_SKIMS] = preparation.zarr_input_path
+        elif preparation.skim_mode == "omx":
+            _remove_path_if_present(str(preparation.launch_context.runtime_zarr_path))
         outputs = self._run(
             inputs,
             preparation.launch_context,
@@ -811,7 +881,13 @@ class ActivitysimRunner(GenericRunner):
         )
         if preparation.generated_zarr_path is not None:
             outputs.zarr_skims = preparation.generated_zarr_path
-        elif preparation.skim_mode == "omx":
+        elif preparation.skim_mode == "omx" and (
+            activitysim_persists_zarr_skims(
+                self.state.full_settings,
+                launch_context=preparation.launch_context,
+            )
+            or preparation.launch_context.runtime_zarr_path.exists()
+        ):
             if workspace is None:
                 raise RuntimeError(
                     "ActivitySim OMX mode requires a workspace for skim finalization"
@@ -841,7 +917,7 @@ class ActivitysimRunner(GenericRunner):
     def get_asim_additional_args(settings: PilatesConfig, asim_docker_vols, compile):
         additional_args = []
         if settings.activitysim.file_format == "parquet":
-            if persist_sharrow_cache_enabled(settings):
+            if activitysim_persists_zarr_skims(settings):
                 additional_args.append("--persist-sharrow-cache")
             data_dirs = []
             output_dirs = []

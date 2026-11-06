@@ -7,7 +7,7 @@ from pilates.config.models import (
     PilatesConfig,
     admission_policy_fingerprint,
 )
-from pilates.utils.consist_config import (
+from pilates.workflows.consist_metadata import (
     build_activitysim_identity_inputs,
     build_beam_identity_inputs,
     build_scenario_consist_kwargs,

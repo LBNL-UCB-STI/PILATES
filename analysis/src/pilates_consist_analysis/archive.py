@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 import hashlib
 import json
@@ -34,9 +35,7 @@ SYSTEM_FACET_COLUMNS = {
 def _open_grouped_ibis_table(**kwargs: Any) -> Any:
     import consist
 
-    context = consist.ibis_grouped_view(**kwargs)
-    table = context.__enter__()
-    return table, context
+    return consist.ibis_grouped_view(**kwargs)
 
 
 def _copy_path(source: Path, destination: Path) -> None:
@@ -202,7 +201,7 @@ class Archive:
             "db_path": str(self.db_path),
             "artifacts": [],
         }
-        self._ibis_contexts: list[Any] = []
+        self._exit_stack = ExitStack()
 
     @classmethod
     def open(
@@ -388,9 +387,8 @@ class Archive:
             missing_files=missing_files,
             schema_compatible=schema_compatible,
         )
-        if isinstance(opened, tuple) and len(opened) == 2:
-            table, context = opened
-            self._ibis_contexts.append(context)
+        if isinstance(opened, AbstractContextManager):
+            table = self._exit_stack.enter_context(opened)
         else:
             table = opened
         table = _alias_facets(table, requested_facets)
@@ -413,9 +411,7 @@ class Archive:
         }
 
     def close(self) -> None:
-        while self._ibis_contexts:
-            context = self._ibis_contexts.pop()
-            context.__exit__(None, None, None)
+        self._exit_stack.close()
 
     def __enter__(self) -> "Archive":
         return self
@@ -476,7 +472,11 @@ class Archive:
         return model, logical_name
 
     def _artifact_family_spec(self, model: str, logical_name: str) -> Mapping[str, str]:
-        families = getattr(self.session, "artifact_families", None) or ARTIFACT_FAMILIES
+        try:
+            session_families = self.session.artifact_families
+        except AttributeError:
+            session_families = None
+        families = session_families or ARTIFACT_FAMILIES
         model_families = families.get(model)
         if model_families is None or logical_name not in model_families:
             available = {
@@ -518,7 +518,7 @@ class Archive:
             entry["artifact_id"] for entry in self._localization_manifest["artifacts"]
         }
         for artifact in artifacts:
-            artifact_id = str(getattr(artifact, "id", ""))
+            artifact_id = str(artifact.id)
             if artifact_id in existing:
                 continue
             source = self._artifact_source_path(artifact)
@@ -526,7 +526,7 @@ class Archive:
             _copy_path(source, destination)
             entry = {
                 "artifact_id": artifact_id,
-                "key": str(getattr(artifact, "key", "")),
+                "key": str(artifact.key),
                 "persistent_path": str(source),
                 "local_path": str(destination),
             }
@@ -534,30 +534,35 @@ class Archive:
         self._write_localization_manifest()
 
     def _artifact_source_path(self, artifact: Any) -> Path:
-        raw_abs_path = str(getattr(artifact, "abs_path", "") or "").strip()
+        raw_abs_path = str(artifact.abs_path or "").strip()
         if raw_abs_path:
             abs_path = Path(raw_abs_path).expanduser()
             if abs_path.exists():
                 return abs_path.resolve()
-        uri = str(
-            getattr(artifact, "uri", None)
-            or getattr(artifact, "container_uri", None)
-            or ""
-        )
+        try:
+            uri_value = artifact.uri
+        except AttributeError:
+            try:
+                uri_value = artifact.container_uri
+            except AttributeError:
+                uri_value = None
+        uri = str(uri_value or "")
         if uri.startswith("workspace://"):
             relative = uri.removeprefix("workspace://").lstrip("/")
             source = self.persistent_archive_run_dir / relative
             if source.exists():
                 return source.resolve()
-        key = str(getattr(artifact, "key", "<unknown>"))
-        raise FileNotFoundError(f"Could not resolve artifact path for {key}.")
+        raise FileNotFoundError(f"Could not resolve artifact path for {artifact.key}.")
 
     def _artifact_local_path(self, artifact: Any, *, source: Path) -> Path:
-        uri = str(
-            getattr(artifact, "uri", None)
-            or getattr(artifact, "container_uri", None)
-            or ""
-        )
+        try:
+            uri_value = artifact.uri
+        except AttributeError:
+            try:
+                uri_value = artifact.container_uri
+            except AttributeError:
+                uri_value = None
+        uri = str(uri_value or "")
         if uri.startswith("workspace://"):
             relative = uri.removeprefix("workspace://").lstrip("/")
             return self.archive_run_dir / relative
@@ -567,7 +572,7 @@ class Archive:
             relative = (
                 Path(".pilates")
                 / "localized_artifacts"
-                / str(getattr(artifact, "id", "artifact"))
+                / str(artifact.id)
                 / source.name
             )
         return self.archive_run_dir / relative

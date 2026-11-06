@@ -15,6 +15,7 @@ from pilates.workflows.planning import (
     build_static_execution_plan_from_file,
 )
 from pilates.workflows.surface import build_enabled_workflow_surface
+from pilates.workflows.state import WorkflowState
 
 
 SEATTLE_ACTIVITYSIM_BEAM = "scenarios/seattle/settings-new-asim-seattle-null.yaml"
@@ -510,3 +511,75 @@ def test_static_execution_plan_supports_beam_only_run():
     assert all(not name.startswith("activitysim_") for name in step_names)
     assert all(not name.startswith("urbansim_") for name in step_names)
     assert all(not name.startswith("atlas_") for name in step_names)
+
+
+def test_static_execution_plan_projects_schedule_and_iterations_from_workflow_state(
+    tmp_path,
+    caplog,
+):
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.run.start_year = 2010
+    settings.run.end_year = 2021
+    settings.run.travel_model_freq = 4
+    settings.run.supply_demand_iters = 3
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    settings.land_use_enabled = True
+    settings.traffic_assignment_enabled = True
+    state_file = tmp_path / "persisted_state.yaml"
+    state_file.write_text("year: 2019\nstage: traffic_assignment\n", encoding="utf-8")
+    settings.runtime.options.state_file_loc = str(state_file)
+
+    surface = build_enabled_workflow_surface(settings)
+    with caplog.at_level("INFO"):
+        planning_state = WorkflowState.for_planning(settings, surface=surface)
+        plan = build_static_execution_plan(
+            settings,
+            include_postprocessing=False,
+            surface=surface,
+        )
+
+    assert "Starting workflow with stage:" not in caplog.text
+    assert planning_state.planned_year_intervals() == [
+        {"year": 2010, "forecast_year": 2017},
+        {"year": 2017, "forecast_year": 2021},
+        {"year": 2021, "forecast_year": 2021},
+    ]
+    assert planning_state.effective_supply_demand_iterations() == 1
+    assert plan.metadata["years"] == planning_state.planned_year_intervals()
+    assert (
+        plan.metadata["supply_demand_iters"]
+        == planning_state.effective_supply_demand_iterations()
+    )
+
+
+def test_after_final_iteration_full_skim_runs_under_beam_only_clamping():
+    from pilates.workflows.stages.supply_demand_beam import (
+        _should_run_full_skim as runtime_should_run_full_skim,
+    )
+
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
+    settings.run.supply_demand_iters = 3
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    settings.run.models.land_use = None
+    settings.land_use_enabled = False
+    settings.run.models.vehicle_ownership = None
+    settings.vehicle_ownership_model_enabled = False
+    settings.run.models.travel = "beam"
+    settings.traffic_assignment_enabled = True
+    settings.beam.full_skim = FullSkimsCreatorConfig(
+        run_schedule="after_final_iteration"
+    )
+
+    plan = _build_plan(settings, include_postprocessing=False)
+    step_names = [step.step_name for step in plan.step_runs]
+
+    assert step_names == [
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+        "beam_full_skim",
+    ]
+    state = WorkflowState.for_planning(settings)
+    assert runtime_should_run_full_skim(settings, 0, state=state) is True

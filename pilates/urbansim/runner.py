@@ -9,7 +9,7 @@ from pilates.generic.runner import GenericRunner
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.urbansim import postprocessor as usim_post
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +133,6 @@ class UrbansimRunner(
         # Initialize container client
         client = None
 
-        # 1. EXTRACT INPUTS FOR CONSIST TRACKING
-        input_paths = [str(path) for _, path, _ in inputs._iter_record_items()]
-
         # Execute container
         try:
             success = self.run_container(
@@ -146,12 +143,11 @@ class UrbansimRunner(
                 command=usim_cmd,
                 model_name=self.model_name,
                 working_dir=settings.urbansim.client_base_folder,
-                # 2. PASS INPUTS
-                input_artifacts=input_paths,
-                # The workflow callback owns the canonical H5 artifact so it
-                # can retain table-level recovery metadata without creating a
-                # second output link from this nested container boundary.
+                # The workflow step owns input/output lineage on the outer run
+                # context so this nested container call does not collide.
+                input_artifacts=[],
                 output_paths=None,
+                lineage_mode="none",
             )
 
             if not success:
