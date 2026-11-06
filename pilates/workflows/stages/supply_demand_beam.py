@@ -362,6 +362,13 @@ def _standalone_full_skim_preprocess_outputs(
                     LINKSTATS_WARMSTART,
                     prepared[LINKSTATS_WARMSTART],
                 )
+    if (
+        settings is not None
+        and get_setting(settings, "shared.geography.zones") is not None
+    ):
+        from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
+
+        _prepare_beam_zone_shapefile(workspace, settings)
     return BeamPreprocessOutputs(
         beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
         prepared_inputs=prepared,

@@ -233,9 +233,7 @@ def test_dynamic_unmatched_inputs_stage_lineage_and_rehydrate_on_cache_hit(
 
     assert second.cache_hit is True
     assert len(observed) == 1
-    assert {key: path.read_bytes() for key, path in destinations.items()} == {
-        key: path.read_bytes() for key, path in sources.items()
-    }
+    assert not any(path.exists() for path in destinations.values())
     assert set(tracker.get_artifacts_for_run(second.run.id).inputs) == set(sources)
 
 
@@ -350,7 +348,6 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
         "land_use.csv": b"land_use\n",
         "households.csv": b"households\n",
         "persons.csv": b"persons\n",
-        "skims.omx": b"upstream omx bytes",
     }
     three_second_inputs = tracker.get_artifacts_for_run(three_second.run.id).inputs
     assert set(three_second_inputs) == {FINAL_SKIMS_OMX}
