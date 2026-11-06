@@ -8,10 +8,10 @@ Every model integration spans four layers in the repository:
 
 | Layer | Path | Responsibility |
 | --- | --- | --- |
-| Adapter and outputs | `pilates/<model>/{preprocessor,runner,postprocessor,outputs}.py` | Translates canonical coupler artifacts into simulator inputs, invokes the container or local process, and packages raw outputs into a `StepOutputsBase` subclass. |
+| Adapter and outputs | `pilates/<model>/{preprocessor,runner,postprocessor,outputs}.py` | Translates canonical coupler artifacts into simulator inputs, idempotently prepares mutable model workspace configs/static inputs, invokes the container or local process, and packages raw outputs into a `StepOutputsBase` subclass. |
 | Step definition and contracts | `pilates/workflows/steps/<model>.py` | Declares `@define_step` callables, `StepDefinition` metadata, `InputContract` specifications, `ArtifactBindingRule` fallback policies, `ResolvedStepInputs` resolvers, and `TypedOutputProjector` mappings. |
 | Stage orchestration and catalog | `pilates/workflows/stages/<stage>.py`, `pilates/workflows/catalog.py` | Calls `execute_step(...)` inside a stage (`land_use`, `vehicle_ownership_model`, `supply_demand_loop`, or `postprocessing`) and registers `WorkflowStepSpec` entries on the static catalog. |
-| Config, keys, and facets | `pilates/config/models.py`, `pilates/workflows/artifact_keys.py`, `pilates/utils/consist_config.py` | Validates `config.yaml` settings with Pydantic, registers canonical coupler keys, and builds Consist identity and facet payloads. |
+| Config, keys, and facets | `pilates/config/models.py`, `pilates/workflows/artifact_keys.py`, `pilates/workflows/consist_metadata.py` | Validates `config.yaml` settings with Pydantic, registers canonical coupler keys, and builds Consist identity and facet payloads. |
 
 ```mermaid
 flowchart LR
@@ -100,7 +100,7 @@ In `pilates/workflows/steps/<model>.py`, declare how your step binds upstream ar
 
 ```python
 from pilates.workflows.binding import ArtifactBindingRule
-from pilates.workflows.step_definition import (
+from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
     StepDefinition,
@@ -129,12 +129,12 @@ MY_MODEL_BINDING_RULES = (
 
 Bind the `@define_step` function, `InputContract`, `resolve_inputs` callback, `project_outputs` projector, and `binding_rules` into a `StepDefinition` (see [Core Contract Types Reference](../workflow/step_contracts.md#core-contract-types-reference) for every field on `StepDefinition`, `ArtifactBindingRule`, `ResolvedStepInputs`, and `WorkflowStepSpec`).
 
-- **Stage execution**: Inside `pilates/workflows/stages/<stage>.py`, invoke `execute_step(...)` so the runtime enforces input resolution, Consist caching, archive promotion, and coupler publication through a single code path. See [Runtime Execution: Fresh Run vs. Cache Hit](../workflow/step_contracts.md#runtime-execution-fresh-run-vs-cache-hit) for how `execute_step(...)` handles both fresh runs and cached hydrations.
-- **Provenance facets**: Register your model's config and facet builder in `pilates/utils/consist_config.py` and reference its `builder_key` in `pilates/workflows/catalog.py` (`WorkflowStepProvenanceSpec`) so run parameters are indexed in `provenance.duckdb`. See [Queryable Facets in DuckDB](../workflow/artifact_flow.md#queryable-facets-in-duckdb) for how run and artifact facets are structured and queried.
+- **Stage execution**: Inside `pilates/workflows/stages/<stage>.py`, invoke `execute_step(...)` so the runtime enforces input resolution, Consist caching, optional recovery archive mirroring (`RunCompletionArchivePolicy`), and coupler publication through a single code path. See [Runtime Execution: Fresh Run vs. Cache Hit](../workflow/step_contracts.md#runtime-execution-fresh-run-vs-cache-hit) for how `execute_step(...)` handles both fresh runs and cached hydrations.
+- **Provenance facets**: Register your model's config and facet builder in `pilates/workflows/consist_metadata.py` and reference its `builder_key` in `pilates/workflows/catalog.py` (`WorkflowStepProvenanceSpec`) so run parameters are indexed in `provenance.duckdb`. See [Queryable Facets in DuckDB](../workflow/artifact_flow.md#queryable-facets-in-duckdb) for how run and artifact facets are structured and queried.
 
 ## Testing Progression
 
-Validate a new integration across four test tiers using `/Users/zaneedell/miniforge3/envs/PILATES/bin/python -m pytest`:
+Validate a new integration across five test tiers using `/Users/zaneedell/miniforge3/envs/PILATES/bin/python -m pytest`:
 
 ### 1. Step Definition and Contract Unit Tests
 
@@ -160,7 +160,15 @@ Add a lightweight stub mode for your step and exercise multi-stage orchestration
 pytest tests/test_golden_stub_workflow.py tests/test_architecture_guardrails.py -v
 ```
 
-### 4. Preserving Generated Test Artifacts for Inspection
+### 4. Contract-Validating Workflow Harness
+
+Run the deterministic contract-validating workflow harness (`tests/test_contract_validating_workflow_harness.py` backed by `tests/helpers/contract_container_backend.py`), which executes real preprocessors, postprocessors, output validators, and Consist caching against fast in-process container simulators across multi-year runs, cold-scratch cache hydration, mid-run restarts, and schema-corruption fault injection:
+
+```bash
+pytest tests/test_contract_validating_workflow_harness.py -v
+```
+
+### 5. Preserving Generated Test Artifacts for Inspection
 
 Fixtures clean up temporary directories when pytest exits. Set `PRESERVE_TEST_OUTPUT` to copy generated workspaces, HDF5 stores, skims, and DuckDB databases into `./test_output/<timestamp>_<test_name>/` after a test completes:
 

@@ -571,42 +571,45 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
             "start_year": start_year,
         },
     )()
-    if not has_rdata:
-        atlas_runs = tracker.find_runs(
-            year=prior_year,
-            model="atlas_run",
-            stage="vehicle_ownership",
-            phase="run",
-            status="completed",
-        )
-        if atlas_runs:
-            tracker.hydrate_run_outputs(
-                str(atlas_runs[-1].id),
-                target_root=workspace.full_path,
-                keys=[f"atlas_continuation_{prior_year}"],
-                preserve_existing=True,
-                on_missing="warn",
+    try:
+        if not has_rdata:
+            atlas_runs = tracker.find_runs(
+                year=prior_year,
+                model="atlas_run",
+                stage="vehicle_ownership",
+                phase="run",
+                status="completed",
             )
-    if not has_households:
-        preprocess_runs = tracker.find_runs(
-            year=prior_year,
-            model="atlas_preprocess",
-            stage="vehicle_ownership",
-            phase="preprocess",
-            status="completed",
-        )
-        if preprocess_runs:
-            prepared_destinations = _atlas_preprocess_prepared_input_paths(
-                settings=settings,
-                state=prior_state,
-                workspace=workspace,
+            if atlas_runs:
+                tracker.hydrate_run_outputs(
+                    str(atlas_runs[-1].id),
+                    target_root=workspace.full_path,
+                    keys=[f"atlas_continuation_{prior_year}"],
+                    preserve_existing=True,
+                    on_missing="warn",
+                )
+        if not has_households:
+            preprocess_runs = tracker.find_runs(
+                year=prior_year,
+                model="atlas_preprocess",
+                stage="vehicle_ownership",
+                phase="preprocess",
+                status="completed",
             )
-            tracker.hydrate_run_outputs_to_destinations(
-                str(preprocess_runs[-1].id),
-                destinations_by_key=prepared_destinations,
-                preserve_existing=True,
-                on_missing="warn",
-            )
+            if preprocess_runs:
+                prepared_destinations = _atlas_preprocess_prepared_input_paths(
+                    settings=settings,
+                    state=prior_state,
+                    workspace=workspace,
+                )
+                tracker.hydrate_run_outputs_to_destinations(
+                    str(preprocess_runs[-1].id),
+                    destinations_by_key=prepared_destinations,
+                    preserve_existing=True,
+                    on_missing="warn",
+                )
+    except AttributeError:
+        return
 
 
 @define_step(

@@ -68,4 +68,4 @@ The loader expands environment variables (such as `${USER}` and `${SLURM_JOB_ID}
 
 - Follow [Getting Started](getting_started.md) for the step-by-step first local run walkthrough.
 - Consult [Configuration Reference](../run/configuration_reference.md) for the complete field-by-field reference.
-- Read [Scenario Lifecycle](../run/scenario_lifecycle.md) to see how configuration drives startup, bootstrap, and year-loop execution.
+- Read [Scenario Lifecycle](../run/scenario_lifecycle.md) to see how configuration drives startup, coupler seeding, and year-loop execution.

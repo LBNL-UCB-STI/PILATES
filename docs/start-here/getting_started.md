@@ -15,14 +15,14 @@ Before launching a run, verify your local software environment and regional data
 - Docker (`infrastructure.container_manager: docker`) for local execution, or Apptainer/Singularity (`singularity`) on HPC clusters.
 - Regional input data placed in the model directories referenced by your scenario YAML.
 
-Active scenario templates under `scenarios/` (such as `scenarios/sfbay/` and `scenarios/seattle/`) read source data from four repository-relative trees and stage working copies into the mutable run workspace during bootstrap:
+Active scenario templates under `scenarios/` (such as `scenarios/sfbay/` and `scenarios/seattle/`) read source data from four repository-relative trees. At scenario start, PILATES seeds initial coupler references (`seed_bootstrap_artifacts_to_coupler`), and each model stage idempotently stages its own mutable working copies and config trees when its step executes:
 
-| Model Stage | Source Input Directory | Bootstrap Staged Workspace Target | Staged Contents |
+| Model Stage | Source Input Directory | Staged Workspace Target | Staged Contents |
 | --- | --- | --- | --- |
-| UrbanSim (`land_use`) | `pilates/urbansim/data/` | `<workspace>/urbansim/data/` | Base regional HDF5 datastore (`custom_mpo_<region_id>_model_data.h5` or year-scoped `.h5`). When UrbanSim is disabled, PILATES still stages this datastore here if ActivitySim or ATLAS is enabled. |
-| ActivitySim (`activity_demand`) | `pilates/activitysim/data/` and `pilates/activitysim/configs/` | `<workspace>/activitysim/data/` and `<workspace>/activitysim/configs/` | Zone and household inputs, initial OMX skims, canonical zone coordinates (`canonical_zones.parquet`), and config trees (`configs`, `configs_extended`, `configs_mp`, `configs_sh_compile`). |
-| BEAM (`travel`) | `pilates/beam/production/` | `<workspace>/beam/input/<region>/` | Primary BEAM `.conf` file, `r5/` network router directory, and warmstart linkstats. |
-| ATLAS (`vehicle_ownership`) | `pilates/atlas/atlas_input/` | `<workspace>/atlas/atlas_input/` | Vehicle ownership input tables and warmstart data when `vehicle_ownership` is enabled. |
+| UrbanSim (`land_use`) | `pilates/urbansim/data/` | `<workspace>/urbansim/data/` | Base regional HDF5 datastore (`custom_mpo_<region_id>_model_data.h5` or year-scoped `.h5`) and static CSV inputs staged by `stage_urbansim_run_workspace`. When UrbanSim is disabled, initial coupler seeding still binds this datastore if ActivitySim or ATLAS is enabled. |
+| ActivitySim (`activity_demand`) | `pilates/activitysim/data/` and `pilates/activitysim/configs/` | `<workspace>/activitysim/data/` and `<workspace>/activitysim/configs/` | Zone and household inputs, initial OMX skims, canonical zone coordinates (`canonical_zones.parquet`), and config trees (`configs`, `configs_extended`, `configs_mp`, `configs_sh_compile`) prepared idempotently via `ensure_activitysim_mutable_configs`. |
+| BEAM (`travel`) | `pilates/beam/production/` | `<workspace>/beam/input/<region>/` | Primary BEAM `.conf` file, `r5/` network router directory, and warmstart linkstats prepared idempotently via `ensure_beam_mutable_workspace`. |
+| ATLAS (`vehicle_ownership`) | `pilates/atlas/atlas_input/` | `<workspace>/atlas/atlas_input/` | Static vehicle ownership lookup tables (`stage_selected_atlas_static_inputs`) and exported yearly CSV inputs when `vehicle_ownership` is enabled. |
 
 ## First Local Run Walkthrough
 
@@ -59,13 +59,13 @@ Tracked files under `scenarios/` serve as baseline templates that contain machin
 
 ## Run Startup and Outputs
 
-During launch, `run.py` validates the YAML settings, initializes runtime flags, builds the `WorkflowPlan`, and creates or restores `WorkflowState`. Before entering the year loop, the bootstrap phase stages the regional input trees into the mutable workspace and publishes starting artifact handles to the Consist coupler.
+During launch, `run.py` validates the YAML settings, initializes runtime flags, builds the `EnabledWorkflowSurface`, and creates or restores `WorkflowState`. Upon opening the Consist scenario context, the launcher runs preflight admission checks and seeds starting artifact handles into `scenario.coupler` (`seed_bootstrap_artifacts_to_coupler`) before entering the year loop, where each step resolver/preprocessor idempotently prepares its own mutable workspace and config files.
 
 A completed or in-progress run produces two directories and two state records:
 
 - **Archive run directory** (`<run.output_directory>/pilates-run--<region>--<name>--<timestamp>/`): Durable record of the run containing exported outputs, configuration snapshots, state checkpoints, and provenance metadata.
 - **Mutable workspace** (`<run.local_workspace_root>/pilates-run--.../` or colocated in the archive directory): Live working directory where containers read and write high-churn intermediate files.
-- **`run_state.yaml`** (managed by `WorkflowState`): YAML checkpoint written inside both the archive directory and mutable workspace that tracks `data_initialized`, completed stages per year, and iteration frontiers for restart and resume.
+- **`run_state.yaml`** (managed by `WorkflowState`): YAML checkpoint written inside both the archive directory and mutable workspace that tracks the active simulation year, stage, and iteration frontier for restart and resume.
 - **`.consist/provenance.duckdb`** (or `run.consist_db_filename`): Run-local DuckDB provenance database recording execution lineage, artifact digests, and cache metadata, snapshotted to `.consist/snapshots/latest/` at stage boundaries and shutdown.
 
 If a run stops early, the launcher logs the exact `python run.py -c <config> -S <archive_run_dir>/run_state.yaml` command required to resume from the last recorded frontier.
@@ -77,7 +77,7 @@ If a run stops early, the launcher logs the exact `python run.py -c <config> -S 
 | Understand YAML layout, `base:` inheritance, and workspace paths | [Configuration Basics](configuration_basics.md) |
 | Look up every configuration section and field | [Configuration Reference](../run/configuration_reference.md) |
 | Check CLI flags for local execution, resume, and Slurm wrappers | [CLI](../run/cli.md) |
-| Trace startup, bootstrap, year-loop execution, and restart behavior | [Scenario Lifecycle](../run/scenario_lifecycle.md) |
+| Trace startup, coupler seeding, year-loop execution, and restart behavior | [Scenario Lifecycle](../run/scenario_lifecycle.md) |
 | Configure 3-tier cluster storage and Slurm jobs | [HPC Overview](../run/hpc_overview.md) and [Lawrencium](../run/lawrencium.md) |
 | Promote scratch archives to cold storage and merge provenance DBs | [Run Promotion](../run/run_promotion.md) |
-| Diagnose startup, bootstrap, restart, or cluster failures | [Troubleshooting](../run/troubleshooting.md) |
+| Diagnose startup, input staging, restart, or cluster failures | [Troubleshooting](../run/troubleshooting.md) |

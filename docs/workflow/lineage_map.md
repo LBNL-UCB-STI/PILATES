@@ -6,7 +6,7 @@ This page provides a step-by-step reference of the artifacts consumed and publis
 
 ```mermaid
 flowchart TD
-    Boot["initialize_data (Bootstrap)"] -->|"usim_datastore_h5, usim_datastore_base_h5, omx_skims"| URun["urbansim_run"]
+    Seed["seed_bootstrap_artifacts_to_coupler()"] -->|"usim_datastore_h5, usim_datastore_base_h5, omx_skims"| URun["urbansim_run"]
     URun -->|"usim_datastore_h5, usim_forecast_output"| UPost["urbansim_postprocess"]
     UPost -->|"usim_datastore_h5, usim_population_source_h5"| APre["atlas_preprocess"]
     APre -->|"atlas_households_csv, atlas_persons_csv, ..."| ARun["atlas_run"]
@@ -28,7 +28,6 @@ flowchart TD
 
 | Step Name | Stage | Consumed Roles / Keys | Published Keys |
 | :--- | :--- | :--- | :--- |
-| `initialize_data` | `bootstrap` | Configured input paths in `PilatesConfig` | `usim_datastore_h5`, `usim_datastore_base_h5`, `omx_skims`, `asim_mutable_data_dir`, `beam_mutable_data_dir`, optional `linkstats_warmstart` |
 | `urbansim_run` | `land_use` | `usim_datastore_h5`, optional `final_skims_omx` / `omx_skims` | `usim_datastore_h5`, `usim_forecast_output` |
 | `urbansim_postprocess` | `land_use` | `usim_datastore_h5`, optional `usim_datastore_base_h5` | `usim_datastore_h5`, `usim_population_source_h5`, `usim_input_merged_{year}`, `usim_input_archive_{year}` |
 | `atlas_preprocess` | `vehicle_ownership_model` | `usim_datastore_h5`, `usim_datastore_base_h5`, optional `final_skims_omx` | `atlas_households_csv`, `atlas_blocks_csv`, `atlas_persons_csv`, `atlas_residential_csv`, `atlas_jobs_csv`, optional `atlas_grave_csv`, optional `atlas_accessibility_csv` |
@@ -45,19 +44,21 @@ flowchart TD
 
 ## Stage-by-Stage Lineage Details
 
-=== "Bootstrap (`initialize_data`)"
+=== "Initial Seeding & Step-Owned Staging"
 
-    #### `initialize_data`
+    #### `seed_bootstrap_artifacts_to_coupler` (`pilates/workflows/binding.py`)
 
     **Reads**
 
-    - Scenario configuration paths from `PilatesConfig`.
+    - Configured read-only input paths from `PilatesConfig` and `Workspace`.
 
     **Publishes**
 
-    - Initial `usim_datastore_h5`, `usim_datastore_base_h5`, `omx_skims`, `asim_mutable_data_dir`, `beam_mutable_data_dir`, and optional `linkstats_warmstart`.
+    - Initial `usim_datastore_base_h5`, `usim_datastore_h5`, `usim_population_source_h5` (when land-use is disabled), `omx_skims`, `final_skims_omx` (when traffic assignment is disabled), optional BEAM-only inputs (`plans_beam_in`, `households_beam_in`, `persons_beam_in`), and optional `linkstats_warmstart`.
 
-    **Downstream handoff**: Registers all bootstrap-safe inputs in `scenario.coupler` so downstream steps resolve initial files through standard binding rules rather than ad-hoc filesystem lookups.
+    **Step-Owned Workspace Staging**
+
+    - Each model step idempotently stages its own mutable configs and static inputs on demand: `stage_urbansim_run_workspace`, `stage_selected_atlas_static_inputs`, `ensure_activitysim_mutable_configs`, and `ensure_beam_mutable_workspace`.
 
 === "Land Use (`land_use`)"
 
