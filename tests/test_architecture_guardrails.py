@@ -11,7 +11,6 @@ PILATES_ROOT = REPO_ROOT / "pilates"
 ALLOWED_PROFILE_IMPORT_FILES: set[Path] = set()
 ALLOWED_RUNTIME_FLAG_CALL_FILES = {
     Path("pilates/workflows/state.py"),
-    Path("pilates/generic/initialization.py"),
     Path("pilates/runtime/launcher.py"),
     Path("pilates/workflows/surface.py"),
 }

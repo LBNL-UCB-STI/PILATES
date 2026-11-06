@@ -351,12 +351,6 @@ def _native_activitysim_resolved_inputs(
                 else None
             ),
         )
-        if FINAL_SKIMS_OMX in rules:
-            rules[FINAL_SKIMS_OMX] = ArtifactBindingRule(
-                semantic_key=FINAL_SKIMS_OMX,
-                required=False,
-                preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
-            )
     elif step_name == "activitysim_run":
         rules[ASIM_OMX_SKIMS] = ArtifactBindingRule(
             semantic_key=ASIM_OMX_SKIMS,

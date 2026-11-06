@@ -2838,8 +2838,6 @@ def ensure_activitysim_mutable_configs(
         input_dir = os.path.join(root_dir, mutable_data_rel)
     else:
         input_dir = mutable_data_rel
-    if input_dir is not None:
-        os.makedirs(input_dir, exist_ok=True)
 
     configs_dest_dir: Optional[str] = None
     if workspace is not None and folder_path is None:
@@ -2966,7 +2964,7 @@ def ensure_activitysim_mutable_configs(
             main_configs_dir=main_configs_dir,
             sharrow=configured_activitysim_sharrow(settings),
         )
-    else:
+    elif local_configs_folder:
         os.makedirs(configs_dest_dir, exist_ok=True)
 
     return Path(configs_dest_dir)
