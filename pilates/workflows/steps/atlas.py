@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Any, Dict, Mapping
 
 from consist import (
-    Artifact,
     BindingResult,
     ExecutionOptions,
     OutputSet,
@@ -24,6 +24,7 @@ from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_runtime import require_runtime_kwargs
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import get_land_use_model
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import is_start_year
@@ -183,15 +184,6 @@ def _atlas_postprocess_native_output_paths(
     return outputs
 
 
-def _coupler_value_filename(value: Any) -> str:
-    if isinstance(value, Artifact):
-        raw_path = value.path or value.container_uri or ""
-        return Path(str(raw_path)).name
-    if isinstance(value, (str, Path)):
-        return Path(value).name
-    return ""
-
-
 def _prefer_base_datastore_key(
     *,
     state: WorkflowState,
@@ -246,18 +238,23 @@ def _select_atlas_datastore_from_coupler(
     else:
         forecast_candidate = resolve_coupler_value(coupler, USIM_FORECAST_OUTPUT)
         current_candidate = resolve_coupler_value(coupler, USIM_DATASTORE_H5)
+        forecast_name = os.path.basename(
+            artifact_to_path(forecast_candidate.value) or ""
+        )
+        current_name = os.path.basename(artifact_to_path(current_candidate.value) or "")
         if (
             forecast_candidate.value is not None
-            and _coupler_value_filename(forecast_candidate.value) == expected_filename
-            and _coupler_value_filename(current_candidate.value) != expected_filename
+            and forecast_name == expected_filename
+            and current_name != expected_filename
         ):
             return forecast_candidate
         pop_candidate = resolve_coupler_value(coupler, USIM_POPULATION_SOURCE_H5)
+        pop_name = os.path.basename(artifact_to_path(pop_candidate.value) or "")
         expected_stem = Path(expected_filename).stem
         if (
             pop_candidate.value is not None
-            and _coupler_value_filename(pop_candidate.value).startswith(expected_stem)
-            and _coupler_value_filename(current_candidate.value) != expected_filename
+            and pop_name.startswith(expected_stem)
+            and current_name != expected_filename
         ):
             return pop_candidate
         candidates = (
@@ -272,17 +269,13 @@ def _select_atlas_datastore_from_coupler(
     return resolve_coupler_value(coupler, USIM_DATASTORE_H5)
 
 
-def _resolve_atlas_preprocess_inputs(
+def _resolve_atlas_datastore_target(
     *,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
     coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
-    requires_beam_skim = requires_prior_beam_skim_handoff(
-        settings=settings,
-        state=state,
-    )
+) -> tuple[bool, Path, Any]:
     land_use_enabled = bool(
         get_setting(
             settings,
@@ -302,7 +295,66 @@ def _resolve_atlas_preprocess_inputs(
         io="input" if (use_base_datastore and prefer_base_key) else "output",
         year=state.forecast_year,
     )
-    atlas_input = Path(workspace.get_usim_mutable_data_dir()) / usim_input_fname
+    selected_datastore = _select_atlas_datastore_from_coupler(
+        coupler=coupler,
+        use_base_datastore=use_base_datastore,
+        prefer_base_key=prefer_base_key,
+        expected_filename=usim_input_fname,
+    )
+    mutable_dir = Path(workspace.get_usim_mutable_data_dir())
+    if use_base_datastore and prefer_base_key:
+        selected_name = os.path.basename(
+            artifact_to_path(selected_datastore.value) or ""
+        )
+        try:
+            main_forecast_year = state.main_forecast_year
+        except AttributeError:
+            main_forecast_year = None
+        if selected_name.startswith("input_data_for_") and selected_name.endswith(
+            "_outputs.h5"
+        ):
+            datastore_dest = mutable_dir / selected_name
+        elif (
+            land_use_enabled
+            and main_forecast_year is not None
+            and state.forecast_year is not None
+            and int(state.forecast_year) < int(main_forecast_year)
+        ):
+            datastore_dest = (
+                mutable_dir / f"input_data_for_{int(main_forecast_year)}_outputs.h5"
+            )
+        else:
+            datastore_dest = mutable_dir / usim_input_fname
+    else:
+        datastore_dest = Path(
+            _urbansim_run_native_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            )[USIM_DATASTORE_H5]
+        )
+    return use_base_datastore, datastore_dest, selected_datastore
+
+
+def _resolve_atlas_preprocess_inputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+) -> ResolvedStepInputs:
+    requires_beam_skim = requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    )
+    use_base_datastore, atlas_input, selected_datastore = (
+        _resolve_atlas_datastore_target(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=coupler,
+        )
+    )
     resolved = _resolve_native_inputs(
         step_name="atlas_preprocess",
         function=_native_atlas_preprocess,
@@ -317,12 +369,6 @@ def _resolve_atlas_preprocess_inputs(
             / "final_skims.omx",
         },
         coupler=coupler,
-    )
-    selected_datastore = _select_atlas_datastore_from_coupler(
-        coupler=coupler,
-        use_base_datastore=use_base_datastore,
-        prefer_base_key=prefer_base_key,
-        expected_filename=usim_input_fname,
     )
     current_bound = (resolved.binding.inputs or {}).get(USIM_DATASTORE_H5)
     if selected_datastore.value is not None and (
@@ -387,35 +433,11 @@ def _resolve_atlas_postprocess_inputs(
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
     forecast_year = state.forecast_year
-    land_use_enabled = bool(
-        get_setting(
-            settings,
-            "land_use_enabled",
-            get_land_use_model(settings) is not None
-            or get_setting(settings, "urbansim") is not None,
-        )
-    )
-    use_base_datastore = is_start_year(state, settings) or not land_use_enabled
-    prefer_base_key = _prefer_base_datastore_key(
+    _, datastore_dest, selected_datastore = _resolve_atlas_datastore_target(
+        settings=settings,
         state=state,
-        land_use_enabled=land_use_enabled,
-        use_base_datastore=use_base_datastore,
-    )
-    usim_input_fname = get_usim_datastore_fname(
-        settings,
-        io="input" if (use_base_datastore and prefer_base_key) else "output",
-        year=forecast_year,
-    )
-    datastore_dest = (
-        Path(workspace.get_usim_mutable_data_dir()) / usim_input_fname
-        if (use_base_datastore and prefer_base_key)
-        else Path(
-            _urbansim_run_native_output_paths(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            )[USIM_DATASTORE_H5]
-        )
+        workspace=workspace,
+        coupler=coupler,
     )
     semantic_roles = {
         _ATLAS_HOUSEHOLDV_CSV_INPUT: f"householdv_{forecast_year}",
@@ -433,15 +455,11 @@ def _resolve_atlas_postprocess_inputs(
     source_by_role: dict[str, str] = {}
     selected_key_by_role: dict[str, str] = {}
     for parameter, semantic_role in semantic_roles.items():
-        if parameter == USIM_DATASTORE_H5:
-            resolved = _select_atlas_datastore_from_coupler(
-                coupler=coupler,
-                use_base_datastore=use_base_datastore,
-                prefer_base_key=prefer_base_key,
-                expected_filename=usim_input_fname,
-            )
-        else:
-            resolved = resolve_coupler_value(coupler, semantic_role)
+        resolved = (
+            selected_datastore
+            if parameter == USIM_DATASTORE_H5
+            else resolve_coupler_value(coupler, semantic_role)
+        )
         source_by_role[parameter] = resolved.source
         if resolved.storage_key is not None:
             selected_key_by_role[parameter] = resolved.storage_key

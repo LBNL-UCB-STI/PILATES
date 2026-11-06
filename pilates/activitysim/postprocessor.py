@@ -990,6 +990,8 @@ def create_usim_input_data(
             and os.path.exists(base_input_store_path)
             and os.path.abspath(base_input_store_path)
             != os.path.abspath(archived_input_store_path)
+            and os.path.abspath(base_input_store_path)
+            != os.path.abspath(input_store_path)
         ):
             with pd.HDFStore(base_input_store_path, mode="r") as base_store:
                 for table_name, h5_key in _select_preferred_h5_key_by_table(

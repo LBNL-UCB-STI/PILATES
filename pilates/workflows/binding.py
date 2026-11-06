@@ -57,6 +57,7 @@ from pilates.utils.state_access import is_start_year, uses_input_datastore
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.coupler_namespace import (
     canonical_artifact_key_from_raw_key,
+    resolve_coupler_value,
     resolve_input_precedence,
     set_coupler_from_artifact,
 )
@@ -109,25 +110,8 @@ class _HasLandUseStage(Protocol):
 
 
 @runtime_checkable
-class _HasCurrentMajorStage(Protocol):
-    @property
-    def current_major_stage(self) -> Any: ...
-
-
-@runtime_checkable
 class _HasUsimMutableDataDir(Protocol):
     def get_usim_mutable_data_dir(self) -> str: ...
-
-
-@runtime_checkable
-class _HasBeamMutableDataDir(Protocol):
-    def get_beam_mutable_data_dir(self) -> str: ...
-
-
-def _current_major_stage(state: Any) -> Any:
-    return (
-        state.current_major_stage if isinstance(state, _HasCurrentMajorStage) else None
-    )
 
 
 def _usim_mutable_data_dir(workspace: Any) -> Optional[str]:
@@ -135,14 +119,6 @@ def _usim_mutable_data_dir(workspace: Any) -> Optional[str]:
         workspace.get_usim_mutable_data_dir
     ):
         return workspace.get_usim_mutable_data_dir()
-    return None
-
-
-def _beam_mutable_data_dir(workspace: Any) -> Optional[str]:
-    if isinstance(workspace, _HasBeamMutableDataDir) and callable(
-        workspace.get_beam_mutable_data_dir
-    ):
-        return workspace.get_beam_mutable_data_dir()
     return None
 
 
@@ -416,28 +392,6 @@ def _urbansim_datastore_candidates_for_year(
     return mapping or None
 
 
-def _urbansim_inputs_for_year(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    year: Optional[int],
-    **_: Any,
-) -> Optional[Mapping[str, Any]]:
-    """Planner-year UrbanSim datastore selector.
-
-    This is the one fallback provider that intentionally consumes the caller
-    supplied ``year``; the rule contract is literally "for the requested
-    year", so the binding layer forwards that year unchanged.
-    """
-    return _urbansim_datastore_candidates_for_year(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=year,
-    )
-
-
 def _activitysim_input_datastore(
     *,
     settings: Any,
@@ -541,7 +495,6 @@ def _activitysim_population_source(
 
 
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
-    "urbansim_inputs_for_year": _urbansim_inputs_for_year,
     "activitysim_input_datastore": _activitysim_input_datastore,
     "activitysim_population_source": _activitysim_population_source,
 }
@@ -1009,13 +962,6 @@ def _seed_artifact_for_coupler_key(
             first_step_started = False
         if not first_step_started:
             try:
-                return scenario.add_input(
-                    path,
-                    key=canonical_key,
-                    latest_artifact_lookup_done=True,
-                    known_latest_artifact_at_uri=None,
-                )
-            except TypeError:
                 return scenario.add_input(path, key=canonical_key)
             except AttributeError:
                 pass
@@ -1068,11 +1014,7 @@ def seed_bootstrap_artifacts_to_coupler(
         if not resolved_artifacts:
             continue
         for key, path in resolved_artifacts.items():
-            try:
-                existing = coupler.get(key)
-            except Exception:
-                existing = None
-            if existing is not None:
+            if resolve_coupler_value(coupler, key).value is not None:
                 continue
             if not path or not os.path.exists(path):
                 continue

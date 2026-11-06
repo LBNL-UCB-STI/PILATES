@@ -128,6 +128,12 @@ def resolve_atlas_vehicle_type_mapping_path(
     candidates = []
     if workspace is not None:
         candidates.append(Path(workspace.get_atlas_mutable_input_dir()) / mapping_name)
+        try:
+            candidates.append(
+                Path(workspace.get_atlas_static_input_dir()) / mapping_name
+            )
+        except AttributeError:
+            pass
     candidates.append(Path(__file__).resolve().parent / "atlas_input" / mapping_name)
 
     for candidate in candidates:

@@ -20,6 +20,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
+    USIM_INPUT_ARCHIVE_PREFIX,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.coupler_namespace import (
@@ -135,6 +136,24 @@ def run_land_use_stage(
         iteration=iteration_index(state),
         phase="postprocess",
     )
+    archive_key = f"{USIM_INPUT_ARCHIVE_PREFIX}{year}"
+    archived_base_artifact = resolve_coupler_value(
+        scenario.coupler,
+        archive_key,
+    ).value
+    if isinstance(archived_base_artifact, Artifact):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            archived_base_artifact,
+        )
+    elif isinstance(archived_base_artifact, (str, Path)):
+        set_coupler_from_artifact(
+            scenario.coupler,
+            USIM_DATASTORE_BASE_H5,
+            None,
+            fallback=str(archived_base_artifact),
+        )
 
     population_source_snapshot = postprocess_outputs.processed_outputs.get(
         USIM_POPULATION_SOURCE_H5

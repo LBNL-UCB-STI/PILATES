@@ -15,7 +15,9 @@ from typing import (
     Callable,
     Dict,
     Mapping,
+    Protocol,
     Sequence,
+    runtime_checkable,
 )
 
 from consist import (
@@ -29,6 +31,7 @@ from consist import (
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -45,13 +48,18 @@ from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
 
 
+@runtime_checkable
+class _HasPathAttr(Protocol):
+    path: Any
+
+
 def _persisted_output_path(
     outputs: Mapping[str, Any],
     *,
     step_name: str,
     key: str,
     declared_outputs: Mapping[str, Any],
-    workspace: Workspace,
+    workspace: Any,
 ) -> Path:
     """Return one output only when it exists at its declared destination.
 
@@ -68,21 +76,34 @@ def _persisted_output_path(
             f"{step_name} output {key!r} has no declared destination"
         ) from exc
 
-    if isinstance(output_spec, os.PathLike):
-        path = Path(output_spec)
-    elif isinstance(output_spec, str):
-        if output_spec.startswith("workspace://"):
-            path = Path(workspace.full_path) / output_spec[
-                len("workspace://") :
-            ].lstrip("/")
-        elif "://" in output_spec:
+    declared_path = (
+        output_spec.path if isinstance(output_spec, _HasPathAttr) else output_spec
+    )
+    if isinstance(declared_path, os.PathLike):
+        path = Path(declared_path)
+    elif isinstance(declared_path, str):
+        if declared_path.startswith("workspace://"):
+            workspace_root = get_setting(workspace, "full_path")
+            if workspace_root is None:
+                raise RuntimeError(
+                    f"{step_name} output {key!r} cannot resolve its workspace destination"
+                )
+            path = Path(workspace_root) / declared_path[len("workspace://") :].lstrip(
+                "/"
+            )
+        elif "://" in declared_path:
             raise RuntimeError(
                 f"{step_name} output {key!r} has a non-local declared destination"
             )
         else:
-            path = Path(output_spec)
+            path = Path(declared_path)
             if not path.is_absolute():
-                path = Path(workspace.full_path) / path
+                workspace_root = get_setting(workspace, "full_path")
+                if workspace_root is None:
+                    raise RuntimeError(
+                        f"{step_name} output {key!r} cannot resolve its relative destination"
+                    )
+                path = Path(workspace_root) / path
     else:
         raise RuntimeError(
             f"{step_name} output {key!r} has an invalid declared destination"
@@ -93,6 +114,9 @@ def _persisted_output_path(
             f"{step_name} output {key!r} is missing at declared destination {path}"
         )
     return path
+
+
+_path_from_output = _persisted_output_path
 
 
 def _validation_context(

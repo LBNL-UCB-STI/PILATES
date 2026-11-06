@@ -89,7 +89,6 @@ from pilates.workflows.binding import (
 )
 from pilates.workflows.input_authority import requires_prior_beam_linkstats_handoff
 from pilates.workflows.state_helpers import resolve_forecast_year
-from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
@@ -100,6 +99,8 @@ from pilates.workflows.contracts import (
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.utils.state_access import is_start_year, iteration_index
 from pilates.workspace import Workspace
+
+from .shared import _path_from_output
 
 logger = logging.getLogger(__name__)
 
@@ -143,62 +144,6 @@ def _require_primary_beam_config(
 # These values deliberately sit beside the legacy factories until the coordinated
 # stage cutover.  They do not capture a holder or coupler: all semantic selection is
 # completed by their resolver and all declared outputs are persisted by Consist.
-
-
-def _path_from_output(
-    *,
-    outputs: Mapping[str, Any],
-    step_name: str,
-    key: str,
-    declared_outputs: Mapping[str, Any],
-    workspace: Any,
-) -> Path:
-    """Return one output from the current invocation's declared path map.
-
-    Cache-hit artifacts retain their original URI by design.  The typed
-    projector must therefore validate the deterministic current destination
-    requested for this invocation rather than consulting artifact metadata.
-    """
-
-    require_output(outputs, step_name=step_name, key=key)
-    try:
-        destination = declared_outputs[key]
-    except KeyError as exc:
-        raise RuntimeError(
-            f"{step_name} output {key!r} has no declared current destination."
-        ) from exc
-    if isinstance(destination, os.PathLike):
-        path = Path(destination)
-    elif isinstance(destination, str) and destination.startswith("workspace://"):
-        workspace_root = get_setting(workspace, "full_path")
-        if workspace_root is None:
-            raise RuntimeError(
-                f"{step_name} output {key!r} cannot resolve its workspace destination."
-            )
-        path = Path(workspace_root) / destination[len("workspace://") :].lstrip("/")
-    elif isinstance(destination, str) and "://" in destination:
-        raise RuntimeError(
-            f"{step_name} output {key!r} has a non-local declared destination."
-        )
-    elif isinstance(destination, str):
-        path = Path(destination)
-        if not path.is_absolute():
-            workspace_root = get_setting(workspace, "full_path")
-            if workspace_root is None:
-                raise RuntimeError(
-                    f"{step_name} output {key!r} cannot resolve its relative destination."
-                )
-            path = Path(workspace_root) / path
-    else:
-        raise RuntimeError(
-            f"{step_name} output {key!r} has an invalid declared destination."
-        )
-
-    if not path.exists():
-        raise RuntimeError(
-            f"{step_name} output {key!r} is missing at declared destination {path}."
-        )
-    return path
 
 
 def _native_output_destination(

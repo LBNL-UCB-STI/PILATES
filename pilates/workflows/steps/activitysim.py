@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import logging
-import os
-import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Protocol, runtime_checkable
+from typing import Any, Dict, Mapping, Protocol, runtime_checkable
 
 from consist import (
     Artifact,
@@ -47,6 +45,8 @@ from pilates.activitysim.outputs import (
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.state_access import current_year, iteration_index
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -56,10 +56,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
-    USIM_POPULATION_BLOCKS_TABLE,
-    USIM_POPULATION_HOUSEHOLDS_TABLE,
-    USIM_POPULATION_JOBS_TABLE,
-    USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
@@ -85,19 +81,9 @@ from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
 from pilates.workflows.state import WorkflowState
 
-from .shared import _activitysim_output_facet_meta
+from .shared import _activitysim_output_facet_meta, _persisted_output_path
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
-
-_ACTIVITYSIM_POPULATION_TABLE_KEYS = (
-    USIM_POPULATION_HOUSEHOLDS_TABLE,
-    USIM_POPULATION_PERSONS_TABLE,
-    USIM_POPULATION_JOBS_TABLE,
-    USIM_POPULATION_BLOCKS_TABLE,
-)
 
 
 def _land_use_enabled(state: WorkflowState) -> bool:
@@ -109,13 +95,6 @@ def _land_use_enabled(state: WorkflowState) -> bool:
         # Lightweight resolver tests and legacy callers may use a state facade
         # without enabled-stage metadata.  Those retain bootstrap semantics.
         return False
-
-
-_ACTIVITYSIM_CONFIG_REFERENCES_ARCHIVED_KEY = "activitysim_config_references_archived"
-_ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK = threading.Lock()
-_ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE: Dict[
-    tuple[str, str, tuple[str, ...]], Dict[str, str]
-] = {}
 
 
 def activitysim_run_output_paths(
@@ -133,7 +112,7 @@ def activitysim_run_output_paths(
         output_keys.add(ZARR_SKIMS)
 
     forecast_year = resolve_forecast_year(state)
-    iteration = getattr(state, "iteration", None)
+    iteration = iteration_index(state)
     if forecast_year is None or iteration is None:
         return {
             key: (
@@ -212,7 +191,7 @@ def activitysim_postprocess_output_paths(
         "households_asim_out",
     }
     forecast_year = resolve_forecast_year(state)
-    iteration = getattr(state, "iteration", None)
+    iteration = iteration_index(state)
     return {
         key: (
             (
@@ -337,7 +316,7 @@ def _native_activitysim_resolved_inputs(
     """Freeze the one ActivitySim semantic selection for a native invocation."""
 
     allow_population_bootstrap_fallback = not _land_use_enabled(state)
-    workspace_root = Path(getattr(workspace, "full_path", "."))
+    workspace_root = Path(get_setting(workspace, "full_path", "."))
     destinations = {
         key: Path(path)
         if path is not None
@@ -423,7 +402,7 @@ def _native_activitysim_resolved_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
-        year=getattr(state, "year", None),
+        year=current_year(state),
     )
 
 
@@ -919,67 +898,6 @@ def _activitysim_run_native_output_paths(
         workspace=workspace,
         produces_zarr=_activitysim_run_produces_zarr(resolved_inputs),
     )
-
-
-def _persisted_output_path(
-    outputs: Mapping[str, Any],
-    *,
-    step_name: str,
-    key: str,
-    declared_outputs: Mapping[str, Any],
-    workspace: Workspace,
-) -> Path:
-    """Return one output only when it exists at its declared current destination.
-
-    A projected result represents the current step execution.  It must not fall
-    back to an artifact's mounted source, archive location, or historical
-    workspace when the declared destination is absent.
-    """
-
-    require_output(outputs, step_name=step_name, key=key)
-    try:
-        output_spec = declared_outputs[key]
-    except KeyError as exc:
-        raise RuntimeError(
-            f"{step_name} output {key!r} has no declared destination"
-        ) from exc
-
-    declared_path = getattr(output_spec, "path", output_spec)
-    if isinstance(declared_path, os.PathLike):
-        path = Path(declared_path)
-    elif isinstance(declared_path, str):
-        if declared_path.startswith("workspace://"):
-            workspace_root = getattr(workspace, "full_path", None)
-            if workspace_root is None:
-                raise RuntimeError(
-                    f"{step_name} output {key!r} cannot resolve its workspace destination"
-                )
-            path = Path(workspace_root) / declared_path[len("workspace://") :].lstrip(
-                "/"
-            )
-        elif "://" in declared_path:
-            raise RuntimeError(
-                f"{step_name} output {key!r} has a non-local declared destination"
-            )
-        else:
-            path = Path(declared_path)
-            if not path.is_absolute():
-                workspace_root = getattr(workspace, "full_path", None)
-                if workspace_root is None:
-                    raise RuntimeError(
-                        f"{step_name} output {key!r} cannot resolve its relative destination"
-                    )
-                path = Path(workspace_root) / path
-    else:
-        raise RuntimeError(
-            f"{step_name} output {key!r} has an invalid declared destination"
-        )
-
-    if not path.exists():
-        raise RuntimeError(
-            f"{step_name} output {key!r} is missing at declared destination {path}"
-        )
-    return path
 
 
 def _project_activitysim_preprocess_outputs(

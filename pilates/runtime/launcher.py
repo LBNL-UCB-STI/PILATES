@@ -30,6 +30,7 @@ from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
 from pilates.workflows.consist_metadata import (
@@ -260,26 +261,29 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) 
     native steps and Consist cache hits republish required inputs.
     """
 
-    if not getattr(state, "is_restart_run", False):
+    if not get_setting(state, "is_restart_run", False):
         return False
 
-    stage_enum = getattr(state, "Stage", None)
+    stage_enum = get_setting(state, "Stage")
     if stage_enum is None:
         return False
 
-    activity_demand = getattr(stage_enum, "activity_demand", None)
-    supply_demand_loop = getattr(stage_enum, "supply_demand_loop", None)
-    current_major_stage = getattr(state, "current_major_stage", None)
+    activity_demand = get_setting(stage_enum, "activity_demand")
+    supply_demand_loop = get_setting(stage_enum, "supply_demand_loop")
+    current_major_stage = get_setting(state, "current_major_stage")
 
     if current_major_stage != supply_demand_loop:
         return False
 
-    is_enabled = getattr(state, "is_enabled", None)
+    try:
+        is_enabled = state.is_enabled
+    except AttributeError:
+        return False
     if not callable(is_enabled) or not is_enabled(activity_demand):
         return False
 
     provider_boundary = supply_demand_loop
-    major_stage_order = getattr(state, "major_stage_order", ())
+    major_stage_order = get_setting(state, "major_stage_order", ()) or ()
     for candidate in major_stage_order:
         if candidate == supply_demand_loop:
             break
@@ -287,15 +291,18 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) 
             provider_boundary = candidate
             break
 
-    resumed_iteration = getattr(state, "iteration", 0)
+    resumed_iteration = get_setting(state, "iteration", 0)
     state.current_major_stage = provider_boundary
     state.current_inner_iter = 0
     state.current_sub_stage = None
     state.sub_stage_progress = None
-    write_state = getattr(state, "write_state", None)
+    try:
+        write_state = state.write_state
+    except AttributeError:
+        write_state = None
     if callable(write_state):
         write_state()
-    provider_name = getattr(provider_boundary, "name", str(provider_boundary))
+    provider_name = get_setting(provider_boundary, "name", str(provider_boundary))
     logger.warning(
         "[launcher][restart] no committed BEAM checkpoint exists; rewinding "
         "from supply-demand iteration=%s to provider boundary=%s so native "
@@ -552,10 +559,14 @@ def main(
     original_signal_handlers: Dict[int, Any] = {}
 
     def _graceful_exit_handler(signum: int, frame: Any) -> None:
+        try:
+            sig_name = signal.Signals(signum).name
+        except (ValueError, AttributeError):
+            sig_name = str(signum)
         logger.warning(
             "PILATES received signal %d (%s); initiating graceful shutdown...",
             signum,
-            signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum),
+            sig_name,
         )
         sys.exit(128 + signum)
 
@@ -660,6 +671,14 @@ def main(
                             cr.current_run()
                         ),
                     )
+            if is_restart_run and not _is_at_initial_workflow_boundary(state):
+                restart_runtime.restore_restart_coupler_snapshot(
+                    scenario=scenario,
+                    tracker=tracker,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                )
             seed_bootstrap_artifacts_to_coupler(
                 settings=settings,
                 state=state,
@@ -670,14 +689,6 @@ def main(
             if not is_restart_run:
                 scenario.capture_coupler_snapshot(phase="init")
             else:
-                if not _is_at_initial_workflow_boundary(state):
-                    restart_runtime.restore_restart_coupler_snapshot(
-                        scenario=scenario,
-                        tracker=tracker,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                    )
                 restart_runtime.hydrate_restart_atlas_continuation_inputs(
                     settings=settings,
                     state=state,

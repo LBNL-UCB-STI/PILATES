@@ -8,6 +8,7 @@ from typing import Any, Union
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.coupler_namespace import (
@@ -53,20 +54,6 @@ def _validate_population_h5_for_activitysim_year(
     )
 
 
-def _coupler_artifact_filename(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        path = value.path
-        if path:
-            return os.path.basename(str(path))
-    except AttributeError:
-        pass
-    if isinstance(value, (str, os.PathLike)):
-        return os.path.basename(os.fspath(value))
-    return ""
-
-
 def _publish_current_h5_alias(
     *,
     coupler: CouplerProtocol,
@@ -85,12 +72,13 @@ def _publish_current_h5_alias(
         coupler,
         USIM_POPULATION_SOURCE_H5,
     ).value
+    current_name = os.path.basename(artifact_to_path(current_datastore) or "")
+    base_name = os.path.basename(artifact_to_path(base_datastore) or "")
     if (
         current_datastore is not None
         and current_datastore is not population_source
-        and _coupler_artifact_filename(current_datastore)
-        and _coupler_artifact_filename(current_datastore)
-        == _coupler_artifact_filename(base_datastore)
+        and current_name
+        and current_name == base_name
     ):
         set_coupler_from_artifact(
             coupler,

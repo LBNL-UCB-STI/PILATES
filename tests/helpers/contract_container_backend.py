@@ -28,7 +28,6 @@ from tests.helpers.micro_world_fixture import (
     MICRO_PERSON_IDS,
     MICRO_TIME_PERIODS,
     MICRO_ZONES,
-    create_micro_world_tables,
     write_micro_skims_omx,
     write_micro_skims_zarr,
     write_urbansim_h5,
@@ -384,20 +383,30 @@ class ContractValidatingContainerBackend:
             )
 
         # Read actual input tables from base_h5 to preserve referential integrity
-        tables = create_micro_world_tables(base_year=in_year)
+        tables: dict[str, pd.DataFrame] = {}
         with pd.HDFStore(str(base_h5), mode="r") as store:
             keys = set(store.keys())
-            for name in ("households", "persons", "blocks", "jobs"):
-                year_key = f"/{in_year}/{name}"
+            for name in (
+                "households",
+                "persons",
+                "blocks",
+                "jobs",
+                "residential_units",
+                "cars",
+                "graveyard",
+            ):
                 root_key = f"/{name}"
-                if year_key in keys:
-                    tables[name] = store[year_key]
-                elif root_key in keys:
-                    tables[name] = store[root_key]
-                else:
+                if root_key not in keys:
                     raise AssertionError(
-                        f"UrbanSim base HDF5 {base_h5} missing required table {name!r} (keys={sorted(keys)})"
+                        f"UrbanSim base HDF5 {base_h5} missing required root table {root_key!r} (keys={sorted(keys)})"
                     )
+                year_key = f"/{in_year}/{name}"
+                tables[name] = (
+                    store[year_key]
+                    if year_key in keys
+                    and name in ("households", "persons", "blocks", "jobs")
+                    else store[root_key]
+                )
 
         output_h5 = data_dir / f"model_data_{forecast_year}.h5"
         write_urbansim_h5(output_h5, tables, years=(in_year, forecast_year))
