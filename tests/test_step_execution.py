@@ -1211,3 +1211,50 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
     assert expected_root in art_2.meta.get("recovery_roots", [])
     refreshed_art_1 = tracker.get_run_outputs(str(art_1.run_id))["result"]
     assert expected_root not in refreshed_art_1.meta.get("recovery_roots", [])
+
+
+def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postprocess() -> (
+    None
+):
+    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+
+    @define_step(model="activitysim", outputs=["result"])
+    def example(*, settings, state, workspace) -> None:
+        return None
+
+    seen_ingest: dict[str, bool] = {}
+    for step_name in (
+        "activitysim_preprocess",
+        "activitysim_run",
+        "activitysim_postprocess",
+    ):
+        definition = StepDefinition(
+            name=step_name,
+            function=example,
+            resolve_inputs=lambda **_: supplied,
+            project_outputs=lambda outputs, **_: outputs["result"],
+            input_contract=_EXAMPLE_INPUT_CONTRACT,
+        )
+        scenario = SimpleNamespace(coupler="coupler", tracker=None)
+        scenario.run = lambda **kwargs: (
+            seen_ingest.__setitem__(step_name, kwargs["config_plan_ingest"])
+            or SimpleNamespace(outputs={"result": "persisted"})
+        )
+        execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings="settings",
+            state="state",
+            workspace="workspace",
+            stage="stage",
+            year=None,
+            iteration=None,
+            phase=None,
+            resolved_inputs=supplied,
+        )
+
+    assert seen_ingest == {
+        "activitysim_preprocess": False,
+        "activitysim_run": True,
+        "activitysim_postprocess": False,
+    }

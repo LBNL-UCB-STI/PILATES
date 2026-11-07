@@ -369,6 +369,11 @@ def _prepare_run_context(
     os.makedirs(local_run_dir, exist_ok=True)
     if archive_run_dir != local_run_dir:
         os.makedirs(archive_run_dir, exist_ok=True)
+    dlt_data_dir = os.environ.setdefault(
+        "DLT_DATA_DIR",
+        os.path.join(local_run_dir, ".dlt"),
+    )
+    os.makedirs(dlt_data_dir, exist_ok=True)
 
     project_root_abs = str(Path(__file__).resolve().parents[2])
 

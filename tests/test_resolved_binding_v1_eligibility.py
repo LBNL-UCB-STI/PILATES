@@ -88,7 +88,11 @@ ELIGIBILITY_MATRIX = (
         False,
         "runtime cache, warmup, and model output closure remain outside strict binding",
     ),
-    EligibilityEntry("activitysim_postprocess", True),
+    EligibilityEntry(
+        "activitysim_postprocess",
+        False,
+        "postprocessor archives raw outputs in place and reads mutable workspace inputs",
+    ),
     EligibilityEntry(
         "beam_preprocess",
         False,

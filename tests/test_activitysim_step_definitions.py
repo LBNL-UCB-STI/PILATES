@@ -9,8 +9,6 @@ import pytest
 
 from consist import (
     BindingResult,
-    ExecutionOptions,
-    ResolvedBinding,
     Tracker,
     resolve_step_contract,
 )
@@ -45,6 +43,7 @@ def _tracked_artifacts(tmp_path: Path, *keys: str) -> dict[str, object]:
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path)},
         hashing_strategy="full",
     )
     artifacts: dict[str, object] = {}
@@ -456,6 +455,7 @@ def test_activitysim_postprocess_resolver_omits_current_artifact_with_population
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path)},
         hashing_strategy="full",
     )
     source_paths = [tmp_path / "population-a.h5", tmp_path / "population-b.h5"]
@@ -508,14 +508,15 @@ def test_activitysim_postprocess_resolver_omits_current_artifact_with_population
     }
 
 
-def test_activitysim_postprocess_resolver_freezes_tracked_h5_aliases(
+def test_activitysim_postprocess_resolver_deduplicates_tracked_h5_aliases(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """One tracked H5 may safely satisfy all three named postprocess parameters."""
+    """One tracked H5 alias is bound once and reuses its in-place workspace path."""
 
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path)},
         hashing_strategy="full",
     )
     source = tmp_path / "sources" / "model_data.h5"
@@ -572,49 +573,30 @@ def test_activitysim_postprocess_resolver_freezes_tracked_h5_aliases(
     settings = SimpleNamespace(run=SimpleNamespace(region="test"))
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
     workspace = SimpleNamespace(full_path=str(tmp_path))
-    with tracker.scenario("activitysim-postprocess") as scenario:
-        identity = scenario.resolve_step_identity(
-            activitysim._activitysim_postprocess_callable,
-            year=2025,
-            iteration=0,
-            phase="postprocess",
-            stage="supply_demand",
-            execution_options=ExecutionOptions(
-                input_binding="paths",
-                runtime_kwargs={
-                    "settings": settings,
-                    "state": state,
-                    "workspace": workspace,
-                },
-            ),
-        )
-        resolved = activitysim._activitysim_postprocess_resolver(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            coupler=object(),
-            step_identity=identity,
-        )
+    resolved = activitysim._activitysim_postprocess_resolver(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=object(),
+    )
 
-    assert isinstance(resolved.binding, ResolvedBinding)
-    assert set(resolved.binding.inputs) == {
-        USIM_POPULATION_SOURCE_H5,
-        USIM_DATASTORE_CURRENT_H5,
-        USIM_DATASTORE_BASE_H5,
+    assert isinstance(resolved.binding, BindingResult)
+    assert set(resolved.binding.inputs) == {USIM_POPULATION_SOURCE_H5}
+    assert resolved.binding.inputs[USIM_POPULATION_SOURCE_H5].id == artifact.id
+    assert resolved.logical_destinations == {
+        USIM_POPULATION_SOURCE_H5: source.resolve(),
     }
-    assert {
-        input.artifact.artifact_id for input in resolved.binding.inputs.values()
-    } == {artifact.id}
 
 
-def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
+def test_activitysim_postprocess_executes_h5_aliases_in_place_without_snapshots(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The native postprocessor receives distinct strict snapshots for H5 aliases."""
+    """The native postprocessor stages inputs in place without .resolved-bindings copies."""
 
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path)},
         hashing_strategy="full",
     )
     required_roles = (
@@ -655,7 +637,7 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
         ),
         source_by_role={role: "coupler" for role in inputs},
         logical_destinations={
-            role: tmp_path / "logical-inputs" / role for role in inputs
+            role: (tmp_path / "sources" / role).resolve() for role in inputs
         },
     )
     monkeypatch.setattr(
@@ -742,29 +724,17 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
             phase="postprocess",
         )
 
-    snapshot_root = (
-        tracker.run_dir / ".resolved-bindings" / result.run.id / "inputs"
-    ).resolve()
-    population_snapshot = snapshot_root / f"{USIM_POPULATION_SOURCE_H5}.h5"
-    current_snapshot = snapshot_root / f"{USIM_DATASTORE_CURRENT_H5}.h5"
-    base_snapshot = snapshot_root / f"{USIM_DATASTORE_BASE_H5}.h5"
-    assert Path(received["population_source_h5_path"]) == population_snapshot
-    assert Path(received["current_input_h5_path"]) == current_snapshot
-    assert Path(received["households_asim_input_path"]) == (
-        snapshot_root / ASIM_HOUSEHOLDS_IN
-    )
-    assert len({population_snapshot, current_snapshot, base_snapshot}) == 3
-    assert all(
-        path.read_text(encoding="utf-8") == "tracked h5\n"
-        for path in (
-            population_snapshot,
-            current_snapshot,
-            base_snapshot,
-        )
+    assert not (tracker.run_dir / ".resolved-bindings" / result.run.id).exists()
+    assert Path(received["population_source_h5_path"]) == h5_source.resolve()
+    assert Path(received["current_input_h5_path"]) == h5_source.resolve()
+    assert (
+        Path(received["households_asim_input_path"])
+        == (tmp_path / "sources" / ASIM_HOUSEHOLDS_IN).resolve()
     )
     assert projected.usim_datastore_h5 == output_paths[USIM_DATASTORE_CURRENT_H5]
-    assert result.outputs[USIM_DATASTORE_CURRENT_H5].container_uri == str(
-        output_paths[USIM_DATASTORE_CURRENT_H5]
+    assert (
+        result.outputs[USIM_DATASTORE_CURRENT_H5].container_uri
+        == "workspace://outputs/usim_datastore_h5"
     )
 
 

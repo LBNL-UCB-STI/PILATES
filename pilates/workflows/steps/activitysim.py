@@ -9,7 +9,6 @@ from consist import (
     BindingResult,
     CacheOptions,
     ExecutionOptions,
-    StepIdentity,
     define_step,
     require_runtime_kwargs,
 )
@@ -62,7 +61,6 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.binding import (
     ArtifactBindingRule,
     activitysim_population_source_selection_rules,
-    build_resolved_binding,
     resolve_artifact_roles,
 )
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
@@ -581,7 +579,6 @@ def _activitysim_postprocess_resolver(
     state: WorkflowState,
     workspace: Workspace,
     coupler: CouplerProtocol,
-    step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
     ensure_activitysim_mutable_configs(settings, workspace)
     required_roles, optional_roles = resolve_runtime_input_output_overrides(
@@ -629,41 +626,6 @@ def _activitysim_postprocess_resolver(
         curr_local = _h5_input_local_path(inputs[USIM_DATASTORE_CURRENT_H5])
         if base_local is not None and base_local == curr_local:
             inputs[USIM_DATASTORE_BASE_H5] = inputs[USIM_DATASTORE_CURRENT_H5]
-    if step_identity is not None and all(
-        isinstance(value, Artifact) for value in inputs.values()
-    ):
-        # This callable intentionally gives three named parameters to one
-        # datastore in restart/base-only cases.  A normal BindingResult loses
-        # that parameter-to-artifact relation during requested staging; freeze
-        # it so Consist stages each named parameter by its tracked identity.
-        filtered_destinations = {
-            role: dest
-            for role, dest in resolved.logical_destinations.items()
-            if role not in removed_roles
-        }
-        return ResolvedStepInputs(
-            step_name=resolved.step_name,
-            binding=build_resolved_binding(
-                step_name=resolved.step_name,
-                function=_activitysim_postprocess_callable,
-                selected_artifacts=inputs,
-                logical_destinations={role: Path("inputs") / role for role in inputs},
-                selection_diagnostics={
-                    "source_by_role": resolved.source_by_role,
-                    "selected_key_by_role": resolved.selected_key_by_role,
-                },
-                source_by_parameter={
-                    role: resolved.source_by_role[role] for role in inputs
-                },
-                step_identity=step_identity,
-            ),
-            required_roles=resolved.required_roles,
-            optional_roles=resolved.optional_roles,
-            source_by_role=resolved.source_by_role,
-            selected_key_by_role=resolved.selected_key_by_role,
-            logical_destinations=filtered_destinations,
-            metadata=resolved.metadata,
-        )
 
     population_source = inputs.get(USIM_POPULATION_SOURCE_H5)
     current_datastore = inputs.get(USIM_DATASTORE_CURRENT_H5)
@@ -681,14 +643,36 @@ def _activitysim_postprocess_resolver(
     ) or _is_population_source_alias(current_datastore, base_datastore):
         inputs.pop(USIM_DATASTORE_BASE_H5, None)
         removed_roles.add(USIM_DATASTORE_BASE_H5)
-    if not removed_roles:
-        return resolved
 
+    workspace_root = Path(get_setting(workspace, "full_path", ".")).resolve()
     filtered_destinations = {
         role: dest
         for role, dest in resolved.logical_destinations.items()
         if role not in removed_roles
     }
+    used_destinations: set[Path] = {
+        Path(dest).resolve()
+        for role, dest in filtered_destinations.items()
+        if role not in _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES
+    }
+    destinations_updated = False
+    for role in _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES:
+        if role in removed_roles or role not in inputs:
+            continue
+        existing_local = _h5_input_local_path(inputs[role])
+        if (
+            existing_local is not None
+            and existing_local.is_relative_to(workspace_root)
+            and existing_local not in used_destinations
+        ):
+            if filtered_destinations.get(role) != existing_local:
+                filtered_destinations[role] = existing_local
+                destinations_updated = True
+            used_destinations.add(existing_local)
+
+    if not removed_roles and not destinations_updated:
+        return resolved
+
     return ResolvedStepInputs(
         step_name=resolved.step_name,
         binding=BindingResult(
@@ -1331,5 +1315,5 @@ activitysim_postprocess = StepDefinition(
         ),
     ),
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    preflight_identity=True,
+    preflight_identity=False,
 )
