@@ -2136,7 +2136,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("Starting ActivitysimPreprocessor.preprocess()")
 
-        skim_record: Optional[FileRecord] = None
+        skims_omx_path: Optional[Path] = None
         if prepare_omx_skims:
             # Record inputs to preprocessor. Raw BEAM skims are a bootstrap input.
             skims_fname = settings.shared.skims.fname
@@ -2247,11 +2247,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     output_dir=workspace.get_asim_mutable_data_dir(),
                 )
 
-            skim_record = FileRecord(
-                file_path=skims_loc,
-                short_name="omx_skims",
-                description="OD Skims copied over to ASim data directory",
-            )
+            resolved_skims_path = artifact_to_path(skims_loc, workspace)
+            if resolved_skims_path is not None:
+                skims_omx_path = Path(resolved_skims_path)
         else:
             logger.info(
                 "[ActivitysimPreprocessor] Skipping OMX skim preparation; "
@@ -2278,13 +2276,14 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
-        all_outputs = ([skim_record] if skim_record else []) + data_from_usim
         records_by_key = {
-            record.short_name: record for record in all_outputs if record.short_name
+            record.short_name: record for record in data_from_usim if record.short_name
         }
         output_values: Dict[str, Union[Path, Dict[str, str]]] = {
             "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
         }
+        if skims_omx_path is not None:
+            output_values["omx_skims"] = skims_omx_path
         input_hashes: Dict[str, str] = {}
         for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
             record = records_by_key.get(record_key)

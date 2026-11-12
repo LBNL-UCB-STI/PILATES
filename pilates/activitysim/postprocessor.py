@@ -14,7 +14,6 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
 )
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
     normalize_asim_output_key,
     has_asim_run_marker,
@@ -730,7 +729,7 @@ def create_usim_input_data(
     population_source_store_path: Optional[str],
     target_store_path: Optional[str] = None,
     base_input_store_path: Optional[str] = None,
-) -> Tuple[str, Optional[FileRecord]]:
+) -> Tuple[str, Optional[str]]:
     """
     Creates UrbanSim input data for the next iteration.
 
@@ -1009,14 +1008,7 @@ def create_usim_input_data(
             os.remove(prior_step_store_path)
         logger.info("Closing all open h5 files")
 
-    output_record = FileRecord(
-        file_path=input_store_path,
-        year=forecast_year,
-        description="New UrbanSim input data for next iteration",
-        short_name=USIM_DATASTORE_H5,
-    )
-
-    return input_store_path, output_record
+    return input_store_path, USIM_DATASTORE_H5
 
 
 class ActivitysimPostprocessor(GenericPostprocessor):
@@ -1240,7 +1232,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             prefix=forecast_year,
         )
 
-        next_usim_input_path, usim_record = create_usim_input_data(
+        next_usim_input_path, usim_datastore_key = create_usim_input_data(
             settings,
             self.state,
             asim_output_dict,
@@ -1255,13 +1247,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             ),
             base_input_store_path=base_input_h5_path,
         )
-        if not usim_record:
+        if not next_usim_input_path or not usim_datastore_key:
             return None, None
-        usim_datastore_key = (
-            usim_record.short_name
-            if isinstance(usim_record, FileRecord)
-            else get_setting(usim_record, "short_name", None)
-        )
         return next_usim_input_path, usim_datastore_key
 
     @staticmethod
