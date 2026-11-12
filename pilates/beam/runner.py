@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from typing import List, Optional, Dict, Any, Mapping
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from pilates.config import PilatesConfig
 from pilates.beam.outputs import (
@@ -13,7 +13,7 @@ from pilates.beam.outputs import (
 )
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.generic.runner import GenericRunner
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import FileRecord
 from pilates.beam.postprocessor import (
     find_latest_beam_iteration,
     find_beam_iterations,
@@ -28,33 +28,24 @@ from pilates.workflows.artifact_keys import (
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.consist_runtime import artifact_fingerprint
 
 logger = logging.getLogger(__name__)
 
 
-def _append_artifact_mapping_records(
-    record_store: RecordStore,
-    artifact_mapping: Optional[Mapping[str, Any]],
-    *,
-    description_prefix: str,
-) -> None:
-    if not artifact_mapping:
-        return
-    for key, value in artifact_mapping.items():
+def _collect_input_paths(
+    inputs: BeamPreprocessOutputs,
+    extra_inputs: Optional[Mapping[str, Any]] = None,
+) -> List[str]:
+    input_paths = [str(path) for _, path, _ in inputs._iter_record_items()]
+    if not extra_inputs:
+        return input_paths
+    for value in extra_inputs.values():
         path = artifact_to_path(value, None)
         if path is None and isinstance(value, (str, os.PathLike)):
             path = os.fspath(value)
-        if not path:
-            continue
-        record_store.add_record(
-            FileRecord(
-                file_path=str(path),
-                short_name=key,
-                description=f"{description_prefix}: {key}",
-                content_hash=artifact_fingerprint(value),
-            )
-        )
+        if path:
+            input_paths.append(str(path))
+    return input_paths
 
 
 def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
@@ -197,15 +188,18 @@ def _resolve_full_skim_input_path(
 
 
 def _select_latest_linkstats_path(
-    records: Optional[RecordStore],
+    inputs: Optional[Union[BeamPreprocessOutputs, Mapping[str, Any]]],
     abs_beam_input: str,
     abs_beam_output: str,
 ) -> Optional[str]:
     """
     Select the newest linkstats artifact and map it to a container path.
     """
-    if records is None:
+    if inputs is None:
         return None
+    mapping = (
+        inputs.prepared_inputs if isinstance(inputs, BeamPreprocessOutputs) else inputs
+    )
 
     def _linkstats_rank(short_name: str) -> Optional[tuple[int, int, int]]:
         if "_sub" in short_name:
@@ -235,21 +229,22 @@ def _select_latest_linkstats_path(
             return (year, iteration, format_priority)
         return None
 
-    best_record: Optional[FileRecord] = None
+    best_name: Optional[str] = None
+    best_path: Optional[str] = None
     best_rank: Optional[tuple[int, int, int]] = None
-    for record in records.all_records():
-        short_name = getattr(record, "short_name", "") or ""
+    for short_name, value in mapping.items():
         rank = _linkstats_rank(short_name)
         if rank is None:
             continue
         if best_rank is None or rank >= best_rank:
             best_rank = rank
-            best_record = record
+            best_name = short_name
+            best_path = str(value)
 
-    if best_record is None:
+    if best_name is None or best_path is None:
         return None
 
-    path = best_record.file_path
+    path = best_path
     if not os.path.isabs(path):
         path = os.path.abspath(path)
     norm_path = os.path.normpath(path)
@@ -261,10 +256,7 @@ def _select_latest_linkstats_path(
         or norm_path == norm_out
         or norm_path.startswith(norm_out + os.sep)
     )
-    if (
-        not is_under_mounted_root
-        and getattr(best_record, "short_name", "") == "linkstats_warmstart"
-    ):
+    if not is_under_mounted_root and best_name == "linkstats_warmstart":
         warmstart_dir = Path(abs_beam_input) / ".pilates" / "warmstarts"
         staged_candidates: list[Path] = []
         if os.path.isfile(path):
@@ -567,10 +559,11 @@ class BeamRunner(GenericRunner):
 
     def _run(
         self,
-        store: RecordStore,
+        inputs: BeamPreprocessOutputs,
         workspace: Workspace,
         launch_config: BeamLaunchConfig,
-    ) -> RecordStore:
+        extra_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> BeamRunOutputs:
         launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
         beam_memory = _resolve_beam_memory(settings)
@@ -631,13 +624,7 @@ class BeamRunner(GenericRunner):
             "-Djna.tmpdir=/app/output/tmp"
         )
 
-        # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
-        # Consist container input lineage expects filesystem paths, so filter to FileRecord instances.
-        from pilates.generic.records import FileRecord
-
-        input_paths = [
-            r.file_path for r in store.all_records() if isinstance(r, FileRecord)
-        ]
+        input_paths = _collect_input_paths(inputs, extra_inputs)
 
         success = self.run_container(
             client=client,
@@ -695,13 +682,21 @@ class BeamRunner(GenericRunner):
                 "skimsActivitySimOD",
             ),
         )
-        output_store = RecordStore(recordList=output_records)
+        raw_outputs: Dict[str, Path] = {}
+        for record in output_records:
+            key = record.short_name or record.unique_id
+            path = artifact_to_path(record.file_path, workspace)
+            if path is not None:
+                raw_outputs[key] = Path(path)
 
         logger.info(
             f"[BEAM Runner] BEAM run complete. Output records: {len(output_records)}"
         )
 
-        return output_store
+        return BeamRunOutputs(
+            beam_output_dir=Path(workspace.get_beam_output_dir()),
+            raw_outputs=raw_outputs,
+        )
 
     def run(
         self,
@@ -717,31 +712,11 @@ class BeamRunner(GenericRunner):
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamRunner.run expects BeamPreprocessOutputs")
         self.state.set_sub_stage_progress("runner")
-        input_store = RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-                for short_name, path, description in inputs._iter_record_items()
-            ]
-        )
-        _append_artifact_mapping_records(
-            input_store,
-            extra_inputs,
-            description_prefix="BEAM run extra input",
-        )
-        output_store = self._run(input_store, workspace, launch_config)
-        raw_outputs: Dict[str, Path] = {}
-        for key, value in output_store.to_mapping().items():
-            path = artifact_to_path(value, workspace)
-            if path is None:
-                continue
-            raw_outputs[key] = Path(path)
-        return BeamRunOutputs(
-            beam_output_dir=Path(workspace.get_beam_output_dir()),
-            raw_outputs=raw_outputs,
+        return self._run(
+            inputs,
+            workspace,
+            launch_config,
+            extra_inputs=extra_inputs,
         )
 
 
@@ -801,10 +776,10 @@ class BeamFullSkimRunner(GenericRunner):
 
     def _run(
         self,
-        store: RecordStore,
+        inputs: BeamPreprocessOutputs,
         workspace: Workspace,
         launch_config: BeamLaunchConfig,
-    ) -> RecordStore:
+    ) -> BeamFullSkimOutputs:
         launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
         region = settings.run.region
@@ -936,7 +911,7 @@ class BeamFullSkimRunner(GenericRunner):
                 extra_input_paths.append(host_linkstats)
         else:
             linkstats_path = _select_latest_linkstats_path(
-                store, abs_beam_input, abs_beam_output
+                inputs, abs_beam_input, abs_beam_output
             )
         if linkstats_path is None:
             router_dir = getattr(settings.beam, "router_directory", None)
@@ -971,11 +946,7 @@ class BeamFullSkimRunner(GenericRunner):
         if linkstats_path is not None:
             cmd_parts.append(f"--linkstatsPath={linkstats_path}")
 
-        input_paths = [
-            record.file_path
-            for record in store.all_records()
-            if isinstance(record, FileRecord)
-        ]
+        input_paths = _collect_input_paths(inputs)
         for extra_path in extra_input_paths:
             if extra_path not in input_paths:
                 input_paths.append(extra_path)
@@ -1007,24 +978,18 @@ class BeamFullSkimRunner(GenericRunner):
                 f"BEAM full skim completed but output was not found: {host_output_file}"
             )
 
-        records = [
-            FileRecord(
-                file_path=host_output_file,
-                year=self.state.forecast_year,
-                short_name=BEAM_FULL_SKIMS,
-                description="BEAM full-skim background skims output",
-            )
-        ]
-        if skims_kind in (None, "activitySimOmx"):
-            records.append(
-                FileRecord(
-                    file_path=host_output_file,
-                    year=self.state.forecast_year,
-                    short_name=FINAL_SKIMS_OMX,
-                    description="Final skims OMX from BEAM full-skim step",
-                )
-            )
-        return RecordStore(recordList=records)
+        full_skims_path = artifact_to_path(host_output_file, workspace)
+        if full_skims_path is None:
+            raise ValueError("Missing beam_full_skims in run outputs.")
+        final_omx_path = (
+            full_skims_path if skims_kind in (None, "activitySimOmx") else None
+        )
+        return BeamFullSkimOutputs(
+            full_skims=Path(full_skims_path),
+            final_skims_omx=(
+                Path(final_omx_path) if final_omx_path is not None else None
+            ),
+        )
 
     def run(
         self,
@@ -1039,25 +1004,4 @@ class BeamFullSkimRunner(GenericRunner):
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamFullSkimRunner.run expects BeamPreprocessOutputs")
         self.state.set_sub_stage_progress("runner")
-        input_store = RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-                for short_name, path, description in inputs._iter_record_items()
-            ]
-        )
-        output_store = self._run(input_store, workspace, launch_config)
-        mapping = output_store.to_mapping()
-        full_skims_path = artifact_to_path(mapping.get(BEAM_FULL_SKIMS), workspace)
-        if full_skims_path is None:
-            raise ValueError("Missing beam_full_skims in run outputs.")
-        final_omx_path = artifact_to_path(mapping.get(FINAL_SKIMS_OMX), workspace)
-        return BeamFullSkimOutputs(
-            full_skims=Path(full_skims_path),
-            final_skims_omx=(
-                Path(final_omx_path) if final_omx_path is not None else None
-            ),
-        )
+        return self._run(inputs, workspace, launch_config)

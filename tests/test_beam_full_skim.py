@@ -56,9 +56,9 @@ class TestBeamFullSkimMode:
 
     def _setup_runner_test(self, skim_cfg, *, full_skim=False):
         """Common test setup for runner tests."""
-        from pilates.beam.runner import BeamFullSkimRunner, BeamRunner
         from pilates.beam.launch_config import BeamLaunchConfig
-        from pilates.generic.records import RecordStore
+        from pilates.beam.outputs import BeamPreprocessOutputs
+        from pilates.beam.runner import BeamFullSkimRunner, BeamRunner
 
         settings = self._make_settings(full_skim_cfg=skim_cfg)
         state = MagicMock()
@@ -73,7 +73,7 @@ class TestBeamFullSkimMode:
         workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
         workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
 
-        store = RecordStore(recordList=[])
+        store = BeamPreprocessOutputs(beam_mutable_data_dir=Path("/tmp/beam_input"))
         launch_root = Path("/tmp/beam_launch") / ("full_skim" if full_skim else "beam")
         launch_config = BeamLaunchConfig(
             root=launch_root,
@@ -505,7 +505,7 @@ class TestBeamFullSkimMode:
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
-            result_store = runner._run(store, workspace, launch_config)
+            result_outputs = runner._run(store, workspace, launch_config)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -534,25 +534,19 @@ class TestBeamFullSkimMode:
         assert f"{launch_region}/od_pairs.csv" in input_artifacts
         assert f"{launch_region}/congested_linkstats.csv.gz" in input_artifacts
 
-        output_path = result_store.to_mapping()["beam_full_skims"]
+        output_path = result_outputs.full_skims
         assert str(output_path).endswith("test_region/year-2020-iteration-0/skims.omx")
 
     def test_select_latest_linkstats_supports_linkstats_warmstart(self):
         """_select_latest_linkstats_path selects linkstats_warmstart when present."""
         from pilates.beam.runner import _select_latest_linkstats_path
-        from pilates.generic.records import FileRecord, RecordStore
 
-        store = RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path="/tmp/beam_input/test_region/warmstart.linkstats.csv.gz",
-                    short_name="linkstats_warmstart",
-                    description="Warmstart linkstats",
-                )
-            ]
-        )
         selected = _select_latest_linkstats_path(
-            store, "/tmp/beam_input", "/tmp/beam_output"
+            {
+                "linkstats_warmstart": "/tmp/beam_input/test_region/warmstart.linkstats.csv.gz"
+            },
+            "/tmp/beam_input",
+            "/tmp/beam_output",
         )
         assert selected == "/app/input/test_region/warmstart.linkstats.csv.gz"
 
@@ -836,7 +830,6 @@ class TestBeamFullSkimMode:
     ):
         """_select_latest_linkstats_path maps unmounted workspace warmstart to staged .pilates/warmstarts inside launch_config."""
         from pilates.beam.runner import _select_latest_linkstats_path
-        from pilates.generic.records import FileRecord, RecordStore
 
         workspace_warmstart = (
             tmp_path
@@ -864,17 +857,8 @@ class TestBeamFullSkimMode:
         staged_warmstart.parent.mkdir(parents=True)
         staged_warmstart.write_bytes(b"PAR1-fake-parquet")
 
-        store = RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(workspace_warmstart),
-                    short_name="linkstats_warmstart",
-                    description="Warmstart linkstats",
-                )
-            ]
-        )
         selected = _select_latest_linkstats_path(
-            store,
+            {"linkstats_warmstart": str(workspace_warmstart)},
             str(launch_root),
             str(tmp_path / "workspace" / "beam" / "output"),
         )

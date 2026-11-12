@@ -1,6 +1,5 @@
 from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.runner import _select_latest_linkstats_path
-from pilates.generic.records import FileRecord, RecordStore
 
 
 def test_beam_run_outputs_promotes_parquet_linkstats_to_canonical_key(tmp_path):
@@ -75,20 +74,13 @@ def test_select_latest_linkstats_path_accepts_parquet_and_csv_keys(tmp_path):
     parquet_path = beam_output_root / "seattle" / "it.2" / "2.linkstats.parquet"
     parquet_path.write_text("stub")
 
-    records = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(parquet_path), short_name="linkstats_parquet_2018_0"
-            ),
-            FileRecord(file_path=str(csv_path), short_name="linkstats_2018_0"),
-            FileRecord(
-                file_path=str(
-                    beam_output_root / "seattle" / "it.1" / "1.linkstats.parquet"
-                ),
-                short_name="linkstats_parquet_2018_0_sub1",
-            ),
-        ]
-    )
+    records = {
+        "linkstats_parquet_2018_0": parquet_path,
+        "linkstats_2018_0": csv_path,
+        "linkstats_parquet_2018_0_sub1": (
+            beam_output_root / "seattle" / "it.1" / "1.linkstats.parquet"
+        ),
+    }
 
     selected = _select_latest_linkstats_path(
         records,
@@ -107,13 +99,7 @@ def test_select_latest_linkstats_path_uses_parquet_when_csv_absent(tmp_path):
     parquet_path.parent.mkdir(parents=True, exist_ok=True)
     parquet_path.write_text("stub")
 
-    records = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(parquet_path), short_name="linkstats_parquet_2018_0"
-            )
-        ]
-    )
+    records = {"linkstats_parquet_2018_0": parquet_path}
 
     selected = _select_latest_linkstats_path(
         records,

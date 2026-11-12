@@ -22,7 +22,6 @@ except Exception:
     print("FAILED TO LOAD XARRAY or ZARR")
 
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.workflows.state_helpers import resolve_forecast_year
@@ -271,18 +270,17 @@ def split_events_parquet_by_type(
     return written_paths, path_traversal_links_path
 
 
-def _select_last_events_parquet_record(
-    raw_outputs: RecordStore,
+def _select_last_events_parquet_path(
+    raw_outputs: BeamRunOutputs,
     year: int,
     iteration: int,
-) -> Optional[FileRecord]:
+) -> Optional[Path]:
     target_name = f"events_parquet_{year}_{iteration}"
-    best_sub = None
+    best_sub: Optional[Path] = None
     best_sub_idx = -1
-    for record in raw_outputs.all_records():
-        short_name = getattr(record, "short_name", "")
+    for short_name, path in raw_outputs.raw_outputs.items():
         if short_name == target_name:
-            return record
+            return path
         if short_name.startswith(f"{target_name}_sub"):
             suffix = short_name.split("_sub", 1)[-1]
             try:
@@ -291,7 +289,7 @@ def _select_last_events_parquet_record(
                 continue
             if sub_idx > best_sub_idx:
                 best_sub_idx = sub_idx
-                best_sub = record
+                best_sub = path
     return best_sub
 
 
@@ -838,25 +836,26 @@ class BeamPostprocessor(GenericPostprocessor):
 
     def _postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: BeamRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
         zarr_skims: Optional[Any] = None,
-    ) -> RecordStore:
+    ) -> BeamPostprocessOutputs:
         """
         Postprocesses the raw outputs from a BEAM run by merging skims into a new Zarr store.
         """
         logger.info("Running BEAM postprocessor...")
         settings = self.state.full_settings
 
-        raw_output_files = [record.short_name for record in raw_outputs.all_records()]
-        processed_records = []
+        raw_output_files = list(raw_outputs.raw_outputs.keys())
+        split_events: Dict[str, Path] = {}
+        split_event_links: Dict[str, Path] = {}
 
-        events_record = _select_last_events_parquet_record(
+        events_path_obj = _select_last_events_parquet_path(
             raw_outputs, self.state.forecast_year, self.state.iteration
         )
-        if events_record is not None and events_record.file_path:
-            events_path = events_record.file_path
+        if events_path_obj is not None:
+            events_path = str(events_path_obj)
             try:
                 written_paths, links_path = split_events_parquet_by_type(
                     events_path,
@@ -874,29 +873,17 @@ class BeamPostprocessor(GenericPostprocessor):
                             f"events_parquet_{self.state.forecast_year}_"
                             f"{self.state.iteration}_type_{safe_type}"
                         )
-                        processed_records.append(
-                            FileRecord(
-                                file_path=out_path,
-                                year=self.state.forecast_year,
-                                short_name=short_name,
-                                description=(
-                                    "BEAM events parquet (type: %s)" % event_type
-                                ),
-                            )
-                        )
+                        resolved = artifact_to_path(out_path, workspace)
+                        if resolved is not None:
+                            split_events[short_name] = Path(resolved)
                 if links_path:
                     short_name = (
                         f"path_traversal_links_{self.state.forecast_year}_"
                         f"{self.state.iteration}"
                     )
-                    processed_records.append(
-                        FileRecord(
-                            file_path=links_path,
-                            year=self.state.forecast_year,
-                            short_name=short_name,
-                            description="BEAM PathTraversal link travel times",
-                        )
-                    )
+                    resolved = artifact_to_path(links_path, workspace)
+                    if resolved is not None:
+                        split_event_links[short_name] = Path(resolved)
             except Exception:
                 logger.warning(
                     "Failed to split events parquet for %s", events_path, exc_info=True
@@ -973,9 +960,9 @@ class BeamPostprocessor(GenericPostprocessor):
             skim_name = skim_name_found
 
             all_skims_found = [
-                record.file_path
-                for record in raw_outputs.all_records()
-                if record.short_name == skim_name
+                str(path)
+                for key, path in raw_outputs.raw_outputs.items()
+                if key == skim_name
             ]
 
             logger.info("Here are all the skim files found")
@@ -1013,15 +1000,13 @@ class BeamPostprocessor(GenericPostprocessor):
                     merged_any = True
                     active_skims_path = updated_skims_path
 
-            if merged_any and active_skims_path is not None:
-                processed_records.append(
-                    FileRecord(
-                        file_path=active_skims_path,
-                        year=self.state.current_year,
-                        description="Zarr skims store updated with BEAM outputs.",
-                        short_name="zarr_skims",
-                    )
-                )
+        zarr_path: Optional[Path] = None
+        final_omx_output_path: Optional[Path] = None
+
+        if merged_any and active_skims_path is not None:
+            resolved_zarr = artifact_to_path(active_skims_path, workspace)
+            if resolved_zarr is not None:
+                zarr_path = Path(resolved_zarr)
 
         if requires_omx_skim_output(settings):
             logger.info(
@@ -1053,21 +1038,18 @@ class BeamPostprocessor(GenericPostprocessor):
                     )
 
                     if final_omx_path:
-                        processed_records.append(
-                            FileRecord(
-                                file_path=final_omx_path,
-                                short_name="final_skims_omx",
-                                description=(
-                                    "Final skims converted to OMX format for "
-                                    "UrbanSim, ATLAS, or other downstream consumers."
-                                ),
-                            )
-                        )
+                        resolved_omx = artifact_to_path(final_omx_path, workspace)
+                        if resolved_omx is not None:
+                            final_omx_output_path = Path(resolved_omx)
                 except Exception as e:
                     logger.error(f"Failed to write skims to OMX: {e}")
 
-        output_store = RecordStore(recordList=processed_records)
-        return output_store
+        return BeamPostprocessOutputs(
+            zarr_skims=zarr_path,
+            final_skims_omx=final_omx_output_path,
+            split_events=split_events,
+            split_event_links=split_event_links,
+        )
 
     def postprocess(
         self,
@@ -1082,44 +1064,9 @@ class BeamPostprocessor(GenericPostprocessor):
         if not isinstance(raw_outputs, BeamRunOutputs):
             raise TypeError("BeamPostprocessor.postprocess expects BeamRunOutputs")
         self.state.set_sub_stage_progress("postprocessor")
-        input_store = RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-                for short_name, path, description in raw_outputs._iter_record_items()
-            ]
-        )
-        output_store = self._postprocess(
-            input_store,
+        return self._postprocess(
+            raw_outputs,
             workspace,
             model_run_hash,
             zarr_skims=zarr_skims,
-        )
-        mapping = output_store.to_mapping()
-
-        zarr_path = artifact_to_path(mapping.get("zarr_skims"), workspace)
-        final_omx_path = artifact_to_path(mapping.get("final_skims_omx"), workspace)
-
-        split_events: Dict[str, Path] = {}
-        split_event_links: Dict[str, Path] = {}
-        for key, value in mapping.items():
-            if key.startswith("events_parquet_") and "_type_" in key:
-                path = artifact_to_path(value, workspace)
-                if path is not None:
-                    split_events[key] = Path(path)
-            elif key.startswith("path_traversal_links_"):
-                path = artifact_to_path(value, workspace)
-                if path is not None:
-                    split_event_links[key] = Path(path)
-
-        return BeamPostprocessOutputs(
-            zarr_skims=Path(zarr_path) if zarr_path is not None else None,
-            final_skims_omx=Path(final_omx_path)
-            if final_omx_path is not None
-            else None,
-            split_events=split_events,
-            split_event_links=split_event_links,
         )

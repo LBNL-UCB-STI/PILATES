@@ -44,7 +44,6 @@ from pilates.beam import beam_exchange
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
-from pilates.generic.records import RecordStore
 
 
 def _empty_resolved_inputs() -> ResolvedStepInputs:
@@ -1524,7 +1523,7 @@ def test_beam_preprocess_resolver_does_not_close_exchange_config_read(
             observed_exchange_path.append(
                 preprocessor._resolve_beam_exchange_scenario_folder(_workspace)
             )
-            or RecordStore()
+            or BeamPreprocessOutputs(beam_mutable_data_dir=mutable_root)
         ),
     )
     monkeypatch.setattr(

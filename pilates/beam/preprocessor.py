@@ -429,7 +429,7 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
-    ) -> RecordStore:
+    ) -> BeamPreprocessOutputs:
         """
         Prepares all data needed to run BEAM for the current iteration.
         """
@@ -542,7 +542,24 @@ class BeamPreprocessor(GenericPreprocessor):
         self._configure_linkstats_warmstart(workspace, store)
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
-        return store
+        prepared_inputs: Dict[str, Path] = {}
+        prepared_input_metadata: Dict[str, Dict[str, Any]] = {}
+        for key, value in store.to_mapping().items():
+            path = artifact_to_path(value, workspace)
+            if path is None:
+                continue
+            prepared_inputs[key] = Path(path)
+        for record in store.all_records():
+            short_name = getattr(record, "short_name", None)
+            if short_name in prepared_inputs:
+                metadata = getattr(record, "metadata", None)
+                if metadata:
+                    prepared_input_metadata[short_name] = dict(metadata)
+        return BeamPreprocessOutputs(
+            beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+            prepared_inputs=prepared_inputs,
+            prepared_input_metadata=prepared_input_metadata,
+        )
 
     def _activity_demand_enabled(self) -> bool:
         """Return whether ActivitySim is enabled for the current run."""
@@ -583,29 +600,10 @@ class BeamPreprocessor(GenericPreprocessor):
             beam_preprocess_inputs=beam_preprocess_inputs,
         )
         try:
-            record_store = self._preprocess(workspace, input_store)
+            return self._preprocess(workspace, input_store)
         finally:
             self._resolved_exchange_scenario_folder = None
             self._resolved_zone_context = None
-        prepared_inputs: Dict[str, Path] = {}
-        prepared_input_metadata: Dict[str, Dict[str, Any]] = {}
-        record_mapping = record_store.to_mapping()
-        for key, value in record_mapping.items():
-            path = artifact_to_path(value, workspace)
-            if path is None:
-                continue
-            prepared_inputs[key] = Path(path)
-        for record in record_store.all_records():
-            short_name = getattr(record, "short_name", None)
-            if short_name in prepared_inputs:
-                metadata = getattr(record, "metadata", None)
-                if metadata:
-                    prepared_input_metadata[short_name] = dict(metadata)
-        return BeamPreprocessOutputs(
-            beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
-            prepared_inputs=prepared_inputs,
-            prepared_input_metadata=prepared_input_metadata,
-        )
 
     def prepare_beam_zone_shapefile(self, workspace: "Workspace") -> Optional[str]:
         """

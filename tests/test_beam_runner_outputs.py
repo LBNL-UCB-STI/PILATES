@@ -10,7 +10,6 @@ from pilates.beam.outputs import (
 )
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner, rename_beam_output_directory
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.outputs_base import ValidationContext
 
 
@@ -135,15 +134,20 @@ def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     workspace = _Workspace(tmp_path)
     captured = {}
 
-    def _fake_run(store: RecordStore, _workspace, _launch_config) -> RecordStore:
-        captured["store"] = store
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(tmp_path / "beam-output" / "plans.csv.gz"),
-                    short_name="beam_plans_out_2030_2",
-                )
-            ]
+    def _fake_run(
+        inputs: BeamPreprocessOutputs,
+        _workspace,
+        _launch_config,
+        *,
+        extra_inputs=None,
+    ) -> BeamRunOutputs:
+        captured["inputs"] = inputs
+        captured["extra_inputs"] = extra_inputs
+        return BeamRunOutputs(
+            beam_output_dir=tmp_path / "beam-output",
+            raw_outputs={
+                "beam_plans_out_2030_2": tmp_path / "beam-output" / "plans.csv.gz"
+            },
         )
 
     monkeypatch.setattr(runner, "_run", _fake_run)
@@ -163,12 +167,10 @@ def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     )
 
     assert isinstance(outputs, BeamRunOutputs)
-    assert captured["store"].to_mapping()["beam_plans"] == str(
-        tmp_path / "beam-input" / "plans.csv.gz"
-    )
-    assert captured["store"].to_mapping()["zarr_skims"] == str(
-        tmp_path / "asim-output" / "cache" / "skims.zarr"
-    )
+    assert captured["inputs"] is preprocess_outputs
+    assert captured["extra_inputs"] == {
+        "zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr"
+    }
     assert outputs.raw_outputs["beam_plans_out_2030_2"] == (
         tmp_path / "beam-output" / "plans.csv.gz"
     )
@@ -226,7 +228,9 @@ def test_beam_runner_mounts_the_bound_launch_tree(
     )
     monkeypatch.setattr(runner, "gather_outputs", lambda *_args: [])
 
-    runner._run(RecordStore(), workspace, launch_config)
+    runner._run(
+        BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path), workspace, launch_config
+    )
 
     assert captured["command"] == "--config=/app/input/configs/beam.conf"
     assert captured["volumes"] == {
@@ -255,7 +259,11 @@ def test_beam_runner_rejects_missing_launch_config_before_workspace_fallback(
             raise AssertionError("runner must not derive BEAM input from Workspace")
 
     with pytest.raises(RuntimeError, match="launch configuration"):
-        runner._run(RecordStore(), WorkspaceWithoutBeamInput(), None)
+        runner._run(
+            BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path),
+            WorkspaceWithoutBeamInput(),
+            None,
+        )
 
 
 def test_full_skim_runner_rejects_missing_launch_config_before_workspace_fallback(
@@ -284,7 +292,11 @@ def test_full_skim_runner_rejects_missing_launch_config_before_workspace_fallbac
             )
 
     with pytest.raises(RuntimeError, match="launch configuration"):
-        runner._run(RecordStore(), WorkspaceWithoutBeamInput(), None)
+        runner._run(
+            BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path),
+            WorkspaceWithoutBeamInput(),
+            None,
+        )
 
 
 def test_beam_runner_fails_closed_when_output_tree_cannot_be_renamed(
@@ -324,7 +336,11 @@ def test_beam_runner_fails_closed_when_output_tree_cannot_be_renamed(
     )
 
     with pytest.raises(RuntimeError, match="rename BEAM output directory"):
-        runner._run(RecordStore(), workspace, launch_config)
+        runner._run(
+            BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path),
+            workspace,
+            launch_config,
+        )
 
 
 def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
