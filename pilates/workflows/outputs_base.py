@@ -23,8 +23,6 @@ from typing import (
     get_origin,
 )
 
-from pilates.generic.records import FileRecord, RecordStore
-
 if TYPE_CHECKING:
     from pilates.config import PilatesConfig
     from pilates.workspace import Workspace
@@ -311,7 +309,7 @@ def required_outputs_for_step_outputs_class(
 
 class StepOutputsBase:
     """
-    Base class for typed step outputs with RecordStore conversion.
+    Base class for typed step outputs.
     """
 
     declared_outputs: ClassVar[Tuple[str, ...]] = ()
@@ -365,26 +363,6 @@ class StepOutputsBase:
                 field_name, f"{self.default_description}: {short_name}"
             )
             yield short_name, value, description
-
-    def to_record_store(self) -> RecordStore:
-        """
-        Convert outputs to a RecordStore for downstream steps.
-
-        Returns
-        -------
-        RecordStore
-            RecordStore containing output file records.
-        """
-        records = []
-        for short_name, path, description in self._iter_record_items():
-            records.append(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-            )
-        return RecordStore(recordList=records)
 
     def validate(self, context: Optional[ValidationContext] = None) -> None:
         """

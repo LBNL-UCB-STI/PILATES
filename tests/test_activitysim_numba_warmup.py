@@ -56,7 +56,7 @@ def _write_structurally_valid_zarr(path: Path) -> None:
 
 
 def test_activitysim_run_outputs_round_trip_generated_zarr(tmp_path: Path) -> None:
-    """OMX-mode primary output persists Zarr as a first-class record."""
+    """OMX-mode primary output emits Zarr as a first-class record item."""
     workspace = _Workspace(tmp_path)
     zarr_path = tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     outputs = ActivitySimRunOutputs(
@@ -64,11 +64,9 @@ def test_activitysim_run_outputs_round_trip_generated_zarr(tmp_path: Path) -> No
         zarr_skims=zarr_path,
     )
 
-    records = outputs.to_record_store()
-    recovered = ActivitySimRunOutputs.from_record_store(records, workspace)
-
-    assert recovered.zarr_skims == zarr_path
-    assert [record.short_name for record in records.all_records()] == [ZARR_SKIMS]
+    items = list(outputs._iter_record_items())
+    assert [short_name for short_name, _, _ in items] == [ZARR_SKIMS]
+    assert items[0][1] == zarr_path
 
 
 def _activitysim_inputs(tmp_path: Path) -> ActivitySimPreprocessOutputs:

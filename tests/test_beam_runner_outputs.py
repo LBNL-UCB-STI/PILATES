@@ -342,7 +342,9 @@ def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
         split_event_links={"path_traversal_links_2030_2": split_links},
     )
 
-    mapping = outputs.to_record_store().to_mapping()
+    mapping = {
+        short_name: str(path) for short_name, path, _ in outputs._iter_record_items()
+    }
 
     assert mapping["final_skims_omx"] == str(final_skims_omx)
     assert mapping["zarr_skims"] == str(zarr_skims)

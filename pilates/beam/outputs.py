@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
+from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple
 
-from pilates.generic.records import FileRecord, RecordStore
-from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.outputs_base import (
     OutputValidator,
@@ -35,9 +33,6 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
-
-if TYPE_CHECKING:
-    from pilates.workspace import Workspace
 
 
 def _resolve_model_name(settings: Any, model_name: str) -> Optional[str]:
@@ -143,59 +138,6 @@ class BeamPreprocessOutputs(StepOutputsBase):
         """
         for key, path in self.prepared_inputs.items():
             yield key, path, f"BEAM prepared input: {key}"
-
-    def to_record_store(self) -> RecordStore:
-        """Convert typed preprocess outputs into a local ``RecordStore``."""
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                    metadata=dict(self.prepared_input_metadata.get(short_name, {})),
-                )
-                for short_name, path, description in self._iter_record_items()
-            ]
-        )
-
-    @classmethod
-    def from_record_store(
-        cls, record_store: RecordStore, workspace: "Workspace"
-    ) -> "BeamPreprocessOutputs":
-        """
-        Build outputs from a RecordStore.
-
-        Parameters
-        ----------
-        record_store : RecordStore
-            RecordStore produced by preprocessing.
-        workspace : Workspace
-            Workspace used to resolve paths.
-
-        Returns
-        -------
-        BeamPreprocessOutputs
-            Parsed outputs.
-        """
-        mapping = record_store.to_mapping()
-        prepared_inputs: Dict[str, Path] = {}
-        prepared_input_metadata: Dict[str, Dict[str, Any]] = {}
-        for key, value in mapping.items():
-            path = artifact_to_path(value, workspace)
-            if path is None:
-                continue
-            prepared_inputs[key] = Path(path)
-        for record in record_store.all_records():
-            short_name = getattr(record, "short_name", None)
-            if short_name in prepared_inputs:
-                metadata = getattr(record, "metadata", None)
-                if metadata:
-                    prepared_input_metadata[short_name] = dict(metadata)
-        return cls(
-            beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
-            prepared_inputs=prepared_inputs,
-            prepared_input_metadata=prepared_input_metadata,
-        )
 
 
 @dataclass
@@ -405,50 +347,6 @@ class BeamRunOutputs(StepOutputsBase):
         for key, path in self.raw_outputs.items():
             yield key, path, f"BEAM raw output: {key}"
 
-    def to_record_store(self) -> RecordStore:
-        """Convert typed runner outputs into a local ``RecordStore``."""
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-                for short_name, path, description in self._iter_record_items()
-            ]
-        )
-
-    @classmethod
-    def from_record_store(
-        cls, record_store: RecordStore, workspace: "Workspace"
-    ) -> "BeamRunOutputs":
-        """
-        Build outputs from a RecordStore.
-
-        Parameters
-        ----------
-        record_store : RecordStore
-            RecordStore produced by the runner.
-        workspace : Workspace
-            Workspace used to resolve paths.
-
-        Returns
-        -------
-        BeamRunOutputs
-            Parsed outputs.
-        """
-        mapping = record_store.to_mapping()
-        raw_outputs: Dict[str, Path] = {}
-        for key, value in mapping.items():
-            path = artifact_to_path(value, workspace)
-            if path is None:
-                continue
-            raw_outputs[key] = Path(path)
-        return cls(
-            beam_output_dir=Path(workspace.get_beam_output_dir()),
-            raw_outputs=raw_outputs,
-        )
-
 
 @dataclass
 class BeamPostprocessOutputs(StepOutputsBase):
@@ -505,42 +403,6 @@ class BeamPostprocessOutputs(StepOutputsBase):
         for key, path in self.split_event_links.items():
             yield key, path, f"Derived split-event links parquet: {key}"
 
-    @classmethod
-    def from_record_store(
-        cls, record_store: RecordStore, workspace: "Workspace"
-    ) -> "BeamPostprocessOutputs":
-        """
-        Build outputs from a RecordStore.
-        """
-        mapping = record_store.to_mapping()
-        values: Dict[str, Any] = {}
-        zarr_path = artifact_to_path(mapping.get(ZARR_SKIMS), workspace)
-        if zarr_path is not None:
-            values["zarr_skims"] = Path(zarr_path)
-        omx_path = artifact_to_path(mapping.get(FINAL_SKIMS_OMX), workspace)
-        if omx_path is not None:
-            values["final_skims_omx"] = Path(omx_path)
-
-        split_events: Dict[str, Path] = {}
-        split_event_links: Dict[str, Path] = {}
-        for key, value in mapping.items():
-            if not key.startswith("events_parquet_") or "_type_" not in key:
-                continue
-            path = artifact_to_path(value, workspace)
-            if path is None:
-                continue
-            split_events[key] = Path(path)
-        for key, value in mapping.items():
-            if not key.startswith("path_traversal_links_"):
-                continue
-            path = artifact_to_path(value, workspace)
-            if path is None:
-                continue
-            split_event_links[key] = Path(path)
-        values["split_events"] = split_events
-        values["split_event_links"] = split_event_links
-        return cls(**values)
-
 
 @dataclass
 class BeamFullSkimOutputs(StepOutputsBase):
@@ -576,17 +438,3 @@ class BeamFullSkimOutputs(StepOutputsBase):
                 self.final_skims_omx,
                 "Final skims OMX from BEAM full-skim step",
             )
-
-    @classmethod
-    def from_record_store(
-        cls, record_store: RecordStore, workspace: "Workspace"
-    ) -> "BeamFullSkimOutputs":
-        mapping = record_store.to_mapping()
-        path = artifact_to_path(mapping.get(BEAM_FULL_SKIMS), workspace)
-        if path is None:
-            raise ValueError("Missing beam_full_skims in record store.")
-        final_omx = artifact_to_path(mapping.get(FINAL_SKIMS_OMX), workspace)
-        return cls(
-            full_skims=Path(path),
-            final_skims_omx=Path(final_omx) if final_omx is not None else None,
-        )

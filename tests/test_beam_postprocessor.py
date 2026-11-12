@@ -16,8 +16,6 @@ from pilates.beam.postprocessor import (
     split_events_parquet_by_type,
     write_zarr_skim_as_omx_new,
 )
-from pilates.beam.outputs import BeamPostprocessOutputs
-from pilates.generic.records import RecordStore, FileRecord
 from pilates.config.models import load_config
 
 # Use the same canonical order as the preprocessor test for consistency
@@ -310,27 +308,6 @@ def test_split_events_parquet_by_type_filtered(tmp_path):
     assert link_table["link_index"].tolist() == [0, 1, 2]
     assert link_table["linkId"].tolist() == [1, 2, 3]
     assert link_table["travelTimeSeconds"].tolist() == [10.0, 20.0, 30.0]
-
-    record_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=written["EventA"],
-                short_name="events_parquet_2018_1_type_EventA",
-            ),
-            FileRecord(
-                file_path=written["EventB"],
-                short_name="events_parquet_2018_1_type_EventB",
-            ),
-            FileRecord(
-                file_path=links_path,
-                short_name="path_traversal_links_2018_1",
-            ),
-        ]
-    )
-    outputs = BeamPostprocessOutputs.from_record_store(record_store, tmp_path)
-    assert "events_parquet_2018_1_type_EventA" in outputs.split_events
-    assert "events_parquet_2018_1_type_EventB" in outputs.split_events
-    assert "path_traversal_links_2018_1" in outputs.split_event_links
 
 
 def test_write_zarr_skim_as_omx_new_uses_workspace_path_descales_transit_and_writes_original_lookup(
