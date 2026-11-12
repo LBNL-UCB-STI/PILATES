@@ -241,6 +241,14 @@ export APPTAINERENV_VECLIB_MAXIMUM_THREADS="$THREADS"
 echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
 
 export DLT__RUNTIME__DLTHUB_TELEMETRY=false
+if [ -z "${DLT_DATA_DIR:-}" ]; then
+    if [ -n "${SLURM_JOB_ID:-}" ] && [ -d "/local/job${SLURM_JOB_ID}" ]; then
+        export DLT_DATA_DIR="/local/job${SLURM_JOB_ID}/dlt"
+    else
+        export DLT_DATA_DIR="${TMPDIR:-/tmp}/dlt-${SLURM_JOB_ID:-$$}"
+    fi
+fi
+mkdir -p "$DLT_DATA_DIR"
 
 # ActivitySim Zarr write debugging. Keep the dataset summary logging enabled by
 # default, but leave the probe writes opt-in so the real compile cache write

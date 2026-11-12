@@ -213,6 +213,9 @@ def execute_step(
     result = scenario.run(
         fn=definition.function,
         binding=resolved.binding,
+        config_plan_ingest=(
+            definition.name not in ("activitysim_preprocess", "activitysim_postprocess")
+        ),
         year=year,
         iteration=iteration,
         phase=phase,
