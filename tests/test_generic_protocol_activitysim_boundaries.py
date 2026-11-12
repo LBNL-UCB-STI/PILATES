@@ -103,7 +103,6 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
         full_path=str(tmp_path),
         get_asim_mutable_data_dir=lambda: str(tmp_path / "asim-data"),
     )
-    previous_records = RecordStore()
 
     land_use = tmp_path / "asim-data" / "land_use.csv"
     households = tmp_path / "asim-data" / "households.csv"
@@ -141,18 +140,14 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
         def _preprocess(
             self,
             workspace_arg,
-            previous_records_arg,
             *,
             final_skims_omx=None,
         ):
             assert workspace_arg is workspace
-            assert previous_records_arg is previous_records
             assert final_skims_omx is None
             return record_store
 
-    outputs = _Preprocessor("activitysim_preprocess", state).preprocess(
-        workspace, previous_records
-    )
+    outputs = _Preprocessor("activitysim_preprocess", state).preprocess(workspace)
 
     assert outputs == ActivitySimPreprocessOutputs(
         mutable_data_dir=land_use.parent,

@@ -508,7 +508,9 @@ class BeamPreprocessor(GenericPreprocessor):
         # files must come from ActivitySim staging rather than silently falling
         # back to stale defaults.
         if self._activity_demand_enabled():
-            store += self._copy_plans_from_asim(input_records, workspace)
+            store.records.update(
+                self._copy_plans_from_asim(input_records, workspace).records
+            )
             staged_keys = {
                 record.short_name
                 for record in store.all_records()
@@ -526,12 +528,14 @@ class BeamPreprocessor(GenericPreprocessor):
                     beam_output_record.metadata.update(filter_metadata)
                 self._validate_population_consistency(workspace)
         else:
-            store += self._register_existing_beam_exchange_inputs(workspace)
+            store.records.update(
+                self._register_existing_beam_exchange_inputs(workspace).records
+            )
 
         # Add FileRecord outputs here for any additional BEAM inputs you want
         # tracked as explicit coupler keys (e.g., network files from the
         # initialized BEAM input directory).
-        store += output_records
+        store.records.update(output_records.records)
 
         # Ensure linkstats file is present and recorded
         self._handle_linkstats(workspace, previous_beam_records, store)

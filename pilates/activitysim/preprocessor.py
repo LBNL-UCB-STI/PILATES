@@ -2070,7 +2070,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
         prepare_omx_skims: bool = True,
@@ -2116,7 +2115,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             }
         record_store = self._preprocess(
             workspace,
-            previous_records if previous_records is not None else RecordStore(),
             **preprocess_kwargs,
         )
         records_by_key = {
@@ -2147,7 +2145,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
         prepare_omx_skims: bool = True,

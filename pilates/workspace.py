@@ -1,9 +1,8 @@
 import os
 import logging
-from typing import Dict, Optional
+from typing import Optional
 
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +28,6 @@ class Workspace:
         self.archive_run_dir: Optional[str] = (
             os.path.expanduser(archive_run_dir) if archive_run_dir is not None else None
         )
-        self.input_data: Dict[str, RecordStore] = {}
-        self.output_data: Dict[str, RecordStore] = {}
         self._asim_mutable_data_dir_override: Optional[str] = None
         self._asim_runtime_cache_dir_override: Optional[str] = None
         self._beam_mutable_data_dir_override: Optional[str] = None
