@@ -1170,7 +1170,9 @@ class ActivitysimRunner(GenericRunner):
         Args:
             inputs (ActivitySimPreprocessOutputs): The typed input data generated
                 by the preprocessor.
-            workspace (Workspace): The workspace object for path management.
+            launch_context (ActivitySimLaunchContext): Resolved ActivitySim
+                launch directories and runtime paths.
+            skim_mode (ActivitysimSkimMode): Skim input mode (`"omx"` or `"zarr"`).
             extra_inputs (Mapping[str, Any], optional): Additional runtime inputs.
 
         Returns:
