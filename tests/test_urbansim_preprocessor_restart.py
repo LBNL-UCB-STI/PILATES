@@ -402,17 +402,16 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
         _self: UrbansimRunner,
         inputs: UrbanSimPreprocessOutputs,
         run_launch_context: UrbanSimLaunchContext,
-        model_run_hash: str | None = None,
     ) -> UrbanSimRunOutputs:
-        captured["run"] = (inputs, run_launch_context, model_run_hash)
+        captured["run"] = (inputs, run_launch_context)
         return UrbanSimRunOutputs(usim_datastore_h5=tmp_path / "output.h5")
 
     monkeypatch.setattr(UrbansimRunner, "_run", _run)
 
-    result = runner.run(staged, launch_context, model_run_hash="run-hash")
+    result = runner.run(staged, launch_context)
 
     assert progress == ["runner"]
-    assert captured["run"] == (staged, launch_context, "run-hash")
+    assert captured["run"] == (staged, launch_context)
     assert result.usim_datastore_h5 == tmp_path / "output.h5"
 
 

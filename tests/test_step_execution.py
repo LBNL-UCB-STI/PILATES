@@ -454,7 +454,7 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         ),
     )
     assert seen["output_paths"] == {
-        USIM_DATASTORE_H5: str(forecast_h5),
+        USIM_DATASTORE_H5: forecast_h5,
     }
     assert result.outputs == archived_outputs
     assert projected.usim_datastore_h5 == forecast_h5

@@ -1,7 +1,7 @@
 import os
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Optional, Dict, TYPE_CHECKING
 
 import pandas as pd
 
@@ -138,30 +138,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
     provenance, or preparing data for downstream models.
     """
 
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this postprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``usim_datastore_h5``: UrbanSim input datastore updated for the
-              next model stage (H5).
-        Related docs
-            - See `pilates/urbansim/inputs.py` for the corresponding input
-              descriptions used by UrbanSim and downstream models.
-        """
-        usim_input_fname = get_usim_datastore_fname(settings, io="input")
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        return {
-            "usim_datastore_h5": usim_input_path,
-        }
-
     def __init__(
         self,
         model_name: str,
@@ -173,7 +149,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: UrbanSimRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
     ) -> UrbanSimPostprocessOutputs:
         """
         Postprocess UrbanSim outputs.
@@ -181,7 +156,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (UrbanSimRunOutputs): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             UrbanSimPostprocessOutputs: Postprocessed output data.
@@ -228,11 +202,10 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: UrbanSimRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
     ) -> UrbanSimPostprocessOutputs:
         if not isinstance(raw_outputs, UrbanSimRunOutputs):
             raise TypeError(
                 "UrbansimPostprocessor.postprocess expects UrbanSimRunOutputs"
             )
         self.state.set_sub_stage_progress("postprocessor")
-        return self._postprocess(raw_outputs, workspace, model_run_hash)
+        return self._postprocess(raw_outputs, workspace)

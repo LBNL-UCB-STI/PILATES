@@ -720,52 +720,75 @@ class BeamRunner(GenericRunner):
         )
 
 
+def beam_full_skim_output_paths(
+    settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+) -> Dict[str, Path]:
+    """
+    Resolve expected output paths for BEAM's ``FullSkimsCreatorApp`` step.
+
+    Resolves ``(year, iteration)`` from ``WorkflowState`` (falling back to
+    ``year``/``iteration`` attributes on lightweight test stubs; returns ``{}``
+    if no year is available). Always declares ``BEAM_FULL_SKIMS`` under
+    ``<beam_output_dir>/<region>/year-<year>-iteration-<iteration>/`` using the
+    extension implied by ``beam.full_skim.skims_kind`` (defaulting to
+    ``"activitySimOmx"``). Also declares ``FINAL_SKIMS_OMX`` in BEAM's mutable
+    data directory only for OMX mode, since ``.zarr``/``.csv.gz`` full-skim runs
+    do not produce the shared OMX skims artifact.
+    """
+    try:
+        year = state.current_year
+    except AttributeError:
+        try:
+            year = state.year
+        except AttributeError:
+            year = None
+    if year is None:
+        return {}
+
+    try:
+        iteration = state.current_inner_iter
+    except AttributeError:
+        try:
+            iteration = state.iteration
+        except AttributeError:
+            iteration = 0
+    if iteration is None:
+        iteration = 0
+
+    try:
+        beam_cfg = settings.beam
+    except AttributeError:
+        beam_cfg = None
+
+    skim_cfg = beam_cfg.full_skim if beam_cfg is not None else None
+    skims_kind = (
+        skim_cfg.skims_kind
+        if skim_cfg is not None and skim_cfg.skims_kind
+        else "activitySimOmx"
+    )
+    output_filename = _full_skim_output_filename(skims_kind)
+    outputs: Dict[str, Path] = {
+        BEAM_FULL_SKIMS: (
+            Path(workspace.get_beam_output_dir())
+            / settings.run.region
+            / f"year-{int(year)}-iteration-{int(iteration)}"
+            / output_filename
+        )
+    }
+    if skims_kind in (None, "activitySimOmx"):
+        omx_name = get_setting(settings, "beam.skims_fname", "skims.omx") or "skims.omx"
+        outputs[FINAL_SKIMS_OMX] = (
+            Path(workspace.get_beam_mutable_data_dir())
+            / settings.run.region
+            / str(omx_name)
+        )
+    return outputs
+
+
 class BeamFullSkimRunner(GenericRunner):
     """
     Runner for BEAM FullSkimsCreatorApp as a dedicated workflow step.
     """
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this runner produces.
-        """
-        year = getattr(state, "current_year", None)
-        if year is None:
-            year = getattr(state, "year", None)
-        iteration = getattr(state, "current_inner_iter", None)
-        if iteration is None:
-            iteration = getattr(state, "iteration", 0)
-        if year is None:
-            return {}
-        beam_cfg = getattr(settings, "beam", None)
-        skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
-        skims_kind = (
-            getattr(skim_cfg, "skims_kind", "activitySimOmx")
-            if skim_cfg is not None
-            else "activitySimOmx"
-        )
-        output_filename = _full_skim_output_filename(skims_kind)
-        outputs: Dict[str, Any] = {
-            BEAM_FULL_SKIMS: (
-                Path(workspace.get_beam_output_dir())
-                / settings.run.region
-                / f"year-{int(year)}-iteration-{int(iteration)}"
-                / output_filename
-            )
-        }
-        if skims_kind in (None, "activitySimOmx"):
-            omx_name = (
-                get_setting(settings, "beam.skims_fname", "skims.omx") or "skims.omx"
-            )
-            outputs[FINAL_SKIMS_OMX] = (
-                Path(workspace.get_beam_mutable_data_dir())
-                / settings.run.region
-                / str(omx_name)
-            )
-        return outputs
 
     def __init__(
         self,

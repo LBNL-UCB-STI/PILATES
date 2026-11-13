@@ -37,10 +37,6 @@ from pilates.utils.zone_utils import (
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
     FINAL_SKIMS_OMX,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -2026,38 +2022,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             "asim_mutable_configs_dir": _asim_mutable_configs_dir(workspace),
             "usim_population_source_h5": usim_input_path,
             FINAL_SKIMS_OMX: final_skims_path,
-        }
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, str]:
-        """
-        Declare the output paths/artifacts this preprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``asim_mutable_data_dir``: Local mutable data dir staged for
-              ActivitySim inputs.
-            - ``asim_mutable_configs_dir``: Config directory for ActivitySim
-              run-time settings.
-            - ``land_use_asim_in`` / ``households_asim_in`` /
-              ``persons_asim_in`` / ``omx_skims``: Canonical staged input
-              artifacts produced under the mutable data contract.
-        Related docs
-            - See `pilates/activitysim/inputs.py` for the corresponding input
-              descriptions used by ActivitySim and downstream models.
-        """
-        del settings, state
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        return {
-            "asim_mutable_data_dir": asim_data_dir,
-            "asim_mutable_configs_dir": _asim_mutable_configs_dir(workspace),
-            ASIM_LAND_USE_IN: os.path.join(asim_data_dir, "land_use.csv"),
-            ASIM_HOUSEHOLDS_IN: os.path.join(asim_data_dir, "households.csv"),
-            ASIM_PERSONS_IN: os.path.join(asim_data_dir, "persons.csv"),
-            ASIM_OMX_SKIMS: os.path.join(asim_data_dir, "skims.omx"),
         }
 
     def __init__(

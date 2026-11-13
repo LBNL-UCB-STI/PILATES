@@ -29,6 +29,7 @@ from pilates.activitysim.runner import (
     ActivitySimConfigStagingPlan,
     ActivitySimLaunchContext,
     activitysim_persists_zarr_skims,
+    asim_required_run_output_paths,
     asim_runtime_zarr_path,
     stage_activitysim_config_roots,
     validate_activitysim_zarr_skims,
@@ -41,7 +42,12 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
     configured_asim_output_keys,
 )
-from pilates.activitysim.postprocessor import ActivitysimPostprocessor
+from pilates.activitysim.postprocessor import (
+    ActivitysimPostprocessor,
+    _activitysim_archived_input_paths,
+    _activitysim_iteration_output_paths,
+    _next_iter_usim_input_store_path,
+)
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.settings_helper import get as get_setting
@@ -102,8 +108,18 @@ def activitysim_run_output_paths(
     workspace: Workspace,
     produces_zarr: bool,
 ) -> Dict[str, Any]:
-    """Return cache-recoverable ActivitySim outputs and their logging metadata."""
-    expected_outputs = ActivitysimRunner.expected_outputs(settings, state, workspace)
+    """
+    Return cache-recoverable ActivitySim run outputs and logging metadata.
+
+    Filters the required ActivitySim output map to ``configured_asim_output_keys``
+    and includes ``ZARR_SKIMS`` when ``produces_zarr`` is enabled. When both
+    ``forecast_year`` and ``iteration`` resolve, wraps each entry in an
+    ``OutputArtifactSpec`` with year/iteration facet metadata; otherwise returns
+    plain paths (with a Zarr directory spec for ``ZARR_SKIMS``).
+    """
+    expected_outputs: Dict[str, Any] = dict(
+        asim_required_run_output_paths(settings, workspace)
+    )
     output_keys = set(configured_asim_output_keys(settings))
     if produces_zarr:
         expected_outputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
@@ -146,10 +162,21 @@ def activitysim_preprocess_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    """Declare cache-recoverable file outputs from ActivitySim preprocessing."""
-    expected_outputs = ActivitysimPreprocessor.expected_outputs(
-        settings, state, workspace
-    )
+    """
+    Declare cache-recoverable file outputs from ActivitySim preprocessing.
+
+    Always declares ``land_use.csv``, ``households.csv``, and ``persons.csv``
+    with file-schema profiling enabled. Omits ``ASIM_OMX_SKIMS`` when
+    ``requires_prior_beam_skim_handoff`` is true because ActivitySim consumes
+    BEAM's Zarr skims directly instead of staging an OMX file.
+    """
+    asim_data_dir = Path(workspace.get_asim_mutable_data_dir())
+    candidate_paths = {
+        ASIM_LAND_USE_IN: asim_data_dir / "land_use.csv",
+        ASIM_HOUSEHOLDS_IN: asim_data_dir / "households.csv",
+        ASIM_PERSONS_IN: asim_data_dir / "persons.csv",
+        ASIM_OMX_SKIMS: asim_data_dir / "skims.omx",
+    }
     profiled_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
     output_keys = (
         ASIM_LAND_USE_IN,
@@ -163,10 +190,10 @@ def activitysim_preprocess_output_paths(
     )
     return {
         key: OutputArtifactSpec(
-            path=expected_outputs[key], profile_file_schema=key in profiled_keys
+            path=candidate_paths[key], profile_file_schema=key in profiled_keys
         )
         for key in output_keys
-        if expected_outputs.get(key) is not None
+        if candidate_paths.get(key) is not None
     }
 
 
@@ -177,10 +204,25 @@ def activitysim_postprocess_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    """Declare non-H5 ActivitySim postprocess outputs for one-link logging."""
-    expected_outputs = ActivitysimPostprocessor.expected_outputs(
-        settings, state, workspace
+    """
+    Declare ActivitySim postprocess outputs for Consist logging and hydration.
+
+    Collects the next-iteration UrbanSim datastore (``USIM_DATASTORE_H5`` when
+    writeback is enabled), per-iteration ActivitySim output parquets, and
+    archived ActivitySim inputs. Attaches file-schema profiling to core tabular
+    outputs and year/iteration facet metadata whenever state context resolves.
+    """
+    raw_paths: Dict[str, Any] = {}
+    next_usim_store = _next_iter_usim_input_store_path(
+        settings,
+        workspace,
+        state,
     )
+    if next_usim_store is not None:
+        raw_paths[USIM_DATASTORE_H5] = next_usim_store
+    raw_paths.update(_activitysim_iteration_output_paths(settings, state, workspace))
+    raw_paths.update(_activitysim_archived_input_paths(state, workspace))
+
     profile_schema_keys = {
         "persons_asim_out",
         "trips_asim_out",
@@ -192,24 +234,20 @@ def activitysim_postprocess_output_paths(
     iteration = iteration_index(state)
     return {
         key: (
-            (
-                OutputArtifactSpec(
-                    path=path,
-                    profile_file_schema=key in profile_schema_keys,
-                    **_activitysim_output_facet_meta(
-                        key,
-                        year=forecast_year,
-                        iteration=iteration,
-                    ),
-                )
-                if forecast_year is not None and iteration is not None
-                else path
+            OutputArtifactSpec(
+                path=path,
+                profile_file_schema=key in profile_schema_keys,
+                **_activitysim_output_facet_meta(
+                    key,
+                    year=forecast_year,
+                    iteration=iteration,
+                ),
             )
-            if key != "asim_output_dir" and path is not None
+            if forecast_year is not None and iteration is not None
             else path
         )
-        for key, path in expected_outputs.items()
-        if key != "asim_output_dir" and path is not None
+        for key, path in raw_paths.items()
+        if path is not None
     }
 
 

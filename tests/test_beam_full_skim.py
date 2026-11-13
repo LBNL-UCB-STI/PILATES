@@ -443,9 +443,9 @@ class TestBeamFullSkimMode:
         assert identity_cfg["full_skim"]["bifurcate_tolls"] is False
         assert identity_cfg["full_skim"]["toll_file_path"] == "toll-prices.csv"
 
-    def test_expected_outputs_maps_skims_kind_to_canonical_filename(self):
-        """BeamFullSkimRunner.expected_outputs maps skims_kind to .omx, .zarr, or .csv.gz."""
-        from pilates.beam.runner import BeamFullSkimRunner
+    def test_beam_full_skim_output_paths_maps_skims_kind_to_canonical_filename(self):
+        """beam_full_skim_output_paths maps skims_kind to .omx, .zarr, or .csv.gz."""
+        from pilates.beam.runner import beam_full_skim_output_paths
         from pilates.config.models import FullSkimsCreatorConfig
         from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
 
@@ -462,7 +462,7 @@ class TestBeamFullSkimMode:
             settings = self._make_settings(
                 full_skim_cfg=FullSkimsCreatorConfig(skims_kind=skims_kind)
             )
-            outputs = BeamFullSkimRunner.expected_outputs(settings, state, workspace)
+            outputs = beam_full_skim_output_paths(settings, state, workspace)
             assert outputs[BEAM_FULL_SKIMS] == (
                 Path("/tmp/beam_output/test_region/year-2025-iteration-1")
                 / expected_name
@@ -550,9 +550,11 @@ class TestBeamFullSkimMode:
         )
         assert selected == "/app/input/test_region/warmstart.linkstats.csv.gz"
 
-    def test_expected_outputs_emits_final_skims_omx_for_activitysim_omx(self):
-        """BeamFullSkimRunner.expected_outputs includes final_skims_omx when skims_kind is activitySimOmx."""
-        from pilates.beam.runner import BeamFullSkimRunner
+    def test_beam_full_skim_output_paths_emits_final_skims_omx_for_activitysim_omx(
+        self,
+    ):
+        """beam_full_skim_output_paths includes final_skims_omx when skims_kind is activitySimOmx."""
+        from pilates.beam.runner import beam_full_skim_output_paths
         from pilates.config.models import FullSkimsCreatorConfig
         from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS, FINAL_SKIMS_OMX
 
@@ -564,9 +566,7 @@ class TestBeamFullSkimMode:
         omx_settings = self._make_settings(
             full_skim_cfg=FullSkimsCreatorConfig(skims_kind="activitySimOmx")
         )
-        omx_outputs = BeamFullSkimRunner.expected_outputs(
-            omx_settings, state, workspace
-        )
+        omx_outputs = beam_full_skim_output_paths(omx_settings, state, workspace)
         assert FINAL_SKIMS_OMX in omx_outputs
         assert omx_outputs[FINAL_SKIMS_OMX] == Path(
             "/tmp/beam_input/test_region/skims.omx"
@@ -578,9 +578,7 @@ class TestBeamFullSkimMode:
         csv_settings = self._make_settings(
             full_skim_cfg=FullSkimsCreatorConfig(skims_kind="od")
         )
-        csv_outputs = BeamFullSkimRunner.expected_outputs(
-            csv_settings, state, workspace
-        )
+        csv_outputs = beam_full_skim_output_paths(csv_settings, state, workspace)
         assert FINAL_SKIMS_OMX not in csv_outputs
 
     def test_resolve_beam_full_skim_inputs_without_population_inputs(self):

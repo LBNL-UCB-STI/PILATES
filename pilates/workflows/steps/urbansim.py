@@ -85,7 +85,10 @@ def _urbansim_run_native_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    return UrbansimRunner.expected_outputs(settings, state, workspace)
+    return {
+        "usim_datastore_h5": Path(workspace.get_usim_mutable_data_dir())
+        / get_usim_datastore_fname(settings, io="output", year=state.forecast_year)
+    }
 
 
 def _urbansim_postprocess_native_output_paths(
@@ -95,9 +98,19 @@ def _urbansim_postprocess_native_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    paths = dict(UrbansimPostprocessor.expected_outputs(settings, state, workspace))
+    """
+    Declare output paths for ``urbansim_postprocess``.
+
+    Declares the updated UrbanSim input datastore (``usim_datastore_h5``), the
+    merged next-iteration datastore, the pre-merge output archive snapshot, and
+    the ``USIM_POPULATION_SOURCE_H5`` alias consumed by downstream stages.
+    """
     forecast_year = state.forecast_year
     mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
+    datastore_path = mutable_data_dir / get_usim_datastore_fname(settings, io="input")
+    paths: Dict[str, Any] = {
+        "usim_datastore_h5": datastore_path,
+    }
     input_name = settings.urbansim.input_file_template.format(
         region_id=settings.urbansim.region_mappings["region_to_region_id"][
             settings.run.region

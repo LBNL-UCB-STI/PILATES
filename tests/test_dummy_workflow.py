@@ -226,7 +226,6 @@ class DummyModelAPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: DummyWorkspace,
-        model_run_hash=None,
     ) -> RecordStore:
         year = self.state.current_year
         output_csv_record = get_record_by_short_name(
@@ -364,7 +363,6 @@ class DummyModelBPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: DummyWorkspace,
-        model_run_hash=None,
     ) -> RecordStore:
         year = self.state.current_year
         output_csv_record = get_record_by_short_name(

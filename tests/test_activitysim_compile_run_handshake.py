@@ -241,7 +241,6 @@ def test_numba_warmup_is_private_and_never_publishes_its_local_zarr(
 
     assert result is None
     assert not production_zarr_path.exists()
-    assert not hasattr(warmup, "expected_outputs")
 
 
 def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_container(

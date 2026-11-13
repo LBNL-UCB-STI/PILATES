@@ -2001,10 +2001,6 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
         def __init__(self, *_args: object) -> None:
             pass
 
-        @staticmethod
-        def expected_outputs(*_args: object) -> dict[str, Path]:
-            return {ZARR_SKIMS: zarr_skims}
-
         def postprocess(
             self, *_args: object, **_kwargs: object
         ) -> BeamPostprocessOutputs:

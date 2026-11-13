@@ -308,26 +308,11 @@ def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
     assert "final_skims_omx" not in captured
 
 
-def test_activitysim_preprocess_does_not_declare_stale_omx_after_bootstrap(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        activitysim.ActivitysimPreprocessor,
-        "expected_outputs",
-        staticmethod(
-            lambda *_args: {
-                "land_use_asim_in": "activitysim/data/land_use.csv",
-                "households_asim_in": "activitysim/data/households.csv",
-                "persons_asim_in": "activitysim/data/persons.csv",
-                "omx_skims": "activitysim/data/skims.omx",
-            }
-        ),
-    )
-
+def test_activitysim_preprocess_does_not_declare_stale_omx_after_bootstrap() -> None:
     declared = activitysim.activitysim_preprocess_output_paths(
         settings=_settings(),
         state=_state(current_year=2020, iteration=1),
-        workspace=SimpleNamespace(),
+        workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: "activitysim/data"),
     )
 
     assert "omx_skims" not in declared

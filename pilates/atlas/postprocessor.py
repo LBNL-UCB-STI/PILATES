@@ -15,10 +15,7 @@ from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.state_access import uses_input_datastore
-from pilates.workflows.artifact_keys import (
-    ATLAS_VEHICLES2_OUTPUT,
-    USIM_POPULATION_SOURCE_H5,
-)
+from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 from pilates.workflows.state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 
@@ -585,41 +582,6 @@ class AtlasPostprocessor(GenericPostprocessor):
     Produces updated UrbanSim inputs and ATLAS vehicle outputs.
     """
 
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this postprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``usim_population_source_h5``: Updated UrbanSim datastore (H5)
-              selected as the downstream population source.
-            - ``atlas_vehicles2_output``: ATLAS vehicles2 CSV emitted for BEAM.
-        Related docs
-            - See `pilates/atlas/inputs.py` for the corresponding input
-              descriptions used by ATLAS and downstream models.
-        """
-        usim_output_path = resolve_atlas_usim_datastore_path(settings, state, workspace)
-        output_year = getattr(state, "year", getattr(state, "forecast_year", None))
-        vehicles2_path = (
-            os.path.join(
-                workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv"
-            )
-            if output_year is not None
-            else None
-        )
-        return {
-            USIM_POPULATION_SOURCE_H5: usim_output_path,
-            **(
-                {ATLAS_VEHICLES2_OUTPUT: vehicles2_path}
-                if vehicles2_path is not None
-                else {}
-            ),
-        }
-
     def __init__(
         self,
         model_name: str,
@@ -631,7 +593,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         usim_datastore_h5: Optional[Path] = None,
     ) -> AtlasPostprocessOutputs:
         """
@@ -641,7 +602,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (AtlasRunOutputs): The raw outputs from the ATLAS model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             AtlasPostprocessOutputs: Typed outputs for the generated files.
@@ -736,7 +696,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         usim_datastore_h5: Optional[Path] = None,
     ) -> AtlasPostprocessOutputs:
         if not isinstance(raw_outputs, AtlasRunOutputs):
@@ -747,7 +706,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         return self._postprocess(
             raw_outputs,
             workspace,
-            model_run_hash,
             usim_datastore_h5=usim_datastore_h5,
         )
 
