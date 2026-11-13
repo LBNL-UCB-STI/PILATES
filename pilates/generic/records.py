@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 _ARTIFACT_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,255}$")
 
 
-def _sanitize_artifact_key(key: str) -> Optional[str]:
+def sanitize_artifact_key(key: str) -> Optional[str]:
+    """
+    Normalize a string into a Consist-compatible artifact key.
+    """
     if _ARTIFACT_KEY_RE.match(key):
         return key
     sanitized = re.sub(r"[^A-Za-z0-9_.:/-]", "_", key)
@@ -33,13 +36,6 @@ def _sanitize_artifact_key(key: str) -> Optional[str]:
     if len(sanitized) > 256:
         sanitized = sanitized[:256]
     return sanitized if _ARTIFACT_KEY_RE.match(sanitized) else None
-
-
-def sanitize_artifact_key(key: str) -> Optional[str]:
-    """
-    Normalize a string into a Consist-compatible artifact key.
-    """
-    return _sanitize_artifact_key(key)
 
 
 @dataclass(kw_only=True)

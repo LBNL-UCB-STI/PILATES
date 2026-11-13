@@ -353,7 +353,7 @@ class StepOutputsBase:
         Returns
         -------
         iterable of tuple
-            Record metadata for RecordStore conversion.
+            Record metadata tuples for step output inspection and serialization.
         """
         for field_name, short_name in self.record_keys.items():
             value = getattr(self, field_name, None)

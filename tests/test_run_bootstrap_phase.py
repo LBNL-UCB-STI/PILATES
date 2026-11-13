@@ -23,8 +23,6 @@ class DummyWorkspace:
     def __init__(self, full_path="/tmp/bootstrap", settings=None):
         self.full_path = full_path
         self.settings = settings
-        self.input_data = {}
-        self.output_data = {}
 
     def get_usim_mutable_data_dir(self):
         return os.path.join(self.full_path, "urbansim", "data")
