@@ -1,7 +1,7 @@
 import os
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Optional, Dict, TYPE_CHECKING
 
 import pandas as pd
 
@@ -137,30 +137,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
     This class is responsible for any postprocessing needed after the UrbanSim run, such as updating outputs,
     provenance, or preparing data for downstream models.
     """
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this postprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``usim_datastore_h5``: UrbanSim input datastore updated for the
-              next model stage (H5).
-        Related docs
-            - See `pilates/urbansim/inputs.py` for the corresponding input
-              descriptions used by UrbanSim and downstream models.
-        """
-        usim_input_fname = get_usim_datastore_fname(settings, io="input")
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        return {
-            "usim_datastore_h5": usim_input_path,
-        }
 
     def __init__(
         self,

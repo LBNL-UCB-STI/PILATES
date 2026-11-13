@@ -1032,42 +1032,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
         return inputs
 
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this postprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``asim_output_dir``: ActivitySim output directory retained after
-              postprocessing. This coarse directory contract remains because
-              archived inputs and per-iteration outputs share stable topology
-              underneath it.
-            - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) written
-              for downstream UrbanSim/ATLAS steps when land use writeback is enabled.
-            - required ``*_asim_out`` keys: Canonical postprocessed parquet
-              outputs archived under the year/iteration directory.
-            - ``asim_input_*_archived``: Archived source inputs retained for
-              provenance-aware recovery.
-        Related docs
-            - See `pilates/activitysim/inputs.py` for the corresponding input
-              descriptions used by ActivitySim and downstream models.
-        """
-        outputs: Dict[str, Any] = {
-            "asim_output_dir": workspace.get_asim_output_dir(),
-            USIM_DATASTORE_H5: _next_iter_usim_input_store_path(
-                settings,
-                workspace,
-                state,
-            ),
-        }
-        outputs.update(_activitysim_iteration_output_paths(settings, state, workspace))
-        outputs.update(_activitysim_archived_input_paths(state, workspace))
-        return outputs
-
     def __init__(
         self,
         model_name: str,

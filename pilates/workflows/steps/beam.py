@@ -50,7 +50,13 @@ from pilates.beam.outputs import (
     BeamPostprocessOutputs,
     BeamPreprocessOutputs,
     BeamRunOutputs,
+    requires_omx_skim_output,
 )
+from pilates.beam.postprocessor import (
+    _activitysim_skims_target_enabled,
+    beam_postprocess_zarr_skims_output_path,
+)
+from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.beam.preprocessor import ensure_beam_mutable_workspace
 from pilates.beam.runner import BeamRunner
 from pilates.beam.skim_provenance import (
@@ -292,15 +298,18 @@ def _beam_postprocess_native_output_paths(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> dict[str, Path]:
-    from pilates.beam.postprocessor import BeamPostprocessor
+    static_outputs: dict[str, Path] = {}
+    if _activitysim_skims_target_enabled(settings):
+        static_outputs["zarr_skims"] = Path(
+            beam_postprocess_zarr_skims_output_path(workspace, state)
+        )
+    if requires_omx_skim_output(settings):
+        region = settings.run.region
+        omx_name = get_beam_omx_skims_name(settings)
+        static_outputs["final_skims_omx"] = (
+            Path(workspace.get_beam_mutable_data_dir()) / region / omx_name
+        )
 
-    static_outputs = {
-        key: Path(path)
-        for key, path in BeamPostprocessor.expected_outputs(
-            settings, state, workspace
-        ).items()
-        if path is not None
-    }
     if resolved_inputs is None:
         return static_outputs
     dynamic_outputs = resolved_inputs.metadata.get("beam_postprocess_output_paths", {})
@@ -331,15 +340,9 @@ def _beam_full_skim_native_output_paths(
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> dict[str, Path]:
     del resolved_inputs
-    from pilates.beam.runner import BeamFullSkimRunner
+    from pilates.beam.runner import beam_full_skim_output_paths
 
-    return {
-        key: Path(path)
-        for key, path in BeamFullSkimRunner.expected_outputs(
-            settings, state, workspace
-        ).items()
-        if path is not None
-    }
+    return beam_full_skim_output_paths(settings, state, workspace)
 
 
 def _materialize_native_outputs(

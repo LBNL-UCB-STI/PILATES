@@ -673,28 +673,6 @@ class ActivitysimRunner(GenericRunner):
         }
 
     @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this runner produces.
-
-        Notes
-        -----
-        Output keys
-            - ``asim_output_dir``: ActivitySim output directory for the run.
-            - required ``*_asim_out`` keys: Canonical final_pipeline parquet
-              outputs for the stable ActivitySim handoff surface.
-        Related docs
-            - See `pilates/activitysim/inputs.py` for the corresponding input
-              descriptions used by ActivitySim and downstream models.
-        """
-        del state
-        outputs: Dict[str, Any] = {"asim_output_dir": workspace.get_asim_output_dir()}
-        outputs.update(asim_required_run_output_paths(settings, workspace))
-        return outputs
-
-    @staticmethod
     def _allocate_private_compile_epoch(
         launch_context: ActivitySimLaunchContext,
     ) -> Path:

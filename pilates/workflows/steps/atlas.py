@@ -186,15 +186,21 @@ def _atlas_postprocess_native_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    outputs = AtlasPostprocessor.expected_outputs(settings, state, workspace)
-    # ATLAS mutates the exact datastore supplied to the callable. Its published
-    # ActivitySim source is a distinct post-mutation snapshot, so it can carry
-    # exact-year HDF5 aliases without changing the mutable UrbanSim handoff.
-    outputs[USIM_POPULATION_SOURCE_H5] = _urbansim_population_source_path(
-        settings=settings,
-        state=state,
-        workspace=workspace,
+    output_year = state.year if state.year is not None else state.forecast_year
+    vehicles2_path = (
+        Path(workspace.get_atlas_output_dir()) / f"vehicles2_{output_year}.csv"
+        if output_year is not None
+        else None
     )
+    outputs: Dict[str, Any] = {
+        USIM_POPULATION_SOURCE_H5: _urbansim_population_source_path(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        ),
+    }
+    if vehicles2_path is not None:
+        outputs[ATLAS_VEHICLES2_OUTPUT] = vehicles2_path
     return outputs
 
 

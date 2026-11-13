@@ -821,20 +821,6 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
         def __init__(self, *_args: object) -> None:
             pass
 
-        @staticmethod
-        def expected_outputs(
-            _settings: object, _state: object, run_workspace: object
-        ) -> dict[str, Path]:
-            output_root = Path(run_workspace.get_atlas_output_dir())
-            return {
-                ATLAS_OUTPUT_DIR: output_root,
-                USIM_POPULATION_SOURCE_H5: Path(
-                    run_workspace.get_usim_mutable_data_dir()
-                )
-                / "output_2030_population_source.h5",
-                ATLAS_VEHICLES2_OUTPUT: output_root / "vehicles2_2030.csv",
-            }
-
         def postprocess(
             self, outputs: object, run_workspace: object, **_kwargs: object
         ) -> None:
@@ -925,10 +911,6 @@ def test_native_atlas_postprocess_publishes_exact_year_population_snapshot(
         def __init__(self, *_args: object) -> None:
             pass
 
-        @staticmethod
-        def expected_outputs(*_args: object) -> dict[str, Path]:
-            return {}
-
         def postprocess(
             self, _outputs: object, _workspace: object, **_kwargs: object
         ) -> None:
@@ -992,10 +974,6 @@ def test_atlas_postprocess_rejects_snapshot_missing_required_root_tables(
     class _AtlasPostprocessor:
         def __init__(self, *_args: object) -> None:
             pass
-
-        @staticmethod
-        def expected_outputs(*_args: object) -> dict[str, Path]:
-            return {}
 
         def postprocess(
             self, _outputs: object, _workspace: object, **_kwargs: object
@@ -1101,10 +1079,6 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     class _Postprocessor:
         def __init__(self, *_args: object) -> None:
             pass
-
-        @staticmethod
-        def expected_outputs(*_args: object) -> dict[str, Path]:
-            return {}
 
         def postprocess(
             self,
@@ -1514,10 +1488,6 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
     class _AtlasPostprocessor:
         def __init__(self, *_args: object) -> None:
             pass
-
-        @staticmethod
-        def expected_outputs(*_args: object) -> dict[str, Path]:
-            return {}
 
         def postprocess(
             self, _outputs: object, _workspace: object, **kwargs: object

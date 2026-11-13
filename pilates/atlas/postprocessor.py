@@ -15,10 +15,7 @@ from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.state_access import uses_input_datastore
-from pilates.workflows.artifact_keys import (
-    ATLAS_VEHICLES2_OUTPUT,
-    USIM_POPULATION_SOURCE_H5,
-)
+from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 from pilates.workflows.state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 
@@ -584,41 +581,6 @@ class AtlasPostprocessor(GenericPostprocessor):
     This includes updating UrbanSim HDF5 with new vehicle ownership and adding vehicleTypeId to ATLAS vehicle outputs.
     Produces updated UrbanSim inputs and ATLAS vehicle outputs.
     """
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this postprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``usim_population_source_h5``: Updated UrbanSim datastore (H5)
-              selected as the downstream population source.
-            - ``atlas_vehicles2_output``: ATLAS vehicles2 CSV emitted for BEAM.
-        Related docs
-            - See `pilates/atlas/inputs.py` for the corresponding input
-              descriptions used by ATLAS and downstream models.
-        """
-        usim_output_path = resolve_atlas_usim_datastore_path(settings, state, workspace)
-        output_year = getattr(state, "year", getattr(state, "forecast_year", None))
-        vehicles2_path = (
-            os.path.join(
-                workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv"
-            )
-            if output_year is not None
-            else None
-        )
-        return {
-            USIM_POPULATION_SOURCE_H5: usim_output_path,
-            **(
-                {ATLAS_VEHICLES2_OUTPUT: vehicles2_path}
-                if vehicles2_path is not None
-                else {}
-            ),
-        }
 
     def __init__(
         self,

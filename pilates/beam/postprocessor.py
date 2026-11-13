@@ -792,38 +792,6 @@ class BeamPostprocessor(GenericPostprocessor):
     Postprocessor for BEAM model.
     """
 
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this postprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``final_skims_omx``: Final OMX skims written to the BEAM
-              mutable data directory when OMX output is enabled.
-            - ``zarr_skims``: Updated Zarr skims after BEAM postprocessing
-              whenever ActivitySim is enabled.
-        Related docs
-            - See `pilates/beam/inputs.py` for the corresponding input
-              descriptions used by BEAM and downstream models.
-        """
-        outputs: Dict[str, Any] = {}
-        if _activitysim_skims_target_enabled(settings):
-            outputs["zarr_skims"] = beam_postprocess_zarr_skims_output_path(
-                workspace, state
-            )
-
-        if requires_omx_skim_output(settings):
-            region = settings.run.region
-            omx_name = get_beam_omx_skims_name(settings)
-            outputs["final_skims_omx"] = os.path.join(
-                workspace.get_beam_mutable_data_dir(), region, omx_name
-            )
-        return outputs
-
     def __init__(
         self,
         model_name: str,

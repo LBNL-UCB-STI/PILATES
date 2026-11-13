@@ -150,7 +150,6 @@ def test_activitysim_numba_warmup_has_no_workflow_output_contract() -> None:
     )
 
     assert warmup.model_name == "activitysim_numba_warmup"
-    assert not hasattr(warmup, "expected_outputs")
 
 
 def test_activitysim_numba_warmup_rejects_wrong_upstream_type(tmp_path: Path) -> None:

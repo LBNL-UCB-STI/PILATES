@@ -8,7 +8,6 @@ import json
 import pandas as pd
 
 from pilates.beam.postprocessor import (
-    BeamPostprocessor,
     _consolidate_tnc_data_zarr,
     _merge_beam_skims_to_zarr,
     _postprocess_tnc_zarr,
@@ -421,30 +420,34 @@ def test_write_zarr_skim_as_omx_new_reconstructs_zone_ids_from_workspace(
     mock_load_canonical_zones.assert_called_once_with(mock_settings, workspace)
 
 
-def test_beam_postprocessor_expected_outputs_uses_omx_name_for_zarr_shared_skims(
+def test_beam_postprocess_output_paths_uses_omx_name_for_zarr_shared_skims(
     tmp_path, mock_settings
 ):
+    from pilates.workflows.steps.beam import _beam_postprocess_native_output_paths
+
     mock_settings.shared.skims.fname = "skims.zarr"
     mock_settings.run.models.land_use = "urbansim"
 
     workspace = MagicMock()
     workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam" / "input")
 
-    outputs = BeamPostprocessor.expected_outputs(
-        mock_settings,
+    outputs = _beam_postprocess_native_output_paths(
+        settings=mock_settings,
         state=MagicMock(),
         workspace=workspace,
     )
 
     assert outputs == {
-        "final_skims_omx": str(tmp_path / "beam" / "input" / "seattle" / "skims.omx")
+        "final_skims_omx": tmp_path / "beam" / "input" / "seattle" / "skims.omx"
     }
 
 
-def test_beam_postprocessor_expected_outputs_accumulates_hybrid_skim_formats(
+def test_beam_postprocess_output_paths_accumulates_hybrid_skim_formats(
     tmp_path, mock_settings
 ):
     """ActivitySim Zarr and UrbanSim/ATLAS OMX consumers need both artifacts."""
+    from pilates.workflows.steps.beam import _beam_postprocess_native_output_paths
+
     mock_settings.shared.skims.fname = "skims.zarr"
     mock_settings.run.models.activity_demand = "activitysim"
     mock_settings.run.models.land_use = "urbansim"
@@ -457,14 +460,14 @@ def test_beam_postprocessor_expected_outputs_accumulates_hybrid_skim_formats(
         tmp_path / "activitysim" / "output"
     )
 
-    outputs = BeamPostprocessor.expected_outputs(
-        mock_settings,
+    outputs = _beam_postprocess_native_output_paths(
+        settings=mock_settings,
         state=MagicMock(),
         workspace=workspace,
     )
 
     assert outputs == {
-        "zarr_skims": str(
+        "zarr_skims": (
             tmp_path
             / "beam"
             / "output"
@@ -472,7 +475,7 @@ def test_beam_postprocessor_expected_outputs_accumulates_hybrid_skim_formats(
             / "beam_postprocess"
             / "skims.zarr"
         ),
-        "final_skims_omx": str(tmp_path / "beam" / "input" / "seattle" / "skims.omx"),
+        "final_skims_omx": tmp_path / "beam" / "input" / "seattle" / "skims.omx",
     }
 
 

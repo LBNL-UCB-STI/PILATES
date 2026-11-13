@@ -1,15 +1,10 @@
 from pathlib import Path
-from typing import Dict, Any
 from dataclasses import dataclass
 import logging
 import os
 
-from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
-from pilates.urbansim import postprocessor as usim_post
-from pilates.workspace import Workspace
-from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -29,32 +24,6 @@ class UrbansimRunner(
     Runner for the UrbanSim land use model.
     This class is responsible for running the UrbanSim containerized model.
     """
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this runner produces.
-
-        Notes
-        -----
-        Output keys
-            - ``usim_datastore_h5``: UrbanSim output datastore (H5) for the
-              forecast year.
-        Related docs
-            - See `pilates/urbansim/inputs.py` for the corresponding input
-              descriptions used by UrbanSim and downstream models.
-        """
-        usim_output_fname = usim_post.get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
-        )
-        return {
-            "usim_datastore_h5": usim_output_path,
-        }
 
     def get_usim_docker_vols(self, output_dir: str) -> dict:
         """Constructs the volume mappings for the UrbanSim Docker container.
