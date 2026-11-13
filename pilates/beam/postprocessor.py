@@ -938,6 +938,7 @@ class BeamPostprocessor(GenericPostprocessor):
                     skim_name_found = name
                     break
 
+        merged_any = False
         if not skim_name_found:
             logger.warning(
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped."
@@ -971,7 +972,6 @@ class BeamPostprocessor(GenericPostprocessor):
             beam_output_dir = workspace.get_beam_output_dir()
 
             merged_sources = []
-            merged_any = False
             for it, it_skim in enumerate(all_skims_found):
                 raw_od_skims_path = os.path.join(
                     workspace.full_path,
