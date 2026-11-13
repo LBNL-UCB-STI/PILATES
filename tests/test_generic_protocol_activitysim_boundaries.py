@@ -65,11 +65,10 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
             return store_arg
 
     class _Postprocessor(GenericPostprocessor):
-        def _postprocess(self, raw_outputs_arg, workspace_arg, model_run_hash=None):
+        def _postprocess(self, raw_outputs_arg, workspace_arg):
             captured["postprocess"] = (
                 raw_outputs_arg,
                 workspace_arg,
-                model_run_hash,
             )
             return raw_outputs_arg
 
@@ -79,9 +78,7 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
 
     preprocessed = preprocessor.preprocess(workspace, previous_records)
     raw_outputs = runner.run(preprocessed, workspace)
-    postprocessed = postprocessor.postprocess(
-        raw_outputs, workspace, model_run_hash="run-hash"
-    )
+    postprocessed = postprocessor.postprocess(raw_outputs, workspace)
 
     assert preprocessed is previous_records
     assert raw_outputs is previous_records
@@ -89,7 +86,7 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
     assert captured == {
         "preprocess": (workspace, previous_records),
         "run": (previous_records, workspace),
-        "postprocess": (previous_records, workspace, "run-hash"),
+        "postprocess": (previous_records, workspace),
     }
     assert state.sub_stages == ["preprocessor", "runner", "postprocessor"]
 
@@ -200,10 +197,9 @@ def test_activitysim_postprocess_forwards_typed_run_outputs(
     captured = {}
 
     class _InspectingPostprocessor(ActivitysimPostprocessor):
-        def _postprocess(self, raw_outputs, workspace_arg, model_run_hash=None):
+        def _postprocess(self, raw_outputs, workspace_arg):
             captured["raw_outputs"] = raw_outputs
             captured["workspace"] = workspace_arg
-            captured["model_run_hash"] = model_run_hash
             return ActivitySimPostprocessOutputs(
                 usim_datastore_h5=None,
                 asim_output_dir=tmp_path / "output",
@@ -213,11 +209,9 @@ def test_activitysim_postprocess_forwards_typed_run_outputs(
     outputs = postprocessor.postprocess(
         run_outputs,
         workspace,
-        model_run_hash="run-hash",
     )
 
     assert captured["workspace"] is workspace
-    assert captured["model_run_hash"] == "run-hash"
     assert captured["raw_outputs"] is run_outputs
     assert captured["raw_outputs"].raw_output_hashes == {
         "households_asim_out_temp": "raw-hash",

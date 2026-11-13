@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Generic, Optional, TYPE_CHECKING, TypeVar
+from typing import Generic, TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -27,18 +27,16 @@ class GenericPostprocessor(ABC, Generic[PostprocessInputsT, PostprocessOutputsT]
         self,
         raw_outputs: PostprocessInputsT,
         workspace: "Workspace",
-        model_run_hash: Optional[str] = None,
     ) -> PostprocessOutputsT:
         """Run postprocessing on runner outputs and return final model outputs."""
         self.state.set_sub_stage_progress("postprocessor")
-        return self._postprocess(raw_outputs, workspace, model_run_hash)
+        return self._postprocess(raw_outputs, workspace)
 
     @abstractmethod
     def _postprocess(
         self,
         raw_outputs: PostprocessInputsT,
         workspace: "Workspace",
-        model_run_hash: Optional[str] = None,
     ) -> PostprocessOutputsT:
         """Implement postprocessing and return model-specific outputs."""
         raise NotImplementedError

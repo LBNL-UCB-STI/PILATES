@@ -1079,7 +1079,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         population_source_h5_path: Optional[str] = None,
         current_input_h5_path: Optional[str] = None,
         households_asim_input_path: Optional[str] = None,
@@ -1104,7 +1103,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         return self._postprocess(
             raw_outputs,
             workspace,
-            model_run_hash,
             **postprocess_kwargs,
         )
 
@@ -1322,7 +1320,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         population_source_h5_path: Optional[str] = None,
         current_input_h5_path: Optional[str] = None,
         households_asim_input_path: Optional[str] = None,
@@ -1337,7 +1334,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (ActivitySimRunOutputs): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             ActivitySimPostprocessOutputs: Postprocessed output data.

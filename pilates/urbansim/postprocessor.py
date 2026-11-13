@@ -173,7 +173,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: UrbanSimRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
     ) -> UrbanSimPostprocessOutputs:
         """
         Postprocess UrbanSim outputs.
@@ -181,7 +180,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (UrbanSimRunOutputs): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             UrbanSimPostprocessOutputs: Postprocessed output data.
@@ -228,11 +226,10 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: UrbanSimRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
     ) -> UrbanSimPostprocessOutputs:
         if not isinstance(raw_outputs, UrbanSimRunOutputs):
             raise TypeError(
                 "UrbansimPostprocessor.postprocess expects UrbanSimRunOutputs"
             )
         self.state.set_sub_stage_progress("postprocessor")
-        return self._postprocess(raw_outputs, workspace, model_run_hash)
+        return self._postprocess(raw_outputs, workspace)

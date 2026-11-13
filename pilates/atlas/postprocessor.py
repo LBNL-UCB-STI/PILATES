@@ -631,7 +631,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         usim_datastore_h5: Optional[Path] = None,
     ) -> AtlasPostprocessOutputs:
         """
@@ -641,7 +640,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (AtlasRunOutputs): The raw outputs from the ATLAS model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             AtlasPostprocessOutputs: Typed outputs for the generated files.
@@ -736,7 +734,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         usim_datastore_h5: Optional[Path] = None,
     ) -> AtlasPostprocessOutputs:
         if not isinstance(raw_outputs, AtlasRunOutputs):
@@ -747,7 +744,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         return self._postprocess(
             raw_outputs,
             workspace,
-            model_run_hash,
             usim_datastore_h5=usim_datastore_h5,
         )
 

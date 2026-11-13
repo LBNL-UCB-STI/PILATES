@@ -374,7 +374,6 @@ class DummyPostprocessor:
         self,
         raw_outputs: Any,
         workspace: Any,
-        model_run_hash: Any = None,
         population_source_h5_path: Any = None,
         current_input_h5_path: Any = None,
     ) -> Any:

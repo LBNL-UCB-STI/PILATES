@@ -838,7 +838,6 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: BeamRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         zarr_skims: Optional[Any] = None,
     ) -> BeamPostprocessOutputs:
         """
@@ -1055,7 +1054,6 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: BeamRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         zarr_skims: Optional[Any] = None,
     ) -> BeamPostprocessOutputs:
         """
@@ -1067,6 +1065,5 @@ class BeamPostprocessor(GenericPostprocessor):
         return self._postprocess(
             raw_outputs,
             workspace,
-            model_run_hash,
             zarr_skims=zarr_skims,
         )

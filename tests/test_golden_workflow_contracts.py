@@ -67,9 +67,7 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     coupler = golden_stub_env["coupler"]
     tracker = golden_stub_env["tracker"]
 
-    def _stub_urbansim_runner(
-        _self, _inputs, runner_workspace, _model_run_hash=None
-    ) -> UrbanSimRunOutputs:
+    def _stub_urbansim_runner(_self, _inputs, runner_workspace) -> UrbanSimRunOutputs:
         return UrbanSimRunOutputs(
             usim_datastore_h5=runner_workspace.output_datastore,
             raw_outputs={},

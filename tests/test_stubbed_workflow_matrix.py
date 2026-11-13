@@ -554,7 +554,7 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
         workspace.get_usim_mutable_data_dir()
     ) / settings.urbansim.output_file_template.format(year=state.forecast_year)
 
-    def _fake_urbansim_run(self, _inputs, _workspace, _model_run_hash=None):
+    def _fake_urbansim_run(self, _inputs, _workspace):
         return UrbanSimRunOutputs(usim_datastore_h5=usim_output_path)
 
     def _fake_atlas_run(self, _inputs, _workspace):

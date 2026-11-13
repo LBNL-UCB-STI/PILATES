@@ -102,28 +102,25 @@ def test_preprocessor_protocol_shape_forwards_previous_payload():
     assert result is previous_records
 
 
-def test_postprocessor_protocol_shape_forwards_model_run_hash():
+def test_postprocessor_protocol_shape_forwards_raw_outputs_and_workspace():
     raw_outputs = RecordStore()
     workspace = object()
     captured = {}
 
     class _Postprocessor:
-        def postprocess(self, raw_outputs_arg, workspace_arg, model_run_hash):
+        def postprocess(self, raw_outputs_arg, workspace_arg):
             captured["raw_outputs"] = raw_outputs_arg
             captured["workspace"] = workspace_arg
-            captured["model_run_hash"] = model_run_hash
             return raw_outputs_arg
 
     result = _Postprocessor().postprocess(
         raw_outputs,
         workspace,
-        model_run_hash="run-hash-123",
     )
 
     assert captured == {
         "raw_outputs": raw_outputs,
         "workspace": workspace,
-        "model_run_hash": "run-hash-123",
     }
     assert result is raw_outputs
 
@@ -181,30 +178,27 @@ def test_generic_preprocessor_defaults_previous_records_to_none():
     assert second is None
 
 
-def test_generic_postprocessor_sets_stage_and_forwards_model_run_hash():
+def test_generic_postprocessor_sets_stage_and_forwards_inputs():
     state = _StageTrackingState()
     raw_outputs = RecordStore()
     workspace = object()
     captured = {}
 
     class _GenericPostprocessor(GenericPostprocessor):
-        def _postprocess(self, raw_outputs_arg, workspace_arg, model_run_hash=None):
+        def _postprocess(self, raw_outputs_arg, workspace_arg):
             captured["raw_outputs"] = raw_outputs_arg
             captured["workspace"] = workspace_arg
-            captured["model_run_hash"] = model_run_hash
             return raw_outputs_arg
 
     postprocessor = _GenericPostprocessor("dummy", state)
     result = postprocessor.postprocess(
         raw_outputs,
         workspace,
-        model_run_hash="run-hash-456",
     )
 
     assert state.sub_stages == ["postprocessor"]
     assert captured == {
         "raw_outputs": raw_outputs,
         "workspace": workspace,
-        "model_run_hash": "run-hash-456",
     }
     assert result is raw_outputs
