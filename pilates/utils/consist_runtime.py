@@ -33,33 +33,17 @@ logger = logging.getLogger(__name__)
 
 import consist
 
-_enabled_override: Optional[bool] = None
 _tracker_hashing_strategy: str = "fast"
-
-
-def _is_enabled(enabled: Optional[bool] = None) -> bool:
-    if enabled is not None:
-        return bool(enabled)
-    if _enabled_override is not None:
-        return _enabled_override
-    return True
-
-
-def set_enabled(enabled: Optional[bool]) -> None:
-    global _enabled_override
-    _enabled_override = bool(enabled) if enabled is not None else None
 
 
 def create_tracker(
     *,
     settings: Optional[Any] = None,
-    enabled: Optional[bool] = None,
     tracker_factory: Optional[Callable[[], TrackerLike]] = None,
     **tracker_kwargs: Any,
 ) -> Optional[TrackerLike]:
     global _tracker_hashing_strategy
-    resolved_enabled = _is_enabled(enabled)
-    set_enabled(resolved_enabled)
+    tracker_kwargs.pop("enabled", None)
     if "hashing_strategy" not in tracker_kwargs:
         try:
             configured_strategy = settings.run.consist_hashing_strategy
@@ -71,22 +55,10 @@ def create_tracker(
     strategy = str(tracker_kwargs.get("hashing_strategy", "fast")).lower()
     _tracker_hashing_strategy = strategy if strategy in {"fast", "full"} else "fast"
 
-    if tracker_factory is None:
-        tracker_factory = lambda: consist.Tracker(**tracker_kwargs)
+    if tracker_factory is not None:
+        return tracker_factory()
 
-    tracker = consist.create_tracker(
-        enabled=resolved_enabled,
-        tracker_factory=tracker_factory,
-    )
-    if resolved_enabled and _is_noop_tracker(tracker):
-        logger.error(
-            "Consist tracker initialization returned %s while enabled=True. "
-            "PILATES requires an active tracker; check preceding Consist tracker "
-            "initialization errors for API/version mismatches.",
-            type(tracker).__name__,
-        )
-        return None
-    return tracker
+    return consist.Tracker(**tracker_kwargs)
 
 
 @contextmanager
@@ -99,15 +71,12 @@ def use_tracker(tracker: Optional[TrackerLike]) -> Iterator[Optional[TrackerLike
 def scenario(
     name: str,
     tracker: Optional[TrackerLike] = None,
-    *,
-    enabled: Optional[bool] = None,
     **kwargs: Any,
 ) -> Iterator[ScenarioWithCoupler]:
-    resolved_enabled = _is_enabled(enabled)
+    kwargs.pop("enabled", None)
     with consist.scenario(
         name,
         tracker=tracker,
-        enabled=resolved_enabled,
         **kwargs,
     ) as sc:
         # Narrow for callers: PILATES requires a coupler-capable scenario.
@@ -117,11 +86,9 @@ def scenario(
 def log_input(
     path: Any,
     key: Optional[str] = None,
-    *,
-    enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
-    resolved_enabled = _is_enabled(enabled)
+    meta.pop("enabled", None)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)
         if schema is not None:
@@ -129,10 +96,8 @@ def log_input(
     meta = _with_declared_schema_meta(meta)
     path = _normalize_path(path)
     meta = _maybe_fast_hash_h5(path, meta)
-    if not resolved_enabled:
-        return consist.log_input(path, key=key, enabled=False, **meta)
     try:
-        return consist.log_input(path, key=key, enabled=True, **meta)
+        return consist.log_input(path, key=key, **meta)
     except Exception as exc:
         return _retry_without_schema_meta(
             log_fn=consist.log_input,
@@ -148,27 +113,23 @@ def artifact_fingerprint(value: Any) -> Optional[str]:
     """
     Return Consist's canonical public artifact fingerprint when available.
 
-    Downstream workflow code should treat ``Artifact.hash`` as the only stable
+    Downstream workflow code should treat ``Artifact.digest`` as the only stable
     fingerprint surface. Missing fingerprints remain ``None``; callers should
     not probe legacy or wrapper-specific fields.
     """
-    try:
-        fingerprint = value.hash
-    except AttributeError:
-        return None
-    if not fingerprint:
-        return None
-    return str(fingerprint)
+    if isinstance(value, ArtifactLike):
+        digest = value.digest
+        if digest is not None:
+            return str(digest)
+    return None
 
 
 def log_output(
     path: Any,
     key: Optional[str] = None,
-    *,
-    enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
-    resolved_enabled = _is_enabled(enabled)
+    meta.pop("enabled", None)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)
         if schema is not None:
@@ -176,13 +137,8 @@ def log_output(
     meta = _with_declared_schema_meta(meta)
     path = _normalize_path(path)
     meta = _maybe_fast_hash_h5(path, meta)
-    if not resolved_enabled:
-        resolved_path = _resolve_artifact_path(path)
-        if resolved_path and not os.path.exists(resolved_path):
-            raise FileNotFoundError(f"Output path does not exist: {resolved_path}")
-        return consist.log_output(path, key=key, enabled=False, **meta)
     try:
-        return consist.log_output(path, key=key, enabled=True, **meta)
+        return consist.log_output(path, key=key, **meta)
     except Exception as exc:
         return _retry_without_schema_meta(
             log_fn=consist.log_output,
@@ -199,7 +155,6 @@ def log_h5_container(
     key: Optional[str] = None,
     *,
     direction: str = "input",
-    enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
     """
@@ -207,23 +162,17 @@ def log_h5_container(
 
     Falls back to log_input/log_output if no active Tracker is set.
     """
-    resolved_enabled = _is_enabled(enabled)
+    meta.pop("enabled", None)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)
         if schema is not None:
             meta = {**meta, "schema": schema}
     meta = _with_declared_schema_meta(meta)
-    if not resolved_enabled:
-        return (
-            log_output(path, key=key, enabled=False, **meta)
-            if direction == "output"
-            else log_input(path, key=key, enabled=False, **meta)
-        )
     tracker = current_tracker()
     if tracker is None:
         if direction == "output":
-            return log_output(path, key=key, enabled=resolved_enabled, **meta)
-        return log_input(path, key=key, enabled=resolved_enabled, **meta)
+            return log_output(path, key=key, **meta)
+        return log_input(path, key=key, **meta)
     with tracker.persistence.batch_artifact_writes():
         return tracker.log_h5_container(path, key=key, direction=direction, **meta)
 
@@ -234,7 +183,6 @@ def log_h5_table(
     *,
     table_path: str,
     direction: str = "input",
-    enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
     """
@@ -243,23 +191,17 @@ def log_h5_table(
     Requires table_path for schema profiling. Falls back to log_input/log_output
     if no active Tracker is set.
     """
-    resolved_enabled = _is_enabled(enabled)
+    meta.pop("enabled", None)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)
         if schema is not None:
             meta = {**meta, "schema": schema}
     meta = _with_declared_schema_meta(meta)
-    if not resolved_enabled:
-        return (
-            log_output(path, key=key, enabled=False, **meta)
-            if direction == "output"
-            else log_input(path, key=key, enabled=False, **meta)
-        )
     tracker = current_tracker()
     if tracker is None:
         if direction == "output":
-            return log_output(path, key=key, enabled=resolved_enabled, **meta)
-        return log_input(path, key=key, enabled=resolved_enabled, **meta)
+            return log_output(path, key=key, **meta)
+        return log_input(path, key=key, **meta)
     return tracker.log_h5_table(
         path, key=key, table_path=table_path, direction=direction, **meta
     )
@@ -267,21 +209,11 @@ def log_h5_table(
 
 def log_artifacts(
     mapping: Mapping[str, Any],
-    *,
-    enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[Dict[str, ArtifactLike]]:
-    resolved_enabled = _is_enabled(enabled)
+    meta.pop("enabled", None)
     normalized = {key: _normalize_path(value) for key, value in mapping.items()}
-    if not resolved_enabled:
-        return _log_artifacts_with_enabled(normalized, enabled=False, **meta)
-    return _log_artifacts_with_enabled(normalized, enabled=True, **meta)
-
-
-def _log_artifacts_with_enabled(
-    outputs: Mapping[str, Any], *, enabled: bool, **meta: Any
-) -> Optional[Dict[str, ArtifactLike]]:
-    return consist.log_artifacts(outputs=outputs, enabled=enabled, **meta)
+    return consist.log_artifacts(outputs=normalized, **meta)
 
 
 def _schema_for_key(key: str) -> Optional[Any]:
@@ -370,8 +302,6 @@ def _with_declared_schema_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def log_meta(**meta: Any) -> None:
-    if not _is_enabled():
-        return None
     return consist.log_meta(**meta)
 
 
@@ -381,16 +311,12 @@ def set_output_meta(
     *,
     merge: bool = True,
 ) -> None:
-    if not _is_enabled():
-        return None
     if current_run() is None:
         return None
     consist.set_output_meta(key, meta, merge=merge)
 
 
 def current_run() -> Optional[Any]:
-    if not _is_enabled():
-        return None
     try:
         return consist.current_run()
     except (AttributeError, RuntimeError):
@@ -422,15 +348,6 @@ def current_tracker() -> Optional[TrackerLike]:
         return consist.current_tracker()
     except (AttributeError, RuntimeError):
         return None
-
-
-def _is_noop_tracker(tracker: Optional[Any]) -> bool:
-    if tracker is None:
-        return False
-    tracker_type = type(tracker)
-    name = tracker_type.__name__.lower()
-    module = tracker_type.__module__.lower()
-    return "nooptracker" in name or ".noop" in module
 
 
 def require_runtime_kwargs(
@@ -482,15 +399,12 @@ def _resolve_artifact_path(value: Any) -> Optional[str]:
 
 
 def dispose_tracker(tracker: Optional[TrackerLike]) -> None:
-    """Safely dispose the underlying SQLAlchemy engine / DuckDB file handles."""
+    """Safely dispose the underlying tracker / database handles."""
     if tracker is None:
         return
     try:
-        dispose = tracker.db.engine.dispose  # type: ignore[attr-defined]
-    except AttributeError:
-        return
-    if callable(dispose):
-        try:
-            dispose()
-        except Exception:
-            logger.warning("Failed to dispose tracker database engine", exc_info=True)
+        tracker.close()
+    except (AttributeError, TypeError):
+        pass
+    except Exception:
+        logger.warning("Failed to close tracker database", exc_info=True)

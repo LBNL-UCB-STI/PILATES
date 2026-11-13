@@ -48,7 +48,7 @@ def _run(
 
 
 def _artifact(key: str) -> Artifact:
-    return Artifact(key=key, container_uri=f"./{key}.txt", driver="other")
+    return Artifact(key=key, uri=f"./{key}.txt", driver="other")
 
 
 class FakeBackend(RunNotificationBackend):

@@ -81,38 +81,34 @@ def test_vehicle_ownership_aliases_real_population_h5_container_with_children(
             self.values[key] = artifact
 
     coupler = _Coupler()
-    cr.set_enabled(True)
-    try:
-        with cr.use_tracker(tracker):
-            with tracker.start_run("atlas-h5-alias", model="atlas"):
-                logged = cr.log_h5_container(
-                    str(h5_path),
-                    key=USIM_POPULATION_SOURCE_H5,
-                    direction="output",
-                    description="ATLAS population source",
-                    container_recovery_unit="parent_file",
-                    child_recovery_policy="descriptive_only",
-                    child_specs={
-                        "/2023/households": H5ChildSpec(
-                            key="atlas_postprocess_usim_households_table_updated",
-                            description="ATLAS-updated households",
-                        )
-                    },
-                    child_selection="include_only",
-                )
-                container_artifact = logged[0] if isinstance(logged, tuple) else logged
-                set_coupler_from_artifact(
-                    coupler,
-                    USIM_POPULATION_SOURCE_H5,
-                    container_artifact,
-                    fallback=str(h5_path),
-                )
-                vehicle_ownership_stage._publish_current_h5_alias(
-                    coupler=coupler,
-                    fallback_path=h5_path,
-                )
-    finally:
-        cr.set_enabled(None)
+    with cr.use_tracker(tracker):
+        with tracker.start_run("atlas-h5-alias", model="atlas"):
+            logged = cr.log_h5_container(
+                str(h5_path),
+                key=USIM_POPULATION_SOURCE_H5,
+                direction="output",
+                description="ATLAS population source",
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
+                child_specs={
+                    "/2023/households": H5ChildSpec(
+                        key="atlas_postprocess_usim_households_table_updated",
+                        description="ATLAS-updated households",
+                    )
+                },
+                child_selection="include_only",
+            )
+            container_artifact = logged[0] if isinstance(logged, tuple) else logged
+            set_coupler_from_artifact(
+                coupler,
+                USIM_POPULATION_SOURCE_H5,
+                container_artifact,
+                fallback=str(h5_path),
+            )
+            vehicle_ownership_stage._publish_current_h5_alias(
+                coupler=coupler,
+                fallback_path=h5_path,
+            )
 
     population_source = coupler.get(USIM_POPULATION_SOURCE_H5)
     current = coupler.get(USIM_DATASTORE_CURRENT_H5)

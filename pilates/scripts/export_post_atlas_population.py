@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 import shutil
 import sys
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 import duckdb
 import pandas as pd
@@ -21,11 +21,28 @@ from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.database.schema.registry import get_schema_for_key
 from pilates.scripts.run_polaris_population_translation import run_translation
 from pilates.utils.consist_analysis import create_analysis_tracker
+from pilates.utils.consist_types import ArtifactLike
 from pilates.utils.provenance_report import write_provenance_report
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT, USIM_DATASTORE_H5
 from pilates.workflows.tracker_outputs import load_tracker_run_outputs
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _HasPath(Protocol):
+    path: Any
+
+
+@runtime_checkable
+class _HasFilePath(Protocol):
+    file_path: Any
+
+
+@runtime_checkable
+class _HasUri(Protocol):
+    uri: Any
+
 
 EXPORT_VERSION = "0.1"
 EXPORT_TYPE = "post_atlas_population_extract"
@@ -217,10 +234,21 @@ def _artifact_path(value: Any, tracker: Any) -> Optional[str]:
         return None
     if isinstance(value, (str, Path)):
         return str(value)
-    for attr in ("path", "file_path", "uri", "container_uri"):
-        candidate = getattr(value, attr, None)
-        if not candidate:
-            continue
+
+    candidates: list[Any] = []
+    if isinstance(value, ArtifactLike):
+        if value.path:
+            candidates.append(value.path)
+        if value.uri:
+            candidates.append(value.uri)
+    if isinstance(value, _HasPath) and value.path:
+        candidates.append(value.path)
+    if isinstance(value, _HasFilePath) and value.file_path:
+        candidates.append(value.file_path)
+    if isinstance(value, _HasUri) and value.uri:
+        candidates.append(value.uri)
+
+    for candidate in candidates:
         text = str(candidate)
         if "://" in text:
             try:
@@ -228,8 +256,9 @@ def _artifact_path(value: Any, tracker: Any) -> Optional[str]:
             except Exception:
                 continue
         return text
+
     if isinstance(value, Mapping):
-        for attr in ("path", "file_path", "uri", "container_uri"):
+        for attr in ("path", "file_path", "uri"):
             candidate = value.get(attr)
             if not candidate:
                 continue

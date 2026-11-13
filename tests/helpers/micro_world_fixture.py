@@ -89,19 +89,15 @@ class MicroWorldEnv:
         *,
         seed_coupler: bool = True,
     ) -> Iterator[ScenarioWithCoupler]:
-        cr.set_enabled(True)
-        try:
-            with cr.use_tracker(self.tracker):
-                with cr.scenario(
-                    name=name,
-                    tracker=self.tracker,
-                    model="test_orchestrator",
-                ) as sc:
-                    if seed_coupler:
-                        self.seed_scenario_coupler(sc)
-                    yield sc
-        finally:
-            cr.set_enabled(None)
+        with cr.use_tracker(self.tracker):
+            with cr.scenario(
+                name=name,
+                tracker=self.tracker,
+                model="test_orchestrator",
+            ) as sc:
+                if seed_coupler:
+                    self.seed_scenario_coupler(sc)
+                yield sc
 
     def seed_scenario_coupler(self, sc: ScenarioWithCoupler) -> None:
         """Seed initial tracked artifacts into the scenario coupler."""

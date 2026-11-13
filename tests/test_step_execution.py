@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 import shutil
@@ -66,7 +67,7 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     )
     archived_outputs = {
         "bundle": Artifact(
-            key="bundle", container_uri="workspace://archived/bundle", driver="other"
+            key="bundle", uri="workspace://archived/bundle", driver="other"
         )
     }
     run_result = RunResult(run=run, outputs=archived_outputs, cache_hit=cache_hit)
@@ -135,9 +136,7 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         git_hash=None,
     )
     outputs = {
-        "result": Artifact(
-            key="result", container_uri="workspace://result", driver="other"
-        )
+        "result": Artifact(key="result", uri="workspace://result", driver="other")
     }
     result = RunResult(run=run, outputs=outputs)
     seen: dict[str, object] = {}
@@ -200,7 +199,7 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
         outputs={
             "staging_root": Artifact(
                 key="staging_root",
-                container_uri="workspace://staging",
+                uri="workspace://staging",
                 driver="unknown",
             )
         },
@@ -268,7 +267,9 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
             config_hash=None,
             git_hash=None,
         ),
-        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+        outputs={
+            "result": Artifact(key="result", uri="workspace://result", driver="other")
+        },
     )
     seen: dict[str, object] = {}
     scenario = SimpleNamespace(
@@ -329,7 +330,9 @@ def test_execute_step_enable_archive_copy_false_authoritatively_disables_archiva
             config_hash=None,
             git_hash=None,
         ),
-        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+        outputs={
+            "result": Artifact(key="result", uri="workspace://result", driver="other")
+        },
     )
     seen: dict[str, object] = {}
     scenario = SimpleNamespace(
@@ -395,7 +398,7 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
     archived_outputs = {
         key: Artifact(
             key=key,
-            container_uri=f"workspace://archived/{forecast_h5.name}",
+            uri=f"workspace://archived/{forecast_h5.name}",
             driver="other",
         )
         for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
@@ -1208,9 +1211,17 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
 
     assert expected_archive_file.read_text(encoding="utf-8") == "v2-modified\n"
     expected_root = str(expected_archive_file.parent.parent.resolve())
-    assert expected_root in art_2.meta.get("recovery_roots", [])
+    art_2_roots = art_2.recovery_roots or (
+        art_2.meta.get("recovery_roots", []) if isinstance(art_2.meta, Mapping) else []
+    )
+    assert expected_root in art_2_roots
     refreshed_art_1 = tracker.get_run_outputs(str(art_1.run_id))["result"]
-    assert expected_root not in refreshed_art_1.meta.get("recovery_roots", [])
+    refreshed_roots = refreshed_art_1.recovery_roots or (
+        refreshed_art_1.meta.get("recovery_roots", [])
+        if isinstance(refreshed_art_1.meta, Mapping)
+        else []
+    )
+    assert expected_root not in refreshed_roots
 
 
 def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postprocess() -> (

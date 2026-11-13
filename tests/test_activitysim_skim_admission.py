@@ -203,11 +203,12 @@ def test_declared_logical_matrices_digest_verifies_despite_container_header_diff
     _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=3.14)
 
     logical_hex = compute_omx_logical_matrices_sha256(skims_path)
-    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+    legacy_logical_identity = f"sha256:logical_matrices:{logical_hex}"
+    canonical_logical_identity = f"logical_matrices_f32_v1:sha256:{logical_hex}"
 
     # Stamp logical_matrices_sha256 into OMX attrs (like full_skim_converter step 10)
     with h5py.File(skims_path, "a") as h5:
-        h5.attrs["logical_matrices_sha256"] = logical_identity
+        h5.attrs["logical_matrices_sha256"] = legacy_logical_identity
 
     # Write provenance sidecar capturing the stamped logical matrices identity
     sidecar_path, _ = write_skim_provenance_sidecar(
@@ -226,7 +227,7 @@ def test_declared_logical_matrices_digest_verifies_despite_container_header_diff
     policy = AdmissionPolicyConfig(
         mode="strict",
         expectation=DeclaredDigestExpectation(
-            identity=logical_identity,
+            identity=legacy_logical_identity,
             provenance_sidecar_path=str(sidecar_path),
         ),
     )
@@ -241,8 +242,8 @@ def test_declared_logical_matrices_digest_verifies_despite_container_header_diff
 
     assert report is not None
     assert report.outcome == "verified"
-    assert report.expected_artifact_id == logical_identity
-    assert report.observed_artifact_id == logical_identity
+    assert report.expected_artifact_id == canonical_logical_identity
+    assert report.observed_artifact_id == canonical_logical_identity
     assert "declared_digest_verified" in report.observations
 
 
@@ -256,7 +257,7 @@ def test_declared_logical_matrices_digest_rejects_on_data_matrix_change(
     _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=1.0)
 
     logical_hex = compute_omx_logical_matrices_sha256(skims_path)
-    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+    logical_identity = f"logical_matrices_f32_v1:sha256:{logical_hex}"
 
     # Mutate data matrix value
     with h5py.File(skims_path, "a") as h5:

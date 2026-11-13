@@ -13,7 +13,7 @@ def test_artifact_path_resolves_tracker_uri() -> None:
     tracker = SimpleNamespace(
         resolve_uri=lambda uri: uri.replace("workspace://", "/tmp/")
     )
-    artifact = SimpleNamespace(container_uri="workspace://atlas/vehicles2_2025.csv")
+    artifact = SimpleNamespace(uri="workspace://atlas/vehicles2_2025.csv")
     assert (
         export_script._artifact_path(artifact, tracker)
         == "/tmp/atlas/vehicles2_2025.csv"

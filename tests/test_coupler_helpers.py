@@ -52,10 +52,11 @@ class CouplerWithNamespaceView(CouplerWithSetFromArtifact):
 
 
 class HistoricalArtifact:
-    def __init__(self, *, container_uri: str, path: Path) -> None:
+    def __init__(self, *, uri: str, path: Path) -> None:
         self.id = "artifact-1"
         self.key = "households_asim_out"
-        self.container_uri = container_uri
+        self.uri = uri
+        self.digest = None
         self._path = path
 
     @property
@@ -132,7 +133,7 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
     rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
     expected_local = current_local / rel_path
     artifact = HistoricalArtifact(
-        container_uri=f"workspace://{rel_path}",
+        uri=f"workspace://{rel_path}",
         path=tmp_path / "historical-run" / rel_path,
     )
     materialized_calls = []
@@ -189,7 +190,6 @@ def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tr
     tmp_path: Path, monkeypatch
 ) -> None:
     from consist import Artifact
-    from consist.models.artifact import set_tracker_ref
 
     current_local = tmp_path / "run-current"
     current_local.mkdir()
@@ -222,12 +222,12 @@ def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tr
     tracker_stub = _TrackerStub()
     artifact = Artifact(
         key="events_parquet_2015_0",
-        container_uri="workspace://beam/output/0.events.parquet",
+        uri="workspace://beam/output/0.events.parquet",
         driver="parquet",
         run_id="beam_run_1",
         meta={},
     )
-    set_tracker_ref(artifact, tracker_stub)
+    artifact = artifact.with_resolver(tracker_stub)
 
     monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: None)
 

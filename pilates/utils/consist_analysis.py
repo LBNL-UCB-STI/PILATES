@@ -4,11 +4,52 @@ import hashlib
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Literal, Mapping, Optional, Sequence
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Literal,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 import numpy as np
 import pandas as pd
-from sqlmodel import Session, col, select, text
+from consist import ParameterizedSQL
+
+from pilates.utils.consist_types import ArtifactLike
+
+
+@runtime_checkable
+class _ExecutingDb(Protocol):
+    def execute(self, sql: str, parameters: Any = None) -> Any: ...
+
+
+@runtime_checkable
+class _QueryingRows(Protocol):
+    def query_rows(self, query: Any) -> list[Any]: ...
+
+
+@runtime_checkable
+class _TrackerWithDb(Protocol):
+    db: Any
+
+
+@runtime_checkable
+class _FindingArtifacts(Protocol):
+    def find_artifacts_by_params(self, **kwargs: Any) -> list[Any]: ...
+
+
+@runtime_checkable
+class _AnalysisArtifactLike(Protocol):
+    id: Any
+    key: Any
+    run_id: Any
+    meta: Any
+
 
 _PHYS_SIM_LINKSTATS_KEY = re.compile(
     r"^linkstats_unmodified_parquet__y(?P<year>\d+)__i(?P<iteration>\d+)"
@@ -55,7 +96,7 @@ def _sql_literal(value: Any) -> str:
 
 
 def _apply_duckdb_runtime_settings(
-    session: Session,
+    tracker: Any,
     *,
     duckdb_threads: Optional[int] = None,
     duckdb_memory_limit: Optional[str] = None,
@@ -65,19 +106,24 @@ def _apply_duckdb_runtime_settings(
     """
     Apply per-connection DuckDB runtime settings for heavy analysis queries.
     """
+    exec_db: _ExecutingDb | None = None
+    if isinstance(tracker, _TrackerWithDb) and isinstance(tracker.db, _ExecutingDb):
+        exec_db = tracker.db
+    elif isinstance(tracker, _ExecutingDb):
+        exec_db = tracker
+    if exec_db is None:
+        return
     if duckdb_threads is not None:
         threads = max(1, int(duckdb_threads))
-        session.exec(text(f"SET threads = {threads}"))
+        exec_db.execute(f"SET threads = {threads}")
     if duckdb_memory_limit:
-        session.exec(
-            text(f"SET memory_limit = {_sql_literal(str(duckdb_memory_limit))}")
-        )
+        exec_db.execute(f"SET memory_limit = {_sql_literal(str(duckdb_memory_limit))}")
     if duckdb_temp_directory:
         temp_dir = str(Path(duckdb_temp_directory).expanduser().resolve())
-        session.exec(text(f"SET temp_directory = {_sql_literal(temp_dir)}"))
+        exec_db.execute(f"SET temp_directory = {_sql_literal(temp_dir)}")
     if duckdb_preserve_insertion_order is not None:
         value = "true" if duckdb_preserve_insertion_order else "false"
-        session.exec(text(f"SET preserve_insertion_order = {value}"))
+        exec_db.execute(f"SET preserve_insertion_order = {value}")
 
 
 def _stable_linkstats_grouped_view_name(
@@ -289,16 +335,19 @@ def parse_linkstats_facets_from_key(key: str) -> Dict[str, Any]:
 
 
 def _decode_artifact_kv_value(row: Any) -> Any:
-    value_type = getattr(row, "value_type", None)
-    if value_type == "bool":
-        return getattr(row, "value_bool", None)
-    if value_type == "int":
-        value_num = getattr(row, "value_num", None)
-        return int(value_num) if value_num is not None else None
-    if value_type == "float":
-        return getattr(row, "value_num", None)
-    if value_type == "str":
-        return getattr(row, "value_str", None)
+    if isinstance(row, tuple):
+        # row: (artifact_id, key_path, value_type, value_str, value_num, value_bool, value_json)
+        value_type = row[2]
+        if value_type == "bool":
+            return row[5]
+        if value_type == "int":
+            return int(row[4]) if row[4] is not None else None
+        if value_type == "float":
+            return row[4]
+        if value_type == "str":
+            return row[3]
+        if value_type == "json":
+            return row[6]
     return None
 
 
@@ -329,23 +378,17 @@ def _facet_map_from_artifact_kv(
     """
     Load linkstats facet fields from artifact_kv with batched artifact_id queries.
     """
-    db = getattr(tracker, "db", None)
-    if db is None or not hasattr(db, "session_scope"):
+    if tracker is None:
         return {}
 
-    try:
-        from consist.models.artifact_kv import ArtifactKV
-    except Exception:
-        return {}
-
-    unique_ids: list[Any] = []
+    unique_ids: list[str] = []
     seen: set[str] = set()
     for artifact_id in artifact_ids:
         normalized = _normalize_artifact_id(artifact_id)
         if normalized is None or normalized in seen:
             continue
         seen.add(normalized)
-        unique_ids.append(artifact_id)
+        unique_ids.append(normalized)
 
     if not unique_ids:
         return {}
@@ -355,33 +398,53 @@ def _facet_map_from_artifact_kv(
     def _consume_rows(rows: list[Any]) -> set[str]:
         resolved_ids: set[str] = set()
         for row in rows:
-            normalized = _normalize_artifact_id(getattr(row, "artifact_id", None))
-            if normalized is None:
+            if isinstance(row, tuple):
+                art_id = str(row[0])
+                kp = str(row[1] or "")
+                val = _decode_artifact_kv_value(row)
+            else:
                 continue
-            key_path = str(getattr(row, "key_path", "") or "")
-            if key_path not in _LINKSTATS_FACET_KEYS:
+            if art_id is None or kp not in _LINKSTATS_FACET_KEYS:
                 continue
-            resolved_ids.add(normalized)
-            facet_map.setdefault(normalized, {})[key_path] = _decode_artifact_kv_value(
-                row
-            )
+            resolved_ids.add(art_id)
+            facet_map.setdefault(art_id, {})[kp] = val
         return resolved_ids
 
-    def _query_rows(artifact_ids_subset: list[Any], ns: Optional[str]) -> list[Any]:
-        if not artifact_ids_subset:
+    def _query_rows(ids_subset: list[str], ns: Optional[str]) -> list[Any]:
+        if not ids_subset:
             return []
         rows: list[Any] = []
-        for chunk in _chunked(artifact_ids_subset, 1000):
-            with db.session_scope() as session:
-                statement = select(ArtifactKV).where(
-                    col(ArtifactKV.artifact_id).in_(chunk)
-                )
+        query_fn = None
+        if isinstance(tracker, _QueryingRows):
+            query_fn = tracker.query_rows
+        elif isinstance(tracker, _TrackerWithDb) and isinstance(
+            tracker.db, _QueryingRows
+        ):
+            query_fn = tracker.db.query_rows
+        if query_fn is not None:
+            for chunk in _chunked(ids_subset, 1000):
                 if ns is not None:
-                    statement = statement.where(ArtifactKV.namespace == ns)
-                statement = statement.where(
-                    col(ArtifactKV.key_path).in_(_LINKSTATS_FACET_KEYS)
-                )
-                rows.extend(session.exec(statement).all())
+                    sql = """
+                    SELECT CAST(artifact_id AS VARCHAR), key_path, value_type, value_str, value_num, value_bool, value_json
+                    FROM artifact_kv
+                    WHERE CAST(artifact_id AS VARCHAR) IN (SELECT UNNEST(?))
+                      AND namespace = ?
+                      AND key_path IN (SELECT UNNEST(?))
+                    """
+                    params = [chunk, ns, list(_LINKSTATS_FACET_KEYS)]
+                else:
+                    sql = """
+                    SELECT CAST(artifact_id AS VARCHAR), key_path, value_type, value_str, value_num, value_bool, value_json
+                    FROM artifact_kv
+                    WHERE CAST(artifact_id AS VARCHAR) IN (SELECT UNNEST(?))
+                      AND key_path IN (SELECT UNNEST(?))
+                    """
+                    params = [chunk, list(_LINKSTATS_FACET_KEYS)]
+                try:
+                    batch = query_fn(ParameterizedSQL(sql, params=params))
+                    rows.extend(batch)
+                except Exception:
+                    pass
         return rows
 
     if namespace is None:
@@ -390,11 +453,7 @@ def _facet_map_from_artifact_kv(
 
     rows_for_namespace = _query_rows(unique_ids, namespace)
     resolved_in_namespace = _consume_rows(rows_for_namespace)
-    unresolved_ids = [
-        artifact_id
-        for artifact_id in unique_ids
-        if (_normalize_artifact_id(artifact_id) or "") not in resolved_in_namespace
-    ]
+    unresolved_ids = [aid for aid in unique_ids if aid not in resolved_in_namespace]
     if unresolved_ids:
         _consume_rows(_query_rows(unresolved_ids, None))
     return facet_map
@@ -407,12 +466,7 @@ def _parent_run_map(
     """
     Resolve run_id -> parent_run_id from Consist run table when available.
     """
-    db = getattr(tracker, "db", None)
-    if db is None or not hasattr(db, "session_scope"):
-        return {}
-    try:
-        from consist.models.run import Run
-    except Exception:
+    if tracker is None:
         return {}
 
     unique_ids: list[str] = []
@@ -429,17 +483,29 @@ def _parent_run_map(
         return {}
 
     mapping: Dict[str, Optional[str]] = {}
-    for chunk in _chunked(unique_ids, 1000):
-        with db.session_scope() as session:
-            statement = select(Run).where(col(Run.id).in_(chunk))
-            rows = session.exec(statement).all()
-        for row in rows:
-            row_id = str(getattr(row, "id", "") or "").strip()
-            if not row_id:
-                continue
-            parent = getattr(row, "parent_run_id", None)
-            parent_normalized = str(parent).strip() if parent is not None else None
-            mapping[row_id] = parent_normalized or None
+    query_fn = None
+    if isinstance(tracker, _QueryingRows):
+        query_fn = tracker.query_rows
+    elif isinstance(tracker, _TrackerWithDb) and isinstance(tracker.db, _QueryingRows):
+        query_fn = tracker.db.query_rows
+    if query_fn is not None:
+        for chunk in _chunked(unique_ids, 1000):
+            try:
+                sql = (
+                    'SELECT id, parent_run_id FROM "run" WHERE id IN (SELECT UNNEST(?))'
+                )
+                rows = query_fn(ParameterizedSQL(sql, params=[chunk]))
+                for row in rows:
+                    if isinstance(row, tuple):
+                        r_id = str(row[0] or "").strip()
+                        parent = row[1]
+                    else:
+                        continue
+                    if not r_id:
+                        continue
+                    mapping[r_id] = str(parent).strip() if parent is not None else None
+            except Exception:
+                pass
     return mapping
 
 
@@ -460,31 +526,29 @@ def _to_int_or_none(value: Any) -> Optional[int]:
         return None
 
 
+def _find_artifacts_by_key_prefix(
+    tracker: Any,
+    *,
+    key_prefix: str,
+    limit: int,
+) -> list[Any]:
+    if tracker is None:
+        return []
+    if isinstance(tracker, _FindingArtifacts):
+        try:
+            return tracker.find_artifacts_by_params(key_prefix=key_prefix, limit=limit)
+        except Exception:
+            pass
+    return []
+
+
 def _find_artifacts_by_key_prefix_sqlmodel(
     tracker: Any,
     *,
     key_prefix: str,
     limit: int,
 ) -> list[Any]:
-    """
-    Fallback artifact discovery using explicit SQLModel query syntax.
-    """
-    db = getattr(tracker, "db", None)
-    if db is None or not hasattr(db, "session_scope"):
-        return []
-    try:
-        from consist.models.artifact import Artifact
-    except Exception:
-        return []
-
-    with db.session_scope() as session:
-        statement = (
-            select(Artifact)
-            .where(col(Artifact.key).like(f"{key_prefix}%"))
-            .order_by(col(Artifact.created_at).desc())
-            .limit(limit)
-        )
-        return list(session.exec(statement).all())
+    return _find_artifacts_by_key_prefix(tracker, key_prefix=key_prefix, limit=limit)
 
 
 def find_linkstats_artifacts(
@@ -512,7 +576,7 @@ def find_linkstats_artifacts(
     )
     if not artifacts:
         # Fallback for runs where artifact facet indexing was absent/incomplete.
-        artifacts = _find_artifacts_by_key_prefix_sqlmodel(
+        artifacts = _find_artifacts_by_key_prefix(
             tracker, key_prefix="linkstats", limit=limit
         )
 
@@ -525,6 +589,7 @@ def find_linkstats_artifacts(
                 "parent_run_id",
                 "header_run_id",
                 "container_uri",
+                "uri",
                 "facet_source",
                 "artifact_family",
                 "year",
@@ -534,8 +599,18 @@ def find_linkstats_artifacts(
             ]
         )
 
-    artifact_ids = [getattr(artifact, "id", None) for artifact in artifacts]
-    run_ids = [getattr(artifact, "run_id", None) for artifact in artifacts]
+    artifact_ids = [
+        str(artifact.id)
+        if isinstance(artifact, _AnalysisArtifactLike) and artifact.id is not None
+        else None
+        for artifact in artifacts
+    ]
+    run_ids = [
+        str(artifact.run_id)
+        if isinstance(artifact, _AnalysisArtifactLike) and artifact.run_id is not None
+        else None
+        for artifact in artifacts
+    ]
     facet_map_from_kv = _facet_map_from_artifact_kv(
         tracker,
         artifact_ids,
@@ -545,9 +620,20 @@ def find_linkstats_artifacts(
 
     output_rows = []
     for artifact in artifacts:
-        key = str(getattr(artifact, "key", "") or "")
-        meta = dict(getattr(artifact, "meta", None) or {})
-        artifact_id = getattr(artifact, "id", None)
+        key = (
+            str(artifact.key or "")
+            if isinstance(artifact, _AnalysisArtifactLike) and artifact.key
+            else ""
+        )
+        if isinstance(artifact, _AnalysisArtifactLike) and isinstance(
+            artifact.meta, Mapping
+        ):
+            meta = dict(artifact.meta)
+        else:
+            meta = {}
+        artifact_id = (
+            artifact.id if isinstance(artifact, _AnalysisArtifactLike) else None
+        )
         normalized_artifact_id = _normalize_artifact_id(artifact_id)
 
         facet = {}
@@ -562,7 +648,7 @@ def find_linkstats_artifacts(
             facet.update(facet_from_kv)
             facet_source = "artifact_kv"
 
-        meta_facet = meta.get("facet") if isinstance(meta.get("facet"), dict) else {}
+        meta_facet = meta.get("facet") if isinstance(meta.get("facet"), Mapping) else {}
         if meta_facet:
             facet_from_meta = _filter_linkstats_facet(meta_facet)
             if facet_from_meta:
@@ -589,18 +675,17 @@ def find_linkstats_artifacts(
         ):
             continue
 
+        art_run_id = artifact.run_id if isinstance(artifact, ArtifactLike) else None
+        art_uri = artifact.uri if isinstance(artifact, ArtifactLike) else None
         output_rows.append(
             {
                 "key": key,
                 "artifact_id": str(artifact_id or ""),
-                "run_id": getattr(artifact, "run_id", None),
-                "parent_run_id": parent_map.get(
-                    str(getattr(artifact, "run_id", "") or "").strip()
-                ),
-                "header_run_id": parent_map.get(
-                    str(getattr(artifact, "run_id", "") or "").strip()
-                ),
-                "container_uri": getattr(artifact, "container_uri", None),
+                "run_id": art_run_id,
+                "parent_run_id": parent_map.get(str(art_run_id or "").strip()),
+                "header_run_id": parent_map.get(str(art_run_id or "").strip()),
+                "container_uri": art_uri,
+                "uri": art_uri,
                 "facet_source": facet_source,
                 "artifact_family": facet.get("artifact_family"),
                 "year": facet.get("year"),
@@ -874,25 +959,7 @@ def _summarize_linkstats_grouped_view(
             """
     query += "\nGROUP BY 1"
 
-    with Session(tracker.engine) as session:
-        rows = session.exec(text(query)).all()
-
-    frame = pd.DataFrame(
-        rows,
-        columns=[
-            "artifact_id",
-            "row_count",
-            "distinct_links",
-            "volume_sum",
-            "vmt_miles",
-            "vht_hours",
-            "total_delay_hours",
-            "vmt_per_vht_mph",
-            "vht_per_vmt_hours_per_mile",
-            "traveltime_mean",
-            "traveltime_p95",
-        ],
-    )
+    frame = tracker.query_df(query)
     if frame.empty:
         return frame
     frame["artifact_id"] = frame["artifact_id"].astype(str)
@@ -931,18 +998,34 @@ def _summarize_linkstats_metric_deltas_from_summary(
     metric_alias_prev = f"{metric_prefix}_previous"
     metric_alias_curr = f"{metric_prefix}_current"
 
+    cols = [
+        "year",
+        "iteration",
+        "beam_sub_iteration",
+        "phys_sim_iteration",
+        "artifact_id",
+        "key",
+    ]
+    subset_df = summary_df.reindex(columns=cols)
     rows_sql: list[str] = []
-    for row in summary_df.itertuples(index=False):
+    for (
+        row_year,
+        row_iter,
+        row_beam_sub,
+        row_phys_sim,
+        row_art_id,
+        row_key,
+    ) in subset_df.itertuples(index=False, name=None):
         rows_sql.append(
             "("
             + ", ".join(
                 [
-                    _sql_literal(getattr(row, "year", None)),
-                    _sql_literal(getattr(row, "iteration", None)),
-                    _sql_literal(getattr(row, "beam_sub_iteration", None)),
-                    _sql_literal(getattr(row, "phys_sim_iteration", None)),
-                    _sql_literal(str(getattr(row, "artifact_id", "") or "")),
-                    _sql_literal(getattr(row, "key", None)),
+                    _sql_literal(row_year),
+                    _sql_literal(row_iter),
+                    _sql_literal(row_beam_sub),
+                    _sql_literal(row_phys_sim),
+                    _sql_literal(str(row_art_id or "")),
+                    _sql_literal(row_key),
                 ]
             )
             + ")"
@@ -952,8 +1035,7 @@ def _summarize_linkstats_metric_deltas_from_summary(
         return pd.DataFrame()
 
     quoted_view = _quote_ident(view_name)
-    query = text(
-        f"""
+    query = f"""
         WITH summary_input(
             year,
             iteration,
@@ -1096,27 +1178,7 @@ def _summarize_linkstats_metric_deltas_from_summary(
         GROUP BY 1,2,3,4,5,6,7,8,9
         ORDER BY year, iteration, beam_sub_iteration, phys_sim_iteration_curr
         """
-    )
-    with Session(tracker.engine) as session:
-        result_rows = session.exec(query).all()
-
-    frame = pd.DataFrame(
-        result_rows,
-        columns=[
-            "year",
-            "iteration",
-            "beam_sub_iteration",
-            "phys_sim_iteration_prev",
-            "phys_sim_iteration_curr",
-            "artifact_id_prev",
-            "artifact_id_curr",
-            "key_prev",
-            "key_curr",
-            "group_count",
-            f"{metric_prefix}_delta_mean",
-            f"{metric_prefix}_delta_abs_mean",
-        ],
-    )
+    frame = tracker.query_df(query)
     if frame.empty:
         return frame
     for column in (
@@ -1190,18 +1252,34 @@ def _summarize_linkstats_traveltime_deltas_hourly_weighted_from_summary(
     if summary_df.empty:
         return pd.DataFrame()
 
+    cols = [
+        "year",
+        "iteration",
+        "beam_sub_iteration",
+        "phys_sim_iteration",
+        "artifact_id",
+        "key",
+    ]
+    subset_df = summary_df.reindex(columns=cols)
     rows_sql: list[str] = []
-    for row in summary_df.itertuples(index=False):
+    for (
+        row_year,
+        row_iter,
+        row_beam_sub,
+        row_phys_sim,
+        row_art_id,
+        row_key,
+    ) in subset_df.itertuples(index=False, name=None):
         rows_sql.append(
             "("
             + ", ".join(
                 [
-                    _sql_literal(getattr(row, "year", None)),
-                    _sql_literal(getattr(row, "iteration", None)),
-                    _sql_literal(getattr(row, "beam_sub_iteration", None)),
-                    _sql_literal(getattr(row, "phys_sim_iteration", None)),
-                    _sql_literal(str(getattr(row, "artifact_id", "") or "")),
-                    _sql_literal(getattr(row, "key", None)),
+                    _sql_literal(row_year),
+                    _sql_literal(row_iter),
+                    _sql_literal(row_beam_sub),
+                    _sql_literal(row_phys_sim),
+                    _sql_literal(str(row_art_id or "")),
+                    _sql_literal(row_key),
                 ]
             )
             + ")"
@@ -1211,8 +1289,7 @@ def _summarize_linkstats_traveltime_deltas_hourly_weighted_from_summary(
 
     volume_filter = "AND volume > 0" if exclude_zero_volume else ""
     quoted_view = _quote_ident(view_name)
-    query = text(
-        f"""
+    query = f"""
         WITH summary_input(
             year,
             iteration,
@@ -1380,29 +1457,7 @@ def _summarize_linkstats_traveltime_deltas_hourly_weighted_from_summary(
         GROUP BY 1,2,3,4,5,6,7,8,9
         ORDER BY year, iteration, beam_sub_iteration, phys_sim_iteration_curr
         """
-    )
-    with Session(tracker.engine) as session:
-        result_rows = session.exec(query).all()
-
-    frame = pd.DataFrame(
-        result_rows,
-        columns=[
-            "year",
-            "iteration",
-            "beam_sub_iteration",
-            "phys_sim_iteration_prev",
-            "phys_sim_iteration_curr",
-            "artifact_id_prev",
-            "artifact_id_curr",
-            "key_prev",
-            "key_curr",
-            "hour_count",
-            "prev_volume_total",
-            "curr_volume_total",
-            "traveltime_delta_mean",
-            "traveltime_delta_abs_mean",
-        ],
-    )
+    frame = tracker.query_df(query)
     if frame.empty:
         return frame
     for column in (
@@ -1826,7 +1881,7 @@ def build_linkstats_hourly_pca_matrix(
             SELECT
                 MIN(cumulative_volume) AS cutoff_volume
             FROM ranked_links
-            WHERE cumulative_volume >= :volume_coverage * total_volume
+            WHERE cumulative_volume >= ? * total_volume
         ),
         selected_links AS (
             SELECT
@@ -1845,35 +1900,27 @@ def build_linkstats_hourly_pca_matrix(
         )
     """
 
-    params = {"volume_coverage": float(volume_coverage)}
-    with Session(tracker.engine) as session:
-        _apply_duckdb_runtime_settings(
-            session,
-            duckdb_threads=duckdb_threads,
-            duckdb_memory_limit=duckdb_memory_limit,
-            duckdb_temp_directory=duckdb_temp_directory,
-            duckdb_preserve_insertion_order=duckdb_preserve_insertion_order,
-        )
-        link_rows = session.exec(
-            text(
-                common_cte
-                + """
-                SELECT
-                    link_index,
-                    link,
-                    daily_volume,
-                    cumulative_share
-                FROM selected_links
-                ORDER BY link_index
-                """
-            ),
-            params=params,
-        ).all()
-
-    link_index_df = pd.DataFrame(
-        link_rows,
-        columns=["link_index", "link", "daily_volume", "cumulative_share"],
+    _apply_duckdb_runtime_settings(
+        tracker,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_preserve_insertion_order=duckdb_preserve_insertion_order,
     )
+    link_query = ParameterizedSQL(
+        common_cte
+        + """
+        SELECT
+            link_index,
+            link,
+            daily_volume,
+            cumulative_share
+        FROM selected_links
+        ORDER BY link_index
+        """,
+        params=[float(volume_coverage)],
+    )
+    link_index_df = tracker.query_df(link_query)
     if link_index_df.empty:
         empty_matrix = np.full(
             (len(artifact_index_df), 0),
@@ -1909,7 +1956,7 @@ def build_linkstats_hourly_pca_matrix(
     hour_bin_expr = (
         f"CAST(FLOOR(CAST(src.hour AS DOUBLE) / {int(hour_group_size)}) AS BIGINT)"
     )
-    matrix_query = text(
+    matrix_query = (
         common_cte
         + f"""
         , hourly_values AS (
@@ -1937,19 +1984,15 @@ def build_linkstats_hourly_pca_matrix(
         FROM hourly_values
         """
     )
-    with Session(tracker.engine) as session:
-        _apply_duckdb_runtime_settings(
-            session,
-            duckdb_threads=duckdb_threads,
-            duckdb_memory_limit=duckdb_memory_limit,
-            duckdb_temp_directory=duckdb_temp_directory,
-            duckdb_preserve_insertion_order=duckdb_preserve_insertion_order,
-        )
-        matrix_rows = session.exec(matrix_query, params=params).all()
-
-    matrix_long_df = pd.DataFrame(
-        matrix_rows,
-        columns=["observation_index", "link_index", "hour_bin", "metric_value"],
+    _apply_duckdb_runtime_settings(
+        tracker,
+        duckdb_threads=duckdb_threads,
+        duckdb_memory_limit=duckdb_memory_limit,
+        duckdb_temp_directory=duckdb_temp_directory,
+        duckdb_preserve_insertion_order=duckdb_preserve_insertion_order,
+    )
+    matrix_long_df = tracker.query_df(
+        ParameterizedSQL(matrix_query, params=[float(volume_coverage)])
     )
     n_observations = int(len(artifact_index_df))
     n_links = int(len(link_index_df))

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import consist
+from consist import digest_file
+from consist.core.persistence import DatabaseManager
 
 from pilates.beam.skim_provenance import (
     compute_omx_logical_matrices_sha256,
@@ -24,9 +26,11 @@ from pilates.config.models import (
 )
 from pilates.utils.admission_helpers import (
     AdmissionMetadataLogger,
+    parse_expected_file_digest,
     persist_admission_report,
     resolve_local_source_uri,
 )
+from pilates.utils.consist_types import TrackerLike
 
 
 logger = logging.getLogger(__name__)
@@ -102,7 +106,7 @@ def _check_declared_logical_matrices_expectation(
     if observed_logical_identity is None:
         try:
             observed_hex = compute_omx_logical_matrices_sha256(execution_path)
-            observed_logical_identity = f"sha256:logical_matrices:{observed_hex}"
+            observed_logical_identity = f"logical_matrices_f32_v1:sha256:{observed_hex}"
         except Exception as exc:
             report = consist.admission.AdmissionReport(
                 outcome="unreadable",
@@ -121,8 +125,17 @@ def _check_declared_logical_matrices_expectation(
                 reason=f"Could not compute logical matrices SHA-256 for {execution_path}: {exc}",
             )
             return report, None
+    else:
+        observed_logical_identity = normalize_logical_matrices_identity(
+            observed_logical_identity
+        )
 
-    if observed_logical_identity == expectation.identity:
+    expected_logical_identity = (
+        normalize_logical_matrices_identity(expectation.identity)
+        or expectation.identity
+    )
+
+    if observed_logical_identity == expected_logical_identity:
         outcome: consist.AdmissionOutcome = "verified"
         obs = ("declared_digest_verified",)
         reason = (
@@ -147,7 +160,7 @@ def _check_declared_logical_matrices_expectation(
         expected_source="declared_digest",
         expected_source_label=expectation.source_label,
         expected_source_uri=expectation.source_uri,
-        expected_artifact_id=expectation.identity,
+        expected_artifact_id=expected_logical_identity,
         observed_artifact_id=observed_logical_identity,
         digest_algorithm="sha256",
         observations=obs,
@@ -192,7 +205,7 @@ def _check_declared_logical_matrices_expectation(
     sidecar_identity = sidecar_payload.get("identity")
 
     if norm_sidecar_logical is not None:
-        if norm_sidecar_logical != expectation.identity or (
+        if norm_sidecar_logical != expected_logical_identity or (
             report.outcome == "verified"
             and report.observed_artifact_id is not None
             and norm_sidecar_logical != report.observed_artifact_id
@@ -240,7 +253,9 @@ def _check_declared_digest_expectation(
     expectation: DeclaredDigestExpectation,
 ) -> tuple[consist.admission.AdmissionReport, dict[str, Any] | None]:
     """Evaluate a DeclaredDigestExpectation and optional provenance sidecar."""
-    if expectation.identity.startswith("sha256:logical_matrices:"):
+    if expectation.identity.startswith(
+        "sha256:logical_matrices:"
+    ) or expectation.identity.startswith("logical_matrices_"):
         return _check_declared_logical_matrices_expectation(
             execution_path=execution_path,
             expectation=expectation,
@@ -253,7 +268,7 @@ def _check_declared_digest_expectation(
     report = consist.admission.check_admission_reference_expected_identity(
         reference=reference,
         expectation=consist.admission.DeclaredDigestExpectation(
-            identity=consist.admission.FileIdentity.parse(expectation.identity),
+            identity=parse_expected_file_digest(expectation.identity),
             source_label=expectation.source_label,
             source_uri=expectation.source_uri,
         ),
@@ -441,6 +456,78 @@ def preflight_activitysim_initial_skims_admission(
             reference=reference,
             expectation=consist_exp,
         )
+        if (
+            report.outcome == "unverified"
+            and "expected_artifact_unverifiable" in report.observations
+        ):
+            source_db_file = (
+                Path(expectation.source_tracker_db).expanduser()
+                if expectation.source_tracker_db is not None
+                else None
+            )
+            owns_db = False
+            db: DatabaseManager | None = None
+            if source_db_file is not None:
+                try:
+                    db = DatabaseManager(
+                        str(source_db_file), skip_schema_init=True, read_only=True
+                    )
+                    owns_db = True
+                except Exception:
+                    db = None
+            elif isinstance(tracker, TrackerLike) and tracker.db is not None:
+                db = tracker.db
+
+            if db is not None:
+                try:
+                    matches = db.find_linked_artifacts_exact(
+                        run_id=expectation.expected_run_id,
+                        key=expectation.artifact_key,
+                        direction=(
+                            expectation.direction
+                            if expectation.direction in ("input", "output")
+                            else None
+                        ),
+                    )
+                    if len(matches) == 1:
+                        matched_artifact = matches[0]
+                        adm_id = matched_artifact.meta.get("admission_file_identity")
+                        if isinstance(adm_id, str):
+                            try:
+                                exp_file_dig = parse_expected_file_digest(adm_id)
+                            except ValueError:
+                                exp_file_dig = None
+                            if exp_file_dig is not None and execution_path.is_file():
+                                obs_file_dig = digest_file(execution_path)
+                                is_match = str(obs_file_dig) == str(exp_file_dig)
+                                report = report.model_copy(
+                                    update={
+                                        "outcome": "verified"
+                                        if is_match
+                                        else "mismatched",
+                                        "expected_source": "prior_run",
+                                        "expected_artifact_id": str(exp_file_dig),
+                                        "observed_artifact_id": str(obs_file_dig),
+                                        "observations": (
+                                            ("prior_run_verified",)
+                                            if is_match
+                                            else ("prior_run_mismatched",)
+                                        ),
+                                        "reason": (
+                                            f"Execution path {execution_path} digest matches "
+                                            f"prior-run {expectation.expected_run_id} admission identity."
+                                            if is_match
+                                            else (
+                                                f"Execution path {execution_path} digest {obs_file_dig} "
+                                                f"does not match prior-run {expectation.expected_run_id} "
+                                                f"admission identity {exp_file_dig}."
+                                            )
+                                        ),
+                                    }
+                                )
+                finally:
+                    if owns_db and db is not None:
+                        db.close()
         default_sidecar = skim_provenance_sidecar_path(execution_path)
         if default_sidecar.is_file():
             try:

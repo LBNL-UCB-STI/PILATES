@@ -539,14 +539,7 @@ class Archive:
             abs_path = Path(raw_abs_path).expanduser()
             if abs_path.exists():
                 return abs_path.resolve()
-        try:
-            uri_value = artifact.uri
-        except AttributeError:
-            try:
-                uri_value = artifact.container_uri
-            except AttributeError:
-                uri_value = None
-        uri = str(uri_value or "")
+        uri = str(artifact.uri or "")
         if uri.startswith("workspace://"):
             relative = uri.removeprefix("workspace://").lstrip("/")
             source = self.persistent_archive_run_dir / relative
@@ -555,14 +548,7 @@ class Archive:
         raise FileNotFoundError(f"Could not resolve artifact path for {artifact.key}.")
 
     def _artifact_local_path(self, artifact: Any, *, source: Path) -> Path:
-        try:
-            uri_value = artifact.uri
-        except AttributeError:
-            try:
-                uri_value = artifact.container_uri
-            except AttributeError:
-                uri_value = None
-        uri = str(uri_value or "")
+        uri = str(artifact.uri or "")
         if uri.startswith("workspace://"):
             relative = uri.removeprefix("workspace://").lstrip("/")
             return self.archive_run_dir / relative

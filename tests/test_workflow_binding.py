@@ -6,8 +6,7 @@ from types import SimpleNamespace
 import h5py
 import pandas as pd
 import pytest
-from consist import AdmissionEvidence, ResolvedBinding, Tracker, define_step
-from consist.core.resolved_binding import ArtifactIdentity
+from consist import AdmissionEvidence, Digest, ResolvedBinding, Tracker, define_step
 
 from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows import binding
@@ -202,7 +201,7 @@ def test_build_resolved_binding_rejects_admission_identity_mismatch(
             step_identity=_step_identity("consume"),
             admission_evidence={
                 "payload": AdmissionEvidence(
-                    observed_identity=ArtifactIdentity.parse("sha256:file:" + "0" * 64),
+                    observed_identity=Digest.parse("sha256:file:" + "0" * 64),
                     expected_identity=None,
                     expected_source=None,
                 )

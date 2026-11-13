@@ -34,9 +34,8 @@ def test_consist_h5_table_schema_profile(tmp_path):
         )
 
     assert artifact is not None
-    # table_path is stored as a direct attribute on the artifact
-    assert getattr(artifact, "table_path", None) == "persons"
-    meta = getattr(artifact, "meta", {}) or {}
+    assert artifact.member == "persons"
+    meta = artifact.meta or {}
     # Schema profiling may be disabled or not supported for h5_table in some builds.
     if meta.get("schema_id") is None or meta.get("schema_summary") is None:
         pytest.skip("H5 table schema profiling not available in this Consist build")

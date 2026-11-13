@@ -16,6 +16,7 @@ from pilates.urbansim.preprocessor import (
 )
 from pilates.utils.admission_helpers import (
     AdmissionMetadataLogger,
+    parse_expected_file_digest,
     persist_admission_report,
     resolve_local_source_uri,
 )
@@ -84,7 +85,7 @@ def preflight_bootstrap_urbansim_datastore_admission(
             execution_path=execution_path,
         ),
         expectation=consist.admission.DeclaredDigestExpectation(
-            identity=consist.admission.FileIdentity.parse(expectation.identity),
+            identity=parse_expected_file_digest(expectation.identity),
             source_label=expectation.source_label,
             source_uri=expectation.source_uri,
         ),

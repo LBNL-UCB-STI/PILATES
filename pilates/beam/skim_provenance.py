@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from consist.admission import admission_file_identity
+from consist import digest_file
 from consist.digest import (
     FLOAT32_MATRICES_V1_POLICY,
     compute_omx_logical_matrices_sha256 as _consist_compute_omx_logical_matrices_sha256,
@@ -35,7 +35,7 @@ def skim_provenance_sidecar_path(skim_path: Path | str) -> Path:
 
 
 def normalize_logical_matrices_identity(raw_val: str | None) -> str | None:
-    """Normalize a logical matrices identity string to 'sha256:logical_matrices:<64hex>'."""
+    """Normalize a logical matrices identity string to canonical Consist form."""
     if raw_val is None:
         return None
     val = raw_val.strip()
@@ -45,7 +45,9 @@ def normalize_logical_matrices_identity(raw_val: str | None) -> str | None:
         else val
     )
     try:
-        return _consist_normalize_logical_matrices_identity(candidate)
+        return _consist_normalize_logical_matrices_identity(
+            candidate, policy=FLOAT32_MATRICES_V1_POLICY
+        )
     except ValueError:
         return val
 
@@ -314,7 +316,7 @@ def inspect_skim_artifact(path: Path | str) -> dict[str, Any]:
         details = _inspect_zarr_artifact(p)
     elif p.name.lower().endswith(".csv.gz"):
         skim_format = "csv_gz"
-        identity_digest = str(admission_file_identity(p))
+        identity_digest = str(digest_file(p))
         size_bytes = p.stat().st_size
         details = {
             "data_model_version": None,
@@ -330,7 +332,7 @@ def inspect_skim_artifact(path: Path | str) -> dict[str, Any]:
         }
     else:
         skim_format = "omx"
-        identity_digest = str(admission_file_identity(p))
+        identity_digest = str(digest_file(p))
         size_bytes = p.stat().st_size
         details = _inspect_omx_artifact(p)
 

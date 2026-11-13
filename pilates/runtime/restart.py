@@ -269,9 +269,7 @@ def _resolve_restart_before_step_ordinal(
 
     if not isinstance(state, WorkflowState):
         return None
-    from consist import Tracker
-    from consist.models.run import Run, RunCouplerSnapshot
-    from sqlmodel import col, select
+    from consist import ParameterizedSQL, Tracker
 
     if not isinstance(tracker, Tracker) or tracker.db is None:
         return None
@@ -282,20 +280,20 @@ def _resolve_restart_before_step_ordinal(
     major_stage = state.current_major_stage
 
     try:
-        with tracker.db.session_scope() as session:
-            rows = session.exec(
-                select(
-                    RunCouplerSnapshot.step_ordinal,
-                    Run.stage,
-                    Run.year,
-                    Run.iteration,
-                )
-                .join(Run, col(RunCouplerSnapshot.run_id) == col(Run.id))
-                .where(
-                    col(RunCouplerSnapshot.scenario_run_id) == scenario_run_id,
-                    col(RunCouplerSnapshot.phase) == "post",
-                )
-            ).all()
+        query = ParameterizedSQL(
+            """
+            SELECT
+                s.step_ordinal,
+                r.stage,
+                r.year,
+                r.iteration
+            FROM run_coupler_snapshot s
+            JOIN "run" r ON s.run_id = r.id
+            WHERE s.scenario_run_id = ? AND s.phase = 'post'
+            """,
+            params=[scenario_run_id],
+        )
+        rows = tracker.query_rows(query)
     except Exception:
         return None
 

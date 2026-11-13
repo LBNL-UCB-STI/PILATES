@@ -148,9 +148,7 @@ def test_register_verified_recovery_copies_uses_consist_registration_api(tmp_pat
         def get_run_outputs(self, run_id):
             assert run_id == "run-1"
             return {
-                "demo_output": SimpleNamespace(
-                    container_uri="workspace://outputs/result.txt"
-                )
+                "demo_output": SimpleNamespace(uri="workspace://outputs/result.txt")
             }
 
         def register_run_output_recovery_copies(self, run_id, recovery_root, **kwargs):
@@ -196,9 +194,7 @@ def test_register_verified_recovery_copies_can_skip_hash_verification(
         def get_run_outputs(self, run_id):
             assert run_id == "run-1"
             return {
-                "demo_output": SimpleNamespace(
-                    container_uri="workspace://outputs/result.txt"
-                )
+                "demo_output": SimpleNamespace(uri="workspace://outputs/result.txt")
             }
 
         def register_run_output_recovery_copies(self, run_id, recovery_root, **kwargs):
@@ -275,7 +271,7 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
                 str(promoted.resolve())
             ]
         finally:
-            promoted_tracker.db.engine.dispose()
+            promoted_tracker.close()
 
         output_path.unlink()
         hydrated = tracker.hydrate_run_outputs(
@@ -296,7 +292,7 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
         assert marker["roots"][0]["status"] == "promoted"
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_can_skip_recovery_copy_verification(
@@ -332,7 +328,7 @@ def test_promote_run_to_recovery_roots_can_skip_recovery_copy_verification(
         assert calls == [False]
         assert result.roots[0].artifact_metadata_updated is True
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
@@ -354,7 +350,7 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
             content="old-result-data",
         )
     finally:
-        main_tracker.db.engine.dispose()
+        main_tracker.close()
 
     run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -412,9 +408,9 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
                 assert old_run_id in merged_run_ids
                 assert new_run_id in merged_run_ids
             finally:
-                merged_tracker.db.engine.dispose()
+                merged_tracker.close()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
@@ -506,7 +502,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
         assert snapshot_history_file.exists()
         assert snapshot_latest_file.exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_direct_copy_missing(
@@ -531,7 +527,7 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
             content="old-result-data",
         )
     finally:
-        main_tracker.db.engine.dispose()
+        main_tracker.close()
 
     run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -554,7 +550,7 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
     if source_wal.exists():
         shutil.copy2(source_wal, Path(f"{snapshot_db}.wal"))
 
-    tracker.db.engine.dispose()
+    tracker.close()
     source_db.unlink()
     source_wal.unlink(missing_ok=True)
 
@@ -579,7 +575,7 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
             promoted / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
         ).exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_seeds_missing_main_db_from_shard(tmp_path):
@@ -637,9 +633,9 @@ def test_promote_run_to_recovery_roots_seeds_missing_main_db_from_shard(tmp_path
             }
             assert new_run_id in merged_run_ids
         finally:
-            merged_tracker.db.engine.dispose()
+            merged_tracker.close()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
@@ -664,7 +660,7 @@ def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
             content="old-result-data",
         )
     finally:
-        main_tracker.db.engine.dispose()
+        main_tracker.close()
 
     run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -714,7 +710,7 @@ def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
         assert promoted.exists()
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
@@ -764,7 +760,7 @@ def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
         assert not shard_path.exists()
         assert not Path(f"{shard_path}.wal").exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_is_idempotent(tmp_path):
@@ -794,7 +790,7 @@ def test_promote_run_to_recovery_roots_is_idempotent(tmp_path):
             str((recovery_root / run_dir.name).resolve())
         ]
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_handles_partial_failure(tmp_path):
@@ -827,4 +823,4 @@ def test_promote_run_to_recovery_roots_handles_partial_failure(tmp_path):
             str((good_root / run_dir.name).resolve())
         ]
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()

@@ -601,7 +601,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
         _write_file(path)
     activitysim_projected = activitysim_preprocess.project_outputs(
         {
-            key: SimpleNamespace(container_uri=f"archive://prior/{path.name}")
+            key: SimpleNamespace(uri=f"archive://prior/{path.name}")
             for key, path in activitysim_outputs.items()
         },
         settings=settings,
@@ -628,7 +628,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
     urbansim_datastore = _path(urbansim_paths[USIM_DATASTORE_H5])
     _write_file(urbansim_datastore)
     urbansim_projected = urbansim_run.project_outputs(
-        {USIM_DATASTORE_H5: SimpleNamespace(container_uri="archive://prior/store.h5")},
+        {USIM_DATASTORE_H5: SimpleNamespace(uri="archive://prior/store.h5")},
         settings=settings,
         state=state,
         workspace=workspace,
@@ -652,7 +652,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
     _write_file(atlas_vehicles)
     atlas_projected = atlas_postprocess.project_outputs(
         {
-            key: SimpleNamespace(container_uri=f"archive://prior/{key}")
+            key: SimpleNamespace(uri=f"archive://prior/{key}")
             for key in (
                 USIM_POPULATION_SOURCE_H5,
                 ATLAS_VEHICLES2_OUTPUT,
@@ -716,7 +716,7 @@ def test_beam_postprocess_dynamic_output_map_is_resolved_once_for_contract_and_p
 
     projected = beam_postprocess.project_outputs(
         {
-            key: SimpleNamespace(container_uri=f"archive://prior/{_path(path).name}")
+            key: SimpleNamespace(uri=f"archive://prior/{_path(path).name}")
             for key, path in dynamic_paths.items()
         },
         settings=settings,

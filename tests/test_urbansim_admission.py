@@ -148,12 +148,10 @@ def test_admitted_datastore_logging_persists_trusted_identity_only_with_full_has
     persisted = reloaded.get_run_inputs(run_id)[_ROLE]
 
     if expected_trusted_identity:
-        assert (
-            str(consist.ArtifactIdentity.from_artifact(persisted)) == expected_identity
-        )
+        assert str(consist.trusted_digest_from_artifact(persisted)) == expected_identity
     else:
         with pytest.raises(ValueError, match="trusted immutable identity"):
-            consist.ArtifactIdentity.from_artifact(persisted)
+            consist.trusted_digest_from_artifact(persisted)
 
 
 def test_verified_declared_digest_writes_sidecar_and_merges_report_metadata(

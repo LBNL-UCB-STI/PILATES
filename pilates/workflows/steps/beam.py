@@ -21,6 +21,7 @@ from typing import Any, Callable, Iterable, Mapping
 import consist as cr
 from consist import (
     Artifact,
+    ArtifactLike,
     BindingResult,
     CacheOptions,
     ExecutionOptions,
@@ -60,6 +61,7 @@ from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.beam.preprocessor import ensure_beam_mutable_workspace
 from pilates.beam.runner import BeamRunner
 from pilates.beam.skim_provenance import (
+    normalize_logical_matrices_identity,
     skim_provenance_sidecar_path,
     write_skim_provenance_sidecar,
 )
@@ -491,13 +493,16 @@ def _project_beam_preprocess_outputs(
         ):
             prepared[key] = declared_outputs[key]
 
+    sidecar_payload: dict[str, Any] | None = None
     if LINKSTATS_WARMSTART in prepared:
         prepared_linkstats = prepared[LINKSTATS_WARMSTART]
         sidecar_path = linkstats_provenance_sidecar_path(prepared_linkstats)
         artifact = outputs.get(LINKSTATS_WARMSTART)
-        try:
-            meta = artifact.meta if artifact is not None else None
-        except AttributeError:
+        if isinstance(artifact, Artifact):
+            meta = artifact.meta_dict()
+        elif isinstance(artifact, ArtifactLike):
+            meta = dict(artifact.meta) if isinstance(artifact.meta, Mapping) else None
+        else:
             meta = None
         cached_prov = (
             meta.get("linkstats_provenance") if isinstance(meta, Mapping) else None
@@ -520,35 +525,36 @@ def _project_beam_preprocess_outputs(
                 if source_path:
                     copy_linkstats_provenance_sidecar(source_path, prepared_linkstats)
 
-            if sidecar_path.is_file() and isinstance(artifact, Artifact):
+            if sidecar_path.is_file():
                 try:
-                    payload = read_linkstats_provenance_sidecar(sidecar_path)
+                    sidecar_payload = read_linkstats_provenance_sidecar(sidecar_path)
                 except Exception as exc:
                     logger.debug(
                         "Unable to read linkstats provenance sidecar from %s: %s",
                         sidecar_path,
                         exc,
                     )
-                    payload = None
-                if payload is not None:
-                    current_meta = (
-                        dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
-                    )
-                    if current_meta.get("linkstats_provenance") != payload:
-                        current_meta["linkstats_provenance"] = payload
-                        artifact.meta = current_meta
+                    sidecar_payload = None
 
     prepared_metadata: dict[str, dict[str, Any]] = {}
     if LINKSTATS_WARMSTART in prepared:
         linkstats_artifact = outputs.get(LINKSTATS_WARMSTART)
-        meta = (
-            linkstats_artifact.meta
-            if isinstance(linkstats_artifact, Artifact)
-            else get_setting(linkstats_artifact, "meta")
-        )
+        if isinstance(linkstats_artifact, Artifact):
+            meta = linkstats_artifact.meta
+        elif isinstance(linkstats_artifact, ArtifactLike):
+            meta = linkstats_artifact.meta
+        else:
+            meta = None
         if isinstance(meta, Mapping) and "linkstats_provenance" in meta:
+            prov = meta["linkstats_provenance"]
             prepared_metadata[LINKSTATS_WARMSTART] = {
-                "linkstats_provenance": meta["linkstats_provenance"]
+                "linkstats_provenance": dict(prov)
+                if isinstance(prov, Mapping)
+                else prov
+            }
+        elif sidecar_payload is not None:
+            prepared_metadata[LINKSTATS_WARMSTART] = {
+                "linkstats_provenance": sidecar_payload
             }
 
     projected = BeamPreprocessOutputs(
@@ -594,8 +600,6 @@ def _project_beam_run_outputs(
                     f"beam_run direct Zarr output {key!r} could not be materialized."
                 )
             resolved_path = Path(path)
-            if isinstance(output, Artifact):
-                output.abs_path = str(resolved_path)
             raw_outputs[key] = resolved_path
     projected = BeamRunOutputs(
         beam_output_dir=Path(workspace.get_beam_output_dir()),
@@ -667,6 +671,14 @@ def _emit_skim_provenance_sidecars(
             identity = payload.get("identity")
             if isinstance(identity, str) and identity.startswith("sha256:file:"):
                 meta_updates["admission_file_identity"] = identity
+            logical_val = payload.get("skim_metadata", {}).get(
+                "logical_matrices_sha256"
+            ) or payload.get("logical_matrices_sha256")
+            if isinstance(logical_val, str) and logical_val.strip():
+                norm_logical = normalize_logical_matrices_identity(logical_val)
+                if norm_logical:
+                    meta_updates["logical_identity"] = norm_logical
+                    meta_updates["logical_profile"] = "float32_matrices_v1"
             cr.set_output_meta(key, meta_updates, merge=True)
             if (
                 source_path is not None

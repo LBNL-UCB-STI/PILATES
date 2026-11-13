@@ -1307,7 +1307,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
             key=USIM_DATASTORE_H5,
             direction="input",
         )
-    trusted_identity = consist.ArtifactIdentity.from_artifact(trusted)
+    trusted_identity = consist.trusted_digest_from_artifact(trusted)
 
     observed_override: dict[str, Artifact] = {}
 
@@ -1363,18 +1363,18 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
     assert override.meta["hash_semantics"]["source"] == "caller_supplied"
 
     input_identity = result.run.meta["input_identity"]
-    assert input_identity["mode"] == "action-v2"
+    assert input_identity["version"] == 1
     assert input_identity["strict_input_count"] == 1
     assert input_identity["strict_binding_identity"]
     assert input_identity["bindings"] == []
     assert output.read_bytes() == source.read_bytes()
 
-    tracker.db.engine.dispose()
+    tracker.close()
     reopened = Tracker(run_dir=run_dir, db_path=str(db_path), hashing_strategy="full")
     persisted = reopened.db.get_artifact(UUID(str(trusted.id)))
 
     assert persisted is not None
-    assert consist.ArtifactIdentity.from_artifact(persisted) == trusted_identity
+    assert consist.trusted_digest_from_artifact(persisted) == trusted_identity
 
 
 def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
@@ -1674,7 +1674,7 @@ def test_native_atlas_projector_rejects_source_mount_when_destination_missing(
                 USIM_POPULATION_SOURCE_H5: SimpleNamespace(path=usim_h5),
                 ATLAS_VEHICLES2_OUTPUT: SimpleNamespace(
                     path=source_mount,
-                    container_uri="workspace://current/atlas-output/vehicles2_2030.csv",
+                    uri="workspace://current/atlas-output/vehicles2_2030.csv",
                 ),
             },
             settings=_settings(),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 import json
@@ -11,7 +12,7 @@ import uuid
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Protocol, Sequence, runtime_checkable
 
 from consist.digest import file_sha256
 
@@ -22,9 +23,45 @@ from pilates.utils.consist_db_snapshot import (
     resolve_consist_db_paths,
     snapshot_latest_dir,
 )
-from sqlalchemy.exc import OperationalError
+from pilates.utils.consist_types import ArtifactLike, TrackerLike
+import duckdb
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _FsRemappable(Protocol):
+    def get_remappable_relative_path(self, uri: str) -> str | Path | None: ...
+
+
+@runtime_checkable
+class _TrackerWithFs(Protocol):
+    fs: _FsRemappable
+
+
+@runtime_checkable
+class _HasUri(Protocol):
+    uri: str
+
+
+@runtime_checkable
+class _RegistrationResult(Protocol):
+    registered: Any
+    blocked: Any
+    summary: Any
+
+
+@runtime_checkable
+class _TrackerWithRegisterCopies(Protocol):
+    def register_run_output_recovery_copies(
+        self,
+        run_id: str,
+        recovery_root: str,
+        *,
+        verify: bool = ...,
+        append: bool = ...,
+        content_hashes: Any = ...,
+    ) -> Any: ...
 
 
 @dataclass(slots=True)
@@ -306,9 +343,9 @@ def _open_archive_tracker(
 def _json_safe(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return _json_safe(asdict(value))
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(key): _json_safe(val) for key, val in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item) for item in value]
@@ -375,13 +412,9 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
     if not resolved_main_db_path.exists():
         return set()
 
-    db = DatabaseManager(str(resolved_main_db_path))
-    try:
-        with db.engine.begin() as conn:
-            rows = conn.exec_driver_sql('SELECT id FROM "run"').fetchall()
-        return {str(row[0]) for row in rows}
-    finally:
-        db.engine.dispose()
+    with DatabaseManager(str(resolved_main_db_path), read_only=True) as db:
+        rows = db.query_rows('SELECT id FROM "run"')
+        return {str(row[0] if isinstance(row, tuple) else row) for row in rows}
 
 
 def _copy_db_file_with_wal(source: Path, destination: Path) -> None:
@@ -484,14 +517,14 @@ def _resolve_root_run_id(
 
 
 def _artifact_relative_path(tracker: Any, artifact: Any) -> Optional[Path]:
-    container_uri = getattr(artifact, "container_uri", None)
-    if not container_uri:
+    uri = (
+        artifact.uri
+        if isinstance(artifact, _HasUri)
+        else (artifact.uri if isinstance(artifact, ArtifactLike) else None)
+    )
+    if not uri or not isinstance(tracker, _TrackerWithFs):
         return None
-    fs = getattr(tracker, "fs", None)
-    get_relative = getattr(fs, "get_remappable_relative_path", None)
-    if not callable(get_relative):
-        return None
-    relative = get_relative(container_uri)
+    relative = tracker.fs.get_remappable_relative_path(uri)
     if relative is None:
         return None
     return Path(relative)
@@ -524,8 +557,7 @@ def _register_verified_run_output_recovery_copies(
     run_ids: Optional[Iterable[str]] = None,
     verify: bool = True,
 ) -> int:
-    register_copies = getattr(tracker, "register_run_output_recovery_copies", None)
-    if not callable(register_copies):
+    if not isinstance(tracker, _TrackerWithRegisterCopies):
         logger.warning(
             "Consist tracker does not expose register_run_output_recovery_copies; "
             "skipping recovery-copy metadata registration."
@@ -548,22 +580,27 @@ def _register_verified_run_output_recovery_copies(
             if verify
             else {}
         )
-        result = register_copies(
+        result = tracker.register_run_output_recovery_copies(
             str(run_id),
             str(recovery_run_dir),
             verify=verify,
             append=True,
             content_hashes=content_hashes or None,
         )
-        registered_for_run = getattr(result, "registered", {})
+        registered_for_run = (
+            result.registered if isinstance(result, _RegistrationResult) else {}
+        )
         registered += len(registered_for_run)
-        blocked = getattr(result, "blocked", {})
+        blocked = result.blocked if isinstance(result, _RegistrationResult) else {}
         if blocked:
+            summary = (
+                result.summary if isinstance(result, _RegistrationResult) else blocked
+            )
             logger.info(
                 "Recovery-copy registration blocked %d output(s) for run %s: %s",
                 len(blocked),
                 run_id,
-                getattr(result, "summary", blocked),
+                summary,
             )
     return registered
 
@@ -618,10 +655,8 @@ def _sync_marker_to_destinations(
 
 
 def _dispose_tracker(tracker: Any) -> None:
-    db = getattr(tracker, "db", None)
-    engine = getattr(db, "engine", None)
-    if engine is not None:
-        engine.dispose()
+    if isinstance(tracker, TrackerLike):
+        tracker.close()
 
 
 def _merge_scoped_run_db(
@@ -696,7 +731,7 @@ def _merge_scoped_run_db(
                     dry_run=True,
                 )
             finally:
-                target_db.engine.dispose()
+                target_db.close()
                 payload = {
                     "dry_run": True,
                     "main_db_path": str(resolved_main_db_path),
@@ -724,7 +759,7 @@ def _merge_scoped_run_db(
                 dry_run=False,
             )
         finally:
-            target_db.engine.dispose()
+            target_db.close()
         _remove_db_file_with_wal(shard_output)
         payload = {
             "dry_run": False,
@@ -751,7 +786,7 @@ def _merge_scoped_run_db(
                 dry_run=False,
             )
         finally:
-            target_db.engine.dispose()
+            target_db.close()
 
         _copy_db_file_with_wal(temp_main_db_path, resolved_main_db_path)
         _remove_db_file_with_wal(shard_output)
@@ -790,7 +825,7 @@ def _merge_scoped_run_db_with_retry(
             dry_run=dry_run,
             shard_path=shard_path,
         )
-    except OperationalError as exc:
+    except (duckdb.Error, OSError) as exc:
         logger.warning(
             "Consist DB merge failed once; retrying with a fresh archive tracker "
             "after a short pause: %s",
@@ -1105,7 +1140,7 @@ def promote_run_to_recovery_roots(
                         "Finished Consist DB merge path in %.2fs",
                         time.perf_counter() - merge_started,
                     )
-                except OperationalError as exc:
+                except (duckdb.Error, OSError) as exc:
                     logger.warning(
                         "Skipping Consist DB merge for archive promotion because "
                         "the export/merge transaction failed: %s",

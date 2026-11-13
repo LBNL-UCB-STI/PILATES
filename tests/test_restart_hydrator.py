@@ -129,7 +129,6 @@ def test_restore_restart_coupler_snapshot_stages_missing_files_from_archive(tmp_
 def test_restore_restart_coupler_snapshot_handles_beam_input_uri_and_skips_external_schemes(
     tmp_path,
 ):
-
     db_path = str(tmp_path / "provenance.duckdb")
     archive_dir = tmp_path / "archive_run"
     archive_dir.mkdir()

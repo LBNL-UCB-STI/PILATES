@@ -10,6 +10,7 @@ Per the BEAM Two-Step Spike v2 Brief:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import gzip
 import json
 import shutil
@@ -731,8 +732,11 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 )
                 assert res0 is None
                 iter0_zarr_art = scenario.coupler.require(ZARR_SKIMS)
-                assert isinstance(iter0_zarr_art.meta, dict)
-                recovery_roots = iter0_zarr_art.meta.get("recovery_roots")
+                assert isinstance(iter0_zarr_art.meta, (dict, Mapping))
+                recovery_roots = (
+                    iter0_zarr_art.recovery_roots
+                    or iter0_zarr_art.meta.get("recovery_roots")
+                )
                 assert recovery_roots
                 assert any(
                     str((archive_dir / "consist-recovery").resolve()) in str(root)
@@ -916,7 +920,7 @@ def test_scenario_6_two_committed_runs_same_identity_exposes_recency_gap(
     # Run 1 linkstats had "1,100" while Run 2 linkstats had "1,200"
     out1 = env["tracker"].get_run_outputs(run1.id)["linkstats"]
     out2 = env["tracker"].get_run_outputs(run2.id)["linkstats"]
-    assert out1.hash != out2.hash
+    assert out1.digest != out2.digest
 
 
 # ==============================================================================
