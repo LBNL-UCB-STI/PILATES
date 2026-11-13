@@ -207,6 +207,17 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
     )
 
     assert set(STEP_DEFINITIONS) == expected
+    for step_name in (
+        "atlas_preprocess",
+        "atlas_postprocess",
+        "activitysim_preprocess",
+        "beam_preprocess",
+        "beam_full_skim",
+    ):
+        step = STEP_DEFINITIONS[step_name]
+        assert step.outputs is not None, f"{step_name} must define outputs"
+        assert step.output_paths is None, f"{step_name} must not define output_paths"
+
     for name, definition in STEP_DEFINITIONS.items():
         contract = resolve_step_contract(
             definition.function,
@@ -227,7 +238,8 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
         )
         assert contract.input_binding == "paths"
 
-        if definition.output_paths is None:
+        declared_fn = definition.outputs or definition.output_paths
+        if declared_fn is None:
             assert contract.outputs is None
             assert contract.output_paths is None
             continue
@@ -241,7 +253,7 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
             if name == "activitysim_run"
             else None
         )
-        declared_paths = definition.output_paths(
+        declared_paths = declared_fn(
             settings=settings,
             state=state,
             workspace=workspace,
@@ -587,7 +599,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
     state = _state()
     workspace = _workspace(tmp_path)
 
-    activitysim_paths = activitysim_preprocess.output_paths(
+    activitysim_paths = activitysim_preprocess.outputs(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -639,7 +651,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
     )
     assert urbansim_projected.usim_datastore_h5 == urbansim_datastore
 
-    atlas_paths = atlas_postprocess.output_paths(
+    atlas_paths = atlas_postprocess.outputs(
         settings=settings,
         state=state,
         workspace=workspace,

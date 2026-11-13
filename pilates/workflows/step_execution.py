@@ -220,6 +220,16 @@ def execute_step(
         iteration=iteration,
         phase=phase,
         stage=stage,
+        outputs=(
+            definition.outputs(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                resolved_inputs=resolved,
+            )
+            if definition.outputs is not None
+            else None
+        ),
         output_paths=(
             definition.output_paths(
                 settings=settings,
@@ -227,7 +237,7 @@ def execute_step(
                 workspace=workspace,
                 resolved_inputs=resolved,
             )
-            if definition.output_paths is not None
+            if definition.outputs is None and definition.output_paths is not None
             else None
         ),
         output_sets=(

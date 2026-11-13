@@ -204,6 +204,7 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
                 "beam_preprocess", BindingResult(inputs={})
             ),
             project_outputs=lambda *_args, **_kwargs: SimpleNamespace(),
+            outputs=None,
             output_paths=None,
             output_sets=None,
             execution_options=None,

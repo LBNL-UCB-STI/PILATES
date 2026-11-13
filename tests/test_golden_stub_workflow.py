@@ -159,6 +159,12 @@ class DummyPreprocessor:
         self._state = state
 
     def preprocess(self, workspace, previous_records=None, **kwargs):
+        if self.model_name == "activitysim":
+            asim_dir = Path(workspace.get_asim_mutable_data_dir())
+            for fname in ("land_use.csv", "households.csv", "persons.csv", "skims.omx"):
+                target = asim_dir / fname
+                if target.exists():
+                    target.touch()
         return self._record_builder(
             self.model_name,
             "preprocess",
@@ -1311,7 +1317,7 @@ def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
             iteration=state.current_inner_iter,
             phase="preprocess",
             stage="supply_demand",
-            output_paths=activitysim_preprocess.output_paths(
+            outputs=activitysim_preprocess.outputs(
                 settings=settings,
                 state=state,
                 workspace=native_workspace,

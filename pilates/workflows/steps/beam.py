@@ -182,7 +182,10 @@ def _linkstats_warmstart_suffix(
 def _beam_population_input_suffix(settings: Any) -> str:
     """Return the suffix written by the ActivitySim-to-BEAM staging step."""
 
-    activitysim = settings.activitysim
+    try:
+        activitysim = settings.activitysim
+    except AttributeError:
+        activitysim = None
     file_format = activitysim.file_format if activitysim is not None else "csv"
     if file_format == "parquet":
         return ".parquet"
@@ -376,6 +379,7 @@ def _materialize_native_outputs(
             )
         resolved = source.resolve()
         if resolved == destination.resolve():
+            destination.touch()
             copy_linkstats_provenance_sidecar(
                 resolved, destination, fallback_source_path=source
             )
@@ -492,6 +496,16 @@ def _project_beam_preprocess_outputs(
             and declared_outputs[key].exists()
         ):
             prepared[key] = declared_outputs[key]
+        elif key == "vehicles_beam_in":
+            root = Path(workspace.get_beam_mutable_data_dir())
+            dest = _native_output_destination(
+                root=root,
+                step_name="beam_preprocess",
+                key="vehicles_beam_in",
+                suffix=".csv",
+            )
+            if dest.exists():
+                prepared[key] = dest
 
     sidecar_payload: dict[str, Any] | None = None
     if LINKSTATS_WARMSTART in prepared:
@@ -1159,6 +1173,7 @@ def _resolve_beam_preprocess_inputs(
                     )
                     or (
                         key == "vehicles_beam_in"
+                        and current_iter == 0
                         and ATLAS_VEHICLES2_OUTPUT in (resolved.binding.inputs or {})
                     )
                 )
@@ -1524,7 +1539,7 @@ _BEAM_FULL_SKIM_INPUT_CONTRACT = InputContract(
         LINKSTATS_WARMSTART,
         "vehicles_beam_in",
     ],
-    output_paths=_native_contract_output_paths(_beam_preprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_beam_preprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "beam_preprocess", input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT
@@ -1846,7 +1861,7 @@ def _native_beam_postprocess(
         LINKSTATS,
     ),
     schema_outputs=[BEAM_FULL_SKIMS, FINAL_SKIMS_OMX],
-    output_paths=_native_contract_output_paths(_beam_full_skim_native_output_paths),
+    outputs=_native_contract_output_paths(_beam_full_skim_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "beam_full_skim", input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT
@@ -1988,7 +2003,7 @@ beam_preprocess = StepDefinition(
     resolve_inputs=_resolve_beam_preprocess_inputs,
     project_outputs=_project_beam_preprocess_outputs,
     input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT,
-    output_paths=_beam_preprocess_native_output_paths,
+    outputs=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_beam_preprocess_output_cache,
     binding_rules=(
@@ -2053,7 +2068,7 @@ beam_full_skim = StepDefinition(
     resolve_inputs=_resolve_beam_full_skim_inputs,
     project_outputs=_project_beam_full_skim_outputs,
     input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT,
-    output_paths=_beam_full_skim_native_output_paths,
+    outputs=_beam_full_skim_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache,
     optional_output_keys=(FINAL_SKIMS_OMX,),

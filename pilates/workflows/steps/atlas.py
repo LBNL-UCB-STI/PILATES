@@ -535,7 +535,7 @@ _ATLAS_POSTPROCESS_INPUT_CONTRACT = InputContract(
         "atlas_grave_csv",
         "atlas_accessibility_csv",
     ],
-    output_paths=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "atlas_preprocess", input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT
@@ -744,7 +744,7 @@ def _native_atlas_run(
         USIM_DATASTORE_H5: None,
     },
     schema_outputs=[USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT],
-    output_paths=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "atlas_postprocess", input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT
@@ -916,7 +916,7 @@ ATLAS_PREPROCESS = StepDefinition(
     resolve_inputs=_resolve_atlas_preprocess_inputs,
     project_outputs=_project_atlas_preprocess,
     input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT,
-    output_paths=_atlas_preprocess_native_output_paths,
+    outputs=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
     binding_rules=(
@@ -963,7 +963,7 @@ ATLAS_POSTPROCESS = StepDefinition(
     resolve_inputs=_resolve_atlas_postprocess_inputs,
     project_outputs=_project_atlas_postprocess,
     input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT,
-    output_paths=_atlas_postprocess_native_output_paths,
+    outputs=_atlas_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
 )

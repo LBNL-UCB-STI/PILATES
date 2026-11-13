@@ -165,7 +165,10 @@ def test_activitysim_definitions_resolve_native_consist_contracts(
     )
     settings = SimpleNamespace(run=SimpleNamespace(region="test"))
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
-    workspace = SimpleNamespace(full_path=str(tmp_path))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+    )
 
     for definition in (
         activitysim.activitysim_preprocess,
@@ -572,7 +575,10 @@ def test_activitysim_postprocess_resolver_deduplicates_tracked_h5_aliases(
     )
     settings = SimpleNamespace(run=SimpleNamespace(region="test"))
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
-    workspace = SimpleNamespace(full_path=str(tmp_path))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+    )
     resolved = activitysim._activitysim_postprocess_resolver(
         settings=settings,
         state=state,

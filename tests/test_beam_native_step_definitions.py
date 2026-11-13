@@ -2047,7 +2047,7 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
     mutable_data_dir = tmp_path / "beam-input"
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
-    declared = beam_preprocess.output_paths(
+    declared = beam_preprocess.outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
@@ -2084,7 +2084,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
     mutable_data_dir = tmp_path / "beam-input"
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
-    declared = beam_preprocess.output_paths(
+    declared = beam_preprocess.outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,

@@ -2198,6 +2198,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                         skims_loc,
                     )
                 else:
+                    Path(skims_loc).touch()
                     logger.debug(
                         "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
                         skims_loc,
