@@ -533,7 +533,7 @@ def _render_postprocessor(spec: ScaffoldSpec) -> str:
         from __future__ import annotations
 
         from pathlib import Path
-        from typing import Optional, TYPE_CHECKING
+        from typing import TYPE_CHECKING
 
         from pilates.generic.postprocessor import GenericPostprocessor
         from pilates.{spec.model}.outputs import (
@@ -552,10 +552,9 @@ def _render_postprocessor(spec: ScaffoldSpec) -> str:
                 self,
                 raw_outputs: {spec.run_output_class},
                 workspace: "Workspace",
-                model_run_hash: Optional[str] = None,
             ) -> {spec.postprocess_output_class}:
                 """Transform raw outputs into publishable artifacts."""
-                del raw_outputs, model_run_hash
+                del raw_outputs
                 return {spec.postprocess_output_class}(
                     output_root=Path(workspace.full_path) / "{spec.model}" / "postprocess",
                 )
