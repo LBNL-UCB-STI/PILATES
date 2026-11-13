@@ -450,10 +450,11 @@ def _render_preprocessor(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
+        from pathlib import Path
         from typing import Optional, TYPE_CHECKING, Tuple
 
         from pilates.generic.preprocessor import GenericPreprocessor
-        from pilates.generic.records import RecordStore
+        from pilates.{spec.model}.outputs import {spec.preprocess_output_class}
 
         if TYPE_CHECKING:
             from pilates.config import PilatesConfig
@@ -468,18 +469,19 @@ def _render_preprocessor(spec: ScaffoldSpec) -> str:
                 settings: "PilatesConfig",
                 output_dir: str,
                 workspace: Optional["Workspace"] = None,
-            ) -> Tuple[RecordStore, RecordStore]:
+            ) -> Tuple[Path, ...]:
                 """Copy immutable inputs into the mutable workspace location."""
                 del settings, output_dir, workspace
-                return RecordStore(), RecordStore()
+                return ()
 
             def _preprocess(
                 self,
                 workspace: "Workspace",
-                previous_records: RecordStore = RecordStore(),
-            ) -> RecordStore:
+            ) -> {spec.preprocess_output_class}:
                 """Build and return {spec.class_prefix} preprocess artifacts."""
-                return RecordStore()
+                return {spec.preprocess_output_class}(
+                    output_root=Path(workspace.full_path) / "{spec.model}" / "preprocess",
+                )
         '''
         ).strip()
         + "\n"
@@ -492,10 +494,14 @@ def _render_runner(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
+        from pathlib import Path
         from typing import TYPE_CHECKING
 
         from pilates.generic.runner import GenericRunner
-        from pilates.generic.records import RecordStore
+        from pilates.{spec.model}.outputs import (
+            {spec.preprocess_output_class},
+            {spec.run_output_class},
+        )
 
         if TYPE_CHECKING:
             from pilates.workspace import Workspace
@@ -506,11 +512,14 @@ def _render_runner(spec: ScaffoldSpec) -> str:
 
             def _run(
                 self,
-                store: RecordStore,
+                inputs: {spec.preprocess_output_class},
                 workspace: "Workspace",
-            ) -> RecordStore:
+            ) -> {spec.run_output_class}:
                 """Run {spec.class_prefix} and return raw output artifacts."""
-                return RecordStore()
+                del inputs
+                return {spec.run_output_class}(
+                    output_root=Path(workspace.full_path) / "{spec.model}" / "run",
+                )
         '''
         ).strip()
         + "\n"
@@ -523,10 +532,14 @@ def _render_postprocessor(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
+        from pathlib import Path
         from typing import Optional, TYPE_CHECKING
 
         from pilates.generic.postprocessor import GenericPostprocessor
-        from pilates.generic.records import RecordStore
+        from pilates.{spec.model}.outputs import (
+            {spec.postprocess_output_class},
+            {spec.run_output_class},
+        )
 
         if TYPE_CHECKING:
             from pilates.workspace import Workspace
@@ -537,12 +550,15 @@ def _render_postprocessor(spec: ScaffoldSpec) -> str:
 
             def _postprocess(
                 self,
-                raw_outputs: RecordStore,
+                raw_outputs: {spec.run_output_class},
                 workspace: "Workspace",
                 model_run_hash: Optional[str] = None,
-            ) -> RecordStore:
+            ) -> {spec.postprocess_output_class}:
                 """Transform raw outputs into publishable artifacts."""
-                return raw_outputs
+                del raw_outputs, model_run_hash
+                return {spec.postprocess_output_class}(
+                    output_root=Path(workspace.full_path) / "{spec.model}" / "postprocess",
+                )
         '''
         ).strip()
         + "\n"
@@ -557,14 +573,9 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
 
         from dataclasses import dataclass, field
         from pathlib import Path
-        from typing import ClassVar, Dict, Iterable, Tuple, TYPE_CHECKING
+        from typing import ClassVar, Dict, Iterable, Tuple
 
-        from pilates.generic.records import RecordStore
-        from pilates.utils.coupler_helpers import artifact_to_path
         from pilates.workflows.outputs_base import StepOutputsBase
-
-        if TYPE_CHECKING:
-            from pilates.workspace import Workspace
 
 
         @dataclass
@@ -583,22 +594,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
                 for key, path in self.prepared_inputs.items():
                     yield key, path, f"{spec.class_prefix} prepared input: {{key}}"
 
-            @classmethod
-            def from_record_store(
-                cls, record_store: RecordStore, workspace: "Workspace"
-            ) -> "{spec.preprocess_output_class}":
-                mapping = record_store.to_mapping() if record_store is not None else {{}}
-                prepared_inputs: Dict[str, Path] = {{}}
-                for key, value in mapping.items():
-                    path = artifact_to_path(value, workspace)
-                    if path is None:
-                        continue
-                    prepared_inputs[key] = Path(path)
-                return cls(
-                    output_root=Path(workspace.full_path) / "{spec.model}" / "preprocess",
-                    prepared_inputs=prepared_inputs,
-                )
-
 
         @dataclass
         class {spec.run_output_class}(StepOutputsBase):
@@ -616,22 +611,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
                 for key, path in self.raw_outputs.items():
                     yield key, path, f"{spec.class_prefix} raw output: {{key}}"
 
-            @classmethod
-            def from_record_store(
-                cls, record_store: RecordStore, workspace: "Workspace"
-            ) -> "{spec.run_output_class}":
-                mapping = record_store.to_mapping() if record_store is not None else {{}}
-                raw_outputs: Dict[str, Path] = {{}}
-                for key, value in mapping.items():
-                    path = artifact_to_path(value, workspace)
-                    if path is None:
-                        continue
-                    raw_outputs[key] = Path(path)
-                return cls(
-                    output_root=Path(workspace.full_path) / "{spec.model}" / "run",
-                    raw_outputs=raw_outputs,
-                )
-
 
         @dataclass
         class {spec.postprocess_output_class}(StepOutputsBase):
@@ -648,22 +627,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
             def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
                 for key, path in self.processed_outputs.items():
                     yield key, path, f"{spec.class_prefix} postprocess output: {{key}}"
-
-            @classmethod
-            def from_record_store(
-                cls, record_store: RecordStore, workspace: "Workspace"
-            ) -> "{spec.postprocess_output_class}":
-                mapping = record_store.to_mapping() if record_store is not None else {{}}
-                processed_outputs: Dict[str, Path] = {{}}
-                for key, value in mapping.items():
-                    path = artifact_to_path(value, workspace)
-                    if path is None:
-                        continue
-                    processed_outputs[key] = Path(path)
-                return cls(
-                    output_root=Path(workspace.full_path) / "{spec.model}" / "postprocess",
-                    processed_outputs=processed_outputs,
-                )
         '''
         ).strip()
         + "\n"

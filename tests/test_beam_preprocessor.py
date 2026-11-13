@@ -507,15 +507,6 @@ def test_preprocess_ignores_workspace_beam_output_cache(
         SimpleNamespace(file_format="parquet"),
     )
 
-    cached_beam_record = FileRecord(
-        file_path="/tmp/cached_beam_plans.parquet",
-        short_name="beam_plans",
-        description="stale BEAM cache record",
-    )
-    mock_workspace.output_data = {
-        "beam": RecordStore(recordList=[cached_beam_record]),
-    }
-
     previous_records = RecordStore(
         recordList=[
             FileRecord(

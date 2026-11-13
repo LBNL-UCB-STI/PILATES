@@ -22,11 +22,11 @@ from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.activitysim.outputs import (
     normalize_asim_output_key,
 )
+from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.runner import BeamRunner
 from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.atlas.runner import AtlasRunner
 from pilates.config.models import ZonesConfig
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.urbansim.outputs import UrbanSimRunOutputs
 from pilates.urbansim.runner import UrbansimRunner
@@ -243,8 +243,9 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         },
     )
 
-    def _fake_beam_run(self, input_store, _workspace, _launch_config):
-        assert "zarr_skims" not in input_store.to_mapping()
+    def _fake_beam_run(self, inputs, _workspace, _launch_config, *, extra_inputs=None):
+        del extra_inputs
+        assert "zarr_skims" not in inputs.prepared_inputs
         events = beam_output_dir / "events.parquet"
         linkstats = beam_output_dir / "linkstats.csv.gz"
         plans_out = beam_output_dir / "plans.parquet"
@@ -260,15 +261,13 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         )
         for path in (linkstats, plans_out):
             _write_file(path, "stub")
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(events),
-                    short_name=f"events_parquet_{state.forecast_year}_{state.iteration}",
-                ),
-                FileRecord(file_path=str(linkstats), short_name=LINKSTATS),
-                FileRecord(file_path=str(plans_out), short_name=BEAM_PLANS_OUT),
-            ]
+        return BeamRunOutputs(
+            beam_output_dir=beam_output_dir,
+            raw_outputs={
+                f"events_parquet_{state.forecast_year}_{state.iteration}": events,
+                LINKSTATS: linkstats,
+                BEAM_PLANS_OUT: plans_out,
+            },
         )
 
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
@@ -438,18 +437,20 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
         + "\n",
     )
 
-    def _fake_beam_run(self, _input_store, _workspace, _launch_config):
+    def _fake_beam_run(self, _inputs, _workspace, _launch_config, *, extra_inputs=None):
+        del extra_inputs
         linkstats = beam_output_dir / "linkstats.csv.gz"
         plans_out = beam_output_dir / "plans.parquet"
         _write_file(linkstats, "stub")
         _write_file(plans_out, "stub")
         raw_zarr_key = f"raw_od_skims_zarr_{state.forecast_year}_{state.iteration}"
-        return RecordStore(
-            recordList=[
-                FileRecord(file_path=str(linkstats), short_name=LINKSTATS),
-                FileRecord(file_path=str(plans_out), short_name=BEAM_PLANS_OUT),
-                FileRecord(file_path=str(raw_beam_zarr_path), short_name=raw_zarr_key),
-            ]
+        return BeamRunOutputs(
+            beam_output_dir=beam_output_dir,
+            raw_outputs={
+                LINKSTATS: linkstats,
+                BEAM_PLANS_OUT: plans_out,
+                raw_zarr_key: raw_beam_zarr_path,
+            },
         )
 
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)

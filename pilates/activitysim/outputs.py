@@ -11,12 +11,9 @@ from typing import (
     Mapping,
     Optional,
     Tuple,
-    TYPE_CHECKING,
     Union,
 )
 import json
-from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -32,9 +29,6 @@ from pilates.workflows.outputs_base import (
     ValidationContext,
     ValidationResult,
 )
-
-if TYPE_CHECKING:
-    from pilates.workspace import Workspace
 
 
 # Map legacy ActivitySim output keys (file stems) to namespaced keys.
@@ -137,24 +131,6 @@ def configured_asim_output_keys(settings: Any) -> Tuple[str, ...]:
     """Return the semantic output keys enabled by the active ActivitySim config."""
 
     return tuple(configured_asim_output_tables(settings))
-
-
-def _record_path(record: Any, workspace: "Workspace") -> Optional[Path]:
-    """
-    Resolve a RecordStore entry into an absolute filesystem path.
-    """
-    if record is None:
-        return None
-    get_absolute_path = getattr(record, "get_absolute_path", None)
-    if callable(get_absolute_path):
-        resolved = get_absolute_path(base_path=workspace.full_path)
-        if resolved:
-            return Path(resolved)
-    file_path = getattr(record, "file_path", None)
-    path = artifact_to_path(file_path if file_path is not None else record, workspace)
-    if path is None:
-        return None
-    return Path(path)
 
 
 def _normalize_activitysim_run_output_key(key: str) -> str:
@@ -313,61 +289,6 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
     omx_skims: Optional[Path] = None
     input_hashes: Dict[str, str] = field(default_factory=dict)
 
-    @classmethod
-    def from_record_store(
-        cls, record_store: RecordStore, workspace: "Workspace"
-    ) -> "ActivitySimPreprocessOutputs":
-        """
-        Build outputs from a RecordStore.
-
-        Parameters
-        ----------
-        record_store : RecordStore
-            RecordStore produced by preprocessing.
-        workspace : Workspace
-            Workspace used to resolve paths.
-
-        Returns
-        -------
-        ActivitySimPreprocessOutputs
-            Parsed outputs.
-        """
-        values: Dict[str, Any] = {}
-        input_hashes: Dict[str, str] = {}
-        records_by_key = {
-            getattr(record, "short_name", None): record
-            for record in record_store.all_records()
-        }
-        for field_name, record_key in cls.record_keys.items():
-            record = records_by_key.get(record_key)
-            if record is None:
-                continue
-            record_path = _record_path(record, workspace)
-            if record_path is not None:
-                values[field_name] = record_path
-            content_hash = getattr(record, "content_hash", None)
-            if content_hash:
-                input_hashes[record_key] = content_hash
-        values["mutable_data_dir"] = Path(workspace.get_asim_mutable_data_dir())
-        values["input_hashes"] = input_hashes
-        return cls(**values)
-
-    def to_record_store(self) -> RecordStore:
-        """
-        Convert outputs to a RecordStore with optional content hashes.
-        """
-        records = []
-        for short_name, path, description in self._iter_record_items():
-            records.append(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                    content_hash=self.input_hashes.get(short_name),
-                )
-            )
-        return RecordStore(recordList=records)
-
 
 @dataclass
 class ActivitySimRunOutputs(StepOutputsBase):
@@ -410,79 +331,6 @@ class ActivitySimRunOutputs(StepOutputsBase):
             yield normalized_key, path, f"ActivitySim raw output: {normalized_key}"
         if self.zarr_skims is not None:
             yield ZARR_SKIMS, self.zarr_skims, "ActivitySim generated Zarr skims"
-
-    @classmethod
-    def from_record_store(
-        cls, record_store: RecordStore, workspace: "Workspace"
-    ) -> "ActivitySimRunOutputs":
-        """
-        Build outputs from a RecordStore.
-
-        Parameters
-        ----------
-        record_store : RecordStore
-            RecordStore produced by the runner.
-        workspace : Workspace
-            Workspace used to resolve paths.
-
-        Returns
-        -------
-        ActivitySimRunOutputs
-            Parsed outputs.
-        """
-        raw_outputs: Dict[str, Path] = {}
-        raw_output_hashes: Dict[str, str] = {}
-        zarr_skims: Optional[Path] = None
-        for record in record_store.all_records():
-            key = getattr(record, "short_name", None)
-            if not key:
-                continue
-            record_path = _record_path(record, workspace)
-            if record_path is None:
-                continue
-            if key == ZARR_SKIMS:
-                zarr_skims = record_path
-                continue
-            raw_outputs[key] = record_path
-            content_hash = getattr(record, "content_hash", None)
-            if content_hash:
-                raw_output_hashes[key] = content_hash
-        return cls(
-            output_dir=Path(workspace.get_asim_output_dir()),
-            zarr_skims=zarr_skims,
-            raw_outputs=raw_outputs,
-            raw_output_hashes=raw_output_hashes,
-        )
-
-    def to_record_store(self) -> RecordStore:
-        """
-        Convert outputs to a RecordStore with optional content hashes.
-        """
-        records = []
-        for raw_key, path in self.raw_outputs.items():
-            short_name = _normalize_activitysim_run_output_key(raw_key)
-            description = f"ActivitySim raw output: {short_name}"
-            records.append(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                    content_hash=(
-                        self.raw_output_hashes.get(raw_key)
-                        or self.raw_output_hashes.get(short_name)
-                    ),
-                )
-            )
-        if self.zarr_skims is not None:
-            records.append(
-                FileRecord(
-                    file_path=str(self.zarr_skims),
-                    short_name=ZARR_SKIMS,
-                    description="ActivitySim generated Zarr skims",
-                    content_hash=self.raw_output_hashes.get(ZARR_SKIMS),
-                )
-            )
-        return RecordStore(recordList=records)
 
 
 class _ActivitySimRunOutputsValidator:
@@ -640,54 +488,3 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
             )
         for key, path in self.processed_outputs.items():
             yield key, path, f"ActivitySim output file: {key}"
-
-    @classmethod
-    def from_record_store(
-        cls, record_store: RecordStore, workspace: "Workspace"
-    ) -> "ActivitySimPostprocessOutputs":
-        """
-        Build outputs from a RecordStore.
-
-        Parameters
-        ----------
-        record_store : RecordStore
-            RecordStore produced by the postprocessor.
-        workspace : Workspace
-            Workspace used to resolve paths.
-
-        Returns
-        -------
-        ActivitySimPostprocessOutputs
-            Parsed outputs.
-        """
-        usim_path = None
-        usim_key = None
-        processed_outputs: Dict[str, Path] = {}
-        processed_output_hashes: Dict[str, str] = {}
-        allowed_outputs = set(ASIM_OUTPUT_KEY_MAP.values()) | set(
-            ASIM_OUTPUT_KEY_MAP.keys()
-        )
-        for record in record_store.all_records():
-            short_name = getattr(record, "short_name", "") or ""
-            if short_name.startswith("usim_input_") or short_name == USIM_DATASTORE_H5:
-                usim_key = USIM_DATASTORE_H5
-                usim_path = record.get_absolute_path(base_path=workspace.full_path)
-                continue
-            normalized_name = normalize_asim_output_key(short_name)
-            if (
-                short_name.startswith("asim_input_")
-                or normalized_name in allowed_outputs
-            ):
-                record_path = record.get_absolute_path(base_path=workspace.full_path)
-                if record_path:
-                    processed_outputs[normalized_name] = Path(record_path)
-                    content_hash = getattr(record, "content_hash", None)
-                    if content_hash:
-                        processed_output_hashes[normalized_name] = content_hash
-        return cls(
-            usim_datastore_h5=Path(usim_path) if usim_path else None,
-            asim_output_dir=Path(workspace.get_asim_output_dir()),
-            processed_outputs=processed_outputs,
-            processed_output_hashes=processed_output_hashes,
-            usim_datastore_key=usim_key,
-        )

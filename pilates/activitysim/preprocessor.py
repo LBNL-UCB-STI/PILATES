@@ -24,7 +24,7 @@ from pilates.activitysim.config_roots import (
     sync_activitysim_sharrow_configs,
 )
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
@@ -2070,7 +2070,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
         prepare_omx_skims: bool = True,
@@ -2114,46 +2113,20 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 for key, value in resolved_table_paths.items()
                 if value is not None
             }
-        record_store = self._preprocess(
+        return self._preprocess(
             workspace,
-            previous_records if previous_records is not None else RecordStore(),
             **preprocess_kwargs,
         )
-        records_by_key = {
-            getattr(record, "short_name", None): record
-            for record in (
-                record_store.all_records() if record_store is not None else []
-            )
-        }
-        output_values: Dict[str, Union[Path, Dict[str, str]]] = {
-            "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
-        }
-        input_hashes: Dict[str, str] = {}
-        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
-            record = records_by_key.get(record_key)
-            if record is None:
-                continue
-            record_path = artifact_to_path(
-                getattr(record, "file_path", None), workspace
-            )
-            if record_path is not None:
-                output_values[field_name] = Path(record_path)
-            content_hash = getattr(record, "content_hash", None)
-            if content_hash:
-                input_hashes[record_key] = content_hash
-        output_values["input_hashes"] = input_hashes
-        return ActivitySimPreprocessOutputs(**output_values)
 
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
         prepare_omx_skims: bool = True,
         population_source_h5_path: Optional[str] = None,
         resolved_h5_table_paths: Optional[Dict[str, str]] = None,
-    ) -> RecordStore:
+    ) -> ActivitySimPreprocessOutputs:
         """
         Run all preprocessing steps for ActivitySim in order.
         """
@@ -2163,10 +2136,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("Starting ActivitysimPreprocessor.preprocess()")
 
-        # Collect any extra outputs created during preprocessing (e.g., on-demand copies)
-        output_records = RecordStore()
-
-        skim_record: Optional[FileRecord] = None
+        skims_omx_path: Optional[Path] = None
         if prepare_omx_skims:
             # Record inputs to preprocessor. Raw BEAM skims are a bootstrap input.
             skims_fname = settings.shared.skims.fname
@@ -2246,13 +2216,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     os.path.join(beam_production_path, skims_fname),
                     path_to_beam_skims_in_current_run_workspace,
                 )
-                output_records.add_record(
-                    FileRecord(
-                        file_path=path_to_beam_skims_in_current_run_workspace,
-                        description="BEAM skims copied to current workspace",
-                        short_name="omx_skims_current_workspace",
-                    )
-                )
 
             if os.path.exists(path_to_beam_skims_in_current_run_workspace):
                 skims_loc = os.path.join(
@@ -2284,11 +2247,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     output_dir=workspace.get_asim_mutable_data_dir(),
                 )
 
-            skim_record = FileRecord(
-                file_path=skims_loc,
-                short_name="omx_skims",
-                description="OD Skims copied over to ASim data directory",
-            )
+            resolved_skims_path = artifact_to_path(skims_loc, workspace)
+            if resolved_skims_path is not None:
+                skims_omx_path = Path(resolved_skims_path)
         else:
             logger.info(
                 "[ActivitysimPreprocessor] Skipping OMX skim preparation; "
@@ -2315,13 +2276,26 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
-        all_outputs = (
-            ([skim_record] if skim_record else [])
-            + data_from_usim
-            + list(output_records.records.values())
-        )
-
-        return RecordStore(recordList=all_outputs)
+        records_by_key = {
+            record.short_name: record for record in data_from_usim if record.short_name
+        }
+        output_values: Dict[str, Union[Path, Dict[str, str]]] = {
+            "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
+        }
+        if skims_omx_path is not None:
+            output_values["omx_skims"] = skims_omx_path
+        input_hashes: Dict[str, str] = {}
+        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
+            record = records_by_key.get(record_key)
+            if record is None:
+                continue
+            record_path = artifact_to_path(record.file_path, workspace)
+            if record_path is not None:
+                output_values[field_name] = Path(record_path)
+            if record.content_hash:
+                input_hashes[record_key] = record.content_hash
+        output_values["input_hashes"] = input_hashes
+        return ActivitySimPreprocessOutputs(**output_values)
 
 
 #######################################

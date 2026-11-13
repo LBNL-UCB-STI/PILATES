@@ -30,6 +30,7 @@ def test_activitysim_preprocess_h5_input_key_uses_start_year_suffix() -> None:
 
 def test_activitysim_preprocess_skips_omx_work_when_zarr_is_authoritative(
     monkeypatch,
+    tmp_path,
 ) -> None:
     preprocessor = asim_preprocessor.ActivitysimPreprocessor(
         "activitysim_preprocess",
@@ -40,19 +41,38 @@ def test_activitysim_preprocess_skips_omx_work_when_zarr_is_authoritative(
         "find_project_root",
         lambda: pytest.fail("Zarr-mode preprocessing must not locate production OMX"),
     )
+    from pilates.generic.records import FileRecord
+    from pilates.workflows.artifact_keys import (
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_LAND_USE_IN,
+        ASIM_PERSONS_IN,
+    )
+
     monkeypatch.setattr(
         asim_preprocessor,
         "create_asim_data_from_h5",
-        lambda *_args, **_kwargs: [],
+        lambda *_args, **_kwargs: [
+            FileRecord(
+                file_path=str(tmp_path / "land_use.csv"), short_name=ASIM_LAND_USE_IN
+            ),
+            FileRecord(
+                file_path=str(tmp_path / "households.csv"),
+                short_name=ASIM_HOUSEHOLDS_IN,
+            ),
+            FileRecord(
+                file_path=str(tmp_path / "persons.csv"), short_name=ASIM_PERSONS_IN
+            ),
+        ],
     )
 
-    records = preprocessor._preprocess(
-        workspace=SimpleNamespace(),
+    outputs = preprocessor._preprocess(
+        workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: str(tmp_path)),
         population_source_h5_path="/bound/population.h5",
         prepare_omx_skims=False,
     )
 
-    assert records.to_mapping() == {}
+    assert outputs.omx_skims is None
+    assert outputs.mutable_data_dir == tmp_path
     assert (
         asim_preprocessor._activitysim_preprocess_h5_input_key(
             "households",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +15,7 @@ from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.activitysim.runner import ActivitysimNumbaWarmup
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -95,7 +94,7 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
     assert state.sub_stages == ["preprocessor", "runner", "postprocessor"]
 
 
-def test_activitysim_preprocess_public_method_constructs_expected_outputs(
+def test_activitysim_preprocess_public_method_forwards_typed_outputs(
     tmp_path: Path,
 ) -> None:
     state = _StageTrackingState()
@@ -103,32 +102,24 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
         full_path=str(tmp_path),
         get_asim_mutable_data_dir=lambda: str(tmp_path / "asim-data"),
     )
-    previous_records = RecordStore()
 
     land_use = tmp_path / "asim-data" / "land_use.csv"
     households = tmp_path / "asim-data" / "households.csv"
     persons = tmp_path / "asim-data" / "persons.csv"
+    skims_omx = tmp_path / "beam-output" / "skims.omx"
     land_use.parent.mkdir(parents=True)
     for path in (land_use, households, persons):
         path.write_text("csv", encoding="utf-8")
 
-    record_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=os.path.relpath(land_use, tmp_path),
-                short_name="land_use_asim_in",
-                content_hash="land-use-hash",
-            ),
-            FileRecord(
-                file_path=os.path.relpath(households, tmp_path),
-                short_name="households_asim_in",
-                content_hash="households-hash",
-            ),
-            FileRecord(
-                file_path=os.path.relpath(persons, tmp_path),
-                short_name="persons_asim_in",
-            ),
-        ]
+    expected_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=land_use.parent,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
+        input_hashes={
+            "land_use_asim_in": "land-use-hash",
+            "households_asim_in": "households-hash",
+        },
     )
 
     class _Preprocessor:
@@ -141,29 +132,18 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
         def _preprocess(
             self,
             workspace_arg,
-            previous_records_arg,
             *,
             final_skims_omx=None,
         ):
             assert workspace_arg is workspace
-            assert previous_records_arg is previous_records
-            assert final_skims_omx is None
-            return record_store
+            assert final_skims_omx == skims_omx
+            return expected_outputs
 
     outputs = _Preprocessor("activitysim_preprocess", state).preprocess(
-        workspace, previous_records
+        workspace, final_skims_omx=skims_omx
     )
 
-    assert outputs == ActivitySimPreprocessOutputs(
-        mutable_data_dir=land_use.parent,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-        input_hashes={
-            "land_use_asim_in": "land-use-hash",
-            "households_asim_in": "households-hash",
-        },
-    )
+    assert outputs is expected_outputs
     assert state.sub_stages == ["preprocessor"]
 
 

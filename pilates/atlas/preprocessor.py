@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, sanitize_artifact_key
+from pilates.generic.records import sanitize_artifact_key
 from pilates.atlas.static_inputs import (
     atlas_selected_scenario,
     atlas_static_input_relpaths,
@@ -252,7 +252,6 @@ class AtlasPreprocessor(GenericPreprocessor):
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
         usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
@@ -528,7 +527,6 @@ class AtlasPreprocessor(GenericPreprocessor):
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
         usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
@@ -539,7 +537,6 @@ class AtlasPreprocessor(GenericPreprocessor):
         self.state.set_sub_stage_progress("preprocessor")
         return self._preprocess(
             workspace,
-            previous_records,
             usim_datastore_h5=usim_datastore_h5,
             final_skims_omx=final_skims_omx,
             allow_workspace_skim_fallback=allow_workspace_skim_fallback,

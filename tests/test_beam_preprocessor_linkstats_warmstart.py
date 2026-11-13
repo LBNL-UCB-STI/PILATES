@@ -101,7 +101,12 @@ def test_preprocess_accepts_artifact_mappings_and_returns_typed_outputs(tmp_path
 
     def _fake_preprocess(_workspace, previous_records):
         captured["mapping"] = previous_records.to_mapping()
-        return previous_records
+        return BeamPreprocessOutputs(
+            beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+            prepared_inputs={
+                key: Path(path) for key, path in captured["mapping"].items()
+            },
+        )
 
     preprocessor._preprocess = _fake_preprocess
 

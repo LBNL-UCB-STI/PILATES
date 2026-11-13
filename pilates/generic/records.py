@@ -16,13 +16,16 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,255}$")
 
 
-def _sanitize_artifact_key(key: str) -> Optional[str]:
+def sanitize_artifact_key(key: str) -> Optional[str]:
+    """
+    Normalize a string into a Consist-compatible artifact key.
+    """
     if _ARTIFACT_KEY_RE.match(key):
         return key
     sanitized = re.sub(r"[^A-Za-z0-9_.:/-]", "_", key)
@@ -33,13 +36,6 @@ def _sanitize_artifact_key(key: str) -> Optional[str]:
     if len(sanitized) > 256:
         sanitized = sanitized[:256]
     return sanitized if _ARTIFACT_KEY_RE.match(sanitized) else None
-
-
-def sanitize_artifact_key(key: str) -> Optional[str]:
-    """
-    Normalize a string into a Consist-compatible artifact key.
-    """
-    return _sanitize_artifact_key(key)
 
 
 @dataclass(kw_only=True)
@@ -56,9 +52,6 @@ class FileRecord:
         metadata: Arbitrary key/value metadata dict
         content_hash: Optional content hash for the file contents
         unique_id: Stable identifier (auto-generated if not provided)
-        container_uri: Optional Consist container URI when available
-        uri: Optional legacy Consist URI when available
-        h5_tables_used: Optional list of HDF5 table paths to log (exact matches)
     """
 
     file_path: str
@@ -70,9 +63,6 @@ class FileRecord:
     metadata: Dict[str, Any] = field(default_factory=dict)
     content_hash: Optional[str] = None
     unique_id: Optional[str] = None
-    container_uri: Optional[str] = None
-    uri: Optional[str] = None
-    h5_tables_used: Optional[List[str]] = None
 
     def __post_init__(self):
         # Auto-generate unique_id if not provided
@@ -104,32 +94,14 @@ class RecordStore:
     """
     Lightweight container for record objects.
 
-    Used to pass outputs from one model method to the next.
-    Records are keyed by unique_id for easy lookup and merging.
+    Used internally by model preprocessors/runners/postprocessors.
+    Records are keyed by unique_id for lookup and deduplication.
     """
 
     records: Dict[str, Any] = field(default_factory=dict)
 
-    def __init__(
-        self,
-        recordDict: Optional[Dict[str, Any]] = None,
-        recordList: Optional[List[Any]] = None,
-    ) -> None:
-        """
-        Initialize RecordStore from dict or list of records.
-
-        Args:
-            recordDict: Dictionary keyed by unique_id
-            recordList: List of record objects with unique_id
-        """
-        if recordDict is not None:
-            if isinstance(recordDict, dict):
-                self.records = recordDict
-            else:
-                raise TypeError("recordDict must be a dictionary")
-        else:
-            self.records = {}
-
+    def __init__(self, recordList: Optional[Sequence[Any]] = None) -> None:
+        self.records = {}
         if recordList is not None:
             for record in recordList:
                 self.add_record(record)
@@ -147,79 +119,18 @@ class RecordStore:
         """Return all records in the store."""
         return list(self.records.values())
 
-    def __add__(self, other: "RecordStore") -> "RecordStore":
-        """Merge two RecordStores (returns new instance, doesn't mutate)."""
-        if not isinstance(other, RecordStore):
-            raise TypeError("Operand must be a RecordStore")
-        combined = {**self.records, **other.records}
-        return RecordStore(recordDict=combined)
+    def __len__(self) -> int:
+        return len(self.records)
 
-    def __iadd__(self, other: "RecordStore") -> "RecordStore":
-        """Merge another RecordStore into this one (mutates)."""
-        if not isinstance(other, RecordStore):
-            raise TypeError("Operand must be a RecordStore")
-        self.records.update(other.records)
-        return self
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self.records.values())
 
     def to_mapping(self) -> Dict[str, str]:
-        """
-        Return a key -> path/container URI mapping for Consist log_artifacts.
-
-        Prefers record.container_uri (or legacy uri) when present, otherwise falls back
-        to file_path/repo_path.
-        If short_name is missing or collides, unique_id is used for the key.
-        """
+        """Return a ``short_name`` (or ``unique_id``) -> ``file_path`` mapping."""
         mapping: Dict[str, str] = {}
         for record in self.all_records():
-            key = getattr(record, "short_name", None) or getattr(
-                record, "unique_id", None
-            )
-            if not key:
-                logger.warning("Record missing short_name and unique_id; skipping.")
+            key = record.short_name or record.unique_id
+            if not key or not record.file_path:
                 continue
-
-            path = getattr(record, "container_uri", None) or getattr(
-                record, "uri", None
-            )
-            if not path:
-                path = getattr(record, "file_path", None) or getattr(
-                    record, "repo_path", None
-                )
-
-            if not path:
-                logger.warning(
-                    "Record '%s' missing container_uri/uri/file_path/repo_path; skipping.",
-                    key,
-                )
-                continue
-
-            sanitized_key = _sanitize_artifact_key(key)
-            if sanitized_key is None:
-                logger.warning(
-                    "Invalid artifact key '%s' could not be sanitized; using unique_id.",
-                    key,
-                )
-                sanitized_key = getattr(record, "unique_id", None)
-            elif sanitized_key != key:
-                logger.warning(
-                    "Invalid artifact key '%s' sanitized to '%s' for Consist compatibility.",
-                    key,
-                    sanitized_key,
-                )
-            key = sanitized_key or key
-
-            if key in mapping:
-                fallback_key = getattr(record, "unique_id", None)
-                if not fallback_key or fallback_key in mapping:
-                    logger.warning(
-                        f"Duplicate key '{key}' with no safe fallback; skipping record."
-                    )
-                    continue
-                logger.warning(
-                    f"Duplicate key '{key}' detected; using unique_id '{fallback_key}'."
-                )
-                key = fallback_key
-
-            mapping[key] = path
-
+            mapping[key] = record.file_path
         return mapping
