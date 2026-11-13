@@ -98,6 +98,13 @@ def _urbansim_postprocess_native_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
+    """
+    Declare output paths for ``urbansim_postprocess``.
+
+    Declares the updated UrbanSim input datastore (``usim_datastore_h5``), the
+    merged next-iteration datastore, the pre-merge output archive snapshot, and
+    the ``USIM_POPULATION_SOURCE_H5`` alias consumed by downstream stages.
+    """
     forecast_year = state.forecast_year
     mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
     datastore_path = mutable_data_dir / get_usim_datastore_fname(settings, io="input")

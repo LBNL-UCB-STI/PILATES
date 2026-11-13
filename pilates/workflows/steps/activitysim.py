@@ -108,7 +108,15 @@ def activitysim_run_output_paths(
     workspace: Workspace,
     produces_zarr: bool,
 ) -> Dict[str, Any]:
-    """Return cache-recoverable ActivitySim outputs and their logging metadata."""
+    """
+    Return cache-recoverable ActivitySim run outputs and logging metadata.
+
+    Filters the required ActivitySim output map to ``configured_asim_output_keys``
+    and includes ``ZARR_SKIMS`` when ``produces_zarr`` is enabled. When both
+    ``forecast_year`` and ``iteration`` resolve, wraps each entry in an
+    ``OutputArtifactSpec`` with year/iteration facet metadata; otherwise returns
+    plain paths (with a Zarr directory spec for ``ZARR_SKIMS``).
+    """
     expected_outputs: Dict[str, Any] = dict(
         asim_required_run_output_paths(settings, workspace)
     )
@@ -154,7 +162,14 @@ def activitysim_preprocess_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    """Declare cache-recoverable file outputs from ActivitySim preprocessing."""
+    """
+    Declare cache-recoverable file outputs from ActivitySim preprocessing.
+
+    Always declares ``land_use.csv``, ``households.csv``, and ``persons.csv``
+    with file-schema profiling enabled. Omits ``ASIM_OMX_SKIMS`` when
+    ``requires_prior_beam_skim_handoff`` is true because ActivitySim consumes
+    BEAM's Zarr skims directly instead of staging an OMX file.
+    """
     asim_data_dir = Path(workspace.get_asim_mutable_data_dir())
     candidate_paths = {
         ASIM_LAND_USE_IN: asim_data_dir / "land_use.csv",
@@ -189,7 +204,14 @@ def activitysim_postprocess_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    """Declare non-H5 ActivitySim postprocess outputs for one-link logging."""
+    """
+    Declare ActivitySim postprocess outputs for Consist logging and hydration.
+
+    Collects the next-iteration UrbanSim datastore (``USIM_DATASTORE_H5`` when
+    writeback is enabled), per-iteration ActivitySim output parquets, and
+    archived ActivitySim inputs. Attaches file-schema profiling to core tabular
+    outputs and year/iteration facet metadata whenever state context resolves.
+    """
     raw_paths: Dict[str, Any] = {}
     next_usim_store = _next_iter_usim_input_store_path(
         settings,

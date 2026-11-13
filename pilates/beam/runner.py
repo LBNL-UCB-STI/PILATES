@@ -723,7 +723,18 @@ class BeamRunner(GenericRunner):
 def beam_full_skim_output_paths(
     settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
 ) -> Dict[str, Path]:
-    """Declare the output paths/artifacts produced by FullSkimsCreatorApp."""
+    """
+    Resolve expected output paths for BEAM's ``FullSkimsCreatorApp`` step.
+
+    Resolves ``(year, iteration)`` from ``WorkflowState`` (falling back to
+    ``year``/``iteration`` attributes on lightweight test stubs; returns ``{}``
+    if no year is available). Always declares ``BEAM_FULL_SKIMS`` under
+    ``<beam_output_dir>/<region>/year-<year>-iteration-<iteration>/`` using the
+    extension implied by ``beam.full_skim.skims_kind`` (defaulting to
+    ``"activitySimOmx"``). Also declares ``FINAL_SKIMS_OMX`` in BEAM's mutable
+    data directory only for OMX mode, since ``.zarr``/``.csv.gz`` full-skim runs
+    do not produce the shared OMX skims artifact.
+    """
     try:
         year = state.current_year
     except AttributeError:

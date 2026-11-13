@@ -298,6 +298,16 @@ def _beam_postprocess_native_output_paths(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> dict[str, Path]:
+    """
+    Declare static and dynamic output paths for ``beam_postprocess``.
+
+    Static outputs include ``zarr_skims`` (when ActivitySim skim merging is
+    enabled) and ``final_skims_omx`` (when downstream models or config require
+    OMX export). When ``resolved_inputs`` is provided, merges dynamic
+    per-iteration event/link paths from
+    ``resolved_inputs.metadata["beam_postprocess_output_paths"]`` and enforces
+    disjoint keys and injective destination paths.
+    """
     static_outputs: dict[str, Path] = {}
     if _activitysim_skims_target_enabled(settings):
         static_outputs["zarr_skims"] = Path(

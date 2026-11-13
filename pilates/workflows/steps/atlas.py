@@ -186,6 +186,13 @@ def _atlas_postprocess_native_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
+    """
+    Declare output paths for ``atlas_postprocess``.
+
+    Publishes ``USIM_POPULATION_SOURCE_H5`` as a distinct post-mutation snapshot
+    for downstream ActivitySim runs and, when ``year`` or ``forecast_year`` is
+    set on ``state``, ``ATLAS_VEHICLES2_OUTPUT`` for BEAM.
+    """
     output_year = state.year if state.year is not None else state.forecast_year
     vehicles2_path = (
         Path(workspace.get_atlas_output_dir()) / f"vehicles2_{output_year}.csv"
