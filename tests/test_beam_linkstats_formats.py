@@ -16,9 +16,14 @@ def test_beam_run_outputs_promotes_parquet_linkstats_to_canonical_key(tmp_path):
         },
     )
 
-    by_key = {short_name: path for short_name, path, _ in outputs._iter_record_items()}
-    assert by_key["linkstats"] == parquet_path
-    assert by_key["beam_plans_out"] == plans_path
+    assert outputs.promoted_linkstats_for_publication() == (
+        "linkstats_parquet_2018_0",
+        parquet_path,
+    )
+    assert outputs._latest_raw_output_for_prefix("beam_plans_out") == (
+        "beam_plans_out_2018_0",
+        plans_path,
+    )
 
 
 def test_beam_run_outputs_publication_selection_skips_sub_iteration_linkstats(tmp_path):

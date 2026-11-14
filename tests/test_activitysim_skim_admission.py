@@ -203,11 +203,12 @@ def test_declared_logical_matrices_digest_verifies_despite_container_header_diff
     _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=3.14)
 
     logical_hex = compute_omx_logical_matrices_sha256(skims_path)
-    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+    legacy_logical_identity = f"sha256:logical_matrices:{logical_hex}"
+    canonical_logical_identity = f"logical_matrices_f32_v1:sha256:{logical_hex}"
 
     # Stamp logical_matrices_sha256 into OMX attrs (like full_skim_converter step 10)
     with h5py.File(skims_path, "a") as h5:
-        h5.attrs["logical_matrices_sha256"] = logical_identity
+        h5.attrs["logical_matrices_sha256"] = legacy_logical_identity
 
     # Write provenance sidecar capturing the stamped logical matrices identity
     sidecar_path, _ = write_skim_provenance_sidecar(
@@ -226,7 +227,7 @@ def test_declared_logical_matrices_digest_verifies_despite_container_header_diff
     policy = AdmissionPolicyConfig(
         mode="strict",
         expectation=DeclaredDigestExpectation(
-            identity=logical_identity,
+            identity=legacy_logical_identity,
             provenance_sidecar_path=str(sidecar_path),
         ),
     )
@@ -241,8 +242,8 @@ def test_declared_logical_matrices_digest_verifies_despite_container_header_diff
 
     assert report is not None
     assert report.outcome == "verified"
-    assert report.expected_artifact_id == logical_identity
-    assert report.observed_artifact_id == logical_identity
+    assert report.expected_artifact_id == canonical_logical_identity
+    assert report.observed_artifact_id == canonical_logical_identity
     assert "declared_digest_verified" in report.observations
 
 
@@ -256,7 +257,7 @@ def test_declared_logical_matrices_digest_rejects_on_data_matrix_change(
     _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=1.0)
 
     logical_hex = compute_omx_logical_matrices_sha256(skims_path)
-    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+    logical_identity = f"logical_matrices_f32_v1:sha256:{logical_hex}"
 
     # Mutate data matrix value
     with h5py.File(skims_path, "a") as h5:
@@ -706,3 +707,67 @@ def test_prior_run_expectation_rejects_blank_identifiers_and_facet_excludes_host
             "direction": "output",
         }
     }
+
+
+def test_activitysim_skim_admission_fast_tracker_with_per_output_full_hashing(
+    tmp_path: Path,
+) -> None:
+    """Fast-hashing producer using OutputArtifactSpec(hashing_strategy='full') verifies natively without side-channel meta."""
+    producer_db_path = tmp_path / "producer_db" / "provenance.duckdb"
+    producer_db_path.parent.mkdir(parents=True, exist_ok=True)
+    producer_skim = tmp_path / "producer_out" / "skims.omx"
+
+    def _produce() -> None:
+        _write_omx_file(producer_skim, with_provenance_attrs=True, matrix_value=3.75)
+
+    with consist.Tracker(
+        run_dir=tmp_path / "producer_runs",
+        db_path=producer_db_path,
+        hashing_strategy="fast",
+    ) as producer_tracker:
+        result = producer_tracker.run(
+            fn=_produce,
+            run_id="fast_tracker_full_output_run",
+            name="fast_tracker_full_output_run",
+            model="beam_full_skim",
+            outputs={
+                "beam_full_skims": consist.OutputArtifactSpec(
+                    path=producer_skim,
+                    hashing_strategy="full",
+                )
+            },
+        )
+        logged = result.outputs["beam_full_skims"]
+        assert logged.digest is not None
+        assert logged.digest.scheme == "sha256:file"
+        assert "admission_file_identity" not in logged.meta
+
+    consumer_db_path = tmp_path / "consumer_db" / "provenance.duckdb"
+    consumer_db_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace_path = tmp_path / "consumer_workspace"
+    staged_skim = workspace_path / "activitysim" / "data" / "skims.omx"
+    staged_skim.parent.mkdir(parents=True, exist_ok=True)
+    staged_skim.write_bytes(producer_skim.read_bytes())
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=PriorRunExpectation(
+            expected_run_id="fast_tracker_full_output_run",
+            artifact_key="beam_full_skims",
+            direction="output",
+            source_tracker_db=str(producer_db_path),
+        ),
+    )
+    with consist.Tracker(
+        run_dir=tmp_path / "consumer_runs",
+        db_path=consumer_db_path,
+    ) as consumer_tracker:
+        report = preflight_activitysim_initial_skims_admission(
+            settings=_make_settings(initial_skims_policy=policy),
+            metadata_logger=MagicMock(),
+            tracker=consumer_tracker,
+            workspace_path=workspace_path,
+            report_dir=tmp_path / "consumer_archive",
+        )
+    assert report is not None
+    assert report.outcome == "verified"

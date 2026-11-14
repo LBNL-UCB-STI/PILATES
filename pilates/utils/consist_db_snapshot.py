@@ -93,17 +93,20 @@ def mirror_consist_db_to_archive(
         return
 
     if tracker is not None:
-        db = getattr(tracker, "db", None)
-        engine = getattr(db, "engine", None)
-        if engine is not None and hasattr(engine, "begin"):
-            try:
-                with engine.begin() as conn:
-                    conn.exec_driver_sql("CHECKPOINT")
-                logger.info(
-                    "Successfully checkpointed DuckDB before mirroring: %s", local_real
-                )
-            except Exception as exc:
-                logger.debug("Could not checkpoint DuckDB before mirror: %s", exc)
+        try:
+            tracker.snapshot_db(archive_real, checkpoint=True)
+            logger.info(
+                "Mirrored Consist DB snapshot via tracker: %s -> %s",
+                local_real,
+                archive_real,
+            )
+            return
+        except (AttributeError, TypeError):
+            pass
+        except Exception as exc:
+            logger.warning(
+                "Tracker DB snapshot failed, falling back to file copy: %s", exc
+            )
 
     try:
         os.makedirs(os.path.dirname(archive_real), exist_ok=True)

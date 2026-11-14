@@ -268,7 +268,6 @@ class AtlasPreprocessor(GenericPreprocessor):
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
         prepared_inputs: Dict[str, Path] = {}
-        prepared_input_meta: Dict[str, Dict[str, object]] = {}
 
         if usim_datastore_h5 is None:
             raise TypeError("AtlasPreprocessor._preprocess requires usim_datastore_h5")
@@ -521,7 +520,6 @@ class AtlasPreprocessor(GenericPreprocessor):
         return AtlasPreprocessOutputs(
             atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
             prepared_inputs=prepared_inputs,
-            prepared_input_meta=prepared_input_meta,
         )
 
     def preprocess(

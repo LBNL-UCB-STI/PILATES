@@ -32,7 +32,7 @@ After startup preparation, the launcher opens the Consist scenario context (`wit
 
 ## 3. Step-Owned Workspace Preparation and the Year Loop
 
-There is no separate pre-scenario `bootstrap` staging phase. Instead, each model owns its own idempotent mutable-workspace, configuration, and static-input preparation directly inside its step resolver or execution step:
+Each model owns its idempotent mutable-workspace, configuration, and static-input preparation inside its step resolver or execution step:
 
 - **UrbanSim (`land_use`)**: `stage_urbansim_run_workspace()` (`pilates/urbansim/preprocessor.py`) stages the bound `usim_datastore_h5`, static CSV inputs (`selected_urbansim_static_input_sources`), `geoid_to_zone.csv`, and skims into `<workspace>/urbansim/data/` immediately before `urbansim_run`, and `run_land_use_stage()` preserves `usim_datastore_base_h5` and `usim_population_source_h5` handoffs across `urbansim_run` and `urbansim_postprocess`.
 - **ATLAS (`vehicle_ownership_model`)**: `AtlasPreprocessor` and `AtlasRunner` idempotently stage selected static ATLAS lookup files (`stage_selected_atlas_static_inputs` in `pilates/atlas/preprocessor.py`) into `<workspace>/atlas/atlas_input/` and export year-scoped CSV tables from the bound UrbanSim HDF5 datastore.

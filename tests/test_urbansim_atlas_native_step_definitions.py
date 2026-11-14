@@ -152,11 +152,16 @@ def test_native_urbansim_atlas_definitions_resolve_to_canonical_contracts(
         assert contract.name.startswith(f"{definition.name}__")
         assert contract.model == definition.name
         assert contract.input_binding == "paths"
-        assert contract.output_paths == definition.output_paths(
+        declared_outputs = (definition.outputs or definition.output_paths)(
             settings=settings,
             state=state,
             workspace=workspace,
         )
+        if definition.outputs is not None:
+            assert contract.outputs is not None
+            assert set(contract.outputs) == set(declared_outputs)
+        else:
+            assert contract.output_paths == declared_outputs
 
 
 def test_native_output_path_providers_preserve_typed_downstream_contracts(
@@ -169,10 +174,10 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
     urbansim_run_paths = URBANSIM_RUN.output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    atlas_preprocess_paths = ATLAS_PREPROCESS.output_paths(
+    atlas_preprocess_paths = ATLAS_PREPROCESS.outputs(
         settings=settings, state=state, workspace=workspace
     )
-    atlas_postprocess_paths = ATLAS_POSTPROCESS.output_paths(
+    atlas_postprocess_paths = ATLAS_POSTPROCESS.outputs(
         settings=settings, state=state, workspace=workspace
     )
 
@@ -378,7 +383,7 @@ def test_atlas_postprocess_output_uses_population_source_snapshot_at_start_year(
     state.is_start_year = lambda: True
     workspace = _workspace(tmp_path)
 
-    output_paths = ATLAS_POSTPROCESS.output_paths(
+    output_paths = ATLAS_POSTPROCESS.outputs(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -504,9 +509,7 @@ def test_atlas_preprocess_declares_explicit_prepared_csv_outputs(
 
     assert ATLAS_PREPROCESS.output_sets is None
     assert set(
-        ATLAS_PREPROCESS.output_paths(
-            settings=settings, state=state, workspace=workspace
-        )
+        ATLAS_PREPROCESS.outputs(settings=settings, state=state, workspace=workspace)
     ) == {
         "atlas_households_csv",
         "atlas_blocks_csv",
@@ -523,7 +526,7 @@ def test_atlas_preprocess_includes_accessibility_output_when_beamac_enabled(
     settings = _settings()
     settings.atlas.beamac = 1
 
-    output_paths = ATLAS_PREPROCESS.output_paths(
+    output_paths = ATLAS_PREPROCESS.outputs(
         settings=settings, state=_state(), workspace=_workspace(tmp_path)
     )
 
@@ -577,7 +580,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
 
         def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
             year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
-            year_root.mkdir(parents=True)
+            year_root.mkdir(parents=True, exist_ok=True)
             for filename in (
                 "households.csv",
                 "blocks.csv",
@@ -594,7 +597,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
 
         def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
             output_root = launch_context.output_root
-            output_root.mkdir(parents=True)
+            output_root.mkdir(parents=True, exist_ok=True)
             (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
             (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
             year_root = launch_context.input_root / "year2030"
@@ -634,9 +637,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
         )
 
     prepared_keys = tuple(
-        ATLAS_PREPROCESS.output_paths(
-            settings=settings, state=state, workspace=workspace
-        )
+        ATLAS_PREPROCESS.outputs(settings=settings, state=state, workspace=workspace)
     )
     recovery_root = archive_root / "consist-recovery"
     assert all(
@@ -680,7 +681,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     )
 
     assert hydrated_prepared.paths == {
-        key: ATLAS_PREPROCESS.output_paths(
+        key: ATLAS_PREPROCESS.outputs(
             settings=settings, state=state, workspace=workspace
         )[key]
         for key in prepared_keys
@@ -759,7 +760,7 @@ def test_atlas_preprocess_projects_declared_csv_paths(
     projected = ATLAS_PREPROCESS.project_outputs(
         {
             key: object()
-            for key in ATLAS_PREPROCESS.output_paths(
+            for key in ATLAS_PREPROCESS.outputs(
                 settings=settings, state=state, workspace=workspace
             )
         },
@@ -846,7 +847,7 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
             )
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, h5_artifact)
 
-        prepared_inputs = ATLAS_PREPROCESS.output_paths(
+        prepared_inputs = ATLAS_PREPROCESS.outputs(
             settings=settings,
             state=state,
             workspace=workspace,
@@ -1097,7 +1098,7 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     monkeypatch.setattr(atlas, "AtlasPostprocessor", _Postprocessor)
     definition = replace(
         ATLAS_POSTPROCESS,
-        output_paths=lambda **_kwargs: {
+        outputs=lambda **_kwargs: {
             USIM_POPULATION_SOURCE_H5: population_h5,
             ATLAS_VEHICLES2_OUTPUT: vehicles2,
         },
@@ -1307,7 +1308,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
             key=USIM_DATASTORE_H5,
             direction="input",
         )
-    trusted_identity = consist.ArtifactIdentity.from_artifact(trusted)
+    trusted_identity = consist.trusted_digest_from_artifact(trusted)
 
     observed_override: dict[str, Artifact] = {}
 
@@ -1363,18 +1364,18 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
     assert override.meta["hash_semantics"]["source"] == "caller_supplied"
 
     input_identity = result.run.meta["input_identity"]
-    assert input_identity["mode"] == "action-v2"
+    assert input_identity["version"] == 1
     assert input_identity["strict_input_count"] == 1
     assert input_identity["strict_binding_identity"]
     assert input_identity["bindings"] == []
     assert output.read_bytes() == source.read_bytes()
 
-    tracker.db.engine.dispose()
+    tracker.close()
     reopened = Tracker(run_dir=run_dir, db_path=str(db_path), hashing_strategy="full")
     persisted = reopened.db.get_artifact(UUID(str(trusted.id)))
 
     assert persisted is not None
-    assert consist.ArtifactIdentity.from_artifact(persisted) == trusted_identity
+    assert consist.trusted_digest_from_artifact(persisted) == trusted_identity
 
 
 def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
@@ -1459,7 +1460,7 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         ATLAS_OUTPUT_DIR: tmp_path / "snapshots" / "atlas-output",
     }
     snapshots.update(
-        ATLAS_PREPROCESS.output_paths(
+        ATLAS_PREPROCESS.outputs(
             settings=settings,
             state=state,
             workspace=workspace,
@@ -1511,7 +1512,7 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
     atlas._native_atlas_run(
         **{
             key: snapshots[key]
-            for key in ATLAS_PREPROCESS.output_paths(
+            for key in ATLAS_PREPROCESS.outputs(
                 settings=settings,
                 state=state,
                 workspace=workspace,
@@ -1674,7 +1675,7 @@ def test_native_atlas_projector_rejects_source_mount_when_destination_missing(
                 USIM_POPULATION_SOURCE_H5: SimpleNamespace(path=usim_h5),
                 ATLAS_VEHICLES2_OUTPUT: SimpleNamespace(
                     path=source_mount,
-                    container_uri="workspace://current/atlas-output/vehicles2_2030.csv",
+                    uri="workspace://current/atlas-output/vehicles2_2030.csv",
                 ),
             },
             settings=_settings(),

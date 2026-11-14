@@ -20,6 +20,7 @@ from pilates.config.models import (
 )
 from pilates.utils.admission_helpers import (
     AdmissionMetadataLogger,
+    parse_expected_file_digest,
     persist_admission_report,
 )
 
@@ -120,7 +121,7 @@ def _check_declared_digest_linkstats_expectation(
     report = consist.admission.check_admission_reference_expected_identity(
         reference=runtime_reference,
         expectation=consist.admission.DeclaredDigestExpectation(
-            identity=consist.admission.FileIdentity.parse(expectation.identity),
+            identity=parse_expected_file_digest(expectation.identity),
             source_label=expectation.source_label,
             source_uri=expectation.source_uri,
         ),

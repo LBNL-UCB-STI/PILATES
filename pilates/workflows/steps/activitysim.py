@@ -85,7 +85,11 @@ from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
 from pilates.workflows.state import WorkflowState
 
-from .shared import _activitysim_output_facet_meta, _persisted_output_path
+from .shared import (
+    _activitysim_output_facet_meta,
+    _native_contract_output_paths,
+    _persisted_output_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1047,7 +1051,7 @@ def _project_activitysim_postprocess_outputs(
     name_template="activitysim_preprocess__y{year}__i{iteration}__phase_{phase}",
     inputs={USIM_POPULATION_SOURCE_H5: None},
     optional_input_keys=(FINAL_SKIMS_OMX,),
-    outputs=[ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN],
+    outputs=_native_contract_output_paths(activitysim_preprocess_output_paths),
     schema_outputs=[
         ASIM_LAND_USE_IN,
         ASIM_HOUSEHOLDS_IN,
@@ -1301,7 +1305,7 @@ activitysim_preprocess = StepDefinition(
     resolve_inputs=_activitysim_preprocess_resolver,
     project_outputs=_project_activitysim_preprocess_outputs,
     input_contract=_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT,
-    output_paths=activitysim_preprocess_output_paths,
+    outputs=activitysim_preprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
     binding_rules=(

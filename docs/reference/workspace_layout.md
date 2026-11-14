@@ -25,10 +25,9 @@ During an active run, PILATES prepares simulator working directories inside `run
 ```text
 <workspace_root>/
 ├── run_state.yaml                 # Persisted WorkflowState checkpoint for restart/resume
-├── provenance/
+├── .consist/
 │   ├── provenance.duckdb          # Live DuckDB provenance index and artifact catalog
-│   └── <scenario_id>/
-│       └── <model>/<run_id>/      # Step-scoped Consist run directory and consist.json
+│   └── snapshots/                 # Periodic and stage-boundary DuckDB snapshots (latest/, history/)
 ├── pilates/
 │   ├── urbansim/data/             # Staged UrbanSim HDF5 datastores, skims, and static inputs
 │   ├── atlas/
@@ -62,6 +61,6 @@ As each year and iteration finishes, postprocessors write durable outputs under 
 | File / Directory | Role |
 | --- | --- |
 | `run_state.yaml` | Records the active forecast year, inner iteration, completed stage checkpoints, and restart metadata for scenario resume. |
-| `provenance/provenance.duckdb` | Stores step execution records, Merkle input/config hashes, coupler artifact URIs, and queryable facets. Query this file with [Analysis Overview](../analysis/overview.md) or [SQL and DuckDB](../analysis/sql_and_duckdb.md). |
-| `provenance/<scenario_id>/<model>/<run_id>/consist.json` | Step-scoped human-readable JSON provenance log emitted by Consist. |
+| `.consist/provenance.duckdb` | Stores step execution records, Merkle input/config hashes, coupler artifact URIs, and queryable facets. Query this file with [Analysis Overview](../analysis/overview.md) or [SQL and DuckDB](../analysis/sql_and_duckdb.md). |
+| `.consist/snapshots/` | Stores `latest/` and `history/` DuckDB snapshots captured at stage boundaries and shutdown. |
 | `consist-recovery/<scenario_id>/<model>/<run_id>/` | Optional durable mirror populated by Consist's `RunCompletionArchivePolicy` when `run.enable_archive_copy: true`, registered via `run.recovery_archive_roots` for cold-scratch cache hydration. |

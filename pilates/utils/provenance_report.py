@@ -4,6 +4,12 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Optional
 
+from consist import Artifact, ArtifactLike as ConsistArtifactLike, Run, Tracker
+from consist.models.run import RunArtifacts
+from consist.protocols import ArtifactResolver
+
+from pilates.utils.consist_types import ArtifactLike
+
 
 def _iter_artifacts(artifacts: Any) -> list[Any]:
     if artifacts is None:
@@ -14,10 +20,8 @@ def _iter_artifacts(artifacts: Any) -> list[Any]:
 
 
 def _artifact_key(artifact: Any) -> str:
-    for key_attr in ("key", "name", "short_name", "artifact_key"):
-        value = getattr(artifact, key_attr, None)
-        if value:
-            return str(value)
+    if isinstance(artifact, ArtifactLike) and artifact.key:
+        return str(artifact.key)
     if isinstance(artifact, Mapping):
         for key_attr in ("key", "name", "short_name", "artifact_key"):
             value = artifact.get(key_attr)
@@ -27,37 +31,59 @@ def _artifact_key(artifact: Any) -> str:
 
 
 def _resolve_via_tracker(tracker: Any, value: str) -> Optional[str]:
-    if tracker is None:
-        return None
-    resolve_uri = getattr(tracker, "resolve_uri", None)
-    if not callable(resolve_uri):
+    if not isinstance(tracker, (Tracker, ArtifactResolver)):
         return None
     try:
-        return str(resolve_uri(value))
+        return str(tracker.resolve_uri(value))
     except Exception:
         return None
 
 
 def _artifact_path(artifact: Any, tracker: Any = None) -> str:
-    container_uri = getattr(artifact, "container_uri", None)
-    if not container_uri and isinstance(artifact, Mapping):
-        container_uri = artifact.get("container_uri")
-    if isinstance(container_uri, str) and "://" in container_uri:
-        resolved = _resolve_via_tracker(tracker, container_uri)
+    if isinstance(artifact, (str, Path)):
+        text = str(artifact)
+        if "://" in text:
+            resolved = _resolve_via_tracker(tracker, text)
+            if resolved:
+                return resolved
+        return text
+
+    if isinstance(artifact, Artifact):
+        if artifact.uri and "://" in artifact.uri:
+            resolved = _resolve_via_tracker(tracker, artifact.uri)
+            if resolved:
+                return resolved
+        if artifact.abs_path:
+            return str(artifact.abs_path)
+        if artifact.uri:
+            return str(artifact.uri)
+        return ""
+
+    uri: Optional[str] = None
+    if isinstance(artifact, ConsistArtifactLike):
+        uri = str(artifact.uri) if artifact.uri is not None else None
+    elif isinstance(artifact, Mapping):
+        uri_val = artifact.get("uri")
+        uri = str(uri_val) if uri_val is not None else None
+
+    if isinstance(uri, str) and "://" in uri:
+        resolved = _resolve_via_tracker(tracker, uri)
         if resolved:
             return resolved
 
-    for path_attr in ("path", "uri", "file_path", "container_uri"):
-        value = getattr(artifact, path_attr, None)
-        if value:
-            value_str = str(value)
-            if "://" in value_str:
-                resolved = _resolve_via_tracker(tracker, value_str)
-                if resolved:
-                    return resolved
-            return value_str
+    if isinstance(artifact, ConsistArtifactLike) and artifact.path:
+        val_str = str(artifact.path)
+        if "://" in val_str:
+            resolved = _resolve_via_tracker(tracker, val_str)
+            if resolved:
+                return resolved
+        return val_str
+
+    if isinstance(uri, str) and uri:
+        return uri
+
     if isinstance(artifact, Mapping):
-        for path_attr in ("path", "uri", "file_path", "container_uri"):
+        for path_attr in ("path", "uri", "file_path"):
             value = artifact.get(path_attr)
             if value:
                 value_str = str(value)
@@ -104,15 +130,29 @@ def build_provenance_report(tracker: Any, run_id: str) -> str:
     if run is None:
         raise ValueError(f"Run not found: {run_id}")
 
-    run_meta = getattr(run, "meta", None)
-    steps = run_meta.get("steps", []) if run_meta is not None else []
+    if isinstance(run, Run):
+        run_id_val = run.id
+        status_val = run.status
+        model_val = run.model_name
+        run_meta = run.meta
+    elif isinstance(run, Mapping):
+        run_id_val = run.get("id", run_id)
+        status_val = run.get("status", "unknown")
+        model_val = run.get("model_name", "unknown")
+        run_meta = run.get("meta")
+    else:
+        run_id_val = run_id
+        status_val = "unknown"
+        model_val = "unknown"
+        run_meta = None
+    steps = run_meta.get("steps", []) if isinstance(run_meta, Mapping) else []
     lines = [
         "# Provenance Report",
         "",
         "## Scenario",
-        f"- `run_id`: `{getattr(run, 'id', run_id)}`",
-        f"- `status`: `{getattr(run, 'status', 'unknown')}`",
-        f"- `model`: `{getattr(run, 'model_name', 'unknown')}`",
+        f"- `run_id`: `{run_id_val}`",
+        f"- `status`: `{status_val}`",
+        f"- `model`: `{model_val}`",
         f"- `step_count`: `{len(steps)}`",
         "",
         "## Step Chain",
@@ -136,8 +176,26 @@ def build_provenance_report(tracker: Any, run_id: str) -> str:
             continue
 
         step_artifacts = tracker.get_artifacts_for_run(step_id)
-        inputs = _iter_artifacts(getattr(step_artifacts, "inputs", None))
-        outputs = _iter_artifacts(getattr(step_artifacts, "outputs", None))
+        inputs_val = (
+            step_artifacts.inputs
+            if isinstance(step_artifacts, RunArtifacts)
+            else (
+                step_artifacts.get("inputs")
+                if isinstance(step_artifacts, Mapping)
+                else None
+            )
+        )
+        outputs_val = (
+            step_artifacts.outputs
+            if isinstance(step_artifacts, RunArtifacts)
+            else (
+                step_artifacts.get("outputs")
+                if isinstance(step_artifacts, Mapping)
+                else None
+            )
+        )
+        inputs = _iter_artifacts(inputs_val)
+        outputs = _iter_artifacts(outputs_val)
 
         lines.append(f"- inputs: {len(inputs)}")
         for row in _summarize_artifacts(inputs, tracker=tracker):

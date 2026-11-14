@@ -36,7 +36,7 @@ def _collect_input_paths(
     inputs: BeamPreprocessOutputs,
     extra_inputs: Optional[Mapping[str, Any]] = None,
 ) -> List[str]:
-    input_paths = [str(path) for _, path, _ in inputs._iter_record_items()]
+    input_paths = [str(path) for path in inputs.prepared_inputs.values()]
     if not extra_inputs:
         return input_paths
     for value in extra_inputs.values():

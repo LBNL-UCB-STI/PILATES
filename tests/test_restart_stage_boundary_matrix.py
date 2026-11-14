@@ -4,6 +4,7 @@ Whole-stage and whole-year execution are exercised through the native golden
 workflow.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -203,6 +204,7 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
                 "beam_preprocess", BindingResult(inputs={})
             ),
             project_outputs=lambda *_args, **_kwargs: SimpleNamespace(),
+            outputs=None,
             output_paths=None,
             output_sets=None,
             execution_options=None,
@@ -291,7 +293,18 @@ def test_run_completion_archive_handles_nested_scalar_and_enclosing_directory_ar
     ):
         art = run_result.outputs[key]
         assert Path(art.abs_path).resolve() == expected_path.resolve()
-        roots = {str(Path(r).resolve()) for r in (art.meta.get("recovery_roots") or [])}
+        roots = {
+            str(Path(r).resolve())
+            for r in (
+                art.recovery_roots
+                or (
+                    art.meta.get("recovery_roots")
+                    if isinstance(art.meta, Mapping)
+                    else []
+                )
+                or []
+            )
+        }
         assert expected_roots.issubset(roots)
     assert (
         recovery_root

@@ -24,6 +24,7 @@ from pilates.config.models import (
 )
 from pilates.utils.admission_helpers import (
     AdmissionMetadataLogger,
+    parse_expected_file_digest,
     persist_admission_report,
     resolve_local_source_uri,
 )
@@ -102,7 +103,7 @@ def _check_declared_logical_matrices_expectation(
     if observed_logical_identity is None:
         try:
             observed_hex = compute_omx_logical_matrices_sha256(execution_path)
-            observed_logical_identity = f"sha256:logical_matrices:{observed_hex}"
+            observed_logical_identity = f"logical_matrices_f32_v1:sha256:{observed_hex}"
         except Exception as exc:
             report = consist.admission.AdmissionReport(
                 outcome="unreadable",
@@ -121,8 +122,17 @@ def _check_declared_logical_matrices_expectation(
                 reason=f"Could not compute logical matrices SHA-256 for {execution_path}: {exc}",
             )
             return report, None
+    else:
+        observed_logical_identity = normalize_logical_matrices_identity(
+            observed_logical_identity
+        )
 
-    if observed_logical_identity == expectation.identity:
+    expected_logical_identity = (
+        normalize_logical_matrices_identity(expectation.identity)
+        or expectation.identity
+    )
+
+    if observed_logical_identity == expected_logical_identity:
         outcome: consist.AdmissionOutcome = "verified"
         obs = ("declared_digest_verified",)
         reason = (
@@ -147,7 +157,7 @@ def _check_declared_logical_matrices_expectation(
         expected_source="declared_digest",
         expected_source_label=expectation.source_label,
         expected_source_uri=expectation.source_uri,
-        expected_artifact_id=expectation.identity,
+        expected_artifact_id=expected_logical_identity,
         observed_artifact_id=observed_logical_identity,
         digest_algorithm="sha256",
         observations=obs,
@@ -192,7 +202,7 @@ def _check_declared_logical_matrices_expectation(
     sidecar_identity = sidecar_payload.get("identity")
 
     if norm_sidecar_logical is not None:
-        if norm_sidecar_logical != expectation.identity or (
+        if norm_sidecar_logical != expected_logical_identity or (
             report.outcome == "verified"
             and report.observed_artifact_id is not None
             and norm_sidecar_logical != report.observed_artifact_id
@@ -240,7 +250,9 @@ def _check_declared_digest_expectation(
     expectation: DeclaredDigestExpectation,
 ) -> tuple[consist.admission.AdmissionReport, dict[str, Any] | None]:
     """Evaluate a DeclaredDigestExpectation and optional provenance sidecar."""
-    if expectation.identity.startswith("sha256:logical_matrices:"):
+    if expectation.identity.startswith(
+        "sha256:logical_matrices:"
+    ) or expectation.identity.startswith("logical_matrices_"):
         return _check_declared_logical_matrices_expectation(
             execution_path=execution_path,
             expectation=expectation,
@@ -253,7 +265,7 @@ def _check_declared_digest_expectation(
     report = consist.admission.check_admission_reference_expected_identity(
         reference=reference,
         expectation=consist.admission.DeclaredDigestExpectation(
-            identity=consist.admission.FileIdentity.parse(expectation.identity),
+            identity=parse_expected_file_digest(expectation.identity),
             source_label=expectation.source_label,
             source_uri=expectation.source_uri,
         ),

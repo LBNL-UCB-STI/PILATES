@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from consist import (
+    Artifact,
     BindingResult,
     Tracker,
     resolve_step_contract,
@@ -2047,7 +2048,7 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
     mutable_data_dir = tmp_path / "beam-input"
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
-    declared = beam_preprocess.output_paths(
+    declared = beam_preprocess.outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
@@ -2084,7 +2085,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
     mutable_data_dir = tmp_path / "beam-input"
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
-    declared = beam_preprocess.output_paths(
+    declared = beam_preprocess.outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
@@ -2222,7 +2223,14 @@ def test_project_beam_run_outputs_uses_direct_logged_zarr_path(tmp_path: Path) -
     (zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
 
     projected = _project_beam_run_outputs(
-        {"raw_od_skims_zarr_2030_2": SimpleNamespace(path=zarr)},
+        {
+            "raw_od_skims_zarr_2030_2": Artifact(
+                key="raw_od_skims_zarr_2030_2",
+                uri=str(zarr),
+                driver="zarr",
+                _abs_path=zarr,
+            )
+        },
         settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=2),
         workspace=workspace,
@@ -2409,7 +2417,7 @@ def test_beam_preprocess_project_outputs_prefers_artifact_meta_over_stale_worksp
     }
     warmstart_artifact = Artifact(
         key=LINKSTATS_WARMSTART,
-        container_uri=str(warmstart_path),
+        uri=str(warmstart_path),
         driver="parquet",
         meta={"linkstats_provenance": authoritative_prov},
     )
@@ -2462,7 +2470,7 @@ def test_beam_postprocess_split_output_paths_recovers_events_from_recovery_roots
 ) -> None:
     """P0-2: _beam_postprocess_split_output_paths uses artifact_to_existing_path so wiped scratch falls back to recovery_roots."""
     import pandas as pd
-    from consist import Artifact, Tracker
+    from consist import Tracker
     from pilates.utils import consist_runtime as cr
 
     workspace_root = tmp_path / "scratch_workspace"
@@ -2480,12 +2488,14 @@ def test_beam_postprocess_split_output_paths_recovers_events_from_recovery_roots
         db_path=str(tmp_path / "provenance.duckdb"),
         mounts={"workspace": str(workspace_root)},
     )
-    events_artifact = Artifact(
-        key="events_parquet_2020_0",
-        container_uri="workspace://beam/output/events.parquet",
-        driver="parquet",
-        meta={"recovery_roots": [str(archive_root)]},
-    )
+    scratch_events = beam_output_dir / "events.parquet"
+    scratch_events.write_bytes(archived_events.read_bytes())
+    with tracker.start_run("producer_run", model="beam_run"):
+        events_artifact = tracker.log_artifact(
+            scratch_events, key="events_parquet_2020_0", direction="output"
+        )
+    scratch_events.unlink()
+    tracker.set_artifact_recovery_roots(events_artifact, [archive_root])
     workspace = SimpleNamespace(
         full_path=str(workspace_root),
         get_beam_output_dir=lambda: str(beam_output_dir),
@@ -2510,7 +2520,8 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """P0-3: _project_beam_run_outputs populates output.path on direct-zarr Artifact after scratch-wipe hydration."""
-    from consist import Artifact, Tracker
+    import shutil
+    from consist import Tracker
     from pilates.utils import consist_runtime as cr
 
     workspace_root = tmp_path / "scratch_workspace"
@@ -2526,13 +2537,15 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
         db_path=str(tmp_path / "provenance.duckdb"),
         mounts={"workspace": str(workspace_root)},
     )
-    zarr_artifact = Artifact(
-        key="raw_od_skims_zarr_2020_0",
-        container_uri="workspace://beam/output/0.skimsOD_Aggregated.zarr",
-        driver="zarr",
-        meta={"recovery_roots": [str(archive_root)]},
-    )
-    assert not Path(zarr_artifact.path).exists()
+    scratch_zarr = beam_output_dir / "0.skimsOD_Aggregated.zarr"
+    shutil.copytree(archived_zarr, scratch_zarr)
+    with tracker.start_run("producer_run", model="beam_run"):
+        zarr_artifact = tracker.log_artifact(
+            scratch_zarr, key="raw_od_skims_zarr_2020_0", direction="output"
+        )
+    shutil.rmtree(scratch_zarr)
+    tracker.set_artifact_recovery_roots(zarr_artifact, [archive_root])
+    assert not scratch_zarr.exists()
 
     monkeypatch.setattr(
         beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
@@ -2569,6 +2582,4 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
             resolved_inputs=resolved_inputs,
         )
 
-    assert zarr_artifact.path is not None
-    assert Path(zarr_artifact.path).exists()
-    assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == Path(zarr_artifact.path)
+    assert Path(projected.raw_outputs["raw_od_skims_zarr_2020_0"]).exists()

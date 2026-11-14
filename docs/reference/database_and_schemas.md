@@ -1,28 +1,31 @@
 # Database and Schema Reference
 
-PILATES uses Consist and DuckDB (`<output_directory>/.consist/provenance.duckdb`) to index run provenance, validate tabular outputs against SQLModel schemas, and expose hybrid SQL views over Parquet and CSV artifacts.
+PILATES uses Consist and DuckDB (`.consist/provenance.duckdb` inside each archive run directory) to index run provenance, associate tabular outputs with SQLModel schemas, and expose hybrid SQL views over Parquet and CSV artifacts.
 
 ## Configuration Settings
 
-Configure DuckDB ingestion and schema validation under `shared.database` and `run` in `config.yaml`:
+Configure the shared provenance catalog under `shared.database` and run-local database behavior under `run` in `config.yaml`:
 
 ```yaml
 shared:
   database:
     enabled: true
-    strict_schema: false
-    ingest_outputs: true
+    type: duckdb
+    path: /path/to/shared/provenance.duckdb
 
 run:
+  consist_db_local_run: true
   consist_db_lock_retries: 20
   consist_db_lock_wait_seconds: 0.5
 ```
 
 | Config Key | Default | Description |
 | --- | --- | --- |
-| `shared.database.enabled` | `true` | Enables DuckDB table ingestion and hybrid view creation during workflow execution. |
-| `shared.database.strict_schema` | `false` | Enforces strict SQLModel column and type validation during `dlt` ingestion; when `false`, Consist infers extra columns at runtime. |
-| `shared.database.ingest_outputs` | `true` | Materializes registered step outputs into `.consist/provenance.duckdb`. |
+| `shared.database.enabled` | `false` | Enables shared DuckDB catalog integration. |
+| `shared.database.type` | `"duckdb"` | Database backend type. |
+| `shared.database.path` | Required under `shared.database` | Shared DuckDB catalog path (used when `consist_db_local_run: false` or `consist_db_seed_from_shared_on_start: true`). |
+| `shared.database.snapshot_path` | `null` | Optional matrix snapshot file path. |
+| `run.consist_db_local_run` | `true` | Stores the active DuckDB provenance database in `.consist/<consist_db_filename>` inside the run directory. |
 | `run.consist_db_lock_retries` | `20` | Number of retry attempts when acquiring the DuckDB file lock. |
 | `run.consist_db_lock_wait_seconds` | `0.5` | Delay in seconds between DuckDB lock acquisition attempts. |
 
@@ -32,23 +35,28 @@ run:
 
 ### Exact Artifact Key Mappings
 
-| Coupler / Artifact Key | SQLModel Schema Class | Module | Primary Keys / Identifiers |
-| --- | --- | --- | --- |
-| `final_land_use` | `ActivitySimLandUse` | `pilates/database/schema/activitysim.py` | `zone_id` |
-| `final_households` | `ActivitySimHouseholds` | `pilates/database/schema/activitysim.py` | `household_id` |
-| `final_persons` | `ActivitySimPersons` | `pilates/database/schema/activitysim.py` | `person_id`, `household_id` |
-| `final_tours` | `ActivitySimTours` | `pilates/database/schema/activitysim.py` | `tour_id`, `person_id`, `household_id` |
-| `final_trips` | `ActivitySimTrips` | `pilates/database/schema/activitysim.py` | `trip_id`, `tour_id`, `person_id`, `household_id` |
-| `beam_linkstats` | `BeamLinkStats` | `pilates/database/schema/beam.py` | `link`, `hour` |
-| `beam_events` | `BeamEvents` | `pilates/database/schema/beam.py` | `time`, `type`, `person`, `vehicle` |
+| Coupler / Artifact Key | SQLModel Schema Class | Module |
+| --- | --- | --- |
+| `land_use_asim_in` / `land_use_asim_out` | `LandUseAsimIn` / `LandUseAsimOut` | `pilates/database/schema/activitysim_schema.py` |
+| `households_asim_in` / `households_asim_out` | `HouseholdsAsimIn` / `HouseholdsAsimOut` | `pilates/database/schema/activitysim_schema.py` |
+| `persons_asim_in` / `persons_asim_out` | `PersonsAsimIn` / `PersonsAsimOut` | `pilates/database/schema/activitysim_schema.py` |
+| `tours_asim_out` | `ToursAsimOut` | `pilates/database/schema/activitysim_schema.py` |
+| `trips_asim_out` | `TripsAsimOut` | `pilates/database/schema/activitysim_schema.py` |
+| `beam_plans_asim_out` | `BeamPlansAsimOut` | `pilates/database/schema/activitysim_schema.py` |
+| `accessibility_asim_out` | `AccessibilityAsimOut` | `pilates/database/schema/activitysim_schema.py` |
+| `linkstats` / `linkstats_warmstart` | `BeamLinkstats` | `pilates/database/schema/beam_schema.py` |
+| `beam_network_final` | `BeamNetworkFinal` | `pilates/database/schema/beam_schema.py` |
+| `beam_plans_out` | `BeamPlansOut` | `pilates/database/schema/beam_schema.py` |
+| `atlas_households_csv`, `atlas_vehicles2_output` | `AtlasHousehold`, `VehiclesAtlasOut` | `pilates/database/schema/atlas_schema.py` |
 
 ### Prefix Families and Split BEAM Event Keys
 
 `get_schema_for_key(key)` also resolves dynamic year-tagged and event-type-prefixed keys:
 
-- **UrbanSim tables** (`urbansim_*` and `<year>_urbansim_*`): Maps `households`, `persons`, `jobs`, `buildings`, `blocks`, and `zones` artifacts to the corresponding schemas in `pilates/database/schema/urbansim.py`.
-- **ATLAS tables** (`atlas_households*`, `atlas_vehicles*`): Maps vehicle ownership outputs to `AtlasHouseholds` and `AtlasVehicles` in `pilates/database/schema/atlas.py`.
-- **Split BEAM event tables** (`beam_events_<EventType>`): Maps per-event-type tables (such as `beam_events_PathTraversal`, `beam_events_ModeChoice`, `beam_events_PersonEntersVehicle`, `beam_events_actstart`, `beam_events_actend`, `beam_events_RefuelSessionEvent`, and `beam_events_ChargingPlugInEvent`) to specialized SQLModel classes in `pilates/database/schema/beam.py`.
+- **UrbanSim tables** (`urbansim_postprocess_usim_*_table_updated` / `*_archived`): Maps `households`, `persons`, `jobs`, `blocks`, `residential_units`, `taz_zone_geoms`, `work_locations`, and `graveyard` artifacts to schemas in `pilates/database/schema/urbansim_schema.py`.
+- **ATLAS tables** (`householdv_<year>`, `vehicles_<year>`): Maps year-scoped ATLAS outputs to `HouseholdVAtlasOut` and `VehiclesAtlasOut` in `pilates/database/schema/atlas_schema.py`.
+- **BEAM prefix families** (`linkstats_*`, `events_parquet_*`, `final_vehicles_*`, `path_traversal_links_*`, `route_history_*`): Maps versioned BEAM outputs to schemas in `pilates/database/schema/beam_schema.py`.
+- **Split BEAM event tables** (`events_parquet_<EventType>`): Maps per-event-type tables (such as `events_parquet_PathTraversal`, `events_parquet_ModeChoice`, `events_parquet_PersonEntersVehicle`, `events_parquet_actstart`, `events_parquet_actend`, `events_parquet_RefuelSessionEvent`, and `events_parquet_ChargingPlugInEvent`) to specialized SQLModel classes in `pilates/database/schema/beam_schema.py`.
 
 ## Generating Schema ERDs and Reference Diagrams
 

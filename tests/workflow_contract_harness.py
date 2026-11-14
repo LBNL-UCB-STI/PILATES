@@ -322,6 +322,17 @@ class DummyPreprocessor:
         beam_preprocess_inputs: Any = None,
         **kwargs: Any,
     ) -> Any:
+        if self.model_name == "activitysim":
+            asim_dir = Path(workspace.get_asim_mutable_data_dir())
+            for fname in (
+                "land_use.csv",
+                "households.csv",
+                "persons.csv",
+                "skims.omx",
+            ):
+                target = asim_dir / fname
+                if target.exists():
+                    target.touch()
         return _invoke_record_builder(
             self._record_builder,
             self.model_name,

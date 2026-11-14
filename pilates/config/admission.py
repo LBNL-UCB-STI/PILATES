@@ -109,12 +109,22 @@ class DeclaredDigestExpectation(BaseModel):
     @classmethod
     def validate_identity(cls, value: str) -> str:
         """Require one canonical raw-file or logical-matrices SHA-256 identity before runtime."""
-        if not re.fullmatch(r"sha256:(file|logical_matrices):[0-9a-f]{64}", value):
-            raise ValueError(
-                "identity must be sha256:file:<64 lowercase hexadecimal characters> or "
-                "sha256:logical_matrices:<64 lowercase hexadecimal characters>"
-            )
-        return value
+        if re.fullmatch(r"sha256:logical_matrices:[0-9a-f]{64}", value):
+            hex_part = value.rsplit(":", 1)[-1]
+            return f"logical_matrices_f32_v1:sha256:{hex_part}"
+
+        if (
+            re.fullmatch(r"sha256:file:[0-9a-f]{64}", value)
+            or re.fullmatch(r"logical_matrices_f32_v1:sha256:[0-9a-f]{64}", value)
+            or re.fullmatch(r"logical_matrices_canonical_v1:sha256:[0-9a-f]{64}", value)
+        ):
+            return value
+
+        raise ValueError(
+            "identity must be sha256:file:<64 lowercase hexadecimal characters>, "
+            "logical_matrices_f32_v1:sha256:<64 lowercase hexadecimal characters>, or "
+            "logical_matrices_canonical_v1:sha256:<64 lowercase hexadecimal characters>"
+        )
 
 
 AdmissionExpectation = Annotated[

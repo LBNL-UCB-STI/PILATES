@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+import uuid
+
+import consist
+
 from pilates.utils.consist_analysis import (
     _prepare_linkstats_pca_artifact_index,
     _resolve_link_filter_reference_artifact_ids,
@@ -202,12 +207,13 @@ def test_parse_linkstats_facets_parses_linkstats_parquet_iteration_key():
 
 
 def test_find_linkstats_artifacts_falls_back_to_key_prefix(monkeypatch):
-    class _FakeArtifact:
-        id = "artifact-1"
-        key = "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter1"
-        container_uri = "workspace://beam/beam_output/example.parquet"
-        run_id = "run-1"
-        meta = {}
+    artifact = consist.Artifact(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        key="linkstats_unmodified_parquet__y2018__i0__phys_sim_iter1",
+        uri="workspace://beam/beam_output/example.parquet",
+        driver="parquet",
+        run_id="run-1",
+    )
 
     class _FakeTracker:
         def find_artifacts_by_params(self, **kwargs):
@@ -215,8 +221,8 @@ def test_find_linkstats_artifacts_falls_back_to_key_prefix(monkeypatch):
             return []
 
     monkeypatch.setattr(
-        "pilates.utils.consist_analysis._find_artifacts_by_key_prefix_sqlmodel",
-        lambda *args, **kwargs: [_FakeArtifact()],
+        "pilates.utils.consist_analysis._find_artifacts_by_key_prefix",
+        lambda *args, **kwargs: [artifact],
     )
 
     frame = find_linkstats_artifacts(
@@ -226,7 +232,7 @@ def test_find_linkstats_artifacts_falls_back_to_key_prefix(monkeypatch):
         artifact_family="linkstats_unmodified_phys_sim_iter_parquet",
     )
     assert len(frame) == 1
-    assert frame.iloc[0]["key"] == _FakeArtifact.key
+    assert frame.iloc[0]["key"] == artifact.key
     assert int(frame.iloc[0]["phys_sim_iteration"]) == 1
     assert frame.iloc[0]["facet_source"] == "key_parse"
     assert "parent_run_id" in frame.columns
@@ -234,75 +240,39 @@ def test_find_linkstats_artifacts_falls_back_to_key_prefix(monkeypatch):
 
 
 def test_find_linkstats_artifacts_prefers_artifact_kv_facets(tmp_path):
-    class _FakeKV:
-        def __init__(
-            self,
-            artifact_id,
-            key_path,
-            value_type,
-            value_num=None,
-            value_str=None,
-            value_bool=None,
-        ):
-            self.artifact_id = artifact_id
-            self.key_path = key_path
-            self.value_type = value_type
-            self.value_num = value_num
-            self.value_str = value_str
-            self.value_bool = value_bool
-
-    class _FakeSession:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def exec(self, _statement):
-            class _Result:
-                def __init__(self, rows):
-                    self._rows = rows
-
-                def all(self):
-                    return self._rows
-
-            return _Result(self._rows)
-
-    class _FakeDB:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def session_scope(self):
-            return _FakeSession(self._rows)
-
-    class _FakeArtifact:
-        id = "artifact-1"
-        key = "not_parseable_key_name"
-        container_uri = "workspace://beam/beam_output/example.parquet"
-        run_id = "run-1"
-        meta = {}
+    artifact_id = "00000000-0000-0000-0000-000000000001"
+    artifact = consist.Artifact(
+        id=uuid.UUID(artifact_id),
+        key="not_parseable_key_name",
+        uri="workspace://beam/beam_output/example.parquet",
+        driver="parquet",
+        run_id="run-1",
+    )
 
     class _FakeTracker:
         def __init__(self, rows):
-            self.db = _FakeDB(rows)
+            self._rows = rows
+
+        def query_rows(self, query):
+            return self._rows
 
         def find_artifacts_by_params(self, **kwargs):
             assert kwargs.get("params")
-            return [_FakeArtifact()]
+            return [artifact]
 
     rows = [
-        _FakeKV(
-            "artifact-1",
+        (
+            artifact_id,
             "artifact_family",
             "str",
-            value_str="linkstats_unmodified_phys_sim_iter_parquet",
+            "linkstats_unmodified_phys_sim_iter_parquet",
+            None,
+            None,
+            None,
         ),
-        _FakeKV("artifact-1", "year", "int", value_num=2018),
-        _FakeKV("artifact-1", "iteration", "int", value_num=0),
-        _FakeKV("artifact-1", "phys_sim_iteration", "int", value_num=3),
+        (artifact_id, "year", "int", None, 2018, None, None),
+        (artifact_id, "iteration", "int", None, 0, None, None),
+        (artifact_id, "phys_sim_iteration", "int", None, 3, None, None),
     ]
     tracker = _FakeTracker(rows)
     frame = find_linkstats_artifacts(
@@ -313,7 +283,7 @@ def test_find_linkstats_artifacts_prefers_artifact_kv_facets(tmp_path):
     )
 
     assert len(frame) == 1
-    assert frame.iloc[0]["key"] == _FakeArtifact.key
+    assert frame.iloc[0]["key"] == artifact.key
     assert int(frame.iloc[0]["phys_sim_iteration"]) == 3
     assert frame.iloc[0]["facet_source"] == "artifact_kv"
     assert "parent_run_id" in frame.columns
@@ -321,94 +291,64 @@ def test_find_linkstats_artifacts_prefers_artifact_kv_facets(tmp_path):
 
 
 def test_find_linkstats_artifacts_batches_kv_queries_for_multiple_artifacts():
-    class _FakeKV:
-        def __init__(
-            self,
-            artifact_id,
-            key_path,
-            value_type,
-            value_num=None,
-            value_str=None,
-            value_bool=None,
-        ):
-            self.artifact_id = artifact_id
-            self.key_path = key_path
-            self.value_type = value_type
-            self.value_num = value_num
-            self.value_str = value_str
-            self.value_bool = value_bool
-
-    class _FakeSession:
-        def __init__(self, rows, call_counter):
-            self._rows = rows
-            self._call_counter = call_counter
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def exec(self, _statement):
-            self._call_counter["count"] += 1
-
-            class _Result:
-                def __init__(self, rows):
-                    self._rows = rows
-
-                def all(self):
-                    return self._rows
-
-            return _Result(self._rows)
-
-    class _FakeDB:
-        def __init__(self, rows):
-            self._rows = rows
-            self.call_counter = {"count": 0}
-
-        def session_scope(self):
-            return _FakeSession(self._rows, self.call_counter)
-
-    class _FakeArtifact:
-        def __init__(self, artifact_id, phys_sim_iteration):
-            self.id = artifact_id
-            self.key = f"not_parseable_key_{artifact_id}"
-            self.container_uri = f"workspace://beam/beam_output/{artifact_id}.parquet"
-            self.run_id = "run-1"
-            self.meta = {}
-            self.phys_sim_iteration = phys_sim_iteration
+    artifact_1_id = "00000000-0000-0000-0000-000000000001"
+    artifact_2_id = "00000000-0000-0000-0000-000000000002"
 
     class _FakeTracker:
         def __init__(self, rows):
-            self.db = _FakeDB(rows)
+            self._rows = rows
+            self.call_counter = {"count": 0}
+            self.db = SimpleNamespace(call_counter=self.call_counter)
             self._artifacts = [
-                _FakeArtifact("artifact-1", 1),
-                _FakeArtifact("artifact-2", 2),
+                consist.Artifact(
+                    id=uuid.UUID(artifact_1_id),
+                    key=f"not_parseable_key_{artifact_1_id}",
+                    uri=f"workspace://beam/beam_output/{artifact_1_id}.parquet",
+                    driver="parquet",
+                    run_id="run-1",
+                ),
+                consist.Artifact(
+                    id=uuid.UUID(artifact_2_id),
+                    key=f"not_parseable_key_{artifact_2_id}",
+                    uri=f"workspace://beam/beam_output/{artifact_2_id}.parquet",
+                    driver="parquet",
+                    run_id="run-1",
+                ),
             ]
+
+        def query_rows(self, query):
+            self.call_counter["count"] += 1
+            return self._rows
 
         def find_artifacts_by_params(self, **kwargs):
             assert kwargs.get("params")
             return self._artifacts
 
     rows = [
-        _FakeKV(
-            "artifact-1",
+        (
+            artifact_1_id,
             "artifact_family",
             "str",
-            value_str="linkstats_unmodified_phys_sim_iter_parquet",
+            "linkstats_unmodified_phys_sim_iter_parquet",
+            None,
+            None,
+            None,
         ),
-        _FakeKV("artifact-1", "year", "int", value_num=2018),
-        _FakeKV("artifact-1", "iteration", "int", value_num=0),
-        _FakeKV("artifact-1", "phys_sim_iteration", "int", value_num=1),
-        _FakeKV(
-            "artifact-2",
+        (artifact_1_id, "year", "int", None, 2018, None, None),
+        (artifact_1_id, "iteration", "int", None, 0, None, None),
+        (artifact_1_id, "phys_sim_iteration", "int", None, 1, None, None),
+        (
+            artifact_2_id,
             "artifact_family",
             "str",
-            value_str="linkstats_unmodified_phys_sim_iter_parquet",
+            "linkstats_unmodified_phys_sim_iter_parquet",
+            None,
+            None,
+            None,
         ),
-        _FakeKV("artifact-2", "year", "int", value_num=2018),
-        _FakeKV("artifact-2", "iteration", "int", value_num=0),
-        _FakeKV("artifact-2", "phys_sim_iteration", "int", value_num=2),
+        (artifact_2_id, "year", "int", None, 2018, None, None),
+        (artifact_2_id, "iteration", "int", None, 0, None, None),
+        (artifact_2_id, "phys_sim_iteration", "int", None, 2, None, None),
     ]
     tracker = _FakeTracker(rows)
 

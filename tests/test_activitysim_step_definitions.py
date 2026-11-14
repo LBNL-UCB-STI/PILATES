@@ -165,7 +165,10 @@ def test_activitysim_definitions_resolve_native_consist_contracts(
     )
     settings = SimpleNamespace(run=SimpleNamespace(region="test"))
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
-    workspace = SimpleNamespace(full_path=str(tmp_path))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+    )
 
     for definition in (
         activitysim.activitysim_preprocess,
@@ -572,7 +575,10 @@ def test_activitysim_postprocess_resolver_deduplicates_tracked_h5_aliases(
     )
     settings = SimpleNamespace(run=SimpleNamespace(region="test"))
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
-    workspace = SimpleNamespace(full_path=str(tmp_path))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+    )
     resolved = activitysim._activitysim_postprocess_resolver(
         settings=settings,
         state=state,
@@ -733,7 +739,7 @@ def test_activitysim_postprocess_executes_h5_aliases_in_place_without_snapshots(
     )
     assert projected.usim_datastore_h5 == output_paths[USIM_DATASTORE_CURRENT_H5]
     assert (
-        result.outputs[USIM_DATASTORE_CURRENT_H5].container_uri
+        result.outputs[USIM_DATASTORE_CURRENT_H5].uri
         == "workspace://outputs/usim_datastore_h5"
     )
 
@@ -805,7 +811,7 @@ def test_activitysim_projectors_validate_persisted_outputs(
         get_asim_mutable_data_dir=lambda: str(tmp_path),
         get_asim_output_dir=lambda: str(tmp_path),
     )
-    artifact = lambda path: SimpleNamespace(container_uri=str(path))
+    artifact = lambda path: SimpleNamespace(uri=str(path), path=str(path))
 
     expected_preprocess_outputs = dict(preprocess_paths)
     expected_run_outputs = dict(run_paths)
@@ -1613,16 +1619,16 @@ def test_activitysim_projector_rejects_source_mount_when_declared_destination_mi
     )
     outputs = {
         ASIM_LAND_USE_IN: SimpleNamespace(
-            container_uri="workspace://current/land_use.csv",
+            uri="workspace://current/land_use.csv",
             path=source_mount,
             abs_path=str(source_mount),
         ),
         ASIM_HOUSEHOLDS_IN: SimpleNamespace(
-            container_uri="workspace://current/households.csv",
+            uri="workspace://current/households.csv",
             path=declared_households,
         ),
         ASIM_PERSONS_IN: SimpleNamespace(
-            container_uri="workspace://current/persons.csv",
+            uri="workspace://current/persons.csv",
             path=declared_persons,
         ),
     }

@@ -141,16 +141,13 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
         usim_datastore_h5=str(bound_usim_h5),
     )
 
-    preprocess_keys = {
-        short_name
-        for short_name, _path, _description in preprocess_outputs._iter_record_items()
-    }
-    assert {
-        ASIM_LAND_USE_IN,
-        ASIM_HOUSEHOLDS_IN,
-        ASIM_PERSONS_IN,
-        ASIM_OMX_SKIMS,
-    } <= preprocess_keys
+    assert preprocess_outputs.land_use_table.exists()
+    assert preprocess_outputs.households_table.exists()
+    assert preprocess_outputs.persons_table.exists()
+    assert (
+        preprocess_outputs.omx_skims is not None
+        and preprocess_outputs.omx_skims.exists()
+    )
     assert preprocess_outputs.input_hashes[ASIM_LAND_USE_IN] == "hash_land_use"
     assert preprocess_outputs.input_hashes[ASIM_HOUSEHOLDS_IN] == "hash_households_in"
     assert preprocess_outputs.input_hashes[ASIM_PERSONS_IN] == "hash_persons_in"
@@ -194,9 +191,12 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
         },
     )
     run_outputs.source_input_paths = {
-        short_name: path
-        for short_name, path, _description in preprocess_outputs._iter_record_items()
+        ASIM_LAND_USE_IN: preprocess_outputs.land_use_table,
+        ASIM_HOUSEHOLDS_IN: preprocess_outputs.households_table,
+        ASIM_PERSONS_IN: preprocess_outputs.persons_table,
     }
+    if preprocess_outputs.omx_skims is not None:
+        run_outputs.source_input_paths[ASIM_OMX_SKIMS] = preprocess_outputs.omx_skims
     run_outputs.source_input_hashes = dict(preprocess_outputs.input_hashes)
     run_outputs.source_input_paths["zarr_skims"] = zarr_cache
     run_outputs.source_input_hashes["zarr_skims"] = "hash_zarr_skims"
@@ -204,10 +204,7 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     postprocessor = ActivitysimPostprocessor("activitysim", state)
     postprocess_outputs = postprocessor.postprocess(run_outputs, workspace)
 
-    output_map = {
-        short_name: path
-        for short_name, path, _description in postprocess_outputs._iter_record_items()
-    }
+    output_map = postprocess_outputs.processed_outputs
     assert "households_asim_out" in output_map
     assert "persons_asim_out" in output_map
     assert "beam_plans_asim_out" in output_map
@@ -326,10 +323,7 @@ def test_activitysim_postprocess_archives_omx_when_zarr_was_not_a_run_input(
     postprocessor = ActivitysimPostprocessor("activitysim", state)
     postprocess_outputs = postprocessor.postprocess(run_outputs, workspace)
 
-    output_map = {
-        short_name: path
-        for short_name, path, _description in postprocess_outputs._iter_record_items()
-    }
+    output_map = postprocess_outputs.processed_outputs
     assert "asim_input_skims_omx_archived" in output_map
     assert "asim_input_skims_zarr_archived" not in output_map
     assert (

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import consist
 import pytest
 
 from pilates.generic.records import FileRecord, RecordStore
@@ -76,7 +77,7 @@ class TraceCapableTrackerStub:
         return None
 
     def register_run_output_recovery_copies(self, *_args, **_kwargs):
-        return None
+        return consist.RunOutputRecoveryCopiesRegistration()
 
     def log_h5_container(
         self,

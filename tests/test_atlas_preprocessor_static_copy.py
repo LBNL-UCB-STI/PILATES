@@ -192,7 +192,7 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
 
         def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
             root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2021"
-            root.mkdir(parents=True)
+            root.mkdir(parents=True, exist_ok=True)
             for name in (
                 "households.csv",
                 "blocks.csv",
@@ -209,7 +209,7 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
 
         def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
             output_dir = launch_context.output_root
-            output_dir.mkdir(parents=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
             (output_dir / "householdv_2021.csv").write_text("id\n1\n")
             (output_dir / "vehicles_2021.csv").write_text("id\n1\n")
             root = launch_context.input_root / "year2021"
@@ -250,7 +250,7 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
             stage="vehicle_ownership",
             phase="preprocess",
             facet=native_facet,
-            output_paths=ATLAS_PREPROCESS.output_paths(
+            outputs=ATLAS_PREPROCESS.outputs(
                 settings=settings, state=producer_state, workspace=workspace
             ),
             execution_options=ExecutionOptions(
@@ -259,7 +259,7 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
         )
         run_inputs = {
             key: path
-            for key, path in ATLAS_PREPROCESS.output_paths(
+            for key, path in ATLAS_PREPROCESS.outputs(
                 settings=settings, state=producer_state, workspace=workspace
             ).items()
         }

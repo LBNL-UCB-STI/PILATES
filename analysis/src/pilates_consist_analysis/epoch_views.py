@@ -275,17 +275,15 @@ class EpochViews:
         return output
 
     def query(self, sql: str) -> pd.DataFrame:
+        formatted_sql = sql.format(views=self)
         try:
-            query_fn = self.tracker.db.query
+            return self.tracker.query_df(formatted_sql)
+        except AttributeError:
+            pass
+        try:
+            return self.tracker.db.query_df(formatted_sql)
         except AttributeError as exc:
             raise RuntimeError("Tracker DB query interface is not available.") from exc
-        result = query_fn(sql.format(views=self))
-        try:
-            return result.df()
-        except AttributeError as exc:
-            raise RuntimeError(
-                "Tracker DB query result does not expose .df()."
-            ) from exc
 
     def _view(self, model: str, logical_name: str) -> str:
         model_key = str(model).strip().lower()

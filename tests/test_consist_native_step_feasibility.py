@@ -137,8 +137,8 @@ def test_equivalent_execution_cache_hit_returns_complete_identical_outputs(
     assert calls == ["executed"]
     assert set(first.outputs) == {"copied", "summary"}
     assert set(second.outputs) == set(first.outputs)
-    assert {key: artifact.hash for key, artifact in second.outputs.items()} == {
-        key: artifact.hash for key, artifact in first.outputs.items()
+    assert {key: artifact.digest for key, artifact in second.outputs.items()} == {
+        key: artifact.digest for key, artifact in first.outputs.items()
     }
 
 
@@ -331,7 +331,7 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
     assert set(three_first_inputs) == {FINAL_SKIMS_OMX}
     assert three_first_inputs[
         FINAL_SKIMS_OMX
-    ].hash == tracker.identity.compute_file_checksum(upstream_omx)
+    ].digest.hex == tracker.identity.compute_file_checksum(upstream_omx)
 
     three_second = run_preprocess(
         workspace_three_second,
@@ -353,7 +353,7 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
     assert set(three_second_inputs) == {FINAL_SKIMS_OMX}
     assert three_second_inputs[
         FINAL_SKIMS_OMX
-    ].hash == tracker.identity.compute_file_checksum(upstream_omx)
+    ].digest.hex == tracker.identity.compute_file_checksum(upstream_omx)
 
     four_first = run_preprocess(
         workspace_four_first,
@@ -369,7 +369,7 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
     assert set(four_first_inputs) == {FINAL_SKIMS_OMX}
     assert four_first_inputs[
         FINAL_SKIMS_OMX
-    ].hash == tracker.identity.compute_file_checksum(upstream_omx)
+    ].digest.hex == tracker.identity.compute_file_checksum(upstream_omx)
 
     four_second = run_preprocess(
         workspace_four_second,
@@ -388,16 +388,23 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
         "persons.csv": b"persons\n",
         "skims.omx": b"upstream omx bytes",
     }
-    assert {key: artifact.hash for key, artifact in four_second.outputs.items()} == {
-        key: artifact.hash for key, artifact in four_first.outputs.items()
+    assert {key: artifact.digest for key, artifact in four_second.outputs.items()} == {
+        key: artifact.digest for key, artifact in four_first.outputs.items()
     }
     four_second_inputs = tracker.get_artifacts_for_run(four_second.run.id).inputs
     assert set(four_second_inputs) == {FINAL_SKIMS_OMX}
     assert four_second_inputs[
         FINAL_SKIMS_OMX
-    ].hash == tracker.identity.compute_file_checksum(upstream_omx)
+    ].digest.hex == tracker.identity.compute_file_checksum(upstream_omx)
 
-    (workspace_four_first / "households.csv").unlink()
+    for ws in (
+        workspace_three_first,
+        workspace_three_second,
+        workspace_four_first,
+        workspace_four_second,
+    ):
+        if (ws / "households.csv").exists():
+            (ws / "households.csv").unlink()
     four_miss = run_preprocess(
         workspace_four_miss,
         "activitysim-preprocess-four-miss",
@@ -417,7 +424,7 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
     assert set(four_miss_inputs) == {FINAL_SKIMS_OMX}
     assert four_miss_inputs[
         FINAL_SKIMS_OMX
-    ].hash == tracker.identity.compute_file_checksum(upstream_omx)
+    ].digest.hex == tracker.identity.compute_file_checksum(upstream_omx)
 
     (workspace_four_first / "households.csv").write_text(
         "households\n", encoding="utf-8"
@@ -431,11 +438,11 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
     assert four_recovered.cache_hit is True
     assert calls == ["executed", "executed", "executed"]
     assert set(four_recovered.outputs) == expected_keys
-    assert {key: artifact.hash for key, artifact in four_recovered.outputs.items()} == {
-        key: artifact.hash for key, artifact in four_first.outputs.items()
-    }
+    assert {
+        key: artifact.digest for key, artifact in four_recovered.outputs.items()
+    } == {key: artifact.digest for key, artifact in four_first.outputs.items()}
     four_recovered_inputs = tracker.get_artifacts_for_run(four_recovered.run.id).inputs
     assert set(four_recovered_inputs) == {FINAL_SKIMS_OMX}
     assert four_recovered_inputs[
         FINAL_SKIMS_OMX
-    ].hash == tracker.identity.compute_file_checksum(upstream_omx)
+    ].digest.hex == tracker.identity.compute_file_checksum(upstream_omx)

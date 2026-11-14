@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import shutil
-from types import SimpleNamespace
 
+import consist
 import pytest
 
 from pilates.config import PilatesConfig
@@ -132,33 +131,39 @@ def test_register_verified_recovery_copies_uses_consist_registration_api(tmp_pat
     output = source_run_dir / "outputs" / "result.txt"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("result-data", encoding="utf-8")
-    expected_hash = hashlib.sha256(b"result-data").hexdigest()
+    demo_artifact = consist.Artifact(
+        key="demo_output",
+        uri="workspace://outputs/result.txt",
+        driver="txt",
+        run_id="run-1",
+    )
 
     calls = []
 
-    class FakeFS:
-        @staticmethod
-        def get_remappable_relative_path(container_uri):
-            assert container_uri == "workspace://outputs/result.txt"
-            return "outputs/result.txt"
+    class FakeTracker(consist.Tracker):
+        def __init__(self) -> None:
+            super().__init__(
+                run_dir=source_run_dir,
+                mounts={"workspace": str(source_run_dir)},
+            )
 
-    class FakeTracker:
-        fs = FakeFS()
-
-        def get_run_outputs(self, run_id):
-            assert run_id == "run-1"
-            return {
-                "demo_output": SimpleNamespace(
-                    container_uri="workspace://outputs/result.txt"
-                )
-            }
-
-        def register_run_output_recovery_copies(self, run_id, recovery_root, **kwargs):
+        def register_run_output_recovery_copies(
+            self, run_id: str, recovery_root: str | Path, **kwargs
+        ) -> consist.RunOutputRecoveryCopiesRegistration:
             calls.append((run_id, recovery_root, kwargs))
-            return SimpleNamespace(
-                registered={"demo_output": object()},
-                blocked={},
-                summary="registered=1",
+            return consist.RunOutputRecoveryCopiesRegistration(
+                outputs={
+                    "demo_output": consist.ArtifactRecoveryCopyRegistration(
+                        artifact=demo_artifact,
+                        key="demo_output",
+                        artifact_id=str(demo_artifact.id),
+                        recovery_root=Path(recovery_root),
+                        expected_path=Path("outputs/result.txt"),
+                        status="registered",
+                        metadata_updated=True,
+                        verification_succeeded=True,
+                    )
+                }
             )
 
         def set_artifact_recovery_roots(self, *_args, **_kwargs):
@@ -178,44 +183,49 @@ def test_register_verified_recovery_copies_uses_consist_registration_api(tmp_pat
             str(recovery_run_dir),
             {
                 "append": True,
-                "content_hashes": {"demo_output": expected_hash},
+                "source_root": source_run_dir,
                 "verify": True,
             },
         )
     ]
 
 
-def test_register_verified_recovery_copies_can_skip_hash_verification(
-    tmp_path, monkeypatch
-):
+def test_register_verified_recovery_copies_can_skip_hash_verification(tmp_path):
     source_run_dir = tmp_path / "source-run"
     recovery_run_dir = tmp_path / "recovery-run"
+    demo_artifact = consist.Artifact(
+        key="demo_output",
+        uri="workspace://outputs/result.txt",
+        driver="txt",
+        run_id="run-1",
+    )
     calls = []
 
-    class FakeTracker:
-        def get_run_outputs(self, run_id):
-            assert run_id == "run-1"
-            return {
-                "demo_output": SimpleNamespace(
-                    container_uri="workspace://outputs/result.txt"
-                )
-            }
-
-        def register_run_output_recovery_copies(self, run_id, recovery_root, **kwargs):
-            calls.append((run_id, recovery_root, kwargs))
-            return SimpleNamespace(
-                registered={"demo_output": object()},
-                blocked={},
-                summary="registered=1",
+    class FakeTracker(consist.Tracker):
+        def __init__(self) -> None:
+            super().__init__(
+                run_dir=source_run_dir,
+                mounts={"workspace": str(source_run_dir)},
             )
 
-    def fail_hash(*_args, **_kwargs):
-        raise AssertionError("source hashing should be skipped when verify=False")
-
-    monkeypatch.setattr(
-        "pilates.runtime.promote_run_archive._run_output_content_hashes",
-        fail_hash,
-    )
+        def register_run_output_recovery_copies(
+            self, run_id: str, recovery_root: str | Path, **kwargs
+        ) -> consist.RunOutputRecoveryCopiesRegistration:
+            calls.append((run_id, recovery_root, kwargs))
+            return consist.RunOutputRecoveryCopiesRegistration(
+                outputs={
+                    "demo_output": consist.ArtifactRecoveryCopyRegistration(
+                        artifact=demo_artifact,
+                        key="demo_output",
+                        artifact_id=str(demo_artifact.id),
+                        recovery_root=Path(recovery_root),
+                        expected_path=Path("outputs/result.txt"),
+                        status="registered",
+                        metadata_updated=True,
+                        verification_succeeded=False,
+                    )
+                }
+            )
 
     registered = _register_verified_run_output_recovery_copies(
         FakeTracker(),
@@ -232,11 +242,90 @@ def test_register_verified_recovery_copies_can_skip_hash_verification(
             str(recovery_run_dir),
             {
                 "append": True,
-                "content_hashes": None,
+                "source_root": None,
                 "verify": False,
             },
         )
     ]
+
+
+def test_register_verified_recovery_copies_real_tracker_fast_hashing_uses_source_root(
+    tmp_path,
+):
+    source_run_dir = tmp_path / "source-run"
+    verified_recovery_dir = tmp_path / "recovery-verified"
+    corrupted_recovery_dir = tmp_path / "recovery-corrupted"
+    advisory_recovery_dir = tmp_path / "recovery-advisory"
+    db_path = source_run_dir / ".consist" / "provenance.duckdb"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tracker = consist.Tracker(
+        run_dir=source_run_dir,
+        db_path=str(db_path),
+        mounts={"workspace": str(source_run_dir)},
+        hashing_strategy="fast",
+        allow_external_paths=True,
+    )
+    try:
+        output_file = source_run_dir / "outputs" / "fast_output.bin"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_bytes(b"fast-hashed-payload")
+
+        with tracker.start_run("fast_run", model="demo"):
+            logged = tracker.log_artifact(
+                str(output_file), key="fast_output", direction="output"
+            )
+        run_id = str(logged.run_id)
+        assert logged.digest is None or logged.digest.scheme != "sha256"
+
+        copied_ok = verified_recovery_dir / "outputs" / "fast_output.bin"
+        copied_ok.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(output_file, copied_ok)
+
+        registered_verified = _register_verified_run_output_recovery_copies(
+            tracker,
+            source_run_dir=source_run_dir,
+            recovery_run_dir=verified_recovery_dir,
+            run_ids=[run_id],
+            verify=True,
+        )
+        assert registered_verified == 1
+
+        copied_bad = corrupted_recovery_dir / "outputs" / "fast_output.bin"
+        copied_bad.parent.mkdir(parents=True, exist_ok=True)
+        copied_bad.write_bytes(b"corrupted-payload")
+
+        registered_corrupted = _register_verified_run_output_recovery_copies(
+            tracker,
+            source_run_dir=source_run_dir,
+            recovery_run_dir=corrupted_recovery_dir,
+            run_ids=[run_id],
+            verify=True,
+        )
+        assert registered_corrupted == 0
+
+        copied_advisory = advisory_recovery_dir / "outputs" / "fast_output.bin"
+        copied_advisory.parent.mkdir(parents=True, exist_ok=True)
+        copied_advisory.write_bytes(b"unverified-payload")
+
+        registered_advisory = _register_verified_run_output_recovery_copies(
+            tracker,
+            source_run_dir=source_run_dir,
+            recovery_run_dir=advisory_recovery_dir,
+            run_ids=[run_id],
+            verify=False,
+        )
+        assert registered_advisory == 1
+
+        refreshed = tracker.get_run_outputs(run_id)["fast_output"]
+        roots = [
+            Path(root).resolve() for root in tracker.artifact_recovery_roots(refreshed)
+        ]
+        assert verified_recovery_dir.resolve() in roots
+        assert advisory_recovery_dir.resolve() in roots
+        assert corrupted_recovery_dir.resolve() not in roots
+    finally:
+        tracker.close()
 
 
 def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
@@ -275,7 +364,7 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
                 str(promoted.resolve())
             ]
         finally:
-            promoted_tracker.db.engine.dispose()
+            promoted_tracker.close()
 
         output_path.unlink()
         hydrated = tracker.hydrate_run_outputs(
@@ -296,7 +385,7 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
         assert marker["roots"][0]["status"] == "promoted"
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_can_skip_recovery_copy_verification(
@@ -332,7 +421,7 @@ def test_promote_run_to_recovery_roots_can_skip_recovery_copy_verification(
         assert calls == [False]
         assert result.roots[0].artifact_metadata_updated is True
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
@@ -354,7 +443,7 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
             content="old-result-data",
         )
     finally:
-        main_tracker.db.engine.dispose()
+        main_tracker.close()
 
     run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -412,9 +501,9 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
                 assert old_run_id in merged_run_ids
                 assert new_run_id in merged_run_ids
             finally:
-                merged_tracker.db.engine.dispose()
+                merged_tracker.close()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
@@ -506,7 +595,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
         assert snapshot_history_file.exists()
         assert snapshot_latest_file.exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_direct_copy_missing(
@@ -531,7 +620,7 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
             content="old-result-data",
         )
     finally:
-        main_tracker.db.engine.dispose()
+        main_tracker.close()
 
     run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -554,7 +643,7 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
     if source_wal.exists():
         shutil.copy2(source_wal, Path(f"{snapshot_db}.wal"))
 
-    tracker.db.engine.dispose()
+    tracker.close()
     source_db.unlink()
     source_wal.unlink(missing_ok=True)
 
@@ -579,7 +668,7 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
             promoted / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
         ).exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_seeds_missing_main_db_from_shard(tmp_path):
@@ -637,9 +726,9 @@ def test_promote_run_to_recovery_roots_seeds_missing_main_db_from_shard(tmp_path
             }
             assert new_run_id in merged_run_ids
         finally:
-            merged_tracker.db.engine.dispose()
+            merged_tracker.close()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
@@ -664,7 +753,7 @@ def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
             content="old-result-data",
         )
     finally:
-        main_tracker.db.engine.dispose()
+        main_tracker.close()
 
     run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -714,7 +803,7 @@ def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
         assert promoted.exists()
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
@@ -764,7 +853,7 @@ def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
         assert not shard_path.exists()
         assert not Path(f"{shard_path}.wal").exists()
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_is_idempotent(tmp_path):
@@ -794,7 +883,7 @@ def test_promote_run_to_recovery_roots_is_idempotent(tmp_path):
             str((recovery_root / run_dir.name).resolve())
         ]
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()
 
 
 def test_promote_run_to_recovery_roots_handles_partial_failure(tmp_path):
@@ -827,4 +916,4 @@ def test_promote_run_to_recovery_roots_handles_partial_failure(tmp_path):
             str((good_root / run_dir.name).resolve())
         ]
     finally:
-        tracker.db.engine.dispose()
+        tracker.close()

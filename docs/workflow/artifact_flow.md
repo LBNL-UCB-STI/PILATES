@@ -1,6 +1,6 @@
 # Artifact Flow, Roles & Facets
 
-In a multi-model workflow, each simulator writes files into its own directory structure using its own naming conventions—and those file locations change across forecast years, supply-demand iterations, and optional stages. If ActivitySim or BEAM had to guess where the latest population HDF5 or travel skims lived on disk, disabling a model (like ATLAS or UrbanSim) or resuming from a cache hit would break downstream path assumptions.
+In a multi-model workflow, each simulator writes files into its own directory structure using its own naming conventions, and those locations change across forecast years, supply-demand iterations, and optional stages. If ActivitySim or BEAM guessed where the latest population HDF5 or travel skims lived on disk, disabling a model (like ATLAS or UrbanSim) or resuming from a cache hit would break downstream path assumptions.
 
 PILATES solves this with **`scenario.coupler`**, an in-memory artifact switchboard attached to the active Consist `ScenarioContext`.
 
@@ -11,9 +11,9 @@ PILATES solves this with **`scenario.coupler`**, an in-memory artifact switchboa
 PILATES relies on `scenario.coupler` for four core responsibilities:
 
 1. **Decouple consumers from upstream directory layouts**: Downstream steps never construct paths into an upstream model's output folder. A step asks the coupler for a semantic key (or an ordered fallback list of keys via `ArtifactBindingRule`), and Consist copies the resolved file into the step's local working directory.
-2. **Track the "latest" version of evolving state across years and iterations**: As the simulation advances, models overwrite keys in `scenario.coupler` with newly archived artifacts. For example, `omx_skims` is seeded at scenario start from the warm-start skim file and is updated after every `beam_postprocess` pass so the next iteration or forecast year automatically binds the newest travel times.
-3. **Adapt cleanly when optional stages are enabled or disabled**: When ATLAS is enabled, `atlas_postprocess` publishes `usim_h5_updated` and `atlas_vehicles2_output` to the coupler; when ATLAS is disabled, those keys remain unset and downstream steps (`activitysim_preprocess`, `beam_preprocess`) fall back to the UrbanSim or initial base-datastore population keys.
-4. **Propagate content identity for caching and provenance**: Because `scenario.coupler` stores Consist `Artifact` objects rather than raw string paths, every coupler handoff automatically records a producer-to-consumer lineage edge in `provenance.duckdb` and feeds the exact input file digest into the downstream step's cache key.
+2. **Track the "latest" version of evolving state across years and iterations**: As the simulation advances, models overwrite keys in `scenario.coupler` with newly archived artifacts. For example, `omx_skims` is seeded at scenario start from the warm-start skim file and updated after every `beam_postprocess` pass so the next iteration or forecast year binds the newest travel times.
+3. **Adapt when optional stages are enabled or disabled**: When ATLAS is enabled, `atlas_postprocess` publishes `usim_h5_updated` and `atlas_vehicles2_output` to the coupler; when ATLAS is disabled, those keys remain unset and downstream steps (`activitysim_preprocess`, `beam_preprocess`) fall back to the UrbanSim or initial base-datastore population keys.
+4. **Propagate content identity for caching and provenance**: Because `scenario.coupler` stores Consist `Artifact` objects rather than raw string paths, every coupler handoff records a producer-to-consumer lineage edge in `.consist/provenance.duckdb` and feeds the exact input file digest into the downstream step's cache key.
 
 ```mermaid
 flowchart LR
@@ -93,7 +93,7 @@ All canonical coupler keys live in `pilates/workflows/artifact_keys.py` (`Artifa
 
 ## Queryable Facets in DuckDB
 
-While `scenario.coupler` manages live artifact handoffs during a run, **facets** make completed runs and artifacts easy to query afterward in `<workspace>/provenance/provenance.duckdb` without parsing filenames or directory trees.
+While `scenario.coupler` manages live artifact handoffs during a run, **facets** make completed runs and artifacts queryable afterward in `<archive_run_dir>/.consist/provenance.duckdb` without parsing filenames or directory trees.
 
 PILATES attaches two kinds of structured facets (indexed with `facet_index=True`, which does not alter cache hashes):
 
@@ -150,7 +150,7 @@ PILATES attaches two kinds of structured facets (indexed with `facet_index=True`
     )
     ```
 
-    1. Queries `<workspace>/provenance/provenance.duckdb` using indexed facet columns rather than scanning the filesystem.
+    1. Queries `<archive_run_dir>/.consist/provenance.duckdb` using indexed facet columns rather than scanning the filesystem.
     2. Matches both intermediate (`beam_sub_iter1`) and promoted final sub-iteration artifacts by structured metadata.
 
 ## Related Documentation
