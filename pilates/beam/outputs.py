@@ -48,6 +48,13 @@ class _BeamPostprocessExpectedOutputsValidator:
         outputs: "BeamPostprocessOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
+        """
+        Return error results if consumer-required BEAM skims are missing.
+
+        Requires ``zarr_skims`` when ``activity_demand`` is ``"activitysim"``,
+        and requires ``final_skims_omx`` when OMX export is enabled or UrbanSim
+        or ATLAS is active. Skips checks if ``context.settings`` is ``None``.
+        """
         settings = context.settings
         if settings is None:
             return []

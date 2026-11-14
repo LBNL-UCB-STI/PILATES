@@ -7,7 +7,7 @@ PILATES validates model outputs at the end of every step before promoting artifa
 At the end of each step, `project_outputs` and the model's `Postprocessor` run three checks in order:
 
 1. **Filesystem path verification**: `StepOutputsBase.validate(context)` checks that every path in `required_path_fields`, every non-`None` path in `optional_path_fields`, and every `Path` value in `dict_path_fields` exists on disk.
-2. **Semantic `OutputValidator` checks**: `StepOutputsBase.validate(context)` runs each `OutputValidator` declared in `validators` (for example, `_BeamPostprocessExpectedOutputsValidator` in `pilates/beam/outputs.py`, which requires `zarr_skims` when ActivitySim is active and `final_skims_omx` when UrbanSim, ATLAS, or `write_skims_to_omx` is enabled).
+2. **Semantic `OutputValidator` checks**: `StepOutputsBase.validate(context)` runs each `OutputValidator` declared in `validators` (for example, `_BeamPostprocessExpectedOutputsValidator` in `pilates/beam/outputs.py`, which requires `zarr_skims` when ActivitySim is active and `final_skims_omx` when UrbanSim, ATLAS, or `write_skims_to_omx` is enabled). Each validator returns `ValidationResult` items only for violations (returning `[]` when everything passes); `StepOutputsBase.validate()` logs them when `level == "warning"` and raises `AssertionError` when `level == "error"`.
 3. **Domain invariants and schemas**: Postprocessors verify cross-table referential integrity, zone coordinate bounds, and positive row counts on core outputs. Registered SQLModel schemas in `pilates/database/schema/registry.py` define column types and keys for tabular artifacts (see [Database and Schemas](../reference/database_and_schemas.md)).
 
 ## Validation by Model

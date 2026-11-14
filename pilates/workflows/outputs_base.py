@@ -36,12 +36,16 @@ ValidationLevel = Literal["error", "warning"]
 @dataclass(frozen=True)
 class ValidationResult:
     """
-    Result payload emitted by a semantic output validator.
+    A single validation violation (error or warning) emitted by an ``OutputValidator``.
+
+    Validators return an empty list when outputs pass; each ``ValidationResult``
+    represents something wrong or unexpected that ``StepOutputsBase.validate()``
+    will log (when ``level == "warning"``) or fail on (when ``level == "error"``).
 
     Attributes
     ----------
     message : str
-        Human-readable validation message.
+        Human-readable description of the violation.
     metadata : mapping, optional
         Optional structured context to aid debugging.
     """
@@ -78,7 +82,13 @@ class ValidationContext:
 
 class OutputValidator(Protocol):
     """
-    Protocol for semantic output validators.
+    Protocol for semantic validators run by ``StepOutputsBase.validate()``.
+
+    Implementations inspect a ``StepOutputs`` instance alongside runtime
+    ``ValidationContext`` (settings, state, workspace, upstream outputs) and
+    return ``ValidationResult`` items. ``StepOutputsBase.validate()`` logs
+    results as warnings when ``level == "warning"`` or raises
+    ``AssertionError`` when ``level == "error"``.
     """
 
     name: str
@@ -88,7 +98,9 @@ class OutputValidator(Protocol):
         self, outputs: Any, context: ValidationContext
     ) -> List[ValidationResult]:
         """
-        Validate typed outputs under a runtime context.
+        Check semantic output invariants and return any violations found.
+
+        An empty list indicates the outputs satisfy this validator's contract.
         """
 
         ...

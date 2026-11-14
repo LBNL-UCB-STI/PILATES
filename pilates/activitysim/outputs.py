@@ -197,6 +197,14 @@ class _UrbanSimToActivitySimBoundaryValidator:
         outputs: "ActivitySimPreprocessOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
+        """
+        Return warning results if prepared tables sit outside ``mutable_data_dir``.
+
+        Applies only when an UrbanSim step is present in
+        ``context.upstream_outputs``, verifying that ``land_use_table``,
+        ``households_table``, and ``persons_table`` live directly inside
+        ``outputs.mutable_data_dir``.
+        """
         upstream = (
             context.upstream_outputs if context.upstream_outputs is not None else {}
         )
@@ -310,6 +318,12 @@ class _ActivitySimRunOutputsValidator:
         outputs: "ActivitySimRunOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
+        """
+        Return warning results for raw output keys outside ``ASIM_OUTPUT_KEY_MAP``.
+
+        Normalizes each key in ``outputs.raw_outputs`` and flags unrecognized
+        keys without failing the run.
+        """
         declared = set(ASIM_OUTPUT_KEY_MAP.values())
         results: list[ValidationResult] = []
         for raw_key in outputs.raw_outputs:
@@ -368,6 +382,13 @@ class _ActivitySimPostprocessOutputsValidator:
         outputs: "ActivitySimPostprocessOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
+        """
+        Return an error result if ``usim_datastore_h5`` is missing with land use active.
+
+        Checks ``context.state`` / ``context.settings`` for an enabled
+        ``land_use`` stage and requires ``outputs.usim_datastore_h5`` so
+        downstream UrbanSim steps receive the updated datastore.
+        """
         if not _activitysim_postprocess_requires_usim_output(context):
             return []
         if outputs.usim_datastore_h5 is not None:

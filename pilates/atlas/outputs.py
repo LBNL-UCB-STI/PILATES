@@ -36,6 +36,9 @@ class AtlasPreprocessOutputs(StepOutputsBase):
     prepared_inputs: Dict[str, Path] = field(default_factory=dict)
 
     def validate(self, context: Optional[ValidationContext] = None) -> None:
+        """
+        Verify ATLAS preprocess paths, post-start-year ``atlas_grave_csv``, and H5 household ID parity.
+        """
         super().validate(context)
         state = getattr(context, "state", None) if context is not None else None
         if state is None:
@@ -125,6 +128,9 @@ class AtlasRunOutputs(StepOutputsBase):
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
 
     def validate(self, context: Optional[Any] = None) -> None:
+        """
+        Verify ``atlas_output_dir`` and ensure ``householdv_*`` and ``vehicles_*`` outputs exist.
+        """
         super().validate(context)
         has_households = any(key.startswith("householdv_") for key in self.raw_outputs)
         has_vehicles = any(key.startswith("vehicles_") for key in self.raw_outputs)
@@ -157,6 +163,9 @@ class AtlasPostprocessOutputs(StepOutputsBase):
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
 
     def validate(self, context: Optional[Any] = None) -> None:
+        """
+        Verify ``atlas_output_dir``, updated ``usim_datastore_h5``, and ``atlas_vehicles2_output``.
+        """
         super().validate(context)
         if self.usim_datastore_h5 is None:
             raise AssertionError(
