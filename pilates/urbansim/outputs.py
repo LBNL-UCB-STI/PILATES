@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Dict, Iterable, Tuple, TYPE_CHECKING
+from typing import ClassVar, Dict, Tuple, TYPE_CHECKING
 
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
@@ -29,13 +28,6 @@ class UrbanSimPreprocessOutputs(StepOutputsBase):
     usim_mutable_data_dir: Path
     prepared_inputs: Dict[str, Path] = field(default_factory=dict)
 
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield prepared UrbanSim input records.
-        """
-        for key, path in self.prepared_inputs.items():
-            yield key, path, f"UrbanSim prepared input: {key}"
-
 
 @dataclass
 class UrbanSimRunOutputs(StepOutputsBase):
@@ -55,20 +47,6 @@ class UrbanSimRunOutputs(StepOutputsBase):
     usim_datastore_h5: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
 
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield UrbanSim raw output records.
-        """
-        yield (
-            USIM_DATASTORE_H5,
-            self.usim_datastore_h5,
-            f"UrbanSim raw output: {USIM_DATASTORE_H5}",
-        )
-        for key, path in self.raw_outputs.items():
-            if key in {USIM_FORECAST_OUTPUT, USIM_DATASTORE_H5}:
-                continue
-            yield key, path, f"UrbanSim raw output: {key}"
-
 
 @dataclass
 class UrbanSimPostprocessOutputs(StepOutputsBase):
@@ -87,15 +65,3 @@ class UrbanSimPostprocessOutputs(StepOutputsBase):
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
     usim_datastore_h5: Path
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield UrbanSim postprocessed output records.
-        """
-        yield (
-            USIM_DATASTORE_H5,
-            self.usim_datastore_h5,
-            f"UrbanSim postprocess output: {USIM_DATASTORE_H5}",
-        )
-        for key, path in self.processed_outputs.items():
-            yield key, path, f"UrbanSim postprocess output: {key}"

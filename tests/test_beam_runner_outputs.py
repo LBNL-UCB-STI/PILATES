@@ -358,14 +358,12 @@ def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
         split_event_links={"path_traversal_links_2030_2": split_links},
     )
 
-    mapping = {
-        short_name: str(path) for short_name, path, _ in outputs._iter_record_items()
-    }
-
-    assert mapping["final_skims_omx"] == str(final_skims_omx)
-    assert mapping["zarr_skims"] == str(zarr_skims)
-    assert mapping["events_parquet_2030_2_type_PathTraversal"] == str(split_event)
-    assert mapping["path_traversal_links_2030_2"] == str(split_links)
+    assert outputs.final_skims_omx == final_skims_omx
+    assert outputs.zarr_skims == zarr_skims
+    assert (
+        outputs.split_events["events_parquet_2030_2_type_PathTraversal"] == split_event
+    )
+    assert outputs.split_event_links["path_traversal_links_2030_2"] == split_links
 
 
 def test_beam_postprocess_outputs_validate_allows_beam_only_without_skims(

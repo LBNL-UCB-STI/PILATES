@@ -60,12 +60,12 @@ Add your model's input and output keys to `pilates/workflows/artifact_keys.py` (
 
 ### 2. Declare `StepOutputsBase`
 
-Subclass `StepOutputsBase` (`pilates/workflows/outputs_base.py`) inside `pilates/<model>/outputs.py`. Declare the path fields that `StepOutputsBase.validate()` checks after execution or cache hydration, and implement `_iter_record_items()` for output inspection:
+Subclass `StepOutputsBase` (`pilates/workflows/outputs_base.py`) inside `pilates/<model>/outputs.py`. Declare the path fields that `StepOutputsBase.validate()` checks after execution or cache hydration:
 
 ```python
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Dict, Iterable, Tuple
+from typing import ClassVar, Dict, Tuple
 
 from pilates.workflows.outputs_base import StepOutputsBase
 
@@ -77,10 +77,6 @@ class MyModelRunOutputs(StepOutputsBase):
 
     output_root: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        for key, path in self.raw_outputs.items():
-            yield key, path, f"MyModel raw output: {key}"
 ```
 
 1. Path attributes that `StepOutputsBase.validate()` requires to exist on disk after execution or hydration.

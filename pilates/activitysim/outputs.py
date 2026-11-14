@@ -7,7 +7,6 @@ from typing import (
     Any,
     ClassVar,
     Dict,
-    Iterable,
     Mapping,
     Optional,
     Tuple,
@@ -16,12 +15,7 @@ from typing import (
 import json
 from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
     USIM_DATASTORE_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.outputs_base import (
     OutputValidator,
@@ -271,32 +265,6 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
     omx_skims: Optional[Path] = None
     input_hashes: Dict[str, str] = field(default_factory=dict)
 
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield prepared ActivitySim input records.
-        """
-        yield (
-            ASIM_LAND_USE_IN,
-            self.land_use_table,
-            "ActivitySim land use input table",
-        )
-        yield (
-            ASIM_HOUSEHOLDS_IN,
-            self.households_table,
-            "ActivitySim households input table",
-        )
-        yield (
-            ASIM_PERSONS_IN,
-            self.persons_table,
-            "ActivitySim persons input table",
-        )
-        if self.omx_skims is not None:
-            yield (
-                ASIM_OMX_SKIMS,
-                self.omx_skims,
-                "ActivitySim OMX skims input",
-            )
-
 
 @dataclass
 class ActivitySimRunOutputs(StepOutputsBase):
@@ -324,16 +292,6 @@ class ActivitySimRunOutputs(StepOutputsBase):
     raw_output_hashes: Dict[str, str] = field(default_factory=dict)
     source_input_paths: Dict[str, Path] = field(default_factory=dict)
     source_input_hashes: Dict[str, str] = field(default_factory=dict)
-
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield run output records.
-        """
-        for key, path in self.raw_outputs.items():
-            normalized_key = _normalize_activitysim_run_output_key(key)
-            yield normalized_key, path, f"ActivitySim raw output: {normalized_key}"
-        if self.zarr_skims is not None:
-            yield ZARR_SKIMS, self.zarr_skims, "ActivitySim generated Zarr skims"
 
 
 class _ActivitySimRunOutputsValidator:
@@ -468,17 +426,3 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         if self.usim_datastore_h5 is None:
             return None
         return USIM_DATASTORE_H5
-
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield postprocessed output records.
-        """
-        usim_key = self._resolved_usim_datastore_key()
-        if usim_key is not None and self.usim_datastore_h5 is not None:
-            yield (
-                usim_key,
-                self.usim_datastore_h5,
-                "New UrbanSim input data for next iteration",
-            )
-        for key, path in self.processed_outputs.items():
-            yield key, path, f"ActivitySim output file: {key}"

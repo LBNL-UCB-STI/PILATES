@@ -8,7 +8,6 @@ from typing import (
     Any,
     ClassVar,
     Dict,
-    Iterable,
     List,
     Literal,
     Mapping,
@@ -226,17 +225,6 @@ class StepOutputsBase:
     optional_path_fields: ClassVar[Tuple[str, ...]] = ()
     dict_path_fields: ClassVar[Tuple[str, ...]] = ()
     validators: ClassVar[Tuple[OutputValidator, ...]] = ()
-
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield records as (short_name, path, description) tuples.
-
-        Returns
-        -------
-        iterable of tuple
-            Record metadata tuples for step output inspection and serialization.
-        """
-        return ()
 
     def validate(self, context: Optional[ValidationContext] = None) -> None:
         """
