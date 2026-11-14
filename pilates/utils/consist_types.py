@@ -2,28 +2,30 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     Iterable,
     Iterator,
     Mapping,
     Optional,
-    Protocol,
-    runtime_checkable,
 )
+from typing_extensions import Protocol, runtime_checkable
 
 from consist.protocols import (
-    ArtifactLike as ConsistArtifactLike,
+    ArtifactRecordLike,
     ScenarioLike as ConsistScenarioLike,
     TrackerLike as ConsistTrackerLike,
 )
-from consist.core.identity import IdentityManager
+
+if TYPE_CHECKING:
+    from consist.core.identity import IdentityManager
 
 
 @runtime_checkable
-class ArtifactLike(ConsistArtifactLike, Protocol):
+class ArtifactLike(ArtifactRecordLike, Protocol):
     @property
-    def digest(self) -> Optional[Any]: ...
+    def run_id(self) -> Optional[str]: ...
 
 
 @runtime_checkable

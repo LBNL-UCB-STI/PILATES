@@ -45,14 +45,31 @@ def test_ephemeral_tracker():
     assert tracker.is_ephemeral is True
 
 
-def test_h5_fast_hash_override_disabled_when_tracker_hashing_is_full(
-    tmp_path, monkeypatch
-):
+def test_h5_hashing_follows_active_tracker_strategy(tmp_path):
     file_path = tmp_path / "sample.h5"
     file_path.write_text("test", encoding="utf-8")
-    monkeypatch.setattr(cr, "_tracker_hashing_strategy", "full")
 
-    assert cr._maybe_fast_hash_h5(str(file_path), {}) == {}
+    with consist.Tracker(
+        run_dir=tmp_path / "full_runs",
+        db_path=tmp_path / "full.duckdb",
+        hashing_strategy="full",
+    ) as full_tracker:
+        with full_tracker.start_run("full_h5_run", model="test"):
+            full_art = cr.log_output(str(file_path), key="sample_h5")
+            assert full_art is not None
+            assert full_art.digest is not None
+            assert full_art.digest.scheme == "sha256:file"
+
+    with consist.Tracker(
+        run_dir=tmp_path / "fast_runs",
+        db_path=tmp_path / "fast.duckdb",
+        hashing_strategy="fast",
+    ) as fast_tracker:
+        with fast_tracker.start_run("fast_h5_run", model="test"):
+            fast_art = cr.log_output(str(file_path), key="sample_h5")
+            assert fast_art is not None
+            assert fast_art.digest is not None
+            assert fast_art.digest.scheme == "stat_file_v1:sha256"
 
 
 def test_log_input_raises_when_outside_active_run(monkeypatch):

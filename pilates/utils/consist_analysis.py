@@ -43,14 +43,6 @@ class _FindingArtifacts(Protocol):
     def find_artifacts_by_params(self, **kwargs: Any) -> list[Any]: ...
 
 
-@runtime_checkable
-class _AnalysisArtifactLike(Protocol):
-    id: Any
-    key: Any
-    run_id: Any
-    meta: Any
-
-
 _PHYS_SIM_LINKSTATS_KEY = re.compile(
     r"^linkstats_unmodified_parquet__y(?P<year>\d+)__i(?P<iteration>\d+)"
     r"__phys_sim_iter(?P<phys_sim_iteration>\d+)"
@@ -601,13 +593,13 @@ def find_linkstats_artifacts(
 
     artifact_ids = [
         str(artifact.id)
-        if isinstance(artifact, _AnalysisArtifactLike) and artifact.id is not None
+        if isinstance(artifact, ArtifactLike) and artifact.id is not None
         else None
         for artifact in artifacts
     ]
     run_ids = [
         str(artifact.run_id)
-        if isinstance(artifact, _AnalysisArtifactLike) and artifact.run_id is not None
+        if isinstance(artifact, ArtifactLike) and artifact.run_id is not None
         else None
         for artifact in artifacts
     ]
@@ -622,18 +614,14 @@ def find_linkstats_artifacts(
     for artifact in artifacts:
         key = (
             str(artifact.key or "")
-            if isinstance(artifact, _AnalysisArtifactLike) and artifact.key
+            if isinstance(artifact, ArtifactLike) and artifact.key
             else ""
         )
-        if isinstance(artifact, _AnalysisArtifactLike) and isinstance(
-            artifact.meta, Mapping
-        ):
+        if isinstance(artifact, ArtifactLike) and isinstance(artifact.meta, Mapping):
             meta = dict(artifact.meta)
         else:
             meta = {}
-        artifact_id = (
-            artifact.id if isinstance(artifact, _AnalysisArtifactLike) else None
-        )
+        artifact_id = artifact.id if isinstance(artifact, ArtifactLike) else None
         normalized_artifact_id = _normalize_artifact_id(artifact_id)
 
         facet = {}

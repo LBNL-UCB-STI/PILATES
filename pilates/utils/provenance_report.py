@@ -2,41 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Mapping, Optional
 
+from consist import Artifact, ArtifactLike as ConsistArtifactLike, Run, Tracker
+from consist.models.run import RunArtifacts
+from consist.protocols import ArtifactResolver
 
-@runtime_checkable
-class _ResolvingTracker(Protocol):
-    def resolve_uri(self, uri: str) -> Any: ...
-
-
-@runtime_checkable
-class _HasKey(Protocol):
-    key: Any
-
-
-@runtime_checkable
-class _HasPath(Protocol):
-    path: Any
-
-
-@runtime_checkable
-class _HasUri(Protocol):
-    uri: Any
-
-
-@runtime_checkable
-class _RunLike(Protocol):
-    id: Any
-    status: Any
-    model_name: Any
-    meta: Any
-
-
-@runtime_checkable
-class _StepArtifactsLike(Protocol):
-    inputs: Any
-    outputs: Any
+from pilates.utils.consist_types import ArtifactLike
 
 
 def _iter_artifacts(artifacts: Any) -> list[Any]:
@@ -48,7 +20,7 @@ def _iter_artifacts(artifacts: Any) -> list[Any]:
 
 
 def _artifact_key(artifact: Any) -> str:
-    if isinstance(artifact, _HasKey) and artifact.key:
+    if isinstance(artifact, ArtifactLike) and artifact.key:
         return str(artifact.key)
     if isinstance(artifact, Mapping):
         for key_attr in ("key", "name", "short_name", "artifact_key"):
@@ -59,7 +31,7 @@ def _artifact_key(artifact: Any) -> str:
 
 
 def _resolve_via_tracker(tracker: Any, value: str) -> Optional[str]:
-    if not isinstance(tracker, _ResolvingTracker):
+    if not isinstance(tracker, (Tracker, ArtifactResolver)):
         return None
     try:
         return str(tracker.resolve_uri(value))
@@ -68,8 +40,27 @@ def _resolve_via_tracker(tracker: Any, value: str) -> Optional[str]:
 
 
 def _artifact_path(artifact: Any, tracker: Any = None) -> str:
+    if isinstance(artifact, (str, Path)):
+        text = str(artifact)
+        if "://" in text:
+            resolved = _resolve_via_tracker(tracker, text)
+            if resolved:
+                return resolved
+        return text
+
+    if isinstance(artifact, Artifact):
+        if artifact.uri and "://" in artifact.uri:
+            resolved = _resolve_via_tracker(tracker, artifact.uri)
+            if resolved:
+                return resolved
+        if artifact.abs_path:
+            return str(artifact.abs_path)
+        if artifact.uri:
+            return str(artifact.uri)
+        return ""
+
     uri: Optional[str] = None
-    if isinstance(artifact, _HasUri):
+    if isinstance(artifact, ConsistArtifactLike):
         uri = str(artifact.uri) if artifact.uri is not None else None
     elif isinstance(artifact, Mapping):
         uri_val = artifact.get("uri")
@@ -80,7 +71,7 @@ def _artifact_path(artifact: Any, tracker: Any = None) -> str:
         if resolved:
             return resolved
 
-    if isinstance(artifact, _HasPath) and artifact.path:
+    if isinstance(artifact, ConsistArtifactLike) and artifact.path:
         val_str = str(artifact.path)
         if "://" in val_str:
             resolved = _resolve_via_tracker(tracker, val_str)
@@ -88,8 +79,8 @@ def _artifact_path(artifact: Any, tracker: Any = None) -> str:
                 return resolved
         return val_str
 
-    if isinstance(artifact, _HasUri) and artifact.uri:
-        return str(artifact.uri)
+    if isinstance(uri, str) and uri:
+        return uri
 
     if isinstance(artifact, Mapping):
         for path_attr in ("path", "uri", "file_path"):
@@ -139,15 +130,22 @@ def build_provenance_report(tracker: Any, run_id: str) -> str:
     if run is None:
         raise ValueError(f"Run not found: {run_id}")
 
-    run_id_val = run.id if isinstance(run, _RunLike) else run_id
-    status_val = run.status if isinstance(run, _RunLike) else "unknown"
-    model_val = run.model_name if isinstance(run, _RunLike) else "unknown"
-    run_meta = (
-        run.meta
-        if isinstance(run, _RunLike)
-        else (run.get("meta") if isinstance(run, Mapping) else None)
-    )
-    steps = run_meta.get("steps", []) if run_meta is not None else []
+    if isinstance(run, Run):
+        run_id_val = run.id
+        status_val = run.status
+        model_val = run.model_name
+        run_meta = run.meta
+    elif isinstance(run, Mapping):
+        run_id_val = run.get("id", run_id)
+        status_val = run.get("status", "unknown")
+        model_val = run.get("model_name", "unknown")
+        run_meta = run.get("meta")
+    else:
+        run_id_val = run_id
+        status_val = "unknown"
+        model_val = "unknown"
+        run_meta = None
+    steps = run_meta.get("steps", []) if isinstance(run_meta, Mapping) else []
     lines = [
         "# Provenance Report",
         "",
@@ -180,7 +178,7 @@ def build_provenance_report(tracker: Any, run_id: str) -> str:
         step_artifacts = tracker.get_artifacts_for_run(step_id)
         inputs_val = (
             step_artifacts.inputs
-            if isinstance(step_artifacts, _StepArtifactsLike)
+            if isinstance(step_artifacts, RunArtifacts)
             else (
                 step_artifacts.get("inputs")
                 if isinstance(step_artifacts, Mapping)
@@ -189,7 +187,7 @@ def build_provenance_report(tracker: Any, run_id: str) -> str:
         )
         outputs_val = (
             step_artifacts.outputs
-            if isinstance(step_artifacts, _StepArtifactsLike)
+            if isinstance(step_artifacts, RunArtifacts)
             else (
                 step_artifacts.get("outputs")
                 if isinstance(step_artifacts, Mapping)

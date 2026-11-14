@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
+from consist import Artifact, Run, Tracker
+from consist.models.run import RunArtifacts
 import duckdb
 import pandas as pd
 
 from pilates.scripts import export_post_atlas_population as export_script
 
 
-def test_artifact_path_resolves_tracker_uri() -> None:
-    tracker = SimpleNamespace(
-        resolve_uri=lambda uri: uri.replace("workspace://", "/tmp/")
+def test_artifact_path_resolves_tracker_uri(tmp_path: Path) -> None:
+    tracker = Tracker(
+        run_dir=tmp_path,
+        mounts={"workspace": str(tmp_path)},
     )
-    artifact = SimpleNamespace(uri="workspace://atlas/vehicles2_2025.csv")
-    assert (
-        export_script._artifact_path(artifact, tracker)
-        == "/tmp/atlas/vehicles2_2025.csv"
+    artifact = Artifact(
+        key="atlas_vehicles2_output",
+        uri="workspace://atlas/vehicles2_2025.csv",
+        driver="csv",
+    )
+    assert export_script._artifact_path(artifact, tracker) == str(
+        tmp_path / "atlas" / "vehicles2_2025.csv"
     )
 
 
@@ -31,7 +36,10 @@ def test_normalize_export_frame_promotes_expected_index() -> None:
 
 
 def test_match_scenario_step_run_id_prefers_atlas_postprocess_name() -> None:
-    scenario_run = SimpleNamespace(
+    scenario_run = Run(
+        id="scenario-1",
+        model_name="pilates",
+        status="completed",
         meta={
             "steps": [
                 {
@@ -42,7 +50,7 @@ def test_match_scenario_step_run_id_prefers_atlas_postprocess_name() -> None:
                     "year": 2025,
                 }
             ]
-        }
+        },
     )
     assert (
         export_script._match_scenario_step_run_id(
@@ -188,53 +196,85 @@ def test_extract_year_sql_reconstructs_households_and_writes_parquet(
         encoding="utf-8",
     )
 
-    step_run = SimpleNamespace(
+    step_run = Run(
         id="step-1",
         parent_run_id=None,
         status="completed",
         model_name="atlas_postprocess",
     )
 
-    class _Tracker:
+    class _Tracker(Tracker):
+        def __init__(self) -> None:
+            super().__init__(
+                run_dir=run_dir,
+                mounts={"workspace": str(run_dir)},
+            )
+
         def find_runs(
-            self, *, model=None, phase=None, year=None, status=None, limit=None
+            self, *, model=None, phase=None, year=None, status=None, limit=None, **_kw
         ):
+            del status, limit
             assert year == 2025
             if model == "atlas_preprocess" and phase == "preprocess":
                 return [
-                    SimpleNamespace(id="pre-1", parent_run_id=None, status="completed")
+                    Run(
+                        id="pre-1",
+                        parent_run_id=None,
+                        status="completed",
+                        model_name="atlas_preprocess",
+                    )
                 ]
             if model == "atlas_run" and phase == "run":
                 return [
-                    SimpleNamespace(id="run-1", parent_run_id=None, status="completed")
+                    Run(
+                        id="run-1",
+                        parent_run_id=None,
+                        status="completed",
+                        model_name="atlas_run",
+                    )
                 ]
             if model == "atlas_postprocess" and phase == "postprocess":
                 return [step_run]
             return []
 
-        def get_run_outputs(self, run_id):
+        def get_run_outputs(self, run_id: str) -> dict[str, Artifact]:
             if run_id == "pre-1":
                 return {
-                    "atlas_households_csv": SimpleNamespace(path=str(households_csv)),
-                    "atlas_persons_csv": SimpleNamespace(path=str(persons_csv)),
+                    "atlas_households_csv": Artifact(
+                        key="atlas_households_csv",
+                        uri=str(households_csv),
+                        driver="csv",
+                    ),
+                    "atlas_persons_csv": Artifact(
+                        key="atlas_persons_csv",
+                        uri=str(persons_csv),
+                        driver="csv",
+                    ),
                 }
             if run_id == "run-1":
                 return {
-                    "householdv_2025": SimpleNamespace(path=str(householdv_csv)),
+                    "householdv_2025": Artifact(
+                        key="householdv_2025",
+                        uri=str(householdv_csv),
+                        driver="csv",
+                    ),
                 }
             if run_id == "step-1":
                 return {
-                    "atlas_vehicles2_output": SimpleNamespace(path=str(vehicles2_csv)),
+                    "atlas_vehicles2_output": Artifact(
+                        key="atlas_vehicles2_output",
+                        uri=str(vehicles2_csv),
+                        driver="csv",
+                    ),
                 }
             raise AssertionError(run_id)
 
-        def get_artifacts_for_run(self, run_id):
-            return SimpleNamespace(inputs={}, outputs={})
+        def get_artifacts_for_run(self, run_id: str) -> RunArtifacts:
+            del run_id
+            return RunArtifacts(inputs={}, outputs={})
 
-        def resolve_uri(self, uri: str) -> str:
-            return uri
-
-        def get_run(self, run_id):
+        def get_run(self, run_id: str, *, resolve_canonical: bool = False):
+            del run_id, resolve_canonical
             return None
 
     manifest = export_script._extract_year_sql(

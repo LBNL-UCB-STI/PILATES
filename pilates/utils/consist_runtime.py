@@ -33,8 +33,6 @@ logger = logging.getLogger(__name__)
 
 import consist
 
-_tracker_hashing_strategy: str = "fast"
-
 
 def create_tracker(
     *,
@@ -42,7 +40,6 @@ def create_tracker(
     tracker_factory: Optional[Callable[[], TrackerLike]] = None,
     **tracker_kwargs: Any,
 ) -> Optional[TrackerLike]:
-    global _tracker_hashing_strategy
     tracker_kwargs.pop("enabled", None)
     if "hashing_strategy" not in tracker_kwargs:
         try:
@@ -52,8 +49,6 @@ def create_tracker(
         if configured_strategy not in {"fast", "full"}:
             configured_strategy = "fast"
         tracker_kwargs["hashing_strategy"] = configured_strategy
-    strategy = str(tracker_kwargs.get("hashing_strategy", "fast")).lower()
-    _tracker_hashing_strategy = strategy if strategy in {"fast", "full"} else "fast"
 
     if tracker_factory is not None:
         return tracker_factory()
@@ -95,7 +90,6 @@ def log_input(
             meta = {**meta, "schema": schema}
     meta = _with_declared_schema_meta(meta)
     path = _normalize_path(path)
-    meta = _maybe_fast_hash_h5(path, meta)
     try:
         return consist.log_input(path, key=key, **meta)
     except Exception as exc:
@@ -136,7 +130,6 @@ def log_output(
             meta = {**meta, "schema": schema}
     meta = _with_declared_schema_meta(meta)
     path = _normalize_path(path)
-    meta = _maybe_fast_hash_h5(path, meta)
     try:
         return consist.log_output(path, key=key, **meta)
     except Exception as exc:
@@ -370,32 +363,6 @@ def _normalize_path(value: Any) -> Any:
     if os.path.isabs(path):
         return os.path.realpath(path)
     return value
-
-
-def _maybe_fast_hash_h5(path: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
-    if "hashing_strategy" in meta:
-        return meta
-    if _tracker_hashing_strategy != "fast":
-        return meta
-    resolved = _resolve_artifact_path(path)
-    if not resolved:
-        return meta
-    lowered = resolved.lower()
-    if lowered.endswith((".h5", ".hdf5")):
-        return {**meta, "hashing_strategy": "fast"}
-    return meta
-
-
-def _resolve_artifact_path(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, os.PathLike):
-        return os.fspath(_normalize_path(value))
-    if isinstance(value, str):
-        return _normalize_path(value)
-    if isinstance(value, ArtifactLike):
-        return os.fspath(value.path)
-    return None
 
 
 def dispose_tracker(tracker: Optional[TrackerLike]) -> None:

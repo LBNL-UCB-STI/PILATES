@@ -5,12 +5,15 @@ from typing import (
     Any,
     Mapping,
     Optional,
-    Protocol,
     TYPE_CHECKING,
-    runtime_checkable,
 )
 
-from consist import Artifact
+from consist import (
+    Artifact,
+    ArtifactLike as ConsistArtifactLike,
+    MaterializedArtifact,
+    Tracker,
+)
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.archive_paths import (
@@ -23,20 +26,13 @@ from pilates.utils.consist_types import ArtifactLike
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
-class _ArtifactWithMeta(Protocol):
-    meta: Any
-
-
 def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
-    uri = None
-    if isinstance(value, ArtifactLike):
-        uri = value.uri
-    elif isinstance(value, str):
-        uri = value
+    if not isinstance(value, ArtifactLike):
+        return None
+    uri = value.uri
     if not isinstance(uri, str) or not uri.startswith("workspace://"):
         return None
-    if not isinstance(value, _ArtifactWithMeta) or not isinstance(value.meta, Mapping):
+    if not isinstance(value.meta, Mapping):
         return None
     mount_root = value.meta.get("mount_root")
     if not mount_root:
@@ -55,30 +51,6 @@ def _materialization_roots(
     return None, None
 
 
-@runtime_checkable
-class _HasPath(Protocol):
-    path: Any
-
-
-@runtime_checkable
-class _MaterializableTrackerLike(Protocol):
-    def materialize_artifact(
-        self,
-        artifact: Any,
-        *,
-        target_root: str,
-        source_root: Optional[str] = None,
-        preserve_existing: bool = True,
-        on_missing: str = "warn",
-        validate_content_hash: str = "if-present",
-    ) -> Any: ...
-
-
-@runtime_checkable
-class _MaterializationResultLike(Protocol):
-    path: Any
-
-
 def _materialize_artifact_to_existing_path(
     value: Any,
     *,
@@ -95,9 +67,7 @@ def _materialize_artifact_to_existing_path(
         tracker = None
     if tracker is None and isinstance(value, Artifact):
         tracker = value.resolver
-    active_tracker = (
-        tracker if isinstance(tracker, _MaterializableTrackerLike) else None
-    )
+    active_tracker = tracker if isinstance(tracker, Tracker) else None
     if isinstance(value, Artifact):
         try:
             resolved = value.ensure_local_path(
@@ -133,7 +103,7 @@ def _materialize_artifact_to_existing_path(
             exc_info=True,
         )
         return None
-    if not isinstance(result, _MaterializationResultLike) or result.path is None:
+    if not isinstance(result, MaterializedArtifact) or result.path is None:
         return None
     resolved_path = os.path.abspath(os.fspath(result.path))
     if os.path.exists(resolved_path):
@@ -166,7 +136,7 @@ def artifact_to_path(
     if value is None:
         return None
     uri = None
-    if isinstance(value, ArtifactLike):
+    if isinstance(value, ConsistArtifactLike):
         uri = value.uri
     elif isinstance(value, str) and "://" in value:
         uri = value
@@ -189,7 +159,7 @@ def artifact_to_path(
         if ws_full_path is not None:
             return os.path.join(ws_full_path, rel_path)
 
-    if isinstance(value, (ArtifactLike, _HasPath)):
+    if isinstance(value, ConsistArtifactLike):
         path = value.path
     elif uri:
         path = uri

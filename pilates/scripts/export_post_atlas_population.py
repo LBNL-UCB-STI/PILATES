@@ -7,8 +7,9 @@ import logging
 from pathlib import Path
 import shutil
 import sys
-from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Mapping, Optional, Sequence
 
+from consist import Artifact, ArtifactLike as ConsistArtifactLike, Tracker
 import duckdb
 import pandas as pd
 
@@ -19,6 +20,7 @@ if __package__ in {None, ""}:
 
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.database.schema.registry import get_schema_for_key
+from pilates.generic.records import FileRecord
 from pilates.scripts.run_polaris_population_translation import run_translation
 from pilates.utils.consist_analysis import create_analysis_tracker
 from pilates.utils.consist_types import ArtifactLike
@@ -27,21 +29,6 @@ from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT, USIM_DATASTO
 from pilates.workflows.tracker_outputs import load_tracker_run_outputs
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class _HasPath(Protocol):
-    path: Any
-
-
-@runtime_checkable
-class _HasFilePath(Protocol):
-    file_path: Any
-
-
-@runtime_checkable
-class _HasUri(Protocol):
-    uri: Any
 
 
 EXPORT_VERSION = "0.1"
@@ -229,24 +216,33 @@ def _file_digest(path: Path, mode: str) -> Optional[str]:
     return digest.hexdigest()
 
 
-def _artifact_path(value: Any, tracker: Any) -> Optional[str]:
+def _artifact_path(value: Any, tracker: Tracker) -> Optional[str]:
     if value is None:
         return None
     if isinstance(value, (str, Path)):
         return str(value)
+    if isinstance(value, FileRecord) and value.file_path:
+        text = str(value.file_path)
+        if "://" in text:
+            try:
+                return str(tracker.resolve_uri(text))
+            except Exception:
+                return None
+        return text
 
     candidates: list[Any] = []
-    if isinstance(value, ArtifactLike):
-        if value.path:
-            candidates.append(value.path)
+    if isinstance(value, Artifact):
         if value.uri:
             candidates.append(value.uri)
-    if isinstance(value, _HasPath) and value.path:
-        candidates.append(value.path)
-    if isinstance(value, _HasFilePath) and value.file_path:
-        candidates.append(value.file_path)
-    if isinstance(value, _HasUri) and value.uri:
-        candidates.append(value.uri)
+        if value.abs_path:
+            candidates.append(value.abs_path)
+    elif isinstance(value, ConsistArtifactLike):
+        if value.uri:
+            candidates.append(value.uri)
+        if isinstance(value, ArtifactLike) and value.abs_path:
+            candidates.append(value.abs_path)
+        if value.path:
+            candidates.append(value.path)
 
     for candidate in candidates:
         text = str(candidate)

@@ -12,9 +12,9 @@ import uuid
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Iterable, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Iterable, Optional, Sequence
 
-from consist.digest import file_sha256
+from consist import RunOutputRecoveryCopiesRegistration, Tracker
 
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.failure_hints import log_consist_cli_instructions
@@ -23,45 +23,10 @@ from pilates.utils.consist_db_snapshot import (
     resolve_consist_db_paths,
     snapshot_latest_dir,
 )
-from pilates.utils.consist_types import ArtifactLike, TrackerLike
+from pilates.utils.consist_types import TrackerLike
 import duckdb
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class _FsRemappable(Protocol):
-    def get_remappable_relative_path(self, uri: str) -> str | Path | None: ...
-
-
-@runtime_checkable
-class _TrackerWithFs(Protocol):
-    fs: _FsRemappable
-
-
-@runtime_checkable
-class _HasUri(Protocol):
-    uri: str
-
-
-@runtime_checkable
-class _RegistrationResult(Protocol):
-    registered: Any
-    blocked: Any
-    summary: Any
-
-
-@runtime_checkable
-class _TrackerWithRegisterCopies(Protocol):
-    def register_run_output_recovery_copies(
-        self,
-        run_id: str,
-        recovery_root: str,
-        *,
-        verify: bool = ...,
-        append: bool = ...,
-        content_hashes: Any = ...,
-    ) -> Any: ...
 
 
 @dataclass(slots=True)
@@ -516,54 +481,14 @@ def _resolve_root_run_id(
     return resolved, _expand_run_subtree(resolved, runs)
 
 
-def _artifact_relative_path(tracker: Any, artifact: Any) -> Optional[Path]:
-    uri = (
-        artifact.uri
-        if isinstance(artifact, _HasUri)
-        else (artifact.uri if isinstance(artifact, ArtifactLike) else None)
-    )
-    if not uri or not isinstance(tracker, _TrackerWithFs):
-        return None
-    relative = tracker.fs.get_remappable_relative_path(uri)
-    if relative is None:
-        return None
-    return Path(relative)
-
-
-def _run_output_content_hashes(
-    tracker: Any,
-    *,
-    source_run_dir: Path,
-    run_id: str,
-) -> dict[str, str]:
-    content_hashes: dict[str, str] = {}
-    outputs = tracker.get_run_outputs(str(run_id))
-    for key, artifact in outputs.items():
-        relative_path = _artifact_relative_path(tracker, artifact)
-        if relative_path is None:
-            continue
-        source_path = source_run_dir / relative_path
-        if not source_path.is_file():
-            continue
-        content_hashes[str(key)] = file_sha256(source_path)
-    return content_hashes
-
-
 def _register_verified_run_output_recovery_copies(
-    tracker: Any,
+    tracker: Tracker,
     *,
     source_run_dir: Path,
     recovery_run_dir: Path,
     run_ids: Optional[Iterable[str]] = None,
     verify: bool = True,
 ) -> int:
-    if not isinstance(tracker, _TrackerWithRegisterCopies):
-        logger.warning(
-            "Consist tracker does not expose register_run_output_recovery_copies; "
-            "skipping recovery-copy metadata registration."
-        )
-        return 0
-
     selected_run_ids = (
         list(run_ids)
         if run_ids is not None
@@ -571,36 +496,22 @@ def _register_verified_run_output_recovery_copies(
     )
     registered = 0
     for run_id in selected_run_ids:
-        content_hashes = (
-            _run_output_content_hashes(
-                tracker,
-                source_run_dir=source_run_dir,
-                run_id=str(run_id),
+        result: RunOutputRecoveryCopiesRegistration = (
+            tracker.register_run_output_recovery_copies(
+                str(run_id),
+                str(recovery_run_dir),
+                verify=verify,
+                append=True,
+                source_root=source_run_dir if verify else None,
             )
-            if verify
-            else {}
         )
-        result = tracker.register_run_output_recovery_copies(
-            str(run_id),
-            str(recovery_run_dir),
-            verify=verify,
-            append=True,
-            content_hashes=content_hashes or None,
-        )
-        registered_for_run = (
-            result.registered if isinstance(result, _RegistrationResult) else {}
-        )
-        registered += len(registered_for_run)
-        blocked = result.blocked if isinstance(result, _RegistrationResult) else {}
-        if blocked:
-            summary = (
-                result.summary if isinstance(result, _RegistrationResult) else blocked
-            )
+        registered += len(result.registered)
+        if result.blocked:
             logger.info(
                 "Recovery-copy registration blocked %d output(s) for run %s: %s",
-                len(blocked),
+                len(result.blocked),
                 run_id,
-                summary,
+                result.summary,
             )
     return registered
 

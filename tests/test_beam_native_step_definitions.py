@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from consist import (
+    Artifact,
     BindingResult,
     Tracker,
     resolve_step_contract,
@@ -2222,7 +2223,14 @@ def test_project_beam_run_outputs_uses_direct_logged_zarr_path(tmp_path: Path) -
     (zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
 
     projected = _project_beam_run_outputs(
-        {"raw_od_skims_zarr_2030_2": SimpleNamespace(path=zarr)},
+        {
+            "raw_od_skims_zarr_2030_2": Artifact(
+                key="raw_od_skims_zarr_2030_2",
+                uri=str(zarr),
+                driver="zarr",
+                _abs_path=zarr,
+            )
+        },
         settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=2),
         workspace=workspace,
