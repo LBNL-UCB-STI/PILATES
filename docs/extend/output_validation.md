@@ -1,44 +1,25 @@
 # Output Validation
 
-PILATES validates model outputs at the end of every step before promoting artifacts to the scenario coupler or downstream stages.
+PILATES validates model outputs at the end of every step before promoting artifacts to `scenario.coupler` or downstream stages.
 
 ## Validation Sequence
 
-At the end of each step, `execute_step(...)` and the model's `Postprocessor` run four checks in order:
+At the end of each step, `project_outputs` and the model's `Postprocessor` run three checks in order:
 
-1. **Required coupler key presence**: `StepOutputsBase.assert_required(...)` verifies that every key listed in `required_outputs` exists on the coupler and resolves to a non-empty artifact reference.
-2. **Filesystem path verification**: `StepOutputsBase.validate_paths(...)` checks that every path listed in `required_path_fields` exists on disk before Consist logs or archives the file.
-3. **Tabular schema and primary-key checks**: For steps with registered SQLModel schemas in `pilates/database/schema/registry.py`, Consist and the postprocessor validate column names, data types, and non-null key constraints. See [Database and Schemas](../reference/database_and_schemas.md) for the schema registry.
-4. **Domain-specific structural invariants**: Postprocessors verify cross-table referential integrity, zone coordinate bounds, and positive row counts on core outputs.
+1. **Filesystem path verification**: `StepOutputsBase.validate(context)` checks that every path in `required_path_fields`, every non-`None` path in `optional_path_fields`, and every `Path` value in `dict_path_fields` exists on disk.
+2. **Semantic `OutputValidator` checks**: `StepOutputsBase.validate(context)` runs each `OutputValidator` declared in `validators` (for example, `_BeamPostprocessExpectedOutputsValidator` in `pilates/beam/outputs.py`, which requires `zarr_skims` when ActivitySim is active and `final_skims_omx` when UrbanSim, ATLAS, or `write_skims_to_omx` is enabled).
+3. **Domain invariants and schemas**: Postprocessors verify cross-table referential integrity, zone coordinate bounds, and positive row counts on core outputs. Registered SQLModel schemas in `pilates/database/schema/registry.py` define column types and keys for tabular artifacts (see [Database and Schemas](../reference/database_and_schemas.md)).
 
-## Configuring Output Validation by Model
+## Validation by Model
 
-### UrbanSim
-
-UrbanSim postprocessing checks that forecasted HDF5 and Parquet tables contain all required geographic and demographic keys (`block_id`, `zone_id`, `household_id`, `person_id`) and match canonical zone identifiers. See [Zone and Skim Alignment](../reference/zone_and_skim_alignment.md) for zone validation rules.
-
-### ATLAS
-
-ATLAS validation verifies that `households.csv` and `vehicles.csv` exist for the target simulation year, contain non-zero household counts when input populations are non-empty, and preserve `household_id` alignment with UrbanSim.
-
-### ActivitySim
-
-ActivitySim output validation checks both coupler artifact bindings and optional DuckDB ingestion schemas (`final_households`, `final_persons`, `final_tours`, `final_trips`, `final_land_use`). Enable strict schema enforcement during ingestion with `shared.database.strict_schema`:
-
-```yaml
-shared:
-  database:
-    enabled: true
-    strict_schema: true
-```
-
-### BEAM
-
-BEAM postprocessing verifies `FINAL_SKIMS_OMX` (or `ZARR_SKIMS`), `BEAM_LINKSTATS`, and `BEAM_EVENTS`. Skim validation confirms 0-based matrix coordinates and finite travel time values before the next replanning or forecast year begins.
+- **UrbanSim**: Checks that forecasted HDF5 and Parquet tables contain required geographic and demographic keys (`block_id`, `zone_id`, `household_id`, `person_id`) and match canonical zone IDs. See [Zone and Skim Alignment](../reference/zone_and_skim_alignment.md).
+- **ATLAS**: Verifies that `households` and `vehicles` CSVs exist for the target simulation year, contain non-zero household counts when input populations are non-empty, and preserve `household_id` alignment with UrbanSim.
+- **ActivitySim**: Validates `households_asim_out`, `persons_asim_out`, `tours_asim_out`, `trips_asim_out`, `beam_plans_asim_out`, and `accessibility_asim_out` against expected paths and schemas.
+- **BEAM**: Verifies `final_skims_omx` (or `zarr_skims`), `linkstats`, and `events_parquet_*` outputs. Skim validation confirms 0-based matrix coordinates and finite travel time values before the next replanning iteration or forecast year begins.
 
 ## Adding Custom Validation to a New Model
 
 Implement custom checks in two places:
 
-1. **Path and key contracts on `StepOutputs`**: Define `required_outputs` and `required_path_fields` on your `StepOutputsBase` subclass in `pilates/<model>/outputs.py`. `execute_step(...)` runs `assert_required()` and `validate_paths()` after `scenario.run(...)` completes.
-2. **Content checks in `Postprocessor`**: Raise a `ValueError` or `FileNotFoundError` inside `pilates/<model>/postprocessor.py` when an output table is empty, missing required columns, or violates domain constraints. Raising before coupler promotion keeps corrupt artifacts out of `.consist/provenance.duckdb` and prevents false cache hits on subsequent runs.
+1. **Path fields and validators on `StepOutputsBase`**: Define `required_path_fields`, `optional_path_fields`, `dict_path_fields`, and `validators` on your `StepOutputsBase` subclass in `pilates/<model>/outputs.py`. Call `outputs.validate(ValidationContext(...))` inside `project_outputs` or your step body.
+2. **Content checks in `Postprocessor`**: Raise `ValueError` or `FileNotFoundError` inside `pilates/<model>/postprocessor.py` when an output table is empty, missing required columns, or violates domain constraints. Failing before coupler publication keeps corrupt artifacts out of `.consist/provenance.duckdb` and prevents false cache hits on subsequent runs.

@@ -14,7 +14,7 @@ Inspect the earliest exception in the console or Slurm log first. Downstream mod
 | `FileNotFoundError` before config validation | The path passed to `-c/--config` or `-S/--stage` does not exist, or a `base:` parent path cannot be resolved. | Verify the `-c` and `-S` paths relative to your working directory and run `python -m pilates.config.models <config.yaml> --validate`. |
 | `ValueError` on `base:` inheritance | Circular `base:` reference chain or missing parent YAML file. | Inspect the `base:` chain in your scenario overlay and ensure each parent file exists. |
 | Validation error on `run.end_year` | `run.end_year` is less than `run.start_year`. | Set `run.end_year >= run.start_year` in your scenario YAML. |
-| Validation error on `atlas.beamac` | `atlas.beamac > 0` is configured outside an SF Bay TAZ run. | Set `atlas.beamac: 0`, or confirm `run.region: sfbay` and `shared.skims.skims_zone_type: taz`. |
+| Validation error on `atlas.beamac` | `atlas.beamac > 0` is configured outside an SF Bay TAZ run. | Set `atlas.beamac: 0`, or confirm `run.region: sfbay` and `shared.geography.zones.zone_type: taz`. |
 | Validation error on missing model section | A model is enabled in `run.models`, but its top-level configuration section (`urbansim`, `atlas`, `activitysim`, or `beam`) is missing. | Add the required model section or set that model key to `null`/`false` under `run.models`. |
 | Validation error on `consist_db_filename` | `run.consist_db_filename` contains directory separators (`/` or `\`). | Provide a basename only, such as `provenance.duckdb`. |
 
