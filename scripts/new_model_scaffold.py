@@ -581,8 +581,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
         class {spec.preprocess_output_class}(StepOutputsBase):
             """Typed outputs from {spec.class_prefix} preprocess."""
 
-            primary_output_attr: ClassVar[str] = "output_root"
-            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
 
@@ -598,8 +596,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
         class {spec.run_output_class}(StepOutputsBase):
             """Typed outputs from {spec.class_prefix} run."""
 
-            primary_output_attr: ClassVar[str] = "output_root"
-            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
 
@@ -615,8 +611,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
         class {spec.postprocess_output_class}(StepOutputsBase):
             """Typed outputs from {spec.class_prefix} postprocess."""
 
-            primary_output_attr: ClassVar[str] = "output_root"
-            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
 

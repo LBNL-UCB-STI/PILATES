@@ -31,20 +31,10 @@ class AtlasPreprocessOutputs(StepOutputsBase):
         Mapping of input short_name to prepared input path.
     """
 
-    primary_output_attr: ClassVar[str] = "atlas_mutable_input_dir"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (
-        "atlas_households_csv",
-        "atlas_blocks_csv",
-        "atlas_persons_csv",
-        "atlas_residential_csv",
-        "atlas_jobs_csv",
-    )
-    required_outputs: ClassVar[Tuple[str, ...]] = declared_outputs
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_mutable_input_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     atlas_mutable_input_dir: Path
     prepared_inputs: Dict[str, Path] = field(default_factory=dict)
-    prepared_input_meta: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -137,11 +127,6 @@ class AtlasRunOutputs(StepOutputsBase):
         Mapping of short_name to raw output path.
     """
 
-    primary_output_attr: ClassVar[str] = "atlas_output_dir"
-    required_output_families: ClassVar[Tuple[str, ...]] = (
-        "householdv_{year}",
-        "vehicles_{year}",
-    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     atlas_output_dir: Path
@@ -179,12 +164,6 @@ class AtlasPostprocessOutputs(StepOutputsBase):
         Mapping of short_name to postprocessed output path.
     """
 
-    primary_output_attr: ClassVar[str] = "usim_datastore_h5"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (
-        USIM_POPULATION_SOURCE_H5,
-        ATLAS_VEHICLES2_OUTPUT,
-    )
-    required_outputs: ClassVar[Tuple[str, ...]] = declared_outputs
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
     optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)

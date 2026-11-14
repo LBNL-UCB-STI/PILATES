@@ -37,6 +37,10 @@ from pilates.utils.zone_utils import (
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
     FINAL_SKIMS_OMX,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -2250,7 +2254,13 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         if skims_omx_path is not None:
             output_values["omx_skims"] = skims_omx_path
         input_hashes: Dict[str, str] = {}
-        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
+        preprocess_record_fields = (
+            ("land_use_table", ASIM_LAND_USE_IN),
+            ("households_table", ASIM_HOUSEHOLDS_IN),
+            ("persons_table", ASIM_PERSONS_IN),
+            ("omx_skims", ASIM_OMX_SKIMS),
+        )
+        for field_name, record_key in preprocess_record_fields:
             record = records_by_key.get(record_key)
             if record is None:
                 continue

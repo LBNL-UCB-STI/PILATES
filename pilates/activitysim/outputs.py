@@ -253,24 +253,6 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
         OMX skims input path when present.
     """
 
-    primary_output_attr: ClassVar[str] = "mutable_data_dir"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (
-        ASIM_LAND_USE_IN,
-        ASIM_HOUSEHOLDS_IN,
-        ASIM_PERSONS_IN,
-    )
-    record_keys: ClassVar[Dict[str, str]] = {
-        "land_use_table": ASIM_LAND_USE_IN,
-        "households_table": ASIM_HOUSEHOLDS_IN,
-        "persons_table": ASIM_PERSONS_IN,
-        "omx_skims": ASIM_OMX_SKIMS,
-    }
-    record_descriptions: ClassVar[Dict[str, str]] = {
-        "land_use_table": "ActivitySim land use input table",
-        "households_table": "ActivitySim households input table",
-        "persons_table": "ActivitySim persons input table",
-        "omx_skims": "ActivitySim OMX skims input",
-    }
     required_path_fields: ClassVar[Tuple[str, ...]] = (
         "mutable_data_dir",
         "land_use_table",
@@ -288,6 +270,32 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
     persons_table: Path
     omx_skims: Optional[Path] = None
     input_hashes: Dict[str, str] = field(default_factory=dict)
+
+    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
+        """
+        Yield prepared ActivitySim input records.
+        """
+        yield (
+            ASIM_LAND_USE_IN,
+            self.land_use_table,
+            "ActivitySim land use input table",
+        )
+        yield (
+            ASIM_HOUSEHOLDS_IN,
+            self.households_table,
+            "ActivitySim households input table",
+        )
+        yield (
+            ASIM_PERSONS_IN,
+            self.persons_table,
+            "ActivitySim persons input table",
+        )
+        if self.omx_skims is not None:
+            yield (
+                ASIM_OMX_SKIMS,
+                self.omx_skims,
+                "ActivitySim OMX skims input",
+            )
 
 
 @dataclass
@@ -307,11 +315,6 @@ class ActivitySimRunOutputs(StepOutputsBase):
         Mapping of short_name to known content hashes for raw outputs.
     """
 
-    primary_output_attr: ClassVar[str] = "output_dir"
-    declared_outputs: ClassVar[Tuple[str, ...]] = tuple(
-        dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values())
-    )
-    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     validators: ClassVar[Tuple[OutputValidator, ...]] = ()
@@ -349,7 +352,7 @@ class _ActivitySimRunOutputsValidator:
         outputs: "ActivitySimRunOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
-        declared = set(outputs.declared_output_keys())
+        declared = set(ASIM_OUTPUT_KEY_MAP.values())
         results: list[ValidationResult] = []
         for raw_key in outputs.raw_outputs:
             normalized_key = _normalize_activitysim_run_output_key(raw_key)
@@ -446,15 +449,6 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         (``usim_datastore_h5``).
     """
 
-    primary_output_attr: ClassVar[str] = "usim_datastore_h5"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_DATASTORE_H5,)
-    optional_outputs: ClassVar[Tuple[str, ...]] = (
-        "asim_input_households_csv_archived",
-        "asim_input_persons_csv_archived",
-        "asim_input_land_use_csv_archived",
-        "asim_input_skims_omx_archived",
-    )
-    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "usim_datastore_h5",

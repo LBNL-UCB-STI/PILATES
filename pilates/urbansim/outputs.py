@@ -24,7 +24,6 @@ class UrbanSimPreprocessOutputs(StepOutputsBase):
         Mapping of input short_name to prepared input path.
     """
 
-    primary_output_attr: ClassVar[str] = "usim_mutable_data_dir"
     required_path_fields: ClassVar[Tuple[str, ...]] = ("usim_mutable_data_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     usim_mutable_data_dir: Path
@@ -51,8 +50,6 @@ class UrbanSimRunOutputs(StepOutputsBase):
         Mapping of short_name to raw output path.
     """
 
-    primary_output_attr: ClassVar[str] = "usim_datastore_h5"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_DATASTORE_H5,)
     required_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     usim_datastore_h5: Path
@@ -86,8 +83,6 @@ class UrbanSimPostprocessOutputs(StepOutputsBase):
         Mapping of short_name to postprocessed output path.
     """
 
-    primary_output_attr: ClassVar[str] = "usim_datastore_h5"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_DATASTORE_H5,)
     required_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
     usim_datastore_h5: Path

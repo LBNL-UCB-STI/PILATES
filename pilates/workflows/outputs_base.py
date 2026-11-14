@@ -217,134 +217,15 @@ def deserialize_step_outputs(
     return output_class(**kwargs)
 
 
-def declared_outputs_for_step_outputs_class(
-    outputs_class: Type[Any],
-) -> Tuple[str, ...]:
-    """
-    Resolve canonical declared output keys for a ``StepOutputs`` class.
-
-    Precedence:
-    1. Explicit ``declared_outputs`` class attribute.
-    2. Fallback to required ``record_keys`` fields.
-
-    Parameters
-    ----------
-    outputs_class : type
-        Step outputs dataclass type.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Ordered, deduplicated output key tuple.
-    """
-    explicit = getattr(outputs_class, "declared_outputs", None) or ()
-    explicit_keys = [key for key in explicit if isinstance(key, str)]
-    if explicit_keys:
-        return tuple(dict.fromkeys(explicit_keys))
-
-    record_keys = getattr(outputs_class, "record_keys", None) or {}
-    required_fields = getattr(outputs_class, "required_path_fields", ()) or ()
-    inferred: list[str] = []
-    for field_name in required_fields:
-        key = record_keys.get(field_name)
-        if isinstance(key, str):
-            inferred.append(key)
-    return tuple(dict.fromkeys(inferred))
-
-
-def required_outputs_for_step_outputs_class(
-    outputs_class: Type[Any],
-    state: Any = None,
-) -> Tuple[str, ...]:
-    """
-    Resolve strict required output keys for a ``StepOutputs`` class.
-
-    Precedence:
-    1. Explicit ``required_outputs`` class attribute.
-    2. State-expanded ``required_output_families`` class attribute.
-    2. Fallback to all declared outputs for the class.
-    """
-    explicit = getattr(outputs_class, "required_outputs", None) or ()
-    explicit_keys = [key for key in explicit if isinstance(key, str)]
-    if explicit_keys:
-        return tuple(dict.fromkeys(explicit_keys))
-    families = getattr(outputs_class, "required_output_families", None) or ()
-    family_keys = [key for key in families if isinstance(key, str)]
-    if family_keys and state is not None:
-        year = getattr(state, "forecast_year", None)
-        if year is None:
-            year = getattr(state, "current_year", getattr(state, "year", None))
-        iteration = getattr(
-            state,
-            "current_inner_iter",
-            getattr(state, "iteration", None),
-        )
-        atlas_year = getattr(state, "atlas_year", None)
-        format_values = {
-            "year": year,
-            "forecast_year": getattr(state, "forecast_year", None),
-            "iteration": iteration,
-            "atlas_year": atlas_year,
-        }
-        expanded: list[str] = []
-        for family in family_keys:
-            try:
-                expanded.append(family.format(**format_values))
-            except Exception:
-                continue
-        if expanded:
-            return tuple(dict.fromkeys(expanded))
-    declared = declared_outputs_for_step_outputs_class(outputs_class)
-    optional = tuple(
-        dict.fromkeys(
-            key
-            for key in (getattr(outputs_class, "optional_outputs", None) or ())
-            if isinstance(key, str)
-        )
-    )
-    if not optional:
-        return declared
-    return tuple(key for key in declared if key not in set(optional))
-
-
 class StepOutputsBase:
     """
     Base class for typed step outputs.
     """
 
-    declared_outputs: ClassVar[Tuple[str, ...]] = ()
-    required_outputs: ClassVar[Tuple[str, ...]] = ()
-    required_output_families: ClassVar[Tuple[str, ...]] = ()
-    optional_outputs: ClassVar[Tuple[str, ...]] = ()
-    record_keys: ClassVar[Dict[str, str]] = {}
-    record_descriptions: ClassVar[Dict[str, str]] = {}
-    default_description: ClassVar[str] = "Step output"
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = ()
     dict_path_fields: ClassVar[Tuple[str, ...]] = ()
     validators: ClassVar[Tuple[OutputValidator, ...]] = ()
-
-    @classmethod
-    def declared_output_keys(cls) -> Tuple[str, ...]:
-        """
-        Return canonical declared output keys for this ``StepOutputs`` class.
-        """
-        return declared_outputs_for_step_outputs_class(cls)
-
-    @classmethod
-    def required_output_keys(cls, state: Any = None) -> Tuple[str, ...]:
-        """
-        Return strict required output keys for this ``StepOutputs`` class.
-        """
-        return required_outputs_for_step_outputs_class(cls, state=state)
-
-    @classmethod
-    def optional_output_keys(cls) -> Tuple[str, ...]:
-        """
-        Return optional output keys for this ``StepOutputs`` class.
-        """
-        explicit = getattr(cls, "optional_outputs", None) or ()
-        return tuple(dict.fromkeys(key for key in explicit if isinstance(key, str)))
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -355,14 +236,7 @@ class StepOutputsBase:
         iterable of tuple
             Record metadata tuples for step output inspection and serialization.
         """
-        for field_name, short_name in self.record_keys.items():
-            value = getattr(self, field_name, None)
-            if value is None:
-                continue
-            description = self.record_descriptions.get(
-                field_name, f"{self.default_description}: {short_name}"
-            )
-            yield short_name, value, description
+        return ()
 
     def validate(self, context: Optional[ValidationContext] = None) -> None:
         """

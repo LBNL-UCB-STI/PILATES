@@ -478,7 +478,9 @@ def _project_beam_preprocess_outputs(
     )
     prepared = {}
     for key in (
-        *BeamPreprocessOutputs.required_output_keys(),
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
         "vehicles_beam_in",
         LINKSTATS_WARMSTART,
     ):
