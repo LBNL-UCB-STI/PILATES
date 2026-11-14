@@ -40,6 +40,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
+from pilates.workflows.state_helpers import resolve_forecast_year
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +418,8 @@ def _run_traffic_assignment_phase(
         )
 
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
+    forecast_year = resolve_forecast_year(state)
+    beam_year = int(forecast_year) if forecast_year is not None else inputs.year
 
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
@@ -430,14 +433,14 @@ def _run_traffic_assignment_phase(
             scenario=scenario,
             settings=settings,
             workspace=workspace,
-            year=inputs.year,
+            year=beam_year,
             iteration=inputs.iteration,
             preprocess_outputs=preprocess_outputs,
             archive_run_dir=archive_run_dir,
         )
         _run_beam_full_skim_step(
             scenario=scenario,
-            year=inputs.year,
+            year=beam_year,
             iteration=inputs.iteration,
             context=context,
             launch_config=launch_config,
@@ -445,7 +448,7 @@ def _run_traffic_assignment_phase(
     else:
         _run_beam_steps(
             scenario=scenario,
-            year=inputs.year,
+            year=beam_year,
             iteration=inputs.iteration,
             context=context,
         )

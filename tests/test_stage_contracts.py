@@ -103,3 +103,33 @@ def test_supply_demand_fails_closed_for_skipped_activitysim_without_beam_checkpo
     assert "_rewind_uncheckpointed_activitysim_restart" not in source
     assert "_restore_activity_demand_outputs_for_resume" not in source
     assert "Step" + "OutputsHolder" not in source
+
+
+def test_traffic_assignment_phase_uses_forecast_year_when_set(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    captured: list[int] = []
+
+    def fake_run_beam_steps(*, scenario, year: int, iteration: int, context) -> None:
+        del scenario, iteration, context
+        captured.append(year)
+
+    monkeypatch.setattr(supply_demand_beam, "_run_beam_steps", fake_run_beam_steps)
+    state = MagicMock()
+    state.year = 2017
+    state.forecast_year = 2019
+    settings = SimpleNamespace(
+        run=SimpleNamespace(models=SimpleNamespace(traffic_assignment="beam")),
+        beam=SimpleNamespace(full_skim=SimpleNamespace(run_schedule="off")),
+    )
+    context = SimpleNamespace(settings=settings, state=state, workspace=MagicMock())
+    inputs = supply_demand_beam.TrafficAssignmentPhaseInputs(year=2017, iteration=0)
+
+    supply_demand_beam._run_traffic_assignment_phase(
+        scenario=MagicMock(),
+        inputs=inputs,
+        context=context,
+    )
+
+    assert captured == [2019]
