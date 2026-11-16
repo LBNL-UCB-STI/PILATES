@@ -1039,7 +1039,7 @@ def test_stage_orchestrators_and_launcher_happy_path_workflow(tmp_path: Path) ->
     assert (
         archive_run_dir
         / "consist-recovery"
-        / "beam_postprocess__supply_demand__y2015__i0__postprocess"
+        / "beam_postprocess__supply_demand__y2017__i0__postprocess"
         / "sfbay"
         / "skims.omx"
     ).is_file()
