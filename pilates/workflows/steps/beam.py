@@ -855,11 +855,6 @@ class _HasFullPath(Protocol):
     full_path: str | Path
 
 
-@runtime_checkable
-class _HasArchiveRunDir(Protocol):
-    archive_run_dir: str | Path | None
-
-
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
     if key in {ZARR_SKIMS, LINKSTATS_WARMSTART}:
         existing = artifact_to_existing_path(source, workspace=workspace)
@@ -1700,12 +1695,10 @@ def _preflight_beam_launch_inputs(
     expected_warmstart_path: Path | None = None,
 ) -> None:
     report_dir_path = (
-        workspace.archive_run_dir if isinstance(workspace, _HasArchiveRunDir) else None
+        workspace.archive_run_dir
+        if workspace.archive_run_dir is not None
+        else workspace.full_path
     )
-    if report_dir_path is None:
-        report_dir_path = (
-            workspace.full_path if isinstance(workspace, _HasFullPath) else Path(".")
-        )
 
     validate_kwargs: dict[str, Any] = {
         "settings": settings,

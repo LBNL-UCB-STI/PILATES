@@ -6,14 +6,20 @@ from types import SimpleNamespace
 import pytest
 
 from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.workspace import Workspace
 from pilates.workflows.stages.postprocessing import run_postprocessing_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from tests.conftest import (
+    make_conforming_settings,
+    make_conforming_workflow_runtime_context,
+    make_conforming_workspace,
+)
 
 
 def test_workflow_runtime_context_builds_surface_when_missing(monkeypatch) -> None:
     settings = SimpleNamespace()
     state = SimpleNamespace()
-    workspace = SimpleNamespace()
+    workspace = SimpleNamespace(on_archive_commit=None, expected_prefix_steps=0)
     built_surface = SimpleNamespace(profile=SimpleNamespace())
     captured = {}
 
@@ -40,7 +46,7 @@ def test_workflow_runtime_context_builds_surface_when_missing(monkeypatch) -> No
 def test_workflow_runtime_context_reuses_explicit_surface() -> None:
     settings = SimpleNamespace()
     state = SimpleNamespace()
-    workspace = SimpleNamespace()
+    workspace = SimpleNamespace(on_archive_commit=None, expected_prefix_steps=0)
     surface = SimpleNamespace(profile=SimpleNamespace())
 
     context = WorkflowRuntimeContext.from_parts(
@@ -97,7 +103,7 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
         )
     )
     state = _FakeState()
-    workspace = SimpleNamespace(full_path=str(tmp_path))
+    workspace = make_conforming_workspace(tmp_path)
     surface = SimpleNamespace(profile=SimpleNamespace())
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
@@ -164,7 +170,7 @@ def test_supply_demand_snapshots_after_activitysim_before_beam(
             )
         ),
         state=_FakeState(),
-        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        workspace=make_conforming_workspace(tmp_path),
         surface=SimpleNamespace(profile=SimpleNamespace()),
     )
     events: list[str] = []
@@ -227,7 +233,7 @@ def test_supply_demand_fails_closed_for_uncommitted_restart_without_handoff(
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
-        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        workspace=make_conforming_workspace(tmp_path),
         surface=SimpleNamespace(profile=SimpleNamespace()),
     )
     with pytest.raises(
@@ -246,7 +252,7 @@ def test_run_postprocessing_stage_uses_runtime_context(
 ) -> None:
     settings = SimpleNamespace()
     state = SimpleNamespace(iteration=0)
-    workspace = SimpleNamespace(full_path=str(tmp_path))
+    workspace = make_conforming_workspace(tmp_path)
     surface = SimpleNamespace(profile=SimpleNamespace())
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
@@ -273,3 +279,29 @@ def test_run_postprocessing_stage_uses_runtime_context(
     assert captured["settings"] is settings
     assert captured["state"] is state
     assert captured["workspace"] is workspace
+
+
+def test_conforming_workspace_and_context_factory(tmp_path: Path) -> None:
+    """Validate that conforming factories produce strongly typed conforming instances."""
+    settings = make_conforming_settings(tmp_path)
+    workspace = make_conforming_workspace(
+        tmp_path,
+        settings=settings,
+        beam_mutable_data_dir=tmp_path / "custom_beam",
+    )
+    assert isinstance(workspace, Workspace)
+    assert workspace.full_path == str(tmp_path / "run")
+    assert workspace.get_beam_mutable_data_dir() == str(tmp_path / "custom_beam")
+    assert workspace.archive_run_dir is None
+    assert workspace.expected_prefix_steps == 0
+    assert workspace.on_archive_commit is None
+
+    context = make_conforming_workflow_runtime_context(
+        tmp_path,
+        settings=settings,
+        workspace=workspace,
+    )
+    assert isinstance(context, WorkflowRuntimeContext)
+    assert context.workspace is workspace
+    assert context.settings is settings
+    assert context.surface is not None

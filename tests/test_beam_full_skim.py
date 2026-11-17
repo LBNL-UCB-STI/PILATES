@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import make_conforming_workspace
+
 
 class TestBeamFullSkimMode:
     """Tests for BEAM full-skim mode configuration and command construction."""
@@ -69,9 +71,12 @@ class TestBeamFullSkimMode:
         model_name = "beam_full_skim" if full_skim else "beam"
         runner = runner_cls(model_name, state)
 
-        workspace = MagicMock()
-        workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
-        workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
+        workspace = make_conforming_workspace(
+            "/tmp",
+            full_path="/tmp",
+            beam_mutable_data_dir="/tmp/beam_input",
+            beam_output_dir="/tmp/beam_output",
+        )
 
         store = BeamPreprocessOutputs(beam_mutable_data_dir=Path("/tmp/beam_input"))
         launch_root = Path("/tmp/beam_launch") / ("full_skim" if full_skim else "beam")
@@ -449,8 +454,10 @@ class TestBeamFullSkimMode:
         from pilates.config.models import FullSkimsCreatorConfig
         from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
 
-        workspace = MagicMock()
-        workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
+        workspace = make_conforming_workspace(
+            "/tmp",
+            beam_output_dir="/tmp/beam_output",
+        )
         state = SimpleNamespace(current_year=2025, current_inner_iter=1)
 
         for skims_kind, expected_name in (
@@ -558,9 +565,12 @@ class TestBeamFullSkimMode:
         from pilates.config.models import FullSkimsCreatorConfig
         from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS, FINAL_SKIMS_OMX
 
-        workspace = MagicMock()
-        workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
-        workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
+        workspace = make_conforming_workspace(
+            "/tmp",
+            full_path="/tmp",
+            beam_mutable_data_dir="/tmp/beam_input",
+            beam_output_dir="/tmp/beam_output",
+        )
         state = SimpleNamespace(current_year=2025, current_inner_iter=1)
 
         omx_settings = self._make_settings(
@@ -587,9 +597,12 @@ class TestBeamFullSkimMode:
 
         settings = self._make_settings()
         state = SimpleNamespace(current_year=2020, current_inner_iter=0)
-        workspace = MagicMock()
-        workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
-        workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
+        workspace = make_conforming_workspace(
+            "/tmp",
+            full_path="/tmp",
+            beam_mutable_data_dir="/tmp/beam_input",
+            beam_output_dir="/tmp/beam_output",
+        )
         coupler = {}
 
         resolved = _resolve_beam_full_skim_inputs(
@@ -618,10 +631,12 @@ class TestBeamFullSkimMode:
             full_skim_cfg=self._make_skim_config(run_schedule="standalone")
         )
         state = SimpleNamespace(current_year=2020, current_inner_iter=0)
-        workspace = MagicMock()
-        workspace.full_path = str(tmp_path)
-        workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam_input")
-        workspace.get_beam_output_dir.return_value = str(tmp_path / "beam_output")
+        workspace = make_conforming_workspace(
+            tmp_path,
+            full_path=str(tmp_path),
+            beam_mutable_data_dir=str(tmp_path / "beam_input"),
+            beam_output_dir=str(tmp_path / "beam_output"),
+        )
 
         plans_path = tmp_path / "plans.csv.gz"
         plans_path.write_bytes(b"plans")
@@ -668,10 +683,12 @@ class TestBeamFullSkimMode:
             full_skim_cfg=self._make_skim_config(run_schedule="after_final_iteration")
         )
         state = SimpleNamespace(current_year=2020, current_inner_iter=0)
-        workspace = MagicMock()
-        workspace.full_path = str(tmp_path)
-        workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam_input")
-        workspace.get_beam_output_dir.return_value = str(tmp_path / "beam_output")
+        workspace = make_conforming_workspace(
+            tmp_path,
+            full_path=str(tmp_path),
+            beam_mutable_data_dir=str(tmp_path / "beam_input"),
+            beam_output_dir=str(tmp_path / "beam_output"),
+        )
 
         plans_path = tmp_path / "plans.csv.gz"
         plans_path.write_bytes(b"plans")
@@ -737,9 +754,11 @@ class TestBeamFullSkimMode:
             encoding="utf-8",
         )
 
-        workspace = MagicMock()
-        workspace.full_path = str(tmp_path)
-        workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam")
+        workspace = make_conforming_workspace(
+            tmp_path,
+            full_path=str(tmp_path),
+            beam_mutable_data_dir=str(tmp_path / "beam"),
+        )
         workspace.get_beam_output_dir.return_value = str(tmp_path / "beam_out")
 
         settings = SimpleNamespace(
@@ -904,8 +923,10 @@ class TestBeamFullSkimMode:
         warmstart_file.parent.mkdir(parents=True)
         warmstart_file.write_bytes(b"PAR1-warmstart")
 
-        workspace = MagicMock()
-        workspace.get_beam_mutable_data_dir.return_value = str(beam_input_dir)
+        workspace = make_conforming_workspace(
+            beam_input_dir,
+            beam_mutable_data_dir=str(beam_input_dir),
+        )
         scenario = SimpleNamespace(coupler={})
         settings = SimpleNamespace(
             run=SimpleNamespace(region="sfbay"),
@@ -963,8 +984,10 @@ class TestBeamFullSkimMode:
         persons_file = tmp_path / "persons.csv.gz"
         persons_file.write_bytes(b"persons")
 
-        workspace = MagicMock()
-        workspace.get_beam_mutable_data_dir.return_value = str(beam_input_dir)
+        workspace = make_conforming_workspace(
+            beam_input_dir,
+            beam_mutable_data_dir=str(beam_input_dir),
+        )
         coupler = {
             BEAM_PLANS_IN: str(plans_file),
             BEAM_HOUSEHOLDS_IN: str(hh_file),
@@ -1087,9 +1110,9 @@ class TestBeamFullSkimMode:
             primary_config=primary_conf,
         )
 
-        workspace = MagicMock()
-        workspace.get_beam_mutable_data_dir.return_value = str(
-            tmp_path / "beam" / "input"
+        workspace = make_conforming_workspace(
+            tmp_path,
+            beam_mutable_data_dir=str(tmp_path / "beam" / "input"),
         )
         state = SimpleNamespace(
             year=2019,

@@ -22,6 +22,7 @@ from pilates.workflows.steps import activitysim, atlas, urbansim
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.urbansim.runner import UrbanSimLaunchContext
 from pilates.beam.beam_input_staging import copy_vehicles_from_atlas
+from tests.conftest import make_conforming_workspace
 
 
 def _settings(*, traffic_assignment: str | None = "beam") -> SimpleNamespace:
@@ -141,10 +142,11 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     )
     state = _state(current_year=2022)
     state.forecast_year = 2022
-    workspace = SimpleNamespace(
+    workspace = make_conforming_workspace(
+        ".",
         full_path=".",
-        get_usim_mutable_data_dir=lambda: "urbansim/data",
-        get_atlas_mutable_input_dir=lambda: "atlas/input",
+        usim_mutable_data_dir="urbansim/data",
+        atlas_mutable_input_dir="atlas/input",
     )
     captured: dict[str, tuple[str, ...]] = {}
 
@@ -244,12 +246,13 @@ def test_activitysim_uses_zarr_only_after_beam_bootstrap(
         staticmethod(lambda *_args: {}),
     )
     state = _state(current_year=2020, iteration=1)
-    workspace = SimpleNamespace(
+    workspace = make_conforming_workspace(
+        "/workspace",
         full_path="/workspace",
-        get_asim_mutable_data_dir=lambda: "/workspace/activitysim/data",
-        get_asim_output_dir=lambda: "/workspace/activitysim/output",
-        get_asim_mutable_configs_dir=lambda: "/workspace/activitysim/configs",
-        get_asim_runtime_cache_dir=lambda: "/workspace/activitysim/output/cache",
+        asim_mutable_data_dir="/workspace/activitysim/data",
+        asim_output_dir="/workspace/activitysim/output",
+        asim_mutable_configs_dir="/workspace/activitysim/configs",
+        asim_runtime_cache_dir="/workspace/activitysim/output/cache",
     )
 
     activitysim._activitysim_preprocess_resolver(
@@ -290,8 +293,9 @@ def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
     captured: dict[str, object] = {}
     settings = _settings()
     state = _state(current_year=2020, iteration=1)
-    workspace = SimpleNamespace(
-        get_asim_mutable_data_dir=lambda: str(tmp_path / "asim_data")
+    workspace = make_conforming_workspace(
+        tmp_path,
+        asim_mutable_data_dir=str(tmp_path / "asim_data"),
     )
 
     class _Preprocessor:
@@ -328,7 +332,9 @@ def test_activitysim_preprocess_does_not_declare_stale_omx_after_bootstrap() -> 
     declared = activitysim.activitysim_preprocess_output_paths(
         settings=_settings(),
         state=_state(current_year=2020, iteration=1),
-        workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: "activitysim/data"),
+        workspace=make_conforming_workspace(
+            ".", asim_mutable_data_dir="activitysim/data"
+        ),
     )
 
     assert "omx_skims" not in declared
@@ -361,7 +367,7 @@ def test_activitysim_population_source_cannot_fall_back_after_land_use(
     activitysim._activitysim_preprocess_resolver(
         settings=_settings(),
         state=state,
-        workspace=SimpleNamespace(full_path="."),
+        workspace=make_conforming_workspace(".", full_path="."),
         coupler=object(),
     )
 
@@ -382,11 +388,12 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
     state = _state(current_year=2022)
     state.forecast_year = 2022
     state.year = 2022
-    workspace = SimpleNamespace(
+    workspace = make_conforming_workspace(
+        tmp_path,
         full_path=str(tmp_path),
-        get_asim_mutable_data_dir=lambda: str(tmp_path / "asim_data"),
-        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
-        get_usim_mutable_data_dir=lambda: str(tmp_path / "usim_data"),
+        asim_mutable_data_dir=str(tmp_path / "asim_data"),
+        atlas_output_dir=str(tmp_path / "atlas_output"),
+        usim_mutable_data_dir=str(tmp_path / "usim_data"),
     )
     captured: dict[str, dict[str, object]] = {}
 
@@ -498,7 +505,7 @@ def test_direct_beam_vehicle_staging_rejects_wrong_forecast_year(
 
     with pytest.raises(ValueError, match="forecast_year=2019.*parsed_source_year=2018"):
         copy_vehicles_from_atlas(
-            workspace=SimpleNamespace(full_path=str(tmp_path)),
+            workspace=make_conforming_workspace(tmp_path, full_path=str(tmp_path)),
             state=SimpleNamespace(forecast_year=2019),
             resolve_beam_exchange_scenario_folder_fn=lambda _workspace: str(
                 tmp_path / "beam-input"
