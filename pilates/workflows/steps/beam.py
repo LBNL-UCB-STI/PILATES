@@ -1243,7 +1243,7 @@ def _resolve_beam_run_inputs(
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
-        optional_roles=(LINKSTATS_WARMSTART, ZARR_SKIMS),
+        optional_roles=(LINKSTATS_WARMSTART,),
     )
 
 
@@ -1854,7 +1854,7 @@ def _archive_beam_launch_config(
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
     },
-    optional_input_keys=(LINKSTATS_WARMSTART, ZARR_SKIMS),
+    optional_input_keys=(LINKSTATS_WARMSTART,),
     schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
@@ -1865,7 +1865,6 @@ def _native_beam_run(
     households_beam_in: Path,
     persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
-    zarr_skims: Path | None = None,
     *,
     settings: Any,
     state: Any,
@@ -1913,7 +1912,6 @@ def _native_beam_run(
         ),
         workspace,
         launch_config=beam_launch_config,
-        extra_inputs={ZARR_SKIMS: zarr_skims} if zarr_skims is not None else None,
     )
     _validate_native_outputs(
         produced,

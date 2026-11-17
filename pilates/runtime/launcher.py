@@ -153,7 +153,7 @@ def query_expected_prefix_steps(tracker: Any, scenario_name: str) -> int:
     if db is None:
         return 0
     try:
-        con = db.connection()
+        con = db.connection
         step_rows = con.execute(
             """
             SELECT count(*) FROM run 
