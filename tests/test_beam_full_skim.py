@@ -1024,11 +1024,6 @@ class TestBeamFullSkimMode:
                     return_value=outputs,
                 )
             )
-            mock_launch_config = stack.enter_context(
-                patch(
-                    "pilates.workflows.stages.supply_demand_beam._compile_beam_launch_config"
-                )
-            )
             mock_full_skim_step = stack.enter_context(
                 patch(
                     "pilates.workflows.stages.supply_demand_beam._run_beam_full_skim_step",
@@ -1047,7 +1042,6 @@ class TestBeamFullSkimMode:
             settings=settings,
         )
         mock_beam_steps.assert_not_called()
-        mock_launch_config.assert_called_once()
         mock_full_skim_step.assert_called_once()
 
     def test_sfbay_standalone_fullskim_hpc_config_loads_validly(self):

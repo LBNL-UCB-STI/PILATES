@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from pilates.config.models import PilatesConfig
     from pilates.workflows.surface import EnabledWorkflowSurface
     from pilates.workspace import Workspace
     from pilates.workflows.state import WorkflowState
+
+
+@runtime_checkable
+class _HasArchiveCommit(Protocol):
+    on_archive_commit: Optional[Callable[[str], None]]
+
+
+@runtime_checkable
+class _HasExpectedPrefixSteps(Protocol):
+    expected_prefix_steps: int
 
 
 @dataclass(frozen=True)
@@ -58,12 +68,20 @@ class WorkflowRuntimeContext:
         archive_cb = (
             on_archive_commit
             if on_archive_commit is not None
-            else workspace.on_archive_commit
+            else (
+                workspace.on_archive_commit
+                if isinstance(workspace, _HasArchiveCommit)
+                else None
+            )
         )
         prefix_steps = (
             expected_prefix_steps
             if expected_prefix_steps != 0
-            else workspace.expected_prefix_steps
+            else (
+                workspace.expected_prefix_steps
+                if isinstance(workspace, _HasExpectedPrefixSteps)
+                else 0
+            )
         )
         return cls(
             settings=settings,

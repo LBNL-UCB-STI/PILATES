@@ -22,12 +22,14 @@ from typing import (
     Any,
     Dict,
     Optional,
+    Protocol,
     cast,
+    runtime_checkable,
 )
 
 from consist.models.run import Run
 from pilates.config import PilatesConfig
-from pilates.workspace import Workspace
+from pilates.workspace import Workspace, Workspace as _RealWorkspace
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
 from pilates.utils.settings_helper import get as get_setting
@@ -134,9 +136,6 @@ class PreparedRunContext:
     archive_consist_db_path: Optional[str]
     run_notifier: Optional[ConsistRunNotifier]
     run_publisher: Optional[ConsistRunPublisher]
-
-
-from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -500,6 +499,16 @@ def _prepare_run_context(
 
     expected_prefix_steps = query_expected_prefix_steps(tracker, run_name)
 
+    @runtime_checkable
+    class _HasArchiveStepSnapshot(Protocol):
+        def snapshot_after_archive_step(self, step_name: str) -> bool: ...
+
+    on_archive_commit = (
+        snapshot_manager.snapshot_after_archive_step
+        if isinstance(snapshot_manager, _HasArchiveStepSnapshot)
+        else None
+    )
+
     with tracker.trace(
         name="workspace_setup",
         model="pilates_orchestrator",
@@ -510,9 +519,10 @@ def _prepare_run_context(
             local_root,
             folder_name=run_name,
             archive_run_dir=archive_run_dir,
-            on_archive_commit=snapshot_manager.snapshot_after_archive_step,
-            expected_prefix_steps=expected_prefix_steps,
         )
+        if isinstance(workspace, _RealWorkspace):
+            workspace.on_archive_commit = on_archive_commit
+            workspace.expected_prefix_steps = expected_prefix_steps
     archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
     local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
     set_run_failure_context(archive_state_path=archive_state_path)
@@ -532,7 +542,7 @@ def _prepare_run_context(
         state=state,
         workspace=workspace,
         surface=surface,
-        on_archive_commit=snapshot_manager.snapshot_after_archive_step,
+        on_archive_commit=on_archive_commit,
         expected_prefix_steps=expected_prefix_steps,
     )
     return PreparedRunContext(

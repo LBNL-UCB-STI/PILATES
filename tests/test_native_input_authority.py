@@ -285,12 +285,28 @@ def test_activitysim_uses_zarr_only_after_beam_bootstrap(
 
 def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
+    settings = _settings()
+    state = _state(current_year=2020, iteration=1)
+    workspace = SimpleNamespace(
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "asim_data")
+    )
 
     class _Preprocessor:
         def preprocess(self, _workspace, **kwargs):
             captured.update(kwargs)
+            from consist import OutputArtifactSpec
+
+            for spec in activitysim.activitysim_preprocess_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ).values():
+                out = Path(spec.path if isinstance(spec, OutputArtifactSpec) else spec)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.touch()
 
     monkeypatch.setattr(
         activitysim,
@@ -299,9 +315,9 @@ def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
     )
     activitysim._activitysim_preprocess_callable(
         Path("/bound/population.h5"),
-        settings=_settings(),
-        state=_state(current_year=2020, iteration=1),
-        workspace=SimpleNamespace(),
+        settings=settings,
+        state=state,
+        workspace=workspace,
     )
 
     assert captured["prepare_omx_skims"] is False
@@ -357,15 +373,34 @@ def test_activitysim_population_source_cannot_fall_back_after_land_use(
 
 def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
+    from consist import OutputArtifactSpec
+
     settings = _settings()
+    settings.urbansim = SimpleNamespace(output_file_template="output_{year}.h5")
     state = _state(current_year=2022)
-    workspace = SimpleNamespace()
+    state.forecast_year = 2022
+    state.year = 2022
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "asim_data"),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "usim_data"),
+    )
     captured: dict[str, dict[str, object]] = {}
 
     class _ActivitysimPreprocessor:
         def preprocess(self, _workspace, **kwargs):
             captured["activitysim"] = kwargs
+            for spec in activitysim.activitysim_preprocess_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ).values():
+                out = Path(spec.path if isinstance(spec, OutputArtifactSpec) else spec)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.touch()
 
     class _UrbansimRunner:
         def __init__(self, *_args):
@@ -376,6 +411,12 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
                 "inputs": inputs,
                 "launch_context": launch_context,
             }
+            for target in (
+                launch_context.output_datastore,
+                Path(workspace.get_usim_mutable_data_dir()) / "output_2022.h5",
+            ):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
 
     class _AtlasPreprocessor:
         def __init__(self, *_args):
@@ -395,8 +436,8 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
     population = Path("/bound/population.h5")
     skims = Path("/bound/final-skims.omx")
     urbansim_launch_context = UrbanSimLaunchContext(
-        mutable_data_dir=Path("/resolved/urbansim"),
-        output_datastore=Path("/resolved/urbansim/output_2022.h5"),
+        mutable_data_dir=tmp_path / "urbansim",
+        output_datastore=tmp_path / "urbansim" / "output_2022.h5",
     )
     staged = UrbanSimPreprocessOutputs(
         usim_mutable_data_dir=urbansim_launch_context.mutable_data_dir,
