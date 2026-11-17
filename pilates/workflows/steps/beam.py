@@ -466,6 +466,7 @@ def _project_beam_preprocess_outputs(
     state: Any,
     workspace: Any,
     resolved_inputs: ResolvedStepInputs,
+    is_cache_hit: bool = False,
 ) -> BeamPreprocessOutputs:
     output_resolved_inputs = (
         resolved_inputs if "native_output_keys" in resolved_inputs.metadata else None
@@ -491,6 +492,7 @@ def _project_beam_preprocess_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
         elif (
             key == LINKSTATS_WARMSTART
@@ -578,13 +580,14 @@ def _project_beam_preprocess_outputs(
         prepared_inputs=prepared,
         prepared_input_metadata=prepared_metadata,
     )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_preprocess",
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
+    if not is_cache_hit:
+        _validate_native_outputs(
+            projected,
+            step_name="beam_preprocess",
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
     return projected
 
 
@@ -595,6 +598,7 @@ def _project_beam_run_outputs(
     state: Any,
     workspace: Any,
     resolved_inputs: ResolvedStepInputs,
+    is_cache_hit: bool = False,
 ) -> BeamRunOutputs:
     declared_outputs = _beam_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -608,6 +612,7 @@ def _project_beam_run_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
         elif _is_direct_beam_zarr_output_key(key):
             path = artifact_to_existing_path(output, workspace=workspace)
@@ -621,13 +626,14 @@ def _project_beam_run_outputs(
         beam_output_dir=Path(workspace.get_beam_output_dir()),
         raw_outputs=raw_outputs,
     )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_run",
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
+    if not is_cache_hit:
+        _validate_native_outputs(
+            projected,
+            step_name="beam_run",
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
     return projected
 
 
@@ -725,6 +731,7 @@ def _project_beam_postprocess_outputs(
     state: Any,
     workspace: Any,
     resolved_inputs: ResolvedStepInputs,
+    is_cache_hit: bool = False,
 ) -> BeamPostprocessOutputs:
     dynamic_output_keys = {
         key
@@ -762,6 +769,7 @@ def _project_beam_postprocess_outputs(
                 key=ZARR_SKIMS,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             if ZARR_SKIMS in outputs and ZARR_SKIMS in declared_outputs
             else None
@@ -773,6 +781,7 @@ def _project_beam_postprocess_outputs(
                 key="final_skims_omx",
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             if "final_skims_omx" in outputs and "final_skims_omx" in declared_outputs
             else None
@@ -784,6 +793,7 @@ def _project_beam_postprocess_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             for key in outputs
             if key in declared_outputs
@@ -797,18 +807,20 @@ def _project_beam_postprocess_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             for key in outputs
             if key in declared_outputs and key.startswith("path_traversal_links_")
         },
     )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_postprocess",
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
+    if not is_cache_hit:
+        _validate_native_outputs(
+            projected,
+            step_name="beam_postprocess",
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
     return projected
 
 
@@ -819,6 +831,7 @@ def _project_beam_full_skim_outputs(
     state: Any,
     workspace: Any,
     resolved_inputs: ResolvedStepInputs,
+    is_cache_hit: bool = False,
 ) -> BeamFullSkimOutputs:
     del resolved_inputs
     declared_outputs = _beam_full_skim_native_output_paths(
@@ -831,6 +844,7 @@ def _project_beam_full_skim_outputs(
             key="beam_full_skims",
             declared_outputs=declared_outputs,
             workspace=workspace,
+            is_cache_hit=is_cache_hit,
         ),
         final_skims_omx=(
             _path_from_output(
@@ -839,18 +853,21 @@ def _project_beam_full_skim_outputs(
                 key=FINAL_SKIMS_OMX,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             if FINAL_SKIMS_OMX in outputs and FINAL_SKIMS_OMX in declared_outputs
             else None
         ),
     )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_full_skim",
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
+    if not is_cache_hit:
+        _validate_native_outputs(
+            projected,
+            step_name="beam_full_skim",
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+    return projected
     return projected
 
 
@@ -974,8 +991,8 @@ def _strict_requested_output_cache(
 ) -> CacheOptions:
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
+        cache_hydration="metadata",
+        validate_cached_outputs="lazy",
     )
 
 
@@ -986,9 +1003,8 @@ def _beam_run_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
-        validate_cached_outputs="eager",
+        cache_hydration="metadata",
+        validate_cached_outputs="lazy",
         cache_version=1,
     )
 
@@ -1000,8 +1016,8 @@ def _beam_postprocess_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
+        cache_hydration="metadata",
+        validate_cached_outputs="lazy",
         cache_version=1,
     )
 
@@ -1691,7 +1707,7 @@ def _preflight_beam_launch_inputs(
 @define_step(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
-    cache_hydration="outputs-requested",
+    cache_hydration="metadata",
     inputs={
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
@@ -1768,7 +1784,7 @@ def _native_beam_run(
 @define_step(
     model="beam_postprocess",
     name_template="beam_postprocess__y{year}__i{iteration}__phase_{phase}",
-    cache_hydration="outputs-requested",
+    cache_hydration="metadata",
     optional_input_keys=(ZARR_SKIMS,),
     schema_outputs=[ZARR_SKIMS, "final_skims_omx"],
     output_paths=_native_contract_output_paths(_beam_postprocess_native_output_paths),

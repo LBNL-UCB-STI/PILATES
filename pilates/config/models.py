@@ -142,6 +142,14 @@ class RunConfig(BaseModel):
             "startup hydration/preflight checks"
         ),
     )
+    resume_policy: Literal["strict", "recompute"] = Field(
+        "strict",
+        description=(
+            "Resume cache validation policy: 'strict' asserts previously completed "
+            "steps must be cache hits and fails early on drift; 'recompute' allows "
+            "re-execution of invalidated steps."
+        ),
+    )
     consist_db_local_run: bool = Field(
         True,
         description=(

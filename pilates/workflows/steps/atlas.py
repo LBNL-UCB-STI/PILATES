@@ -796,6 +796,16 @@ def _native_atlas_postprocess(
         destination_h5=destination_h5,
         year=state.forecast_year,
     )
+    if not state.is_start_year():
+        from pilates.workflows.stages.vehicle_ownership import (
+            _validate_population_h5_for_activitysim_year,
+        )
+
+        _validate_population_h5_for_activitysim_year(
+            path=destination_h5,
+            year=state.forecast_year,
+            context=f"ATLAS postprocess local output y{state.forecast_year}",
+        )
 
 
 def _project_atlas_preprocess(
@@ -805,6 +815,7 @@ def _project_atlas_preprocess(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
+    is_cache_hit: bool = False,
 ) -> AtlasPreprocessOutputs:
     declared_outputs = _atlas_preprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -816,6 +827,7 @@ def _project_atlas_preprocess(
             key=key,
             declared_outputs=declared_outputs,
             workspace=workspace,
+            is_cache_hit=is_cache_hit,
         )
         for key in declared_outputs
     }
@@ -823,14 +835,15 @@ def _project_atlas_preprocess(
         atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
         prepared_inputs=prepared_inputs,
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_preprocess",
+    if not is_cache_hit:
+        projected.validate(
+            _validation_context(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name="atlas_preprocess",
+            )
         )
-    )
     return projected
 
 
@@ -841,6 +854,7 @@ def _project_atlas_run(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
+    is_cache_hit: bool = False,
 ) -> AtlasRunOutputs:
     declared_outputs = _atlas_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -854,18 +868,20 @@ def _project_atlas_run(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             for key in declared_outputs
         },
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_run",
+    if not is_cache_hit:
+        projected.validate(
+            _validation_context(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name="atlas_run",
+            )
         )
-    )
     return projected
 
 
@@ -876,6 +892,7 @@ def _project_atlas_postprocess(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
+    is_cache_hit: bool = False,
 ) -> AtlasPostprocessOutputs:
     declared_outputs = _atlas_postprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -888,6 +905,7 @@ def _project_atlas_postprocess(
             key=USIM_POPULATION_SOURCE_H5,
             declared_outputs=declared_outputs,
             workspace=workspace,
+            is_cache_hit=is_cache_hit,
         ),
         processed_outputs={
             ATLAS_VEHICLES2_OUTPUT: _persisted_output_path(
@@ -896,17 +914,19 @@ def _project_atlas_postprocess(
                 key=ATLAS_VEHICLES2_OUTPUT,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
         },
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_postprocess",
+    if not is_cache_hit:
+        projected.validate(
+            _validation_context(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name="atlas_postprocess",
+            )
         )
-    )
     return projected
 
 

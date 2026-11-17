@@ -248,12 +248,6 @@ def run_vehicle_ownership_stage(
                         coupler=coupler,
                         fallback_path=atlas_postprocess_outputs.usim_datastore_h5,
                     )
-                if not atlas_state.is_start_year():
-                    _validate_population_h5_for_activitysim_year(
-                        path=atlas_postprocess_outputs.usim_datastore_h5,
-                        year=atlas_year,
-                        context=f"ATLAS postprocess local output y{atlas_year}",
-                    )
         except Exception:
             from pilates.utils.failure_handling import persist_state_on_error
 

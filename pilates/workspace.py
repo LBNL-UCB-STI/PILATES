@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from pilates.config import PilatesConfig
 
@@ -21,6 +21,8 @@ class Workspace:
         folder_name: str,
         *,
         archive_run_dir: Optional[str] = None,
+        on_archive_commit: Optional[Callable[[str], None]] = None,
+        expected_prefix_steps: int = 0,
     ):
         self.settings = settings
         self.output_path = output_path
@@ -28,6 +30,9 @@ class Workspace:
         self.archive_run_dir: Optional[str] = (
             os.path.expanduser(archive_run_dir) if archive_run_dir is not None else None
         )
+        self.on_archive_commit: Optional[Callable[[str], None]] = on_archive_commit
+        self.expected_prefix_steps: int = expected_prefix_steps
+        self.step_execution_counter: int = 0
         self._asim_mutable_data_dir_override: Optional[str] = None
         self._asim_runtime_cache_dir_override: Optional[str] = None
         self._beam_mutable_data_dir_override: Optional[str] = None

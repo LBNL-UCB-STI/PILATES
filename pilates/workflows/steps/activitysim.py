@@ -834,12 +834,12 @@ def _activitysim_execution_options(
 def _activitysim_cache_options(
     *, settings: PilatesConfig, state: WorkflowState, workspace: Workspace
 ) -> CacheOptions:
-    """Admit a cache candidate only after all requested ActivitySim outputs land."""
+    """Admit a cache candidate with zero-copy metadata hydration."""
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
+        cache_hydration="metadata",
+        validate_cached_outputs="lazy",
     )
 
 
@@ -881,6 +881,7 @@ def _project_activitysim_preprocess_outputs(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
+    is_cache_hit: bool = False,
 ) -> ActivitySimPreprocessOutputs:
     declared_outputs = activitysim_preprocess_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -893,6 +894,7 @@ def _project_activitysim_preprocess_outputs(
             key=ASIM_LAND_USE_IN,
             declared_outputs=declared_outputs,
             workspace=workspace,
+            is_cache_hit=is_cache_hit,
         ),
         households_table=_persisted_output_path(
             outputs,
@@ -900,6 +902,7 @@ def _project_activitysim_preprocess_outputs(
             key=ASIM_HOUSEHOLDS_IN,
             declared_outputs=declared_outputs,
             workspace=workspace,
+            is_cache_hit=is_cache_hit,
         ),
         persons_table=_persisted_output_path(
             outputs,
@@ -907,6 +910,7 @@ def _project_activitysim_preprocess_outputs(
             key=ASIM_PERSONS_IN,
             declared_outputs=declared_outputs,
             workspace=workspace,
+            is_cache_hit=is_cache_hit,
         ),
         omx_skims=(
             _persisted_output_path(
@@ -915,19 +919,21 @@ def _project_activitysim_preprocess_outputs(
                 key=ASIM_OMX_SKIMS,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             if ASIM_OMX_SKIMS in outputs
             else None
         ),
     )
-    projected.validate(
-        ValidationContext(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="activitysim_preprocess",
+    if not is_cache_hit:
+        projected.validate(
+            ValidationContext(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name="activitysim_preprocess",
+            )
         )
-    )
     return projected
 
 
@@ -938,6 +944,7 @@ def _project_activitysim_run_outputs(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
+    is_cache_hit: bool = False,
 ) -> ActivitySimRunOutputs:
     if resolved_inputs is None:
         raise RuntimeError(
@@ -965,6 +972,7 @@ def _project_activitysim_run_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             for key in declared_outputs
             if key.endswith("_asim_out")
@@ -976,19 +984,21 @@ def _project_activitysim_run_outputs(
                 key=ZARR_SKIMS,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             if produces_zarr
             else None
         ),
     )
-    projected.validate(
-        ValidationContext(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="activitysim_run",
+    if not is_cache_hit:
+        projected.validate(
+            ValidationContext(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name="activitysim_run",
+            )
         )
-    )
     return projected
 
 
@@ -999,6 +1009,7 @@ def _project_activitysim_postprocess_outputs(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
+    is_cache_hit: bool = False,
 ) -> ActivitySimPostprocessOutputs:
     declared_outputs = activitysim_postprocess_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -1015,6 +1026,7 @@ def _project_activitysim_postprocess_outputs(
                 key=USIM_DATASTORE_H5,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             if USIM_DATASTORE_H5 in outputs
             else None
@@ -1027,6 +1039,7 @@ def _project_activitysim_postprocess_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
+                is_cache_hit=is_cache_hit,
             )
             for key in outputs
             if key != USIM_DATASTORE_H5
@@ -1035,14 +1048,15 @@ def _project_activitysim_postprocess_outputs(
             USIM_DATASTORE_H5 if USIM_DATASTORE_H5 in outputs else None
         ),
     )
-    projected.validate(
-        ValidationContext(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="activitysim_postprocess",
+    if not is_cache_hit:
+        projected.validate(
+            ValidationContext(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name="activitysim_postprocess",
+            )
         )
-    )
     return projected
 
 
@@ -1315,6 +1329,7 @@ activitysim_preprocess = StepDefinition(
             required=False,
         ),
     ),
+    archive_outputs=True,
 )
 activitysim_run = StepDefinition(
     name="activitysim_run",
@@ -1326,6 +1341,7 @@ activitysim_run = StepDefinition(
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    archive_outputs=False,
 )
 activitysim_postprocess = StepDefinition(
     name="activitysim_postprocess",
@@ -1336,6 +1352,7 @@ activitysim_postprocess = StepDefinition(
     output_paths=activitysim_postprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
+    archive_outputs=True,
     binding_rules=(
         ArtifactBindingRule(
             semantic_key=USIM_DATASTORE_CURRENT_H5,

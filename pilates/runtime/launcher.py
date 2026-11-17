@@ -136,6 +136,44 @@ class PreparedRunContext:
     run_publisher: Optional[ConsistRunPublisher]
 
 
+def query_expected_prefix_steps(tracker: Any, scenario_name: str) -> int:
+    """
+    Query tracker DB for the count of completed child step runs from the latest run of scenario_name.
+    """
+    if tracker is None:
+        return 0
+    db = getattr(tracker, "db", None)
+    if db is None:
+        return 0
+    try:
+        with db.connect() as con:
+            rows = con.execute(
+                """
+                SELECT id FROM run
+                WHERE model_name = 'pilates_orchestrator'
+                  AND status = 'completed'
+                  AND id LIKE ?
+                ORDER BY start_time DESC
+                LIMIT 1
+                """,
+                [f"{scenario_name}%"],
+            ).fetchall()
+            if not rows:
+                return 0
+            latest_parent_id = rows[0][0]
+            step_rows = con.execute(
+                """
+                SELECT count(*) FROM run
+                WHERE parent_run_id = ? AND status = 'completed'
+                """,
+                [latest_parent_id],
+            ).fetchone()
+            return int(step_rows[0]) if step_rows else 0
+    except Exception as exc:
+        logger.debug("Failed to query expected_prefix_steps: %s", exc)
+        return 0
+
+
 _format_restart_command = format_restart_command
 _format_hpc_restart_command = format_hpc_restart_command
 _resolve_cache_epoch = scenario_runtime.resolve_cache_epoch
@@ -451,7 +489,10 @@ def _prepare_run_context(
         tracker=tracker,
         local_db_path=local_consist_db_path,
         archive_run_dir=archive_run_dir,
+        archive_db_path=archive_consist_db_path,
     )
+
+    expected_prefix_steps = query_expected_prefix_steps(tracker, run_name)
 
     with tracker.trace(
         name="workspace_setup",
@@ -463,6 +504,8 @@ def _prepare_run_context(
             local_root,
             folder_name=run_name,
             archive_run_dir=archive_run_dir,
+            on_archive_commit=snapshot_manager.snapshot_after_archive_step,
+            expected_prefix_steps=expected_prefix_steps,
         )
     archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
     local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
@@ -483,6 +526,8 @@ def _prepare_run_context(
         state=state,
         workspace=workspace,
         surface=surface,
+        on_archive_commit=snapshot_manager.snapshot_after_archive_step,
+        expected_prefix_steps=expected_prefix_steps,
     )
     return PreparedRunContext(
         settings=settings,

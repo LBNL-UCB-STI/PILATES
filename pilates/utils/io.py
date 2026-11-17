@@ -238,6 +238,12 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
         action="store_true",
         help="allow resuming from an earlier year than the archive run state",
     )
+    parser.add_argument(
+        "--resume",
+        choices=["strict", "recompute"],
+        default=None,
+        help="Resume cache validation policy ('strict' or 'recompute')",
+    )
     args = parser.parse_args()
 
     # Override default settings_file if provided via command-line argument.
@@ -252,6 +258,8 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
 
     # Load settings from the specified config file into a Pydantic model for validation and structured access.
     settings = load_config(settings_file)
+    if args.resume is not None:
+        settings.run.resume_policy = args.resume
 
     # Attach runtime-specific file paths to the settings object for easy access later.
     _apply_runtime_options(

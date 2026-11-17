@@ -1,3 +1,25 @@
+# pilates/postprocessing/postprocessor.py
+"""
+Legacy workspace postprocessor for MEP and PILATES summary outputs.
+
+NOTE (Phase 1.4 Architectural Blocker):
+----------------------------------------
+This module currently relies on scraping the mutable local workspace filesystem
+(e.g., globbing for raw parquet, csv, and shapefiles across asim_output_data_dir,
+beam_output_data_dir, etc.) rather than receiving typed Consist Artifacts or
+relying on LinkML-defined artifact schemas.
+
+Under Phase 1.1–1.3 zero-copy metadata replay (`cache_hydration="metadata"`), intermediate
+simulation workspaces are not fully hydrated on disk on fresh compute nodes when steps
+are cache hits. In stack layer Phase 1.4 / LinkML migration:
+1. `postprocessing` must be refactored into declarative input-binding steps declaring
+   precise upstream artifact inputs (e.g., via LinkML schemas) rather than raw filesystem scraping.
+2. Legacy file-copy routines (`copy_outputs_to_mep`, `find_closest_file`, directory walking)
+   must be replaced by typed artifact resolution through `scenario.coupler` / Consist artifacts.
+Until then, downstream postprocessing requires either upstream outputs to be materialized
+or runs on the same node where simulation outputs were staged.
+"""
+
 import gzip
 import os
 import pandas as pd

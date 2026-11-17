@@ -200,6 +200,155 @@ def materialize_beam_launch_config(
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
 
 
+def compute_beam_launch_overrides(
+    *,
+    settings: Any,
+    source_primary: Path | None = None,
+    env_overrides: Mapping[str, str] | None = None,
+    prepared_inputs: Mapping[str, Any] | None = None,
+    derived_root: Path | None = None,
+    exchange_relative: Path | None = None,
+    source_root: Path | None = None,
+) -> tuple[dict[str, Any], bool, bool, bool]:
+    """Compute pure structured HOCON launch overrides and policy flags."""
+    env_overrides_dict = dict(env_overrides or {})
+    overrides: dict[str, Any] = {
+        "beam.outputs.baseOutputDirectory": _BEAM_CONTAINER_OUTPUT_DIR,
+    }
+    introduces_missing_format_key = False
+    introduces_missing_skim_name_key = False
+    introduces_missing_full_skim_timeout_key = False
+
+    if source_primary is not None and source_primary.is_file():
+        format_overrides, introduces_missing_format_key = _artifact_format_overrides(
+            settings=settings,
+            source_primary=source_primary,
+            env_overrides=env_overrides_dict,
+        )
+        overrides.update(format_overrides)
+        skim_name_overrides, introduces_missing_skim_name_key = (
+            _activitysim_skims_file_base_name_override(
+                settings=settings,
+                source_primary=source_primary,
+                env_overrides=env_overrides_dict,
+            )
+        )
+        overrides.update(skim_name_overrides)
+        full_skim_timeout_overrides, introduces_missing_full_skim_timeout_key = (
+            _full_skim_calculation_timeout_override(
+                settings=settings,
+                source_primary=source_primary,
+                env_overrides=env_overrides_dict,
+            )
+        )
+        overrides.update(full_skim_timeout_overrides)
+    else:
+        beam_cfg = getattr(settings, "beam", None)
+        if beam_cfg is not None:
+            formats = getattr(beam_cfg, "artifact_formats", None)
+            if formats is not None:
+                format_values = formats.model_dump()
+                for field_name, config_key in _ARTIFACT_FORMAT_POLICY_KEYS.items():
+                    if field_name in format_values:
+                        overrides[config_key] = format_values[field_name]
+            skim_base = getattr(beam_cfg, "activitysim_skims_file_base_name", None)
+            if skim_base:
+                overrides[_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY] = skim_base
+            full_skim = getattr(beam_cfg, "full_skim", None)
+            if (
+                full_skim is not None
+                and getattr(full_skim, "run_schedule", "disabled") != "disabled"
+            ):
+                overrides[_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY] = int(
+                    getattr(full_skim, "calculation_timeout_hours", 72)
+                )
+
+    inputs = prepared_inputs or {}
+    warmstart = inputs.get(LINKSTATS_WARMSTART)
+    if warmstart is not None:
+        warmstart_dest_name = (
+            _warmstart_destination_name(Path(warmstart))
+            if isinstance(warmstart, (str, Path)) and Path(warmstart).is_file()
+            else "initial_linkstats"
+        )
+        warmstart_destination = Path(".pilates") / "warmstarts" / warmstart_dest_name
+        overrides["beam.warmStart.initialLinkstatsFilePath"] = (
+            str(derived_root / warmstart_destination)
+            if derived_root
+            else str(warmstart_destination)
+        )
+
+    vehicle_source = inputs.get("vehicles_beam_in")
+    if vehicle_source is not None:
+        vehicle_suffix = (
+            "".join(Path(vehicle_source).suffixes)
+            if isinstance(vehicle_source, (str, Path))
+            else ".parquet"
+        )
+        vehicle_destination = (
+            exchange_relative or Path("exchange")
+        ) / f"vehicles{vehicle_suffix}"
+        overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = (
+            str(derived_root / vehicle_destination)
+            if derived_root
+            else str(vehicle_destination)
+        )
+    elif source_primary is not None and source_primary.is_file():
+        configured_vehicles_path = resolve_beam_config_value(
+            source_primary,
+            key="beam.agentsim.agents.vehicles.vehiclesFilePath",
+            env_overrides=env_overrides_dict,
+        )
+        if (
+            configured_vehicles_path
+            and not Path(str(configured_vehicles_path)).exists()
+        ):
+            overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = ""
+
+    beam_cfg = getattr(settings, "beam", None)
+    if beam_cfg is not None and getattr(beam_cfg, "discard_plans_every_year", False):
+        overrides["beam.replanning.maxAgentPlanMemorySize"] = 0
+
+    zones = getattr(getattr(settings, "shared", None), "geography", None)
+    zones = getattr(zones, "zones", None) if zones is not None else None
+    if zones is not None:
+        zone_destination = Path("shape") / "canonical_zones_sorted.geojson"
+        overrides["beam.agentsim.taz.filePath"] = (
+            str(derived_root / zone_destination)
+            if derived_root
+            else str(zone_destination)
+        )
+        overrides["beam.agentsim.taz.tazIdFieldName"] = zones.activitysim_index_col
+
+    if source_primary is not None and source_primary.is_file():
+        r5_source = resolve_beam_config_value(
+            source_primary,
+            key="beam.routing.r5.directory",
+            env_overrides=env_overrides_dict,
+        )
+        if r5_source:
+            if derived_root is not None and source_root is not None:
+                r5_relative = _relative_source_path(
+                    source_root=source_root,
+                    path=Path(str(r5_source)),
+                    key="beam.routing.r5.directory",
+                )
+                generated_network = derived_root / r5_relative / "physsim-network.xml"
+            else:
+                generated_network = Path(str(r5_source)) / "physsim-network.xml"
+            overrides["matsim.modules.network.inputNetworkFile"] = str(
+                generated_network
+            )
+            overrides["beam.physsim.inputNetworkFilePath"] = str(generated_network)
+
+    return (
+        overrides,
+        introduces_missing_format_key,
+        introduces_missing_skim_name_key,
+        introduces_missing_full_skim_timeout_key,
+    )
+
+
 def build_beam_launch_config(
     *,
     settings: Any,
@@ -236,31 +385,21 @@ def build_beam_launch_config(
         key="beam.exchange.scenario.folder",
     )
     staged_inputs: list[BeamLaunchInput] = []
-    overrides: dict[str, Any] = {
-        "beam.outputs.baseOutputDirectory": _BEAM_CONTAINER_OUTPUT_DIR,
-    }
-    format_overrides, introduces_missing_format_key = _artifact_format_overrides(
+    (
+        overrides,
+        introduces_missing_format_key,
+        introduces_missing_skim_name_key,
+        introduces_missing_full_skim_timeout_key,
+    ) = compute_beam_launch_overrides(
         settings=settings,
         source_primary=source_primary,
         env_overrides=env_overrides,
+        prepared_inputs=prepared_inputs,
+        derived_root=derived_root,
+        exchange_relative=exchange_relative,
+        source_root=source_root,
     )
-    overrides.update(format_overrides)
-    skim_name_overrides, introduces_missing_skim_name_key = (
-        _activitysim_skims_file_base_name_override(
-            settings=settings,
-            source_primary=source_primary,
-            env_overrides=env_overrides,
-        )
-    )
-    overrides.update(skim_name_overrides)
-    full_skim_timeout_overrides, introduces_missing_full_skim_timeout_key = (
-        _full_skim_calculation_timeout_override(
-            settings=settings,
-            source_primary=source_primary,
-            env_overrides=env_overrides,
-        )
-    )
-    overrides.update(full_skim_timeout_overrides)
+
     population_stems = {
         BEAM_PLANS_IN: "plans",
         BEAM_HOUSEHOLDS_IN: "households",
@@ -291,9 +430,6 @@ def build_beam_launch_config(
                 destination=warmstart_destination,
             )
         )
-        overrides["beam.warmStart.initialLinkstatsFilePath"] = str(
-            derived_root / warmstart_destination
-        )
 
     vehicle_source = prepared_inputs.get("vehicles_beam_in")
     if vehicle_source is not None:
@@ -307,43 +443,6 @@ def build_beam_launch_config(
                 destination=vehicle_destination,
             )
         )
-        overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = str(
-            derived_root / vehicle_destination
-        )
-    else:
-        configured_vehicles_path = resolve_beam_config_value(
-            source_primary,
-            key="beam.agentsim.agents.vehicles.vehiclesFilePath",
-            env_overrides=env_overrides,
-        )
-        if (
-            configured_vehicles_path
-            and not Path(str(configured_vehicles_path)).exists()
-        ):
-            overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = ""
-
-    if settings.beam.discard_plans_every_year:
-        overrides["beam.replanning.maxAgentPlanMemorySize"] = 0
-    zones = settings.shared.geography.zones
-    if zones is not None:
-        zone_destination = Path("shape") / "canonical_zones_sorted.geojson"
-        overrides["beam.agentsim.taz.filePath"] = str(derived_root / zone_destination)
-        overrides["beam.agentsim.taz.tazIdFieldName"] = zones.activitysim_index_col
-
-    r5_source = resolve_beam_config_value(
-        source_primary,
-        key="beam.routing.r5.directory",
-        env_overrides=env_overrides,
-    )
-    if r5_source:
-        r5_relative = _relative_source_path(
-            source_root=source_root,
-            path=Path(str(r5_source)),
-            key="beam.routing.r5.directory",
-        )
-        generated_network = derived_root / r5_relative / "physsim-network.xml"
-        overrides["matsim.modules.network.inputNetworkFile"] = str(generated_network)
-        overrides["beam.physsim.inputNetworkFilePath"] = str(generated_network)
 
     launch_config = materialize_beam_launch_config(
         settings=settings,
