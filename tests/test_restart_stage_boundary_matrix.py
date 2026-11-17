@@ -95,9 +95,6 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         return run_inputs
 
     monkeypatch.setattr(
-        beam_stage, "_compile_beam_launch_config", lambda **_: launch_config
-    )
-    monkeypatch.setattr(
         beam_stage, "beam_run", SimpleNamespace(resolve_inputs=resolve_run_inputs)
     )
     monkeypatch.setattr(
@@ -118,7 +115,7 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
     )
 
     assert observed["resolved"] is run_inputs
-    assert observed["runtime"] == {"beam_launch_config": launch_config}
+    assert observed["runtime"] is None
 
 
 def test_native_archive_is_called_with_verify_before_canary_failpoint(
@@ -188,13 +185,6 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
         calls.append("failpoint")
         raise RuntimeError("canary")
 
-    monkeypatch.setattr(
-        beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_kwargs: SimpleNamespace(
-            root=tmp_path / "launch", primary_config=tmp_path / "launch" / "beam.conf"
-        ),
-    )
     monkeypatch.setattr(
         beam_stage,
         "beam_preprocess",
@@ -359,11 +349,6 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
             return SimpleNamespace(), SimpleNamespace()
         pytest.fail(f"unexpected phase {phase}")
 
-    monkeypatch.setattr(
-        beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_: SimpleNamespace(root=launch_root, primary_config=launch_primary),
-    )
     monkeypatch.setattr(
         beam_stage,
         "beam_run",

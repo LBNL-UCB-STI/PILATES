@@ -20,7 +20,6 @@ from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
 from pilates.beam.admission import copy_linkstats_provenance_sidecar
 from pilates.beam.config_hocon import (
     beam_config_env_overrides,
-    resolve_beam_config_value,
 )
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -203,7 +202,7 @@ def materialize_beam_launch_config(
 def compute_beam_launch_overrides(
     *,
     settings: Any,
-    source_primary: Path | None = None,
+    config_tree: dict[str, Any] | None = None,
     env_overrides: Mapping[str, str] | None = None,
     prepared_inputs: Mapping[str, Any] | None = None,
     derived_root: Path | None = None,
@@ -219,26 +218,23 @@ def compute_beam_launch_overrides(
     introduces_missing_skim_name_key = False
     introduces_missing_full_skim_timeout_key = False
 
-    if source_primary is not None and source_primary.is_file():
+    if config_tree is not None:
         format_overrides, introduces_missing_format_key = _artifact_format_overrides(
             settings=settings,
-            source_primary=source_primary,
-            env_overrides=env_overrides_dict,
+            config_tree=config_tree,
         )
         overrides.update(format_overrides)
         skim_name_overrides, introduces_missing_skim_name_key = (
             _activitysim_skims_file_base_name_override(
                 settings=settings,
-                source_primary=source_primary,
-                env_overrides=env_overrides_dict,
+                config_tree=config_tree,
             )
         )
         overrides.update(skim_name_overrides)
         full_skim_timeout_overrides, introduces_missing_full_skim_timeout_key = (
             _full_skim_calculation_timeout_override(
                 settings=settings,
-                source_primary=source_primary,
-                env_overrides=env_overrides_dict,
+                config_tree=config_tree,
             )
         )
         overrides.update(full_skim_timeout_overrides)
@@ -293,11 +289,12 @@ def compute_beam_launch_overrides(
             if derived_root
             else str(vehicle_destination)
         )
-    elif source_primary is not None and source_primary.is_file():
-        configured_vehicles_path = resolve_beam_config_value(
-            source_primary,
-            key="beam.agentsim.agents.vehicles.vehiclesFilePath",
-            env_overrides=env_overrides_dict,
+    elif config_tree is not None:
+        from pilates.beam.config_hocon import _lookup_dotted_key
+
+        configured_vehicles_path = _lookup_dotted_key(
+            config_tree,
+            "beam.agentsim.agents.vehicles.vehiclesFilePath",
         )
         if (
             configured_vehicles_path
@@ -320,11 +317,12 @@ def compute_beam_launch_overrides(
         )
         overrides["beam.agentsim.taz.tazIdFieldName"] = zones.activitysim_index_col
 
-    if source_primary is not None and source_primary.is_file():
-        r5_source = resolve_beam_config_value(
-            source_primary,
-            key="beam.routing.r5.directory",
-            env_overrides=env_overrides_dict,
+    if config_tree is not None:
+        from pilates.beam.config_hocon import _lookup_dotted_key
+
+        r5_source = _lookup_dotted_key(
+            config_tree,
+            "beam.routing.r5.directory",
         )
         if r5_source:
             if derived_root is not None and source_root is not None:
@@ -370,18 +368,18 @@ def build_beam_launch_config(
     derived_root = output_dir / source_root.name
     env_overrides = beam_config_env_overrides(settings, config_root=source_root)
     source_primary = source_root / settings.beam.config
+    from pilates.beam.config_hocon import (
+        load_resolved_beam_config_tree,
+        _lookup_dotted_key,
+    )
+
+    config_tree = load_resolved_beam_config_tree(
+        source_primary, env_overrides=env_overrides
+    )
+    exchange_folder = _lookup_dotted_key(config_tree, "beam.exchange.scenario.folder")
     exchange_relative = _relative_source_path(
         source_root=source_root,
-        path=Path(
-            str(
-                resolve_beam_config_value(
-                    source_primary,
-                    key="beam.exchange.scenario.folder",
-                    env_overrides=env_overrides,
-                )
-                or source_root / settings.beam.scenario_folder
-            )
-        ),
+        path=Path(str(exchange_folder or source_root / settings.beam.scenario_folder)),
         key="beam.exchange.scenario.folder",
     )
     staged_inputs: list[BeamLaunchInput] = []
@@ -392,7 +390,7 @@ def build_beam_launch_config(
         introduces_missing_full_skim_timeout_key,
     ) = compute_beam_launch_overrides(
         settings=settings,
-        source_primary=source_primary,
+        config_tree=config_tree,
         env_overrides=env_overrides,
         prepared_inputs=prepared_inputs,
         derived_root=derived_root,
@@ -649,16 +647,15 @@ def _write_synthetic_parquet_stub(
 def _activitysim_skims_file_base_name_override(
     *,
     settings: Any,
-    source_primary: Path,
-    env_overrides: Mapping[str, str],
+    config_tree: dict[str, Any],
 ) -> tuple[dict[str, str], bool]:
     """Return the configured BEAM activity-sim skimmer writer base name."""
 
     expected = settings.beam.activitysim_skims_file_base_name
-    source_value = resolve_beam_config_value(
-        source_primary,
-        key=_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
-        env_overrides=dict(env_overrides),
+    from pilates.beam.config_hocon import _lookup_dotted_key
+
+    source_value = _lookup_dotted_key(
+        config_tree, _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY
     )
     if source_value is None:
         logger.warning(
@@ -681,8 +678,7 @@ def _activitysim_skims_file_base_name_override(
 def _full_skim_calculation_timeout_override(
     *,
     settings: Any,
-    source_primary: Path,
-    env_overrides: Mapping[str, str],
+    config_tree: dict[str, Any],
 ) -> tuple[dict[str, int], bool]:
     """Return the configured BEAM BackgroundFullSkimsCreator timeout in hours."""
 
@@ -693,10 +689,10 @@ def _full_skim_calculation_timeout_override(
     ):
         return {}, False
     expected = int(getattr(full_skim, "calculation_timeout_hours", 72))
-    source_value = resolve_beam_config_value(
-        source_primary,
-        key=_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
-        env_overrides=dict(env_overrides),
+    from pilates.beam.config_hocon import _lookup_dotted_key
+
+    source_value = _lookup_dotted_key(
+        config_tree, _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY
     )
     return (
         {_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY: expected},
@@ -707,8 +703,7 @@ def _full_skim_calculation_timeout_override(
 def _artifact_format_overrides(
     *,
     settings: Any,
-    source_primary: Path,
-    env_overrides: Mapping[str, str],
+    config_tree: dict[str, Any],
 ) -> tuple[dict[str, str], bool]:
     """Return typed format policy overrides and report legacy missing keys."""
 
@@ -723,11 +718,9 @@ def _artifact_format_overrides(
     policy_summary: list[str] = []
     for field_name, config_key in _ARTIFACT_FORMAT_POLICY_KEYS.items():
         expected = overrides[config_key]
-        source_value = resolve_beam_config_value(
-            source_primary,
-            key=config_key,
-            env_overrides=dict(env_overrides),
-        )
+        from pilates.beam.config_hocon import _lookup_dotted_key
+
+        source_value = _lookup_dotted_key(config_tree, config_key)
         source_kind = "configured" if field_name in field_sources else "default"
         policy_summary.append(f"{field_name}={expected} ({source_kind})")
         if source_value is None:

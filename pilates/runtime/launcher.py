@@ -136,39 +136,45 @@ class PreparedRunContext:
     run_publisher: Optional[ConsistRunPublisher]
 
 
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class _TrackerWithDb(Protocol):
+    db: Any
+
+
 def query_expected_prefix_steps(tracker: Any, scenario_name: str) -> int:
     """
     Query tracker DB for the count of completed child step runs from the latest run of scenario_name.
     """
     if tracker is None:
         return 0
-    db = getattr(tracker, "db", None)
+
+    if not isinstance(tracker, _TrackerWithDb):
+        return 0
+
+    db = tracker.db
     if db is None:
         return 0
     try:
-        with db.connect() as con:
-            rows = con.execute(
-                """
-                SELECT id FROM run
-                WHERE model_name = 'pilates_orchestrator'
-                  AND status = 'completed'
-                  AND id LIKE ?
-                ORDER BY start_time DESC
+        con = db.connection()
+        step_rows = con.execute(
+            """
+            SELECT count(*) FROM run 
+            WHERE parent_run_id = (
+                SELECT id FROM run 
+                WHERE model_name = 'pilates_orchestrator' 
+                  AND status = 'completed' 
+                  AND id LIKE ? 
+                ORDER BY start_time DESC 
                 LIMIT 1
-                """,
-                [f"{scenario_name}%"],
-            ).fetchall()
-            if not rows:
-                return 0
-            latest_parent_id = rows[0][0]
-            step_rows = con.execute(
-                """
-                SELECT count(*) FROM run
-                WHERE parent_run_id = ? AND status = 'completed'
-                """,
-                [latest_parent_id],
-            ).fetchone()
-            return int(step_rows[0]) if step_rows else 0
+            ) 
+            AND status = 'completed'
+            """,
+            [f"{scenario_name}%"],
+        ).fetchone()
+        return int(step_rows[0]) if step_rows else 0
     except Exception as exc:
         logger.debug("Failed to query expected_prefix_steps: %s", exc)
         return 0

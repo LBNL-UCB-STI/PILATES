@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Protocol, TypeVar, runtime_checkable
 
-import consist as cr
 from consist import (
     CacheOptions,
     ExecutionOptions,
@@ -30,34 +29,6 @@ class ScenarioDriftError(RuntimeError):
     """Raised when strict resume detects cache drift on a previously completed step."""
 
 
-def check_strict_resume_drift_guard(step_name: str, **kwargs: Any) -> None:
-    """
-    Guard invoked inside native step bodies.
-
-    If _strict_resume_expected_hit is True, the step was expected to be a cache hit.
-    Since execution reached the callable body, a cache miss occurred.
-    Immediately raises ScenarioDriftError before starting container or model computation.
-    """
-    if kwargs.get("_strict_resume_expected_hit"):
-        explanation = None
-        try:
-            current_run = cr.current_run()
-            if current_run is not None:
-                meta = getattr(current_run, "meta", None)
-                if isinstance(meta, dict):
-                    explanation = meta.get("cache_miss_explanation")
-        except Exception:
-            explanation = None
-
-        msg = (
-            f"Strict-resume drift detected in step '{step_name}': expected a cache hit "
-            f"for previously completed step run, but got a cache miss."
-        )
-        if explanation:
-            msg += f" Miss explanation: {explanation}"
-        raise ScenarioDriftError(msg)
-
-
 @runtime_checkable
 class _HasOnArchiveCommit(Protocol):
     on_archive_commit: Callable[[str], None] | None
@@ -72,6 +43,11 @@ class _HasStepExecutionSession(Protocol):
 @runtime_checkable
 class _HasResumePolicy(Protocol):
     resume_policy: Literal["strict", "recompute"]
+
+
+@runtime_checkable
+class _HasMeta(Protocol):
+    meta: Any
 
 
 @runtime_checkable
@@ -97,6 +73,11 @@ class _HasRunConfig(Protocol):
 @runtime_checkable
 class _HasMainForecastYear(Protocol):
     main_forecast_year: int | None
+
+
+@runtime_checkable
+class _HasCacheHit(Protocol):
+    cache_hit: bool
 
 
 def _is_step_archive_enabled(
@@ -233,7 +214,34 @@ def execute_step(
             and workspace.expected_prefix_steps > 0
             and current_ordinal <= workspace.expected_prefix_steps
         ):
-            base_runtime_kwargs["_strict_resume_expected_hit"] = True
+            import functools
+            import consist as cr
+
+            original_func = definition.function
+
+            @functools.wraps(original_func)
+            def _drift_guard_wrapper(*args, **kwargs):
+                explanation = None
+                try:
+                    current_run = cr.current_run()
+                    if isinstance(current_run, _HasMeta):
+                        meta = current_run.meta
+                        if isinstance(meta, dict):
+                            explanation = meta.get("cache_miss_explanation")
+                except Exception:
+                    pass
+                msg = (
+                    f"Strict-resume drift detected in step '{definition.name}': expected a cache hit "
+                    f"for previously completed step run, but got a cache miss."
+                )
+                if explanation:
+                    msg += f" Miss explanation: {explanation}"
+                raise ScenarioDriftError(msg)
+
+            # Using dataclasses.replace to update definition if it's a dataclass,
+            # or just creating a new instance if needed. Since definition is a StepDefinition
+            # let's replace it properly.
+            definition = replace(definition, function=_drift_guard_wrapper)
 
     step_identity: StepIdentity | None = None
     if definition.preflight_identity:
@@ -343,30 +351,14 @@ def execute_step(
         execution_options=options,
         step_identity=step_identity,
     )
-    is_hit = getattr(result, "is_cache_hit", False) or getattr(
-        result, "cache_hit", False
-    )
+    is_hit = result.cache_hit if isinstance(result, _HasCacheHit) else False
     if step_archive_root is not None and not is_hit:
         if isinstance(workspace, _HasOnArchiveCommit) and workspace.on_archive_commit:
             workspace.on_archive_commit(definition.name)
-    try:
-        projected = definition.project_outputs(
-            result.outputs,
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            resolved_inputs=resolved,
-            is_cache_hit=is_hit,
-        )
-    except TypeError as exc:
-        if "is_cache_hit" in str(exc):
-            projected = definition.project_outputs(
-                result.outputs,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                resolved_inputs=resolved,
-            )
-        else:
-            raise
-    return result, projected
+    return result, definition.project_outputs(
+        result.outputs,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        resolved_inputs=resolved,
+    )

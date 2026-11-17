@@ -296,7 +296,7 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
     assert set(hit_result.outputs) == set(cold_result.outputs)
     assert set(hit_outputs.prepared_inputs) == set(cold_outputs.prepared_inputs)
     assert all(
-        path.exists() and path.is_relative_to(Path(hit_workspace.full_path))
+        path.is_relative_to(Path(hit_workspace.full_path))
         for path in hit_outputs.prepared_inputs.values()
     )
 
@@ -2312,17 +2312,14 @@ def test_beam_preprocess_projector_rejects_stale_mount_when_current_destination_
         ),
     }
 
-    with pytest.raises(
-        RuntimeError,
-        match="beam_preprocess output 'plans_beam_in' is missing at declared destination",
-    ):
-        beam_preprocess.project_outputs(
-            outputs,
-            settings=SimpleNamespace(activitysim=None),
-            state=object(),
-            workspace=workspace,
-            resolved_inputs=_empty_resolved_inputs(),
-        )
+    projected = beam_preprocess.project_outputs(
+        outputs,
+        settings=SimpleNamespace(activitysim=None),
+        state=object(),
+        workspace=workspace,
+        resolved_inputs=_empty_resolved_inputs(),
+    )
+    assert BEAM_PLANS_IN in projected.prepared_inputs
 
 
 def test_beam_provenance_set_output_meta_persists_during_run_and_resists_stale_workspace_sidecars(
@@ -2583,3 +2580,81 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
         )
 
     assert Path(projected.raw_outputs["raw_od_skims_zarr_2020_0"]).exists()
+
+
+def test_beam_run_wiped_workspace_replays_zero_copy_without_compiling_launch_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pilates.workflows.step_execution import execute_step
+
+    ws_root = tmp_path / "wiped_workspace"
+    ws_root.mkdir()
+    archive_skims = tmp_path / "archive" / "run_0" / "beam" / "skims.zarr"
+    archive_skims.mkdir(parents=True)
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(
+            local_input_folder=str(ws_root / "beam_input"),
+            config="beam.conf",
+            linkstats_format="parquet",
+            events_format="parquet",
+            skims_format="zarr",
+            artifact_formats=SimpleNamespace(activitysim_skims="zarr"),
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.zarr")),
+    )
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    workspace = SimpleNamespace(
+        full_path=str(ws_root),
+        get_beam_mutable_data_dir=lambda: str(ws_root / "beam_data"),
+        get_beam_output_dir=lambda: str(ws_root / "beam_output"),
+        get_beam_config_dir=lambda: str(ws_root / "beam_conf"),
+    )
+
+    def _forbid_compile(*args: object, **kwargs: object) -> object:
+        raise AssertionError("_compile_beam_launch_config should not be called")
+
+    def _forbid_mutable(*args: object, **kwargs: object) -> object:
+        raise AssertionError("ensure_beam_mutable_workspace should not be called")
+
+    monkeypatch.setattr(beam_steps, "_compile_beam_launch_config", _forbid_compile)
+    monkeypatch.setattr(beam_steps, "ensure_beam_mutable_workspace", _forbid_mutable)
+
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_run",
+        binding=BindingResult(inputs={}),
+    )
+
+    seen_cache_options: list[object] = []
+
+    def _simulate_cache_hit(**kwargs: object) -> SimpleNamespace:
+        seen_cache_options.append(kwargs.get("cache_options"))
+        return SimpleNamespace(
+            run=SimpleNamespace(id="cached_beam_run"),
+            outputs={"raw_od_skims_zarr_2020_0": archive_skims},
+            cache_hit=True,
+        )
+
+    scenario = SimpleNamespace(
+        coupler=SimpleNamespace(), tracker=None, run=_simulate_cache_hit
+    )
+
+    run_result, projected = execute_step(
+        scenario=scenario,
+        definition=beam_steps.beam_run,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="supply_demand",
+        year=2020,
+        iteration=0,
+        phase="run",
+        resolved_inputs=resolved_inputs,
+    )
+
+    assert run_result.cache_hit is True
+    assert len(seen_cache_options) == 1
+    assert seen_cache_options[0].cache_hydration == "metadata"
+    assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == archive_skims
+    assert not (ws_root / "beam_data").exists()

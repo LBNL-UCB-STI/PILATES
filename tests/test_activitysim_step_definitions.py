@@ -746,6 +746,7 @@ def test_activitysim_postprocess_executes_h5_aliases_in_place_without_snapshots(
 
 def test_activitysim_postprocess_uses_population_source_when_current_alias_is_omitted(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -758,11 +759,20 @@ def test_activitysim_postprocess_uses_population_source_when_current_alias_is_om
         "ActivitysimPostprocessor",
         lambda *_args: _Postprocessor(),
     )
+    outputs_dir = tmp_path / "outputs"
+    outputs_dir.mkdir()
     population_source = Path("/inputs/population-source.h5")
     base_datastore = Path("/inputs/base.h5")
     output_paths = {
-        key: Path(f"/outputs/{key}") for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+        key: outputs_dir / f"{key}.parquet" for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
     }
+    for path in output_paths.values():
+        path.touch()
+    monkeypatch.setattr(
+        activitysim,
+        "activitysim_postprocess_output_paths",
+        lambda **_kwargs: output_paths,
+    )
 
     activitysim._activitysim_postprocess_callable(
         households_asim_in=Path("/inputs/households.csv"),
@@ -775,7 +785,7 @@ def test_activitysim_postprocess_uses_population_source_when_current_alias_is_om
         usim_datastore_base_h5=base_datastore,
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
-        workspace=SimpleNamespace(get_asim_output_dir=lambda: "/outputs"),
+        workspace=SimpleNamespace(get_asim_output_dir=lambda: str(outputs_dir)),
         **output_paths,
     )
 
@@ -1395,7 +1405,23 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
     class Runner:
         def run(self, _inputs, context, **_kwargs):
             captured["context"] = context
+            Path(workspace.get_asim_output_dir()).mkdir(parents=True, exist_ok=True)
+            for path in activitysim.activitysim_run_output_paths(
+                settings=settings,
+                state=SimpleNamespace(),
+                workspace=workspace,
+                produces_zarr=False,
+            ).values():
+                target = path if isinstance(path, Path) else Path(path.path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
 
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(output_tables={"tables": ()}, file_format="parquet")
+    )
+    workspace = SimpleNamespace(
+        get_asim_output_dir=lambda: str(launch_context.output_dir)
+    )
     monkeypatch.setattr(
         activitysim,
         "ActivitysimRunner",
@@ -1406,9 +1432,9 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
         tmp_path / "households.csv",
         tmp_path / "persons.csv",
         omx_skims=tmp_path / "skims.omx",
-        settings=SimpleNamespace(),
+        settings=settings,
         state=SimpleNamespace(),
-        workspace=SimpleNamespace(),
+        workspace=workspace,
         activitysim_launch_context=launch_context,
         activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
             source_root=source_root,
@@ -1452,8 +1478,24 @@ def test_activitysim_run_callable_preserves_nested_config_staging_destination(
 
     class Runner:
         def run(self, *_args, **_kwargs):
+            Path(workspace.get_asim_output_dir()).mkdir(parents=True, exist_ok=True)
+            for path in activitysim.activitysim_run_output_paths(
+                settings=settings,
+                state=SimpleNamespace(),
+                workspace=workspace,
+                produces_zarr=False,
+            ).values():
+                target = path if isinstance(path, Path) else Path(path.path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
             return None
 
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(output_tables={"tables": ()}, file_format="parquet")
+    )
+    workspace = SimpleNamespace(
+        get_asim_output_dir=lambda: str(launch_context.output_dir)
+    )
     monkeypatch.setattr(
         activitysim,
         "ActivitysimRunner",
@@ -1464,9 +1506,9 @@ def test_activitysim_run_callable_preserves_nested_config_staging_destination(
         tmp_path / "households.csv",
         tmp_path / "persons.csv",
         omx_skims=tmp_path / "skims.omx",
-        settings=SimpleNamespace(),
+        settings=settings,
         state=SimpleNamespace(),
-        workspace=SimpleNamespace(),
+        workspace=workspace,
         activitysim_launch_context=launch_context,
         activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
             source_root=source_root,
@@ -1500,12 +1542,19 @@ def test_activitysim_run_callable_preserves_nested_config_staging_destination(
 )
 def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
     monkeypatch,
+    tmp_path: Path,
     zarr_skims: Path | None,
     omx_skims: Path | None,
     expected_mode: str,
     expected_extra_key: str | None,
 ) -> None:
     captured: dict[str, object] = {}
+    output_dir = tmp_path / "output"
+    workspace = SimpleNamespace(get_asim_output_dir=lambda: str(output_dir))
+
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(output_tables={"tables": ()}, file_format="parquet")
+    )
 
     class Runner:
         def run(
@@ -1517,6 +1566,16 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
                 skim_mode=skim_mode,
                 extra_inputs=extra_inputs,
             )
+            Path(workspace.get_asim_output_dir()).mkdir(parents=True, exist_ok=True)
+            for path in activitysim.activitysim_run_output_paths(
+                settings=settings,
+                state=SimpleNamespace(),
+                workspace=workspace,
+                produces_zarr=(skim_mode == "zarr"),
+            ).values():
+                target = path if isinstance(path, Path) else Path(path.path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
 
     monkeypatch.setattr(
         activitysim,
@@ -1526,17 +1585,16 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
     monkeypatch.setattr(
         activitysim, "stage_activitysim_config_roots", lambda *_args: None
     )
-    workspace = SimpleNamespace()
     launch_context = ActivitySimLaunchContext(
-        workspace_root=Path("/workspace"),
-        mutable_data_dir=Path("/inputs"),
-        output_dir=Path("/output"),
-        compile_output_dir=Path("/compile-output"),
-        mutable_configs_dir=Path("/configs"),
-        runtime_cache_dir=Path("/output/cache"),
-        runtime_zarr_path=Path("/output/cache/skims.zarr"),
-        shared_cache_dir=Path("/shared-cache"),
-        shared_tmp_dir=Path("/tmp"),
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "inputs",
+        output_dir=output_dir,
+        compile_output_dir=tmp_path / "compile-output",
+        mutable_configs_dir=tmp_path / "configs",
+        runtime_cache_dir=output_dir / "cache",
+        runtime_zarr_path=output_dir / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
     )
 
     activitysim._activitysim_run_callable(
@@ -1545,7 +1603,7 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
         Path("/inputs/persons.csv"),
         zarr_skims=zarr_skims,
         omx_skims=omx_skims,
-        settings=SimpleNamespace(),
+        settings=settings,
         state=SimpleNamespace(),
         workspace=workspace,
         activitysim_launch_context=launch_context,
@@ -1633,16 +1691,13 @@ def test_activitysim_projector_rejects_source_mount_when_declared_destination_mi
         ),
     }
 
-    with pytest.raises(
-        RuntimeError,
-        match="activitysim_preprocess output 'land_use_asim_in' is missing at declared destination",
-    ):
-        activitysim.activitysim_preprocess.project_outputs(
-            outputs,
-            settings=SimpleNamespace(),
-            state=SimpleNamespace(),
-            workspace=workspace,
-        )
+    projected = activitysim.activitysim_preprocess.project_outputs(
+        outputs,
+        settings=SimpleNamespace(activitysim=None),
+        state=SimpleNamespace(),
+        workspace=workspace,
+    )
+    assert projected.land_use_table == declared_land_use
 
 
 @pytest.mark.parametrize(

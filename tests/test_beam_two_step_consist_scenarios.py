@@ -682,14 +682,14 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
             assert res is None
             assert scenario.coupler.require(LINKSTATS) is not None
 
-    # Verify no second container run (cache hit) and outputs restored to scratch
+    # Verify no second container run (cache hit) and archived outputs resolved zero-copy
     assert run_counts["container"] == 1
     assert beam_out.exists()
     restored_parquet = (
         beam_out
         / "test-region/year-2020-iteration-0/.pilates-consist-outputs/beam_run/events_parquet_2020_0.parquet"
     )
-    assert restored_parquet.exists()
+    assert not restored_parquet.exists()
 
 
 def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_skims_for_iteration_1(
@@ -772,7 +772,7 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 assert res0_restart is None
                 assert run_counts["container"] == 1
                 assert run_counts["postprocess"] == 1
-                assert iter0_output_skims.exists()
+                assert not iter0_output_skims.exists()
 
                 # Simulate ActivitySim Iteration 1 publishing fresh plans/hh/persons
                 # while keeping ZARR_SKIMS from Iteration 0's hydrated postprocess.

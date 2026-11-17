@@ -537,11 +537,25 @@ class ConsistDbSnapshotManager:
         reason = f"after_archive_step_{step_name}"
         ok = self.snapshot(reason=reason, checkpoint=True, force=True)
         if self.local_db_path and self.archive_db_path:
-            mirror_consist_db_to_archive(
-                self.local_db_path,
-                self.archive_db_path,
-                tracker=self.tracker,
-            )
+            latest_db = self.latest_dir / self.db_filename
+            if latest_db.exists():
+                try:
+                    os.makedirs(os.path.dirname(self.archive_db_path), exist_ok=True)
+                    temp_dest = f"{self.archive_db_path}.tmp.{os.getpid()}"
+                    shutil.copy2(latest_db, temp_dest)
+                    os.replace(temp_dest, self.archive_db_path)
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to copy snapshot to archive DB path %s: %s",
+                        self.archive_db_path,
+                        exc,
+                    )
+            else:
+                mirror_consist_db_to_archive(
+                    self.local_db_path,
+                    self.archive_db_path,
+                    tracker=self.tracker,
+                )
         return ok
 
     def snapshot(self, *, reason: str, checkpoint: bool, force: bool = False) -> bool:

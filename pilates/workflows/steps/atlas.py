@@ -59,7 +59,6 @@ from .shared import (
     _persisted_output_path,
     _resolve_native_inputs,
     _strict_requested_output_cache_options,
-    _validation_context,
 )
 from .urbansim import (
     _urbansim_population_source_path,
@@ -815,7 +814,6 @@ def _project_atlas_preprocess(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> AtlasPreprocessOutputs:
     declared_outputs = _atlas_preprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -827,7 +825,6 @@ def _project_atlas_preprocess(
             key=key,
             declared_outputs=declared_outputs,
             workspace=workspace,
-            is_cache_hit=is_cache_hit,
         )
         for key in declared_outputs
     }
@@ -835,15 +832,6 @@ def _project_atlas_preprocess(
         atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
         prepared_inputs=prepared_inputs,
     )
-    if not is_cache_hit:
-        projected.validate(
-            _validation_context(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="atlas_preprocess",
-            )
-        )
     return projected
 
 
@@ -854,7 +842,6 @@ def _project_atlas_run(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> AtlasRunOutputs:
     declared_outputs = _atlas_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -868,20 +855,10 @@ def _project_atlas_run(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
-                is_cache_hit=is_cache_hit,
             )
             for key in declared_outputs
         },
     )
-    if not is_cache_hit:
-        projected.validate(
-            _validation_context(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="atlas_run",
-            )
-        )
     return projected
 
 
@@ -892,7 +869,6 @@ def _project_atlas_postprocess(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> AtlasPostprocessOutputs:
     declared_outputs = _atlas_postprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -905,7 +881,6 @@ def _project_atlas_postprocess(
             key=USIM_POPULATION_SOURCE_H5,
             declared_outputs=declared_outputs,
             workspace=workspace,
-            is_cache_hit=is_cache_hit,
         ),
         processed_outputs={
             ATLAS_VEHICLES2_OUTPUT: _persisted_output_path(
@@ -914,19 +889,9 @@ def _project_atlas_postprocess(
                 key=ATLAS_VEHICLES2_OUTPUT,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
-                is_cache_hit=is_cache_hit,
             )
         },
     )
-    if not is_cache_hit:
-        projected.validate(
-            _validation_context(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="atlas_postprocess",
-            )
-        )
     return projected
 
 

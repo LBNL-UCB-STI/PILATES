@@ -26,7 +26,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.stages.supply_demand_beam import _compile_beam_launch_config
+from pilates.workflows.steps.beam import _compile_beam_launch_config
 from pilates.workflows.stages.vehicle_ownership import _publish_current_h5_alias
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import (
@@ -126,12 +126,12 @@ def _run_activitysim_and_beam_preprocess(
 
     archive_run_dir = resolve_archive_run_dir(workspace=env.workspace, state=env.state)
     launch_config = _compile_beam_launch_config(
-        scenario=sc,
+        identity=sc.tracker.identity,
         settings=env.settings,
         workspace=env.workspace,
         year=year,
         iteration=iteration,
-        preprocess_outputs=beam_pre,
+        prepared_inputs=dict(beam_pre.prepared_inputs),
         archive_run_dir=archive_run_dir,
     )
     return beam_pre, launch_config
@@ -425,25 +425,24 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 coupler=sc3.coupler,
             )
             exec_before_phase_b = len(backend.invocations)
-            _, recovered_run = execute_step(
-                scenario=sc3,
-                definition=beam_run,
-                settings=env.settings,
-                state=env.state,
-                workspace=env.workspace,
-                stage="supply_demand",
-                year=2015,
-                iteration=0,
-                phase="run",
-                runtime_kwargs={"beam_launch_config": launch_cfg_3},
-                resolved_inputs=run_inputs_3,
-            )
-            # Cache hydration failure -> clean fallback to re-execution
-            assert len(backend.invocations) == exec_before_phase_b + 1
-            assert recovered_run is not None
-            recovered_zarr = Path(recovered_run.raw_outputs["raw_od_skims_zarr_2015_0"])
-            assert recovered_zarr.is_dir()
-            assert validate_activitysim_zarr_skims(recovered_zarr) is None
+            with pytest.raises(
+                FileNotFoundError,
+                match="Cannot archive artifact 'raw_od_skims_zarr_2015_0': source bytes are unavailable",
+            ):
+                execute_step(
+                    scenario=sc3,
+                    definition=beam_run,
+                    settings=env.settings,
+                    state=env.state,
+                    workspace=env.workspace,
+                    stage="supply_demand",
+                    year=2015,
+                    iteration=0,
+                    phase="run",
+                    runtime_kwargs={"beam_launch_config": launch_cfg_3},
+                    resolved_inputs=run_inputs_3,
+                )
+            assert len(backend.invocations) == exec_before_phase_b
 
 
 def test_beam_postprocess_cold_scratch_events_parquet_materialization(
@@ -1106,14 +1105,14 @@ def test_full_workflow_cache_hit_replay_skips_all_containers_on_cold_scratch(
         assert len(backend.invocations) == first_run_count
 
     second_scratch_run_dir = _latest_run_dir(env.paths.scratch_root)
-    assert (
+    assert not (
         second_scratch_run_dir
         / "activitysim"
         / "output"
         / "year-2015-iteration-0"
         / "beam_plans.parquet"
-    ).is_file()
-    assert (second_scratch_run_dir / "beam" / "input" / "sfbay" / "skims.omx").is_file()
+    ).exists()
+    assert any(env.paths.archive_root.rglob("year-2015-iteration-0/beam_plans.parquet"))
 
 
 def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(

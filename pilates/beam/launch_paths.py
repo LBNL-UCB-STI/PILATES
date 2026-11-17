@@ -211,14 +211,26 @@ def validate_staged_linkstats_reference(
             "Consist linkstats reference does not delegate to linkstats_warmstart."
         )
     observed_path = snapshot_reference.resolved_path
-    if (
-        observed_path is None
-        or observed_path.resolve() != execution_reference.physical_target_path
-    ):
-        raise BeamLaunchPathError(
-            "Consist canonicalized linkstats differs from the staged file BEAM will read: "
-            f"{observed_path} != {execution_reference.physical_target_path}"
-        )
+    if observed_path is not None:
+        resolved_observed = observed_path.resolve()
+        if resolved_observed != execution_reference.physical_target_path:
+            import filecmp
+
+            if not (
+                resolved_observed.is_file()
+                and execution_reference.physical_target_path.is_file()
+                and resolved_observed.name
+                == execution_reference.physical_target_path.name
+                and filecmp.cmp(
+                    resolved_observed,
+                    execution_reference.physical_target_path,
+                    shallow=False,
+                )
+            ):
+                raise BeamLaunchPathError(
+                    "Consist canonicalized linkstats differs from the staged file BEAM will read: "
+                    f"{observed_path} != {execution_reference.physical_target_path}"
+                )
     return execution_reference
 
 
@@ -312,14 +324,21 @@ def validate_r5_execution_reference(
     execution_reference = resolve_r5_network_reference(
         settings=settings, workspace=workspace, config_root=config_root
     )
-    if (
-        member.resolved_path.resolve()
-        != execution_reference.selected_osm_physical_target_path
-    ):
-        raise BeamLaunchPathError(
-            "Consist selected R5 OSM member differs from the file BEAM will read: "
-            f"{member.resolved_path} != {execution_reference.selected_osm_physical_target_path}"
-        )
+    resolved_member = member.resolved_path.resolve()
+    target_path = execution_reference.selected_osm_physical_target_path
+    if resolved_member != target_path:
+        import filecmp
+
+        if not (
+            resolved_member.is_file()
+            and target_path.is_file()
+            and resolved_member.name == target_path.name
+            and filecmp.cmp(resolved_member, target_path, shallow=False)
+        ):
+            raise BeamLaunchPathError(
+                "Consist selected R5 OSM member differs from the file BEAM will read: "
+                f"{member.resolved_path} != {execution_reference.selected_osm_physical_target_path}"
+            )
     return execution_reference
 
 

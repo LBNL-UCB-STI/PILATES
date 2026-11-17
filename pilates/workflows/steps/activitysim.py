@@ -80,7 +80,6 @@ from pilates.workflows.contracts import (
     InputContract,
     StepDefinition,
 )
-from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
 from pilates.workflows.state import WorkflowState
@@ -836,7 +835,7 @@ def _activitysim_cache_options(
 ) -> CacheOptions:
     """Admit a cache candidate with zero-copy metadata hydration."""
 
-    del settings, state, workspace
+    # del settings, state, workspace
     return CacheOptions(
         cache_hydration="metadata",
         validate_cached_outputs="lazy",
@@ -881,7 +880,6 @@ def _project_activitysim_preprocess_outputs(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> ActivitySimPreprocessOutputs:
     declared_outputs = activitysim_preprocess_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -894,7 +892,6 @@ def _project_activitysim_preprocess_outputs(
             key=ASIM_LAND_USE_IN,
             declared_outputs=declared_outputs,
             workspace=workspace,
-            is_cache_hit=is_cache_hit,
         ),
         households_table=_persisted_output_path(
             outputs,
@@ -902,7 +899,6 @@ def _project_activitysim_preprocess_outputs(
             key=ASIM_HOUSEHOLDS_IN,
             declared_outputs=declared_outputs,
             workspace=workspace,
-            is_cache_hit=is_cache_hit,
         ),
         persons_table=_persisted_output_path(
             outputs,
@@ -910,7 +906,6 @@ def _project_activitysim_preprocess_outputs(
             key=ASIM_PERSONS_IN,
             declared_outputs=declared_outputs,
             workspace=workspace,
-            is_cache_hit=is_cache_hit,
         ),
         omx_skims=(
             _persisted_output_path(
@@ -919,21 +914,11 @@ def _project_activitysim_preprocess_outputs(
                 key=ASIM_OMX_SKIMS,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
-                is_cache_hit=is_cache_hit,
             )
             if ASIM_OMX_SKIMS in outputs
             else None
         ),
     )
-    if not is_cache_hit:
-        projected.validate(
-            ValidationContext(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="activitysim_preprocess",
-            )
-        )
     return projected
 
 
@@ -944,7 +929,6 @@ def _project_activitysim_run_outputs(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> ActivitySimRunOutputs:
     if resolved_inputs is None:
         raise RuntimeError(
@@ -972,7 +956,6 @@ def _project_activitysim_run_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
-                is_cache_hit=is_cache_hit,
             )
             for key in declared_outputs
             if key.endswith("_asim_out")
@@ -984,21 +967,11 @@ def _project_activitysim_run_outputs(
                 key=ZARR_SKIMS,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
-                is_cache_hit=is_cache_hit,
             )
             if produces_zarr
             else None
         ),
     )
-    if not is_cache_hit:
-        projected.validate(
-            ValidationContext(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="activitysim_run",
-            )
-        )
     return projected
 
 
@@ -1009,7 +982,6 @@ def _project_activitysim_postprocess_outputs(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> ActivitySimPostprocessOutputs:
     declared_outputs = activitysim_postprocess_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -1026,7 +998,6 @@ def _project_activitysim_postprocess_outputs(
                 key=USIM_DATASTORE_H5,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
-                is_cache_hit=is_cache_hit,
             )
             if USIM_DATASTORE_H5 in outputs
             else None
@@ -1039,7 +1010,6 @@ def _project_activitysim_postprocess_outputs(
                 key=key,
                 declared_outputs=declared_outputs,
                 workspace=workspace,
-                is_cache_hit=is_cache_hit,
             )
             for key in outputs
             if key != USIM_DATASTORE_H5
@@ -1048,15 +1018,6 @@ def _project_activitysim_postprocess_outputs(
             USIM_DATASTORE_H5 if USIM_DATASTORE_H5 in outputs else None
         ),
     )
-    if not is_cache_hit:
-        projected.validate(
-            ValidationContext(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="activitysim_postprocess",
-            )
-        )
     return projected
 
 
@@ -1130,6 +1091,25 @@ def _activitysim_preprocess_callable(
     ActivitysimPreprocessor("activitysim", state).preprocess(
         workspace, **preprocess_kwargs
     )
+    declared_outputs = activitysim_preprocess_output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    from pilates.workflows.steps.shared import _validation_context
+
+    projected = _project_activitysim_preprocess_outputs(
+        {key: None for key in declared_outputs},
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    projected.validate(
+        _validation_context(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="activitysim_preprocess",
+        )
+    )
 
 
 @define_step(
@@ -1175,7 +1155,7 @@ def _activitysim_run_callable(
 ) -> None:
     """Run ActivitySim from exactly one materialized native skim source."""
 
-    del settings
+    # del settings
     if zarr_skims is not None and omx_skims is None:
         skim_mode: ActivitysimSkimMode = "zarr"
         extra_inputs: Mapping[str, Path] = {ZARR_SKIMS: Path(zarr_skims)}
@@ -1208,6 +1188,41 @@ def _activitysim_run_callable(
         skim_mode=skim_mode,
         extra_inputs=extra_inputs,
         workspace=workspace,
+    )
+
+    class DummyResolvedInputs:
+        def __init__(self, mode: str) -> None:
+            from pilates.workflows.artifact_keys import ASIM_OMX_SKIMS, ZARR_SKIMS
+
+            self.selected_key_by_role = {
+                "omx_skims": ZARR_SKIMS if mode == "zarr" else ASIM_OMX_SKIMS
+            }
+            self.metadata = {_ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: mode == "zarr"}
+
+    dummy_resolved = DummyResolvedInputs(skim_mode)
+    declared_outputs = _activitysim_run_native_output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        resolved_inputs=dummy_resolved,
+    )
+    outputs_mock = {k: None for k in declared_outputs}
+    from pilates.workflows.steps.shared import _validation_context
+
+    projected = _project_activitysim_run_outputs(
+        outputs_mock,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        resolved_inputs=dummy_resolved,
+    )
+    projected.validate(
+        _validation_context(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="activitysim_run",
+        )
     )
 
 
@@ -1269,7 +1284,7 @@ def _activitysim_postprocess_callable(
     """Postprocess persisted ActivitySim raw outputs without a holder lookup."""
 
     del persons_asim_in, land_use_asim_in, omx_skims, zarr_skims
-    del settings
+    # del settings
     raw_outputs = ActivitySimRunOutputs(
         output_dir=Path(workspace.get_asim_output_dir()),
         raw_outputs={
@@ -1310,6 +1325,37 @@ def _activitysim_postprocess_callable(
         base_input_h5_path=(
             str(usim_datastore_base_h5) if usim_datastore_base_h5 is not None else None
         ),
+    )
+    declared_outputs = activitysim_postprocess_output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    from pilates.workflows.steps.shared import _validation_context
+
+    has_usim_input = any(
+        x is not None
+        for x in (
+            usim_datastore_h5,
+            usim_population_source_h5,
+            usim_datastore_base_h5,
+        )
+    )
+    projected = _project_activitysim_postprocess_outputs(
+        {
+            key: None
+            for key in declared_outputs
+            if key != USIM_DATASTORE_H5 or has_usim_input
+        },
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    projected.validate(
+        _validation_context(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="activitysim_postprocess",
+        )
     )
 
 

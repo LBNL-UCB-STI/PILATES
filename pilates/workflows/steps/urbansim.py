@@ -56,7 +56,6 @@ from .shared import (
     _persisted_output_path,
     _resolve_native_inputs,
     _strict_requested_output_cache_options,
-    _validation_context,
 )
 
 
@@ -266,6 +265,33 @@ def _native_urbansim_run(
         inputs,
         launch_context=urbansim_launch_context,
     )
+    declared_outputs = _urbansim_run_native_output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    from pilates.workflows.steps.shared import (
+        _persisted_output_path,
+        _validation_context,
+    )
+
+    datastore = _persisted_output_path(
+        {USIM_DATASTORE_H5: None},
+        step_name="urbansim_run",
+        key=USIM_DATASTORE_H5,
+        declared_outputs=declared_outputs,
+        workspace=workspace,
+    )
+    projected = NativeUrbanSimRunOutputs(
+        usim_datastore_h5=datastore,
+        raw_outputs={USIM_FORECAST_OUTPUT: datastore},
+    )
+    projected.validate(
+        _validation_context(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="urbansim_run",
+        )
+    )
 
 
 @define_step(
@@ -316,6 +342,40 @@ def _native_urbansim_postprocess(
         ),
         year=state.forecast_year,
     )
+    declared_outputs = _urbansim_postprocess_native_output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    from pilates.workflows.steps.shared import (
+        _persisted_output_path,
+        _validation_context,
+    )
+
+    datastore = _persisted_output_path(
+        {USIM_DATASTORE_H5: None},
+        step_name="urbansim_postprocess",
+        key=USIM_DATASTORE_H5,
+        declared_outputs=declared_outputs,
+        workspace=workspace,
+    )
+    population_source = _persisted_output_path(
+        {USIM_POPULATION_SOURCE_H5: None},
+        step_name="urbansim_postprocess",
+        key=USIM_POPULATION_SOURCE_H5,
+        declared_outputs=declared_outputs,
+        workspace=workspace,
+    )
+    validated = NativeUrbanSimPostprocessOutputs(
+        usim_datastore_h5=datastore,
+        processed_outputs={USIM_POPULATION_SOURCE_H5: population_source},
+    )
+    validated.validate(
+        _validation_context(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="urbansim_postprocess",
+        )
+    )
 
 
 def _project_urbansim_run(
@@ -325,7 +385,6 @@ def _project_urbansim_run(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> NativeUrbanSimRunOutputs:
     declared_outputs = _urbansim_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -336,21 +395,11 @@ def _project_urbansim_run(
         key=USIM_DATASTORE_H5,
         declared_outputs=declared_outputs,
         workspace=workspace,
-        is_cache_hit=is_cache_hit,
     )
     projected = NativeUrbanSimRunOutputs(
         usim_datastore_h5=datastore,
         raw_outputs={USIM_FORECAST_OUTPUT: datastore},
     )
-    if not is_cache_hit:
-        projected.validate(
-            _validation_context(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="urbansim_run",
-            )
-        )
     return projected
 
 
@@ -361,7 +410,6 @@ def _project_urbansim_postprocess(
     state: WorkflowState,
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
-    is_cache_hit: bool = False,
 ) -> NativeUrbanSimPostprocessOutputs:
     declared_outputs = _urbansim_postprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
@@ -372,7 +420,6 @@ def _project_urbansim_postprocess(
         key=USIM_DATASTORE_H5,
         declared_outputs=declared_outputs,
         workspace=workspace,
-        is_cache_hit=is_cache_hit,
     )
     processed_outputs = {
         key: _persisted_output_path(
@@ -381,7 +428,6 @@ def _project_urbansim_postprocess(
             key=key,
             declared_outputs=declared_outputs,
             workspace=workspace,
-            is_cache_hit=is_cache_hit,
         )
         for key in outputs
         if key != USIM_DATASTORE_H5
@@ -390,15 +436,6 @@ def _project_urbansim_postprocess(
         usim_datastore_h5=datastore,
         processed_outputs=processed_outputs,
     )
-    if not is_cache_hit:
-        projected.validate(
-            _validation_context(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name="urbansim_postprocess",
-            )
-        )
     return projected
 
 

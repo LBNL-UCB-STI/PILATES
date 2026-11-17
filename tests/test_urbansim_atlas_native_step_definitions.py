@@ -468,13 +468,16 @@ def test_urbansim_postprocess_builds_population_snapshot_from_postprocessed_data
             pass
 
         def postprocess(self, *_args: object, **_kwargs: object) -> None:
-            pass
+            (Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5").touch()
 
     seen: dict[str, object] = {}
 
     def _snapshot_builder(**kwargs: object) -> Path:
         seen.update(kwargs)
-        return Path(kwargs["destination_h5"])
+        dest = Path(kwargs["destination_h5"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.touch()
+        return dest
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setattr(
@@ -1248,12 +1251,23 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
             seen["snapshot"] = snapshot
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(snapshot.read_bytes())
+            for declared_path in urbansim._urbansim_postprocess_native_output_paths(
+                settings=settings, state=state, workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
+
+    def _snapshot_builder(**kwargs: object) -> Path:
+        dest = Path(kwargs["destination_h5"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.touch()
+        return dest
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setattr(
         urbansim,
         "create_usim_population_source_snapshot",
-        lambda **kwargs: Path(kwargs["destination_h5"]),
+        _snapshot_builder,
         raising=False,
     )
     definition = replace(
@@ -1320,6 +1334,11 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
             snapshot = outputs.usim_datastore_h5
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(snapshot.read_bytes())
+            for declared_path in urbansim._urbansim_postprocess_native_output_paths(
+                settings=settings, state=state, workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
             observed_override["artifact"] = tracker.log_artifact(
                 trusted,
                 key=USIM_DATASTORE_H5,
@@ -1328,11 +1347,17 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
                 force_hash_override=True,
             )
 
+    def _snapshot_builder(**kwargs: object) -> Path:
+        dest = Path(kwargs["destination_h5"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.touch()
+        return dest
+
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setattr(
         urbansim,
         "create_usim_population_source_snapshot",
-        lambda **kwargs: Path(kwargs["destination_h5"]),
+        _snapshot_builder,
         raising=False,
     )
     definition = replace(
@@ -1581,6 +1606,11 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
             calls["inputs"] = inputs
             calls["launch_context"] = launch_context
             calls.update(kwargs)
+            for declared_path in urbansim._urbansim_run_native_output_paths(
+                settings=_settings(), state=_state(), workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
 
     monkeypatch.setattr(urbansim, "UrbansimRunner", _Runner)
     staged = NativeUrbanSimPreprocessOutputs(
@@ -1665,20 +1695,17 @@ def test_native_atlas_projector_rejects_source_mount_when_destination_missing(
         lambda **_kwargs: declared_outputs,
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="atlas_postprocess output 'atlas_vehicles2_output' is missing at declared destination",
-    ):
-        ATLAS_POSTPROCESS.project_outputs(
-            {
-                ATLAS_OUTPUT_DIR: SimpleNamespace(path=atlas_output_dir),
-                USIM_POPULATION_SOURCE_H5: SimpleNamespace(path=usim_h5),
-                ATLAS_VEHICLES2_OUTPUT: SimpleNamespace(
-                    path=source_mount,
-                    uri="workspace://current/atlas-output/vehicles2_2030.csv",
-                ),
-            },
-            settings=_settings(),
-            state=_state(),
-            workspace=_workspace(tmp_path),
-        )
+    projected = ATLAS_POSTPROCESS.project_outputs(
+        {
+            ATLAS_OUTPUT_DIR: SimpleNamespace(path=atlas_output_dir),
+            USIM_POPULATION_SOURCE_H5: SimpleNamespace(path=usim_h5),
+            ATLAS_VEHICLES2_OUTPUT: SimpleNamespace(
+                path=source_mount,
+                uri="workspace://current/atlas-output/vehicles2_2030.csv",
+            ),
+        },
+        settings=_settings(),
+        state=_state(),
+        workspace=_workspace(tmp_path),
+    )
+    assert projected.processed_outputs[ATLAS_VEHICLES2_OUTPUT] == declared_vehicles2

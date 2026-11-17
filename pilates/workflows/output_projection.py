@@ -22,7 +22,6 @@ class TypedOutputProjector(Protocol, Generic[OutputT]):
         state: Any,
         workspace: Any,
         resolved_inputs: ResolvedStepInputs,
-        is_cache_hit: bool = False,
     ) -> OutputT: ...
 
 

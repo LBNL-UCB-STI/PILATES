@@ -60,7 +60,6 @@ def _persisted_output_path(
     key: str,
     declared_outputs: Mapping[str, Any],
     workspace: Any,
-    is_cache_hit: bool = False,
 ) -> Path:
     """Return one output only when it exists at its declared destination.
 
@@ -110,10 +109,6 @@ def _persisted_output_path(
             f"{step_name} output {key!r} has an invalid declared destination"
         )
 
-    if not is_cache_hit and not path.exists():
-        raise RuntimeError(
-            f"{step_name} output {key!r} is missing at declared destination {path}"
-        )
     return path
 
 

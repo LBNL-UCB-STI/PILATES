@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 
 from pilates.config.models import PilatesConfig
@@ -17,9 +16,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
 )
 from pilates.utils.formatting import formatted_print
-from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
-from pilates.beam.config_hocon import beam_config_root
-from pilates.beam.launch_paths import prepare_r5_raw_rebuild
+from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.workflows.coupler_namespace import (
     coupler_storage_value,
     set_coupler_from_artifact,
@@ -119,96 +116,6 @@ def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
     raise RuntimeError(message)
 
 
-def _archive_beam_launch_config(
-    launch_config_dir: Path,
-    *,
-    year: int,
-    iteration: int,
-    targets: Sequence[Path | None],
-) -> None:
-    """Archive compiled BEAM launch config tree to durable run directories."""
-    if not launch_config_dir.exists():
-        return
-    launch_config_resolved = launch_config_dir.resolve()
-    for target in targets:
-        if target is None:
-            continue
-        dest_root = Path(target).expanduser().resolve()
-        dest_dir = (
-            dest_root / ".pilates-beam-launch-config" / f"y{year}" / f"i{iteration}"
-        )
-        if dest_dir.resolve() == launch_config_resolved:
-            continue
-        dest_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(
-            launch_config_dir,
-            dest_dir,
-            dirs_exist_ok=True,
-            ignore_dangling_symlinks=True,
-        )
-        logger.debug(
-            "[beam] archived launch config to %s",
-            dest_dir,
-        )
-
-
-def _compile_beam_launch_config(
-    *,
-    scenario: ScenarioWithCoupler,
-    settings: PilatesConfig,
-    workspace: Workspace,
-    year: int,
-    iteration: int,
-    preprocess_outputs: Any,
-    archive_run_dir: Optional[Path] = None,
-) -> BeamLaunchConfig:
-    """Create the one derived config tree consumed by the next BEAM process."""
-
-    from pilates.beam.preprocessor import (
-        _prepare_beam_zone_shapefile,
-        ensure_beam_mutable_workspace,
-    )
-
-    ensure_beam_mutable_workspace(settings, workspace)
-    source_root = beam_config_root(settings, workspace=workspace)
-    if (
-        get_setting(settings, "shared.geography.zones") is not None
-        and not (source_root / "shape" / "canonical_zones_sorted.geojson").exists()
-    ):
-        _prepare_beam_zone_shapefile(workspace, settings)
-    output_dir = (
-        Path(workspace.full_path)
-        / ".pilates-beam-launch-config"
-        / f"y{year}"
-        / f"i{iteration}"
-    )
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    launch_config = build_beam_launch_config(
-        settings=settings,
-        source_root=source_root,
-        output_dir=output_dir,
-        identity=scenario.tracker.identity,
-        prepared_inputs=preprocess_outputs.prepared_inputs,
-    )
-    prepare_r5_raw_rebuild(
-        settings=settings,
-        workspace=workspace,
-        config_root=launch_config.root,
-    )
-    tracker_run_dir = getattr(getattr(scenario, "tracker", None), "run_dir", None)
-    _archive_beam_launch_config(
-        output_dir,
-        year=year,
-        iteration=iteration,
-        targets=[
-            archive_run_dir,
-            Path(tracker_run_dir) if tracker_run_dir else None,
-        ],
-    )
-    return launch_config
-
-
 def _run_beam_steps(
     *,
     scenario: ScenarioWithCoupler,
@@ -223,7 +130,7 @@ def _run_beam_steps(
     workspace = context.workspace
     archive_run_dir = resolve_archive_run_dir(workspace=workspace, state=state)
 
-    _, preprocess_outputs = execute_step(
+    _, _ = execute_step(
         scenario=scenario,
         definition=beam_preprocess,
         settings=settings,
@@ -233,15 +140,6 @@ def _run_beam_steps(
         year=year,
         iteration=iteration,
         phase="preprocess",
-    )
-    launch_config = _compile_beam_launch_config(
-        scenario=scenario,
-        settings=settings,
-        workspace=workspace,
-        year=year,
-        iteration=iteration,
-        preprocess_outputs=preprocess_outputs,
-        archive_run_dir=archive_run_dir,
     )
     run_inputs = beam_run.resolve_inputs(
         settings=settings,
@@ -259,7 +157,6 @@ def _run_beam_steps(
         year=year,
         iteration=iteration,
         phase="run",
-        runtime_kwargs={"beam_launch_config": launch_config},
         resolved_inputs=run_inputs,
     )
 
@@ -294,7 +191,6 @@ def _run_beam_steps(
             year=year,
             iteration=iteration,
             context=context,
-            launch_config=launch_config,
         )
     return None
 
@@ -305,7 +201,7 @@ def _run_beam_full_skim_step(
     year: int,
     iteration: int,
     context: WorkflowRuntimeContext,
-    launch_config: BeamLaunchConfig,
+    launch_config: BeamLaunchConfig | None = None,
 ) -> None:
     """Execute full skims through its native definition."""
 
@@ -325,7 +221,9 @@ def _run_beam_full_skim_step(
         year=year,
         iteration=iteration,
         phase="full_skim",
-        runtime_kwargs={"beam_launch_config": launch_config},
+        runtime_kwargs=(
+            {"beam_launch_config": launch_config} if launch_config is not None else None
+        ),
         resolved_inputs=full_skim_inputs,
     )
     return None
@@ -428,22 +326,12 @@ def _run_traffic_assignment_phase(
             workspace=workspace,
             settings=settings,
         )
-        archive_run_dir = resolve_archive_run_dir(workspace=workspace, state=state)
-        launch_config = _compile_beam_launch_config(
-            scenario=scenario,
-            settings=settings,
-            workspace=workspace,
-            year=beam_year,
-            iteration=inputs.iteration,
-            preprocess_outputs=preprocess_outputs,
-            archive_run_dir=archive_run_dir,
-        )
         _run_beam_full_skim_step(
             scenario=scenario,
             year=beam_year,
             iteration=inputs.iteration,
             context=context,
-            launch_config=launch_config,
+            launch_config=None,
         )
     else:
         _run_beam_steps(
