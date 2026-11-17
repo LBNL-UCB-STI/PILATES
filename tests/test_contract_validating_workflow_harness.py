@@ -1727,6 +1727,7 @@ def test_forecast_year_scenario_fork_reuses_base_year_cache_and_branches_forecas
         env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         fork_settings = env.settings.model_copy(deep=True)
+        fork_settings.run.output_run_name = "fork-policy"
 
         def _apply_2017_policy_fork(**kwargs):
             year = kwargs["year"]

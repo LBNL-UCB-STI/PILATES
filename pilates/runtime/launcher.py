@@ -439,7 +439,9 @@ def _prepare_run_context(
         archive_db_path=archive_consist_db_path,
     )
 
-    expected_prefix_steps = query_expected_prefix_steps(tracker, run_name)
+    expected_prefix_steps = (
+        query_expected_prefix_steps(tracker, run_name) if is_restart_run else 0
+    )
 
     @runtime_checkable
     class _HasArchiveStepSnapshot(Protocol):
