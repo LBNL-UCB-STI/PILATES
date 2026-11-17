@@ -632,6 +632,7 @@ def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admi
     workspace = SimpleNamespace(
         get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+        archive_run_dir=str(tmp_path / "archive-run"),
     )
     context = SimpleNamespace(
         canonicalization=object(), log_meta=lambda **_kwargs: None
@@ -825,6 +826,7 @@ def test_native_beam_run_skips_initial_linkstats_admission_on_subsequent_iterati
     workspace = SimpleNamespace(
         get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+        archive_run_dir=str(tmp_path / "archive-run"),
     )
     context = SimpleNamespace(
         canonicalization=object(), log_meta=lambda **_kwargs: None

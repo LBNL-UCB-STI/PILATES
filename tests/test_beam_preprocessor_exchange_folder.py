@@ -498,8 +498,9 @@ def test_beam_preprocess_stages_explicit_archive_vehicle_source_with_metadata(
     preprocessor.settings.vehicle_ownership_model_enabled = True
 
     workspace = _make_workspace(tmp_path / "local-run")
+    workspace.archive_run_dir = str(tmp_path / "archive-run")
     local_root = Path(workspace.full_path)
-    archive_root = Path(preprocessor.workspace.archive_run_dir).parent
+    archive_root = Path(workspace.archive_run_dir)
     atlas_rel = Path("atlas") / "atlas_output"
     archive_vehicles = archive_root / atlas_rel / "vehicles2_2018.csv"
     archive_vehicles.parent.mkdir(parents=True, exist_ok=True)

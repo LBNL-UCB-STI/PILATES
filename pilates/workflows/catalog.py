@@ -284,6 +284,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="postprocess",
         stage_name="postprocessing",
         order=150,
+        optional=True,
         dynamic_input_families=("events_parquet_{year}_{iteration}",),
         dynamic_output_families=(
             "inexus_output",
