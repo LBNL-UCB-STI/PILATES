@@ -1692,13 +1692,17 @@ def _preflight_beam_launch_inputs(
     workspace: Workspace,
     beam_launch_config: BeamLaunchConfig,
     run_context: Any,
+    expected_warmstart_path: Path | None = None,
 ) -> None:
-    launch_reference = validate_staged_linkstats_reference(
-        settings=settings,
-        workspace=workspace,
-        run_context=run_context,
-        config_root=beam_launch_config.root,
-    )
+    validate_kwargs: dict[str, Any] = {
+        "settings": settings,
+        "workspace": workspace,
+        "run_context": run_context,
+        "config_root": beam_launch_config.root,
+    }
+    if expected_warmstart_path is not None:
+        validate_kwargs["expected_warmstart_path"] = expected_warmstart_path
+    launch_reference = validate_staged_linkstats_reference(**validate_kwargs)
     if launch_reference is None:
         if not requires_prior_beam_linkstats_handoff(settings=settings, state=state):
             reject_or_warn_for_missing_staged_linkstats(settings=settings)
@@ -1887,6 +1891,7 @@ def _native_beam_run(
         workspace=workspace,
         beam_launch_config=beam_launch_config,
         run_context=_consist_ctx,
+        expected_warmstart_path=prepared.get(LINKSTATS_WARMSTART),
     )
     produced = BeamRunner("beam_run", state).run(
         BeamPreprocessOutputs(
@@ -2071,6 +2076,7 @@ def _native_beam_full_skim(
         workspace=workspace,
         beam_launch_config=beam_launch_config,
         run_context=_consist_ctx,
+        expected_warmstart_path=prepared.get(LINKSTATS_WARMSTART),
     )
     from pilates.beam.runner import BeamFullSkimRunner
 

@@ -177,6 +177,7 @@ def validate_staged_linkstats_reference(
     workspace: Workspace,
     run_context: RunContext,
     config_root: Path | None = None,
+    expected_warmstart_path: Path | None = None,
 ) -> BeamLaunchPathReference | None:
     """Prove canonicalization and final staged HOCON select the same linkstats."""
     execution_reference = resolve_staged_linkstats_reference(
@@ -210,26 +211,28 @@ def validate_staged_linkstats_reference(
         raise BeamLaunchPathError(
             "Consist linkstats reference does not delegate to linkstats_warmstart."
         )
-    observed_path = snapshot_reference.resolved_path
-    if observed_path is not None:
-        resolved_observed = observed_path.resolve()
-        if resolved_observed != execution_reference.physical_target_path:
+    authoritative_path = (
+        expected_warmstart_path
+        if expected_warmstart_path is not None
+        else snapshot_reference.resolved_path
+    )
+    if authoritative_path is not None:
+        resolved_authoritative = authoritative_path.resolve()
+        if resolved_authoritative != execution_reference.physical_target_path:
             import filecmp
 
             if not (
-                resolved_observed.is_file()
+                resolved_authoritative.is_file()
                 and execution_reference.physical_target_path.is_file()
-                and resolved_observed.name
-                == execution_reference.physical_target_path.name
                 and filecmp.cmp(
-                    resolved_observed,
+                    resolved_authoritative,
                     execution_reference.physical_target_path,
                     shallow=False,
                 )
             ):
                 raise BeamLaunchPathError(
                     "Consist canonicalized linkstats differs from the staged file BEAM will read: "
-                    f"{observed_path} != {execution_reference.physical_target_path}"
+                    f"{authoritative_path} != {execution_reference.physical_target_path}"
                 )
     return execution_reference
 

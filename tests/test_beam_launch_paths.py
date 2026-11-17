@@ -319,3 +319,226 @@ def test_validate_r5_execution_reference_matches_consist_member(tmp_path: Path) 
     )
 
     assert execution_reference.selected_osm_path == selected_osm
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "iter0_base_renamed_to_warmstart",
+        "iter1_warmstart_differs_from_base",
+        "no_warmstart_artifact_uses_base_copy",
+        "tampered_staged_warmstart_fails_closed",
+    ],
+)
+def test_linkstats_and_r5_validation_across_compiled_launch_variants(
+    tmp_path: Path,
+    variant: str,
+) -> None:
+    """Real BeamConfigAdapter canonicalization + build_beam_launch_config preflight."""
+    from consist.core.identity import IdentityManager
+    from consist.integrations.beam import BeamConfigAdapter, BeamReferencePolicy
+    from pilates.beam.launch_config import build_beam_launch_config
+    from pilates.beam.launch_paths import (
+        BeamLaunchPathError,
+        beam_config_env_overrides,
+        validate_r5_execution_reference,
+        validate_staged_linkstats_reference,
+    )
+    from pilates.config.models import BeamArtifactFormatsConfig
+    from pilates.workflows.artifact_keys import LINKSTATS_WARMSTART
+
+    beam_input_dir = tmp_path / "beam" / "input"
+    region_dir = beam_input_dir / "seattle"
+    r5_dir = region_dir / "r5" / "network"
+    r5_dir.mkdir(parents=True)
+    osm_path = r5_dir / "network.osm.pbf"
+    osm_path.write_bytes(b"osm-source-bytes")
+    base_linkstats = r5_dir / "init.linkstats.parquet"
+    base_linkstats.write_bytes(b"base-init-linkstats")
+    (region_dir / "urbansim").mkdir(parents=True)
+    vehicles_path = region_dir / "urbansim" / "vehicles.csv"
+    vehicles_path.write_text("vehicleId,vehicleTypeId\n", encoding="utf-8")
+
+    primary_conf = region_dir / "beam.conf"
+    primary_conf.write_text(
+        "\n".join(
+            [
+                'beam.inputDirectory = "."',
+                'beam.outputs.baseOutputDirectory = "output"',
+                "beam.replanning.maxAgentPlanMemorySize = 4",
+                "beam.exchange.scenario {",
+                '  folder = ${beam.inputDirectory}"/urbansim"',
+                "  convertWgs2Utm = true",
+                "}",
+                'beam.agentsim.agents.vehicles.vehiclesFilePath = ${beam.inputDirectory}"/urbansim/vehicles.csv"',
+                'beam.warmStart.initialLinkstatsFilePath = ${beam.inputDirectory}"/r5/network/init.linkstats.parquet"',
+                "beam.routing.r5 {",
+                '  directory = ${beam.inputDirectory}"/r5/network"',
+                '  directory2 = ""',
+                '  osmMapdbFile = ${beam.routing.r5.directory}"/osm.mapdb"',
+                "}",
+                'beam.physsim.inputNetworkFilePath = ${beam.routing.r5.directory}"/physsim.xml"',
+                'matsim.modules.network.inputNetworkFile = ""',
+                'beam.router.skim.activity-sim-skimmer.fileBaseName = "skims"',
+                "beam.exchange.output.activity_sim_skims_format = parquet",
+                "beam.exchange.output.exchange_format = parquet",
+                "beam.exchange.output.events_format = parquet",
+                "beam.exchange.output.linkstats_format = parquet",
+                "beam.exchange.output.full_skim_timeout_hours = 72",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="seattle", output_directory=str(tmp_path / "archive")
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="urbansim",
+            local_mutable_data_folder="beam/input",
+            discard_plans_every_year=True,
+            sample=1.0,
+            replanning_portion=0.0,
+            memory="4g",
+            max_plans_memory=4,
+            router_directory=None,
+            admission=None,
+            artifact_formats=BeamArtifactFormatsConfig(),
+            activitysim_skims_file_base_name="skimsActivitySimOD",
+        ),
+        activitysim=None,
+        shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
+    )
+    workspace = _Workspace(beam_input_dir)
+    identity = IdentityManager()
+
+    adapter = BeamConfigAdapter(
+        root_dirs=[region_dir],
+        primary_config=primary_conf,
+        env_overrides=beam_config_env_overrides(settings, config_root=region_dir),
+        path_aliases={"beam_region_input": region_dir, "beam_input": beam_input_dir},
+        reference_policies={
+            "beam.routing.r5.directory": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_r5_raw_network_directory",
+                required=True,
+                delegated_artifact_keys=("r5_network",),
+            ),
+            "beam.warmStart.initialLinkstatsFilePath": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_linkstats_warmstart",
+                required=False,
+                delegated_artifact_keys=(LINKSTATS_WARMSTART,),
+            ),
+            "beam.exchange.scenario.folder": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_population_input_root",
+                required=False,
+                delegated_artifact_keys=("plans_beam_in",),
+            ),
+            "beam.agentsim.agents.vehicles.vehiclesFilePath": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_vehicle_input",
+                required=False,
+                delegated_artifact_keys=("vehicles_beam_in",),
+            ),
+            "beam.physsim.inputNetworkFilePath": BeamReferencePolicy(
+                identity_policy="output_or_runtime_ignored",
+                required=False,
+            ),
+            "beam.routing.r5.osmMapdbFile": BeamReferencePolicy(
+                identity_policy="output_or_runtime_ignored",
+                required=False,
+            ),
+            "beam.router.skim.activity-sim-skimmer.fileBaseName": BeamReferencePolicy(
+                identity_policy="output_or_runtime_ignored",
+                required=False,
+            ),
+        },
+    )
+    discovered = adapter.discover(
+        [region_dir],
+        identity=identity,
+        strict=True,
+    )
+    canonical = adapter.canonicalize(
+        discovered,
+        run=None,
+        plan_only=True,
+        strict=True,
+    )
+    run_context = SimpleNamespace(canonicalization=canonical.canonicalization)
+
+    prepared_inputs: dict[str, Path] = {}
+    expected_warmstart_path: Path | None = None
+    if variant == "iter0_base_renamed_to_warmstart":
+        staged = (
+            beam_input_dir
+            / ".pilates-consist-outputs"
+            / "linkstats_warmstart.linkstats.parquet"
+        )
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"base-init-linkstats")
+        prepared_inputs[LINKSTATS_WARMSTART] = staged
+        expected_warmstart_path = staged
+    elif variant in (
+        "iter1_warmstart_differs_from_base",
+        "tampered_staged_warmstart_fails_closed",
+    ):
+        iter0_out = tmp_path / "iter0_linkstats.parquet"
+        iter0_out.write_bytes(b"iter0-warmstart-linkstats")
+        prepared_inputs[LINKSTATS_WARMSTART] = iter0_out
+        expected_warmstart_path = iter0_out
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=region_dir,
+        output_dir=tmp_path / ".pilates-beam-launch-config" / "y2019" / "i0",
+        identity=identity,
+        prepared_inputs=prepared_inputs,
+    )
+
+    if variant == "tampered_staged_warmstart_fails_closed":
+        staged_target = validate_staged_linkstats_reference(
+            settings=settings,
+            workspace=workspace,
+            run_context=run_context,
+            config_root=launch_config.root,
+            expected_warmstart_path=expected_warmstart_path,
+        )
+        assert staged_target is not None
+        staged_target.physical_target_path.write_bytes(b"tampered-bytes")
+        with pytest.raises(
+            BeamLaunchPathError,
+            match="Consist canonicalized linkstats differs from the staged file BEAM will read",
+        ):
+            validate_staged_linkstats_reference(
+                settings=settings,
+                workspace=workspace,
+                run_context=run_context,
+                config_root=launch_config.root,
+                expected_warmstart_path=expected_warmstart_path,
+            )
+        return
+
+    linkstats_ref = validate_staged_linkstats_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=launch_config.root,
+        expected_warmstart_path=expected_warmstart_path,
+    )
+    r5_ref = validate_r5_execution_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=launch_config.root,
+    )
+    assert linkstats_ref is not None
+    assert (
+        r5_ref.selected_osm_path.resolve()
+        == (launch_config.root / "r5" / "network" / "network.osm.pbf").resolve()
+    )
