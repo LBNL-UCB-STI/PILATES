@@ -162,7 +162,7 @@ def query_expected_prefix_steps(tracker: Any, scenario_name: str) -> int:
                 WHERE model_name = 'pilates_orchestrator' 
                   AND status = 'completed' 
                   AND id LIKE ? 
-                ORDER BY start_time DESC 
+                ORDER BY started_at DESC 
                 LIMIT 1
             ) 
             AND status = 'completed'
