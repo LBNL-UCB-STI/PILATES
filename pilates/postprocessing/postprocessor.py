@@ -1122,7 +1122,7 @@ def build_mep_summaries(trips, settings, year, iteration):
     )
 
 
-def process_event_file(settings, year, iteration):
+def process_event_file(settings, year, iteration, *, output_path=None):
     try:
         logger.info("Loading utilities")
         utils = _read_asim_utilities(settings, year, iteration)
@@ -1161,9 +1161,13 @@ def process_event_file(settings, year, iteration):
             date.today().strftime("%Y%m%d"),
             iteration,
         )
-        final_output.to_csv(
-            os.path.join(post_output_folder, filename), compression="gzip"
+        target_path = (
+            str(output_path)
+            if output_path is not None
+            else os.path.join(post_output_folder, filename)
         )
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        final_output.to_csv(target_path, compression="gzip")
 
         logger.info("Building mep summaries")
         try:

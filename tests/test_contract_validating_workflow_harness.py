@@ -1211,7 +1211,6 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
         ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
         ctx.state.sub_stage_progress = "runner"
-        ctx.state.write_state()
         raise RuntimeError("Simulated crash mid-ActivitySim before BEAM checkpoint")
 
     with ContractValidatingContainerBackend() as backend_b:
@@ -1590,7 +1589,6 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
         ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
         ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
         ctx.state.sub_stage_progress = "runner"
-        ctx.state.write_state()
         raise RuntimeError(
             "Simulated crash mid-ActivitySim in year 2017 after 2017 UrbanSim+ATLAS"
         )

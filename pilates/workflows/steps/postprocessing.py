@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-import shutil
 from typing import Any, Mapping
 
 from consist import (
@@ -126,36 +125,23 @@ def _postprocessing_callable(
 
         year = current_year(state) or 0
         iter_idx = iteration_index(state)
-        try:
-            process_event_file(settings, year, iter_idx)
-        except Exception as exc:
-            logger.warning(
-                "[postprocessing] process_event_file failed or skipped: %s", exc
-            )
-
-        try:
-            copy_outputs_to_mep(settings, year, iter_idx, workspace)
-        except Exception as exc:
-            logger.warning(
-                "[postprocessing] copy_outputs_to_mep failed or skipped: %s", exc
-            )
-
         declared = _postprocessing_output_paths(
             settings=settings, state=state, workspace=workspace
         )
         inexus_target = declared.get("inexus_output")
-        if inexus_target is not None and not inexus_target.exists():
-            post_folder = inexus_target.parent
-            post_folder.mkdir(parents=True, exist_ok=True)
-            candidates = sorted(post_folder.glob(f"*{year}*iter{iter_idx}*.csv.gz"))
-            if candidates:
-                shutil.copy2(candidates[-1], inexus_target)
-            else:
-                inexus_target.touch()
-
+        if inexus_target is not None:
+            inexus_target.parent.mkdir(parents=True, exist_ok=True)
         mep_target = declared.get("mep_outputs")
-        if mep_target is not None and not mep_target.exists():
+        if mep_target is not None:
             mep_target.mkdir(parents=True, exist_ok=True)
+
+        process_event_file(
+            settings,
+            year,
+            iter_idx,
+            output_path=inexus_target,
+        )
+        copy_outputs_to_mep(settings, year, iter_idx, workspace)
 
 
 def _resolve_postprocessing_inputs(

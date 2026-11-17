@@ -4,8 +4,6 @@ from bisect import bisect_left
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
-import os
-import yaml
 import logging
 
 from pilates.config import PilatesConfig
@@ -65,9 +63,8 @@ class WorkflowState:
         self.is_restart_run = False
 
         self.forecast_year: int | None = None
-        self.file_loc = file_loc
-        self.mirror_file_loc: Optional[str] = None
         self.archive_run_dir: Optional[str | Path] = None
+        del file_loc
 
         # Kept as an ignored constructor argument so archived callers that
         # still pass the legacy field can load. Numba warmup is node-local
@@ -159,68 +156,6 @@ class WorkflowState:
 
     def set_sub_stage_progress(self, sub_stage_progress: Optional[str]):
         self.sub_stage_progress = sub_stage_progress
-        self.write_state()
-
-    @classmethod
-    def write_stage(
-        cls,
-        year: int,
-        current_stage: Stage,
-        file_loc,
-        iteration,
-        asim_compiled,
-        sub_stage_progress: Optional[str] = None,
-    ):
-        stage_name: Optional[str] = None
-        if isinstance(current_stage, Enum):
-            stage_name = current_stage.name
-        elif isinstance(current_stage, str):
-            stage_name = current_stage
-
-        # ponytail: drop retired data_initialized flag from run_state.yaml
-        to_save = {
-            "year": year,
-            "stage": stage_name,
-            "iteration": iteration,
-            "sub_stage_progress": sub_stage_progress,
-        }
-        # Historic callers may still provide this positional field. It is
-        # intentionally ignored: a node-local Numba cache cannot determine
-        # cache eligibility or restart behavior.
-        del asim_compiled
-        directory = os.path.dirname(file_loc)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        with open(file_loc, mode="w", encoding="utf-8") as f:
-            yaml.dump(to_save, f)
-
-    @classmethod
-    def read_current_stage(cls, file_loc):
-        if not os.path.exists(file_loc):
-            logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, 0, False, None, None]
-        with open(file_loc, encoding="utf-8") as f:
-            data = yaml.load(f, Loader=yaml.FullLoader)
-            data = data if data is not None else {}
-            year = data.get("year", None)
-            stage_str = data.get("stage", "null")
-        stage = (
-            None
-            if stage_str is None or stage_str == "null"
-            else WorkflowState.Stage[stage_str]
-        )
-        iteration = data.get("iteration", 0) or 0
-        # Accept old snapshots but never restore their warmup marker as
-        # workflow state.
-        asim_compiled = False
-        sub_stage_progress = data.get("sub_stage_progress", None)
-        return [
-            year,
-            stage,
-            iteration,
-            asim_compiled,
-            sub_stage_progress,
-        ]
 
     @classmethod
     def from_settings(cls, settings: PilatesConfig) -> "WorkflowState":
@@ -376,7 +311,6 @@ class WorkflowState:
                     self.current_sub_stage = self.loop_substages[0]
 
                 logger.info(f"Starting workflow with stage: {stage.name}")
-                self.write_state()
                 break
         # If no enabled stages found, the workflow is effectively complete
         if self.current_major_stage is None:
@@ -489,10 +423,6 @@ class WorkflowState:
             )
             return max(1, base_iteration + 1)
         return total_iters
-
-    def write_state(self):
-        """No-op: state file persistence is deleted in Phase 1B."""
-        pass
 
     def is_enabled(self, stage: Stage) -> bool:
         """Checks if a stage is enabled in settings."""
