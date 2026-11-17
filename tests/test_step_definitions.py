@@ -564,7 +564,7 @@ def test_native_steps_declare_static_consist_metadata() -> None:
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,
             },
-            "optional": {LINKSTATS_WARMSTART, ZARR_SKIMS},
+            "optional": {LINKSTATS_WARMSTART},
             "schema_outputs": {LINKSTATS, "beam_plans_out"},
         },
         "beam_postprocess": {
