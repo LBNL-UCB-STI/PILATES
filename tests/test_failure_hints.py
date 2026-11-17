@@ -120,7 +120,7 @@ def test_format_consist_shell_command_prefers_main_db():
 def test_log_restart_instructions_uses_context_state_path(caplog):
     context = {
         "settings": SimpleNamespace(settings_file="settings.yaml"),
-        "state": SimpleNamespace(run_info_path="/tmp/run/run_state.yaml"),
+        "state": SimpleNamespace(),
         "archive_run_dir": "/tmp/run",
         "local_run_dir": "/local/run",
     }
@@ -153,7 +153,7 @@ def test_log_restart_instructions_includes_promotion_command_when_available(capl
                 )
             ),
         ),
-        "state": SimpleNamespace(run_info_path="/tmp/run/run_state.yaml"),
+        "state": SimpleNamespace(),
         "archive_run_dir": "/tmp/run",
         "local_run_dir": "/local/run",
     }

@@ -66,7 +66,6 @@ def _make_preprocessor(
         current_year=2018,
         forecast_year=2018,
         current_inner_iter=0,
-        run_info_path=None,
     )
     state.set_sub_stage_progress = lambda _value: None
     return BeamPreprocessor("beam", state)
@@ -497,10 +496,10 @@ def test_beam_preprocess_stages_explicit_archive_vehicle_source_with_metadata(
         activity_demand_enabled=True,
     )
     preprocessor.settings.vehicle_ownership_model_enabled = True
-    preprocessor.state.run_info_path = str(tmp_path / "archive-run" / "run_state.yaml")
+
     workspace = _make_workspace(tmp_path / "local-run")
     local_root = Path(workspace.full_path)
-    archive_root = Path(preprocessor.state.run_info_path).parent
+    archive_root = Path(preprocessor.workspace.archive_run_dir).parent
     atlas_rel = Path("atlas") / "atlas_output"
     archive_vehicles = archive_root / atlas_rel / "vehicles2_2018.csv"
     archive_vehicles.parent.mkdir(parents=True, exist_ok=True)

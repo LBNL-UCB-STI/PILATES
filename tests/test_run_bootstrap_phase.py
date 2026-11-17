@@ -880,13 +880,9 @@ def test_format_restart_command_uses_config_and_archive_state():
 
     command = run_module._format_restart_command(
         settings=settings,
-        archive_state_path="/tmp/pilates run/run_state.yaml",
     )
 
-    assert (
-        command
-        == "python run.py -c scenarios/settings-seattle.yaml --run-dir '/tmp/pilates run'"
-    )
+    assert command == "python run.py -c scenarios/settings-seattle.yaml"
 
 
 def test_format_hpc_restart_command_requires_account_placeholder():
@@ -894,12 +890,11 @@ def test_format_hpc_restart_command_requires_account_placeholder():
 
     command = run_module._format_hpc_restart_command(
         settings=settings,
-        archive_state_path="/tmp/pilates run/run_state.yaml",
     )
 
     assert (
         command
-        == "./hpc/job_runner.sh -c scenarios/settings-seattle.yaml -a '<slurm_account>' --run-dir '/tmp/pilates run'"
+        == "./hpc/job_runner.sh -c scenarios/settings-seattle.yaml -a '<slurm_account>'"
     )
 
 
@@ -984,12 +979,9 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
 
     class StateStub:
         def __init__(self):
-            self.run_info_path = None
+
             self.file_loc = None
             self.mirror_file_loc = None
-
-        def set_run_info_path(self, path: str) -> None:
-            self.run_info_path = path
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
@@ -1048,9 +1040,6 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
     assert prepared.archive_run_dir.startswith(str(tmp_path / "archive-root"))
     assert prepared.local_run_dir.startswith(str(tmp_path / "local-root"))
     assert prepared.workspace.archive_run_dir == prepared.archive_run_dir
-    assert state.file_loc == prepared.archive_state_path
-    assert state.mirror_file_loc == prepared.local_state_path
-    assert state.run_info_path == prepared.archive_state_path
     assert create_tracker_kwargs["run_dir"] == prepared.archive_run_dir
     assert create_tracker_kwargs["mounts"]["workspace"] == prepared.local_run_dir
     assert create_tracker_kwargs["mounts"]["beam_input"] == os.path.join(
@@ -1078,12 +1067,9 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
 
     class StateStub:
         def __init__(self):
-            self.run_info_path = None
+
             self.file_loc = None
             self.mirror_file_loc = None
-
-        def set_run_info_path(self, path: str) -> None:
-            self.run_info_path = path
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
@@ -1183,12 +1169,9 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
 
     class StateStub:
         def __init__(self):
-            self.run_info_path = None
+
             self.file_loc = None
             self.mirror_file_loc = None
-
-        def set_run_info_path(self, path: str) -> None:
-            self.run_info_path = path
 
     created_workspaces = []
 
@@ -1665,8 +1648,6 @@ def _prepared_outer_admission_run(
         is_restart_run=is_restart_run,
         archive_run_dir=str(tmp_path / "archive-run"),
         local_run_dir=str(tmp_path / "local-run"),
-        archive_state_path=str(tmp_path / "archive-run" / "run_state.yaml"),
-        local_state_path=str(tmp_path / "local-run" / "run_state.yaml"),
         local_consist_db_path=None,
         archive_consist_db_path=None,
         run_notifier=None,

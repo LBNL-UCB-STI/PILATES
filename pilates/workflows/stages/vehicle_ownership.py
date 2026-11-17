@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Any, Union
+from typing import Any, Union, Protocol, runtime_checkable
 
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
@@ -33,23 +33,34 @@ from pilates.workflows.state import WorkflowState
 logger = logging.getLogger(__name__)
 
 
+@runtime_checkable
+class _AtlasParentState(Protocol):
+    year: int | None
+    forecast_year: int | None
+    start_year: int | None
+    full_settings: Any | None
+    iteration: int | None
+    __dict__: dict[str, Any]
+
+
 class AtlasSubState:
     """Workflow state for a single ATLAS sub-year within a forecast interval."""
 
-    def __init__(self, parent_state: Any, year: int) -> None:
-        interval_start_year = getattr(parent_state, "year", None)
+    def __init__(self, parent_state: _AtlasParentState, year: int) -> None:
+        interval_start_year = parent_state.year
         if interval_start_year is None:
             raise RuntimeError(
                 "WorkflowState.year must be set before constructing AtlasSubState."
             )
-        self.__dict__ = parent_state.__dict__.copy()
+        if hasattr(parent_state, "__dict__"):
+            self.__dict__ = parent_state.__dict__.copy()
         self.year = year
         self.current_year = year
         self.forecast_year = year
-        self.main_forecast_year = getattr(parent_state, "forecast_year", None)
-        self.start_year = getattr(parent_state, "start_year", None)
+        self.main_forecast_year = parent_state.forecast_year
+        self.start_year = parent_state.start_year
         self.atlas_interval_start_year = interval_start_year
-        self.full_settings = getattr(parent_state, "full_settings", None)
+        self.full_settings = parent_state.full_settings
         self.is_start_year = lambda: year == self.atlas_interval_start_year
         self.atlas_usim_datastore_h5: Any | None = None
         self.atlas_usim_datastore_base_h5: Any | None = None
@@ -57,7 +68,8 @@ class AtlasSubState:
 
     @property
     def iteration(self) -> int:
-        return int(getattr(self._parent_state, "iteration", 1))
+        it = self._parent_state.iteration
+        return int(it) if it is not None else 1
 
     def set_sub_stage_progress(self, sub_stage_progress: str) -> None:
         """Update parent state's sub-stage progress tracking (no-op in Phase 1B)."""

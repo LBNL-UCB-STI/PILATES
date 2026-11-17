@@ -50,7 +50,6 @@ class WorkflowState:
         asim_compiled: bool,
         full_settings: PilatesConfig,
         sub_stage_progress: Optional[str] = None,
-        run_info_path: Optional[str] = None,  # new
     ):
         # Store basic simulation parameters
         self.start_year = start_year
@@ -63,10 +62,7 @@ class WorkflowState:
         self.current_inner_iter = inner_iter
         self.current_sub_stage = sub_stage
         self.sub_stage_progress = sub_stage_progress
-        self.run_info_path = run_info_path  # new
-        # Preserve whether the run *started* as a restart before launcher later
-        # populates ``run_info_path`` for fresh runs too.
-        self.is_restart_run = bool(run_info_path)
+        self.is_restart_run = False
 
         self.forecast_year: int | None = None
         self.file_loc = file_loc
@@ -161,10 +157,6 @@ class WorkflowState:
     def iteration(self, value):
         self.current_inner_iter = value
 
-    def set_run_info_path(self, run_info_path: Optional[str]):
-        self.run_info_path = run_info_path
-        self.write_state()
-
     def set_sub_stage_progress(self, sub_stage_progress: Optional[str]):
         self.sub_stage_progress = sub_stage_progress
         self.write_state()
@@ -178,7 +170,6 @@ class WorkflowState:
         iteration,
         asim_compiled,
         sub_stage_progress: Optional[str] = None,
-        run_info_path: Optional[str] = None,
     ):
         stage_name: Optional[str] = None
         if isinstance(current_stage, Enum):
@@ -192,7 +183,6 @@ class WorkflowState:
             "stage": stage_name,
             "iteration": iteration,
             "sub_stage_progress": sub_stage_progress,
-            "run_info_path": run_info_path,
         }
         # Historic callers may still provide this positional field. It is
         # intentionally ignored: a node-local Numba cache cannot determine
@@ -224,14 +214,12 @@ class WorkflowState:
         # workflow state.
         asim_compiled = False
         sub_stage_progress = data.get("sub_stage_progress", None)
-        run_info_path = data.get("run_info_path", None)
         return [
             year,
             stage,
             iteration,
             asim_compiled,
             sub_stage_progress,
-            run_info_path,
         ]
 
     @classmethod
@@ -255,7 +243,6 @@ class WorkflowState:
         resume_sub_stage = None
         file_loc = None
         sub_stage_progress = None
-        run_info_path = None
 
         out = cls(
             start_year,
@@ -273,7 +260,6 @@ class WorkflowState:
             False,
             settings,
             sub_stage_progress=sub_stage_progress,
-            run_info_path=run_info_path,
         )
 
         out._settings["supply_demand_iters"] = settings.run.supply_demand_iters

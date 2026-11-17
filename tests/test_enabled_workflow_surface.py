@@ -68,7 +68,6 @@ def _restart_state():
     )
     return SimpleNamespace(
         is_restart_run=True,
-        run_info_path="/tmp/run_state.yaml",
         current_major_stage=stage.supply_demand_loop,
         current_sub_stage=stage.traffic_assignment,
         Stage=stage,

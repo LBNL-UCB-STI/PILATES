@@ -730,7 +730,6 @@ def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admi
         state=SimpleNamespace(
             year=2030,
             iteration=0,
-            run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
         ),
         workspace=workspace,
         beam_launch_config=launch_config,
@@ -803,7 +802,6 @@ def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
             state=SimpleNamespace(
                 year=2030,
                 iteration=0,
-                run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
             ),
             workspace=workspace,
             beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
@@ -893,7 +891,6 @@ def test_native_beam_run_skips_initial_linkstats_admission_on_subsequent_iterati
         state=SimpleNamespace(
             year=2030,
             iteration=1,
-            run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
         ),
         workspace=workspace,
         beam_launch_config=launch_config,

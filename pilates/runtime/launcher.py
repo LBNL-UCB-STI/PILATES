@@ -128,8 +128,6 @@ class PreparedRunContext:
     is_restart_run: bool
     archive_run_dir: str
     local_run_dir: str
-    archive_state_path: str
-    local_state_path: str
     local_consist_db_path: Optional[str]
     archive_consist_db_path: Optional[str]
     run_notifier: Optional[ConsistRunNotifier]
@@ -490,8 +488,6 @@ def _prepare_run_context(
         is_restart_run=is_restart_run,
         archive_run_dir=archive_run_dir,
         local_run_dir=local_run_dir,
-        archive_state_path=archive_state_path,
-        local_state_path=local_state_path,
         local_consist_db_path=local_consist_db_path,
         archive_consist_db_path=archive_consist_db_path,
         run_notifier=run_notifier,
@@ -547,7 +543,6 @@ def main(
     is_restart_run = prepared.is_restart_run
     archive_run_dir = prepared.archive_run_dir
     local_run_dir = prepared.local_run_dir
-    archive_state_path = prepared.archive_state_path
     local_consist_db_path = prepared.local_consist_db_path
     archive_consist_db_path = prepared.archive_consist_db_path
     run_succeeded = False

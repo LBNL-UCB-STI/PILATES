@@ -67,7 +67,6 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         state=SimpleNamespace(
             is_restart_run=False,
             sub_stage_progress=None,
-            run_info_path=None,
             archive_run_dir=None,
             set_sub_stage_progress=lambda _: None,
         ),
@@ -170,7 +169,6 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
         state=SimpleNamespace(
             is_restart_run=False,
             sub_stage_progress=None,
-            run_info_path=None,
             archive_run_dir=str(archive_root),
             set_sub_stage_progress=lambda _: None,
         ),
@@ -328,7 +326,6 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
         state=SimpleNamespace(
             is_restart_run=True,
             sub_stage_progress="postprocessor",
-            run_info_path=None,
             archive_run_dir=None,
             set_sub_stage_progress=lambda _: None,
         ),

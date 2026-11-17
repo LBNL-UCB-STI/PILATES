@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 import shlex
 from typing import Any, Dict, Optional
 
@@ -25,14 +24,11 @@ def format_restart_command(
     *,
     settings: Optional[Any],
     archive_run_dir: Optional[str] = None,
-    archive_state_path: Optional[str] = None,
 ) -> Optional[str]:
     config_path = None
     if settings is not None:
         config_path = settings.settings_file
     run_dir = archive_run_dir
-    if not run_dir and archive_state_path:
-        run_dir = str(Path(archive_state_path).parent)
     if not config_path and not run_dir:
         return None
 
@@ -48,14 +44,11 @@ def format_hpc_restart_command(
     *,
     settings: Optional[Any],
     archive_run_dir: Optional[str] = None,
-    archive_state_path: Optional[str] = None,
 ) -> Optional[str]:
     config_path = None
     if settings is not None:
         config_path = settings.settings_file
     run_dir = archive_run_dir
-    if not run_dir and archive_state_path:
-        run_dir = str(Path(archive_state_path).parent)
     if not config_path and not run_dir:
         return None
 
@@ -178,14 +171,10 @@ def log_restart_instructions_on_failure(
     state = context.get("state")
     archive_run_dir = context.get("archive_run_dir")
     local_run_dir = context.get("local_run_dir")
-    archive_state_path = context.get("archive_state_path")
-    if archive_state_path is None and state is not None:
-        archive_state_path = state.run_info_path
 
     command = format_restart_command(
         settings=settings,
         archive_run_dir=archive_run_dir,
-        archive_state_path=archive_state_path,
     )
     if command is None:
         return
@@ -196,11 +185,8 @@ def log_restart_instructions_on_failure(
         command_hpc = format_hpc_restart_command(
             settings=settings,
             archive_run_dir=archive_run_dir,
-            archive_state_path=archive_state_path,
         )
         logger.error("  HPC command: %s", command_hpc)
-    if archive_state_path:
-        logger.error("  state file: %s", archive_state_path)
     if archive_run_dir:
         logger.error("  archive run dir: %s", archive_run_dir)
     if local_run_dir:

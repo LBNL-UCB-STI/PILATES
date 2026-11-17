@@ -1694,6 +1694,10 @@ def _preflight_beam_launch_inputs(
     run_context: Any,
     expected_warmstart_path: Path | None = None,
 ) -> None:
+    report_dir_path = getattr(workspace, "archive_run_dir", workspace.full_path)
+    if report_dir_path is None:
+        report_dir_path = workspace.full_path
+
     validate_kwargs: dict[str, Any] = {
         "settings": settings,
         "workspace": workspace,
@@ -1728,7 +1732,7 @@ def _preflight_beam_launch_inputs(
             existing_admission_reports=existing_admission_reports,
             settings=settings,
             launch_reference=launch_reference,
-            report_dir=Path(state.run_info_path).parent,
+            report_dir=Path(report_dir_path),
         )
     validate_r5_execution_reference(
         settings=settings,

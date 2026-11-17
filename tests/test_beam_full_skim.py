@@ -1092,7 +1092,6 @@ class TestBeamFullSkimMode:
             tmp_path / "beam" / "input"
         )
         state = SimpleNamespace(
-            run_info_path=str(tmp_path / "run_info.json"),
             year=2019,
             iteration=0,
         )

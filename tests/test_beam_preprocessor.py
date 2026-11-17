@@ -363,7 +363,6 @@ class TestBeamPreprocessor:
             full_settings=mock_settings,
             current_year=2020,
             current_inner_iter=0,
-            run_info_path=None,  # Mock as needed
         )
         # Instantiate the preprocessor
         preprocessor = BeamPreprocessor(
@@ -396,7 +395,6 @@ def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_mis
         full_settings=mock_settings,
         current_year=2020,
         current_inner_iter=0,
-        run_info_path=None,
     )
     preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
     object.__setattr__(mock_settings.beam, "skim_zone_geoid_col", "geoid10")
@@ -417,7 +415,6 @@ def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_con
         full_settings=mock_settings,
         current_year=2020,
         current_inner_iter=0,
-        run_info_path=None,
     )
     preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
     object.__setattr__(mock_settings.beam, "skim_zone_geoid_col", "geoid10")
@@ -453,7 +450,6 @@ def test_prepare_beam_zone_shapefile_reprojects_wgs84_zones_to_local_crs(
         full_settings=mock_settings,
         current_year=2020,
         current_inner_iter=0,
-        run_info_path=None,
     )
     preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
     object.__setattr__(mock_settings.shared.geography, "local_crs", "EPSG:26910")
@@ -494,7 +490,6 @@ def test_preprocess_ignores_workspace_beam_output_cache(
         current_year=2020,
         current_inner_iter=0,
         forecast_year=2020,
-        run_info_path=None,
     )
     preprocessor = BeamPreprocessor(
         model_name="beam",
@@ -612,7 +607,6 @@ def test_copy_plans_from_asim_accepts_plans_asim_out_alias(
         current_year=2020,
         current_inner_iter=0,
         forecast_year=2020,
-        run_info_path=None,
     )
     preprocessor = BeamPreprocessor(
         model_name="beam",
@@ -678,7 +672,6 @@ def test_copy_plans_from_asim_requires_all_typed_input_records(
         current_year=2020,
         current_inner_iter=0,
         forecast_year=2020,
-        run_info_path=None,
     )
     preprocessor = BeamPreprocessor(model_name="beam", state=state)
     object.__setattr__(
