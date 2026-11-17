@@ -1,0 +1,18 @@
+# PILATES Configuration File (Inherited Format)
+# SFBay Consist UrbanSim + ATLAS + ActivitySim + BEAM HPC 2-Iteration Smoke Test
+# Single interval (2017 -> 2019), full ActivitySim population (for UrbanSim work_zone_id
+# integrity), 2 supply-demand iterations (to exercise non-final events gating,
+# iter 0 -> iter 1 warmstart handoff, and cross-node wiped-NVMe replay).
+
+base: settings-sfbay-consist-usim-hpc-2019-canary.yaml
+
+run:
+  max_year_intervals: 1
+  supply_demand_iters: 2
+  output_run_name: consist-sfbay-usim-smoke-2iter
+
+activitysim:
+  household_sample_size: 0
+
+beam:
+  sample: 0.1
