@@ -74,9 +74,9 @@ class RuntimeFlags:
 class RuntimeOptions:
     """Ephemeral runtime options attached outside the persisted config schema."""
 
-    state_file_loc: Optional[str] = None
     settings_file: Optional[str] = None
-    allow_rewind_resume: bool = False
+    run_dir: Optional[str] = None
+    timestamp: bool = False
 
     def copy(self) -> RuntimeOptions:
         """Return an independent copy of runtime options."""

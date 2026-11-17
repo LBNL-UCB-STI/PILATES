@@ -316,7 +316,7 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
     for name, definition in STEP_DEFINITIONS.items():
         contract = definition.input_contract
 
-        if name in {"beam_preprocess", "urbansim_postprocess"}:
+        if name in {"beam_preprocess", "urbansim_postprocess", "postprocessing"}:
             assert contract.status == "complete"
             assert contract.reason is None
         else:
@@ -748,13 +748,17 @@ def test_beam_postprocess_dynamic_output_map_is_resolved_once_for_contract_and_p
     }
 
 
-def test_native_postprocessing_definition_is_overwrite_only_and_outputless() -> None:
+def test_native_postprocessing_definition_uses_metadata_cache_and_tracked_outputs() -> (
+    None
+):
     options = postprocessing_definition.cache_options()
 
-    assert options.cache_mode == "overwrite"
-    assert (
-        postprocessing_definition.project_outputs(
-            {}, settings=object(), state=object(), workspace=object()
-        )
-        is None
-    )
+    assert options.cache_hydration == "metadata"
+    assert options.cache_mode != "overwrite"
+    assert postprocessing_definition.archive_outputs is True
+    assert postprocessing_definition.project_outputs(
+        {"inexus_output": "artifact"},
+        settings=object(),
+        state=object(),
+        workspace=object(),
+    ) == {"inexus_output": "artifact"}

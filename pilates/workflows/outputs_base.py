@@ -25,7 +25,7 @@ from typing import (
 if TYPE_CHECKING:
     from pilates.config import PilatesConfig
     from pilates.workspace import Workspace
-    from pilates.workflows.atlas_state import AtlasSubState
+    from pilates.workflows.stages.vehicle_ownership import AtlasSubState
     from pilates.workflows.state import WorkflowState
 
 StepOutputsT = TypeVar("StepOutputsT")

@@ -33,15 +33,11 @@ def test_tracked_steps_define_provenance_builder_keys():
         )
 
 
-def test_provenance_metadata_is_optional_for_postprocessing():
-    untracked_without_provenance = [
-        spec.step_name
-        for spec in catalog.WORKFLOW_STEP_SPECS
-        if not spec.tracked and spec.provenance is None
-    ]
-    assert "postprocessing" in untracked_without_provenance
-
-    assert catalog.provenance_builder_key_for_step_name("postprocessing") is None
+def test_provenance_metadata_is_configured_for_postprocessing():
+    assert (
+        catalog.provenance_builder_key_for_step_name("postprocessing")
+        == "postprocessing"
+    )
 
 
 def test_enabled_schema_step_models_honors_settings_flags():

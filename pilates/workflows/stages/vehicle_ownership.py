@@ -10,7 +10,6 @@ from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
-from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.coupler_namespace import (
     resolve_coupler_value,
     set_coupler_from_artifact,
@@ -32,6 +31,37 @@ from pilates.utils.state_access import iteration_index
 from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+class AtlasSubState:
+    """Workflow state for a single ATLAS sub-year within a forecast interval."""
+
+    def __init__(self, parent_state: Any, year: int) -> None:
+        interval_start_year = getattr(parent_state, "year", None)
+        if interval_start_year is None:
+            raise RuntimeError(
+                "WorkflowState.year must be set before constructing AtlasSubState."
+            )
+        self.__dict__ = parent_state.__dict__.copy()
+        self.year = year
+        self.current_year = year
+        self.forecast_year = year
+        self.main_forecast_year = getattr(parent_state, "forecast_year", None)
+        self.start_year = getattr(parent_state, "start_year", None)
+        self.atlas_interval_start_year = interval_start_year
+        self.full_settings = getattr(parent_state, "full_settings", None)
+        self.is_start_year = lambda: year == self.atlas_interval_start_year
+        self.atlas_usim_datastore_h5: Any | None = None
+        self.atlas_usim_datastore_base_h5: Any | None = None
+        self._parent_state = parent_state
+
+    @property
+    def iteration(self) -> int:
+        return int(getattr(self._parent_state, "iteration", 1))
+
+    def set_sub_stage_progress(self, sub_stage_progress: str) -> None:
+        """Update parent state's sub-stage progress tracking (no-op in Phase 1B)."""
+        pass
 
 
 def _validate_population_h5_for_activitysim_year(

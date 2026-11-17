@@ -12,7 +12,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.stages.vehicle_ownership import AtlasSubState
 from pilates.workflows.input_authority import (
     requires_prior_beam_linkstats_handoff,
     requires_prior_beam_skim_handoff,

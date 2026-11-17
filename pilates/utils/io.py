@@ -21,19 +21,19 @@ logger = logging.getLogger(__name__)
 def _apply_runtime_options(
     settings: Any,
     *,
-    state_file_loc: Optional[str],
     settings_file: str,
-    allow_rewind_resume: bool,
+    run_dir: Optional[str] = None,
+    timestamp: bool = False,
 ) -> None:
     if isinstance(settings, PilatesConfig):
-        settings.runtime.options.state_file_loc = state_file_loc
         settings.runtime.options.settings_file = settings_file
-        settings.runtime.options.allow_rewind_resume = allow_rewind_resume
+        settings.runtime.options.run_dir = run_dir
+        settings.runtime.options.timestamp = timestamp
         return
 
-    settings.state_file_loc = state_file_loc
     settings.settings_file = settings_file
-    settings.allow_rewind_resume = allow_rewind_resume
+    settings.run_dir = run_dir
+    settings.timestamp = timestamp
 
 
 def apply_runtime_flags(settings: Any, enabled_flags: Dict[str, bool]) -> None:
@@ -228,15 +228,14 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
         "-c", "--config", default="settings.yaml", help="config file name"
     )
     parser.add_argument(
-        "-S",
-        "--stage",
+        "--run-dir",
         default=None,
-        help="current state file to pick up from",
+        help="Explicit run/archive directory path to use or resume",
     )
     parser.add_argument(
-        "--allow-rewind-resume",
+        "--timestamp",
         action="store_true",
-        help="allow resuming from an earlier year than the archive run state",
+        help="Append timestamp suffix to the run directory",
     )
     parser.add_argument(
         "--resume",
@@ -250,12 +249,6 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
     if args.config:
         settings_file = args.config
 
-    stage_file_loc = args.stage
-    if args.stage is not None and not os.path.exists(stage_file_loc):
-        raise FileNotFoundError(
-            f"Explicit stage file provided via -S/--stage does not exist: {stage_file_loc}"
-        )
-
     # Load settings from the specified config file into a Pydantic model for validation and structured access.
     settings = load_config(settings_file)
     if args.resume is not None:
@@ -264,9 +257,9 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
     # Attach runtime-specific file paths to the settings object for easy access later.
     _apply_runtime_options(
         settings,
-        state_file_loc=stage_file_loc,
         settings_file=settings_file,
-        allow_rewind_resume=args.allow_rewind_resume is True,
+        run_dir=args.run_dir,
+        timestamp=args.timestamp is True,
     )
 
     # Compute and attach model enabled flags to the settings object.

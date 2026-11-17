@@ -97,6 +97,7 @@ class WorkflowState:
         self._year_schedule: Tuple[int, ...] = ()
         self._year_schedule_positions: Dict[int, int] = {}
         self._schedule_index: Optional[int] = None
+        self._iter_started: Optional[bool] = None
 
         # Determine what stages are enabled
         self.enabled_stages = set()
@@ -239,7 +240,6 @@ class WorkflowState:
         start_year = settings.run.start_year
         end_year = settings.run.end_year
         travel_model_freq = settings.run.travel_model_freq
-        runtime_options = settings.runtime.options
 
         ensure_runtime_flags_initialized(settings)
         runtime_flags = settings.runtime.flags
@@ -248,37 +248,14 @@ class WorkflowState:
         vehicle_ownership_model_enabled = runtime_flags.vehicle_ownership_model_enabled
         activity_demand_enabled = runtime_flags.activity_demand_enabled
         traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
-        file_loc = runtime_options.state_file_loc
 
-        if file_loc:
-            [
-                year,
-                stage,
-                iteration,
-                asim_compiled,
-                sub_stage_progress,
-                run_info_path,
-            ] = cls.read_current_stage(file_loc)
-        else:
-            year = None
-            stage = None
-            iteration = 0
-            asim_compiled = False
-            sub_stage_progress = None
-            run_info_path = None
-
-        resume_major_stage = stage
+        year = start_year
+        resume_major_stage = None
+        iteration = 0
         resume_sub_stage = None
-        loop_stage_aliases = {
-            cls.Stage.activity_demand,
-            cls.Stage.activity_demand_directly_from_land_use,
-            cls.Stage.traffic_assignment,
-        }
-        if stage in loop_stage_aliases:
-            resume_major_stage = cls.Stage.supply_demand_loop
-            resume_sub_stage = stage
-
-        year = year or start_year
+        file_loc = None
+        sub_stage_progress = None
+        run_info_path = None
 
         out = cls(
             start_year,
@@ -293,7 +270,7 @@ class WorkflowState:
             iteration,
             resume_sub_stage,
             file_loc,
-            asim_compiled,
+            False,
             settings,
             sub_stage_progress=sub_stage_progress,
             run_info_path=run_info_path,
@@ -528,23 +505,8 @@ class WorkflowState:
         return total_iters
 
     def write_state(self):
-        """Save the current state to file"""
-        targets = []
-        if self.file_loc:
-            targets.append(self.file_loc)
-        mirror = self.mirror_file_loc
-        if mirror and mirror not in targets:
-            targets.append(mirror)
-        for target in targets:
-            WorkflowState.write_stage(
-                self.current_year,
-                self.current_sub_stage or self.current_major_stage,
-                target,
-                self.current_inner_iter,
-                False,
-                self.sub_stage_progress,
-                self.run_info_path,
-            )
+        """No-op: state file persistence is deleted in Phase 1B."""
+        pass
 
     def is_enabled(self, stage: Stage) -> bool:
         """Checks if a stage is enabled in settings."""
@@ -556,65 +518,9 @@ class WorkflowState:
         target_inner_iter: int = 0,
         target_sub_stage: Optional[Stage] = None,
     ) -> bool:
-        """
-        Simplified logic: check if we should run the target stage/iteration/substage
-        """
-        # Check if the target stage is enabled
+        """Check if the target stage is enabled in settings."""
         check_stage = target_sub_stage if target_sub_stage is not None else target_major
-        if not self.is_enabled(check_stage):
-            return False
-
-        # If we haven't started yet, allow any enabled stage
-        if self.current_major_stage is None:
-            return True
-
-        # For major stages (not substages)
-        if target_sub_stage is None:
-            # Only run the current major stage.
-            try:
-                current_idx = self.major_stage_order.index(self.current_major_stage)
-                target_idx = self.major_stage_order.index(target_major)
-                return current_idx == target_idx
-            except ValueError:
-                logger.error(
-                    "State inconsistency: current major stage %s or target stage %s "
-                    "not found in major_stage_order; refusing run.",
-                    self.current_major_stage.name if self.current_major_stage else None,
-                    target_major.name if target_major else None,
-                )
-                return False
-
-        # For substages within the supply-demand loop
-        if target_sub_stage is not None:
-            # Must be in the supply-demand loop to run substages
-            if self.current_major_stage != self.Stage.supply_demand_loop:
-                return False
-
-            # Check iteration first
-            total_iters = self.effective_supply_demand_iterations()
-            if self.current_inner_iter >= total_iters:
-                return False
-
-            if self.current_inner_iter != target_inner_iter:
-                return False
-
-            # Check substage position
-            if self.current_sub_stage is None:
-                # At start of iteration, can run any substage
-                return True
-            else:
-                try:
-                    current_sub_idx = self.loop_substages.index(self.current_sub_stage)
-                    target_sub_idx = self.loop_substages.index(target_sub_stage)
-                    result = current_sub_idx <= target_sub_idx
-                    return result
-                except ValueError:
-                    logger.error(
-                        f"Target substage {target_sub_stage.name} not found in sequence"
-                    )
-                    return False
-
-        return False
+        return self.is_enabled(check_stage)
 
     def is_start_year(self):
         return self.year == self.start_year
@@ -624,48 +530,17 @@ class WorkflowState:
         return self
 
     def __next__(self):
-        """Returns the current year if the workflow is not finished, otherwise raises StopIteration."""
-        # Check if the workflow is finished (current_year > end_year and no active stage)
-        if (
-            self.current_year is not None
-            and self.current_year > self.end_year
-            and self.current_major_stage is None
-        ):
-            # Clean up state file if finished
-            cleanup_paths = []
-            if self.file_loc:
-                cleanup_paths.append(self.file_loc)
-            mirror = self.mirror_file_loc
-            if mirror and mirror not in cleanup_paths:
-                cleanup_paths.append(mirror)
-            for path in cleanup_paths:
-                if os.path.exists(path):
-                    logger.info(f"Workflow finished. Removing state file: {path}")
-                    os.remove(path)
+        """Returns the current year if the workflow is not finished, otherwise advances to next year or raises StopIteration."""
+        if self._iter_started is None:
+            self._iter_started = True
+            if self.current_year is not None and self.current_year <= self.end_year:
+                return self.current_year
             raise StopIteration
 
-        # If current_year is None, it means read_current_stage returned None for year,
-        # which should only happen for a brand new run, where current_major_stage
-        # would be initialized in from_settings. If current_major_stage is also None here,
-        # it implies an issue or an empty workflow.
-        if self.current_year is None and self.current_major_stage is None:
-            logger.warning(
-                "Workflow state indicates no current year and no active stage. Stopping."
-            )
-            raise StopIteration
-
-        # If we are past the end year but still have an active stage, something is wrong
-        if (
-            self.current_year is not None
-            and self.current_year > self.end_year
-            and self.current_major_stage is not None
-        ):
-            logger.error(
-                f"Workflow is past end year ({self.end_year}) but still in stage {self.current_major_stage.name}. Stopping."
-            )
-            raise StopIteration
-
-        return self.current_year
+        self._advance_to_next_year()
+        if self.current_year is not None and self.current_year <= self.end_year:
+            return self.current_year
+        raise StopIteration
 
     def complete_step(
         self,
@@ -673,78 +548,8 @@ class WorkflowState:
         completed_inner_iter: int = 0,
         completed_sub: Optional[Stage] = None,
     ):
-        """
-        Simplified state transition logic
-        """
-        logger.info(
-            "Completed step: (Major: %s, Iter: %s, Sub: %s) for year %d",
-            completed_major.name if completed_major else None,
-            completed_inner_iter,
-            completed_sub.name if completed_sub else None,
-            self.current_year,
-        )
-
-        # Handle substage completion within supply-demand loop
-        if completed_sub is not None:
-            if self.current_major_stage != self.Stage.supply_demand_loop:
-                logger.error(
-                    f"Completed substage {completed_sub.name} but not in supply-demand loop. State inconsistency."
-                )
-                # Attempt to recover by advancing major stage
-                self._advance_to_next_major_stage()
-                self.write_state()
-                return
-
-            try:
-                current_sub_idx = self.loop_substages.index(completed_sub)
-                if current_sub_idx < len(self.loop_substages) - 1:
-                    # Move to next substage in same iteration
-                    self.current_sub_stage = self.loop_substages[current_sub_idx + 1]
-                    logger.debug(
-                        f"Moving to next substage: {self.current_sub_stage.name}"
-                    )
-                else:
-                    # Last substage of iteration completed
-                    total_iters = self.effective_supply_demand_iterations(
-                        resumed_iteration=completed_inner_iter
-                    )
-                    if completed_inner_iter < total_iters - 1:
-                        # Start next iteration
-                        self.current_inner_iter = completed_inner_iter + 1
-                        self.current_sub_stage = (
-                            self.loop_substages[0] if self.loop_substages else None
-                        )
-                        logger.debug(
-                            f"Starting next iteration: {self.current_inner_iter}"
-                        )
-                    else:
-                        # Loop completed, move to next major stage
-                        self._advance_to_next_major_stage()
-            except ValueError:
-                logger.error(
-                    f"Completed substage {completed_sub.name} not found in sequence. State inconsistency."
-                )
-                # Attempt to recover by advancing major stage
-                self._advance_to_next_major_stage()
-
-        # Handle major stage completion
-        elif completed_major is not None:
-            if self.current_major_stage != completed_major:
-                current_major_name = (
-                    self.current_major_stage.name
-                    if self.current_major_stage is not None
-                    else "None"
-                )
-                logger.error(
-                    f"Completed major stage {completed_major.name} but current major stage is {current_major_name}. State inconsistency."
-                )
-                # Attempt to recover by advancing major stage from current state
-                self._advance_to_next_major_stage()
-            else:
-                # Regular major stage completed
-                self._advance_to_next_major_stage()
-
-        self.write_state()
+        """No-op: step completion mutation is deleted in Phase 1B."""
+        pass
 
     def _advance_to_next_major_stage(self):
         """Move to the next enabled major stage or next year"""

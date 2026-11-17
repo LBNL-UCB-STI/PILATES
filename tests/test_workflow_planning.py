@@ -76,7 +76,7 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     assert removed_alias not in html_payload
 
 
-def test_postprocessing_is_untracked_and_only_reports_its_input_contract_gap():
+def test_postprocessing_is_tracked_step_without_contract_gaps():
     plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     postprocessing_step = next(
@@ -86,7 +86,7 @@ def test_postprocessing_is_untracked_and_only_reports_its_input_contract_gap():
         gap for gap in plan.contract_gaps if gap.step_run_id == postprocessing_step.id
     ]
 
-    assert [gap.kind for gap in postprocessing_gaps] == ["underdeclared_inputs"]
+    assert postprocessing_gaps == []
 
 
 def test_tracked_step_with_no_outputs_still_reports_underdeclared_output_gap():
@@ -526,9 +526,6 @@ def test_static_execution_plan_projects_schedule_and_iterations_from_workflow_st
     settings.activity_demand_enabled = False
     settings.land_use_enabled = True
     settings.traffic_assignment_enabled = True
-    state_file = tmp_path / "persisted_state.yaml"
-    state_file.write_text("year: 2019\nstage: traffic_assignment\n", encoding="utf-8")
-    settings.runtime.options.state_file_loc = str(state_file)
 
     surface = build_enabled_workflow_surface(settings)
     with caplog.at_level("INFO"):

@@ -107,7 +107,7 @@ def _source_archive_run_dir(
     if direct.exists():
         return direct.resolve()
 
-    pattern = f"pilates-run--{run_cfg.region}--{run_cfg.output_run_name}--*"
+    pattern = f"pilates-run--{run_cfg.region}--{run_cfg.output_run_name}*"
     matches = sorted(
         (path for path in archive_root.glob(pattern) if path.is_dir()),
         key=lambda path: path.stat().st_mtime,

@@ -25,7 +25,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.stages.vehicle_ownership import AtlasSubState
 from pilates.workflows.steps.beam import _compile_beam_launch_config
 from pilates.workflows.stages.vehicle_ownership import _publish_current_h5_alias
 from pilates.workflows.step_execution import execute_step
@@ -1172,8 +1172,6 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
             "atlas",
         ]
         archive_run_dir_a = _latest_run_dir(env_a.paths.archive_root)
-        archived_state_a = archive_run_dir_a / "run_state.yaml"
-        assert archived_state_a.is_file()
 
         # Restore real supply_demand stage, wipe node-local scratch, and restart
         monkeypatch.setattr(
@@ -1183,7 +1181,7 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         env_a.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         restart_settings_a = env_a.settings.model_copy(deep=True)
-        restart_settings_a.runtime.options.state_file_loc = str(archived_state_a)
+        restart_settings_a.runtime.options.run_dir = str(archive_run_dir_a)
         launcher.main(settings=restart_settings_a)
 
         # Only ActivitySim (warmup + main) and BEAM should have executed after restart!
@@ -1229,10 +1227,8 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         pre_restart_count = len(backend_b.invocations)
         assert pre_restart_count == 3
         archive_run_dir_b = _latest_run_dir(env_b.paths.archive_root)
-        archived_state_b = archive_run_dir_b / "run_state.yaml"
-        assert archived_state_b.is_file()
 
-        # Restore real supply_demand stage, wipe scratch, and restart with allow_rewind_resume=True
+        # Restore real supply_demand stage, wipe scratch, and restart with run_dir
         monkeypatch.setattr(
             launcher, "run_supply_demand_stage", real_run_supply_demand_stage
         )
@@ -1240,8 +1236,7 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         env_b.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         restart_settings_b = env_b.settings.model_copy(deep=True)
-        restart_settings_b.runtime.options.state_file_loc = str(archived_state_b)
-        restart_settings_b.runtime.options.allow_rewind_resume = True
+        restart_settings_b.runtime.options.run_dir = str(archive_run_dir_b)
         launcher.main(settings=restart_settings_b)
 
         # UrbanSim and ATLAS replay from Consist cache (0 container re-runs);
@@ -1627,8 +1622,6 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
         pre_restart_count = len(backend.invocations)
 
         archive_run_dir = _latest_run_dir(env.paths.archive_root)
-        archived_state = archive_run_dir / "run_state.yaml"
-        assert archived_state.is_file()
 
         # Restore real supply_demand stage, wipe node-local scratch, and restart
         monkeypatch.setattr(
@@ -1638,8 +1631,7 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
         env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         restart_settings = env.settings.model_copy(deep=True)
-        restart_settings.runtime.options.state_file_loc = str(archived_state)
-        restart_settings.runtime.options.allow_rewind_resume = True
+        restart_settings.runtime.options.run_dir = str(archive_run_dir)
         launcher.main(settings=restart_settings)
 
         # Year 2017 UrbanSim and ATLAS replay from Consist cache (0 container re-runs);

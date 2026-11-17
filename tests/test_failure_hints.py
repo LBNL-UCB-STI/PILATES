@@ -8,12 +8,12 @@ def test_format_restart_command_uses_config_and_archive_state():
 
     command = failure_hints.format_restart_command(
         settings=settings,
-        archive_state_path="/tmp/pilates run/run_state.yaml",
+        archive_run_dir="/tmp/pilates run",
     )
 
     assert (
         command
-        == "python run.py -c scenarios/settings-seattle.yaml -S '/tmp/pilates run/run_state.yaml'"
+        == "python run.py -c scenarios/settings-seattle.yaml --run-dir '/tmp/pilates run'"
     )
 
 
@@ -22,12 +22,12 @@ def test_format_hpc_restart_command_requires_account_placeholder():
 
     command = failure_hints.format_hpc_restart_command(
         settings=settings,
-        archive_state_path="/tmp/pilates run/run_state.yaml",
+        archive_run_dir="/tmp/pilates run",
     )
 
     assert (
         command
-        == "./hpc/job_runner.sh -c scenarios/settings-seattle.yaml -a '<slurm_account>' -s '/tmp/pilates run/run_state.yaml'"
+        == "./hpc/job_runner.sh -c scenarios/settings-seattle.yaml -a '<slurm_account>' --run-dir '/tmp/pilates run'"
     )
 
 
@@ -131,9 +131,9 @@ def test_log_restart_instructions_uses_context_state_path(caplog):
     )
 
     assert "Run failed. Restart command:" in caplog.text
-    assert "python run.py -c settings.yaml -S /tmp/run/run_state.yaml" in caplog.text
+    assert "python run.py -c settings.yaml --run-dir /tmp/run" in caplog.text
     assert (
-        "./hpc/job_runner.sh -c settings.yaml -a '<slurm_account>' -s /tmp/run/run_state.yaml"
+        "./hpc/job_runner.sh -c settings.yaml -a '<slurm_account>' --run-dir /tmp/run"
         in caplog.text
     )
     assert "archive run dir: /tmp/run" in caplog.text

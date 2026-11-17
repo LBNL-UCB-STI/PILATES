@@ -32,7 +32,6 @@ from pilates.config import PilatesConfig
 from pilates.workspace import Workspace, Workspace as _RealWorkspace
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
-from pilates.utils.settings_helper import get as get_setting
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
 from pilates.workflows.consist_metadata import (
@@ -65,7 +64,6 @@ from pilates.runtime.failure_hints import (
     log_restart_instructions_on_failure,
     set_run_failure_context,
 )
-from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
 from pilates.runtime.run_notifications import (
     ConsistRunNotifier,
@@ -264,25 +262,6 @@ def _build_scenario_runtime_contract(
     )
 
 
-def _enforce_resume_rewind_guardrail(
-    *,
-    state: WorkflowState,
-    archive_state_path: str,
-    allow_rewind_resume: bool,
-) -> None:
-    restart_runtime.enforce_resume_rewind_guardrail(
-        state=state,
-        archive_state_path=archive_state_path,
-        allow_rewind_resume=allow_rewind_resume,
-        read_archive_run_state_year_fn=lambda state_path: (
-            restart_runtime.read_archive_run_state_year(
-                state_path,
-                read_current_stage_fn=WorkflowState.read_current_stage,
-            )
-        ),
-    )
-
-
 def _is_at_initial_workflow_boundary(state: Any) -> bool:
     """Return True when state is positioned at the first enabled major stage of start_year."""
     if not isinstance(state, WorkflowState):
@@ -294,66 +273,6 @@ def _is_at_initial_workflow_boundary(state: Any) -> bool:
         None,
     )
     return first_enabled is not None and state.current_major_stage == first_enabled
-
-
-def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) -> bool:
-    """Re-enter the provider chain when restart lacks a BEAM checkpoint.
-
-    When restart begins mid-ActivitySim before a committed BEAM checkpoint,
-    rewind to the earliest enabled upstream major stage so that ordinary
-    native steps and Consist cache hits republish required inputs.
-    """
-
-    if not get_setting(state, "is_restart_run", False):
-        return False
-
-    stage_enum = get_setting(state, "Stage")
-    if stage_enum is None:
-        return False
-
-    activity_demand = get_setting(stage_enum, "activity_demand")
-    supply_demand_loop = get_setting(stage_enum, "supply_demand_loop")
-    current_major_stage = get_setting(state, "current_major_stage")
-
-    if current_major_stage != supply_demand_loop:
-        return False
-
-    try:
-        is_enabled = state.is_enabled
-    except AttributeError:
-        return False
-    if not callable(is_enabled) or not is_enabled(activity_demand):
-        return False
-
-    provider_boundary = supply_demand_loop
-    major_stage_order = get_setting(state, "major_stage_order", ()) or ()
-    for candidate in major_stage_order:
-        if candidate == supply_demand_loop:
-            break
-        if is_enabled(candidate):
-            provider_boundary = candidate
-            break
-
-    resumed_iteration = get_setting(state, "iteration", 0)
-    state.current_major_stage = provider_boundary
-    state.current_inner_iter = 0
-    state.current_sub_stage = None
-    state.sub_stage_progress = None
-    try:
-        write_state = state.write_state
-    except AttributeError:
-        write_state = None
-    if callable(write_state):
-        write_state()
-    provider_name = get_setting(provider_boundary, "name", str(provider_boundary))
-    logger.warning(
-        "[launcher][restart] no committed BEAM checkpoint exists; rewinding "
-        "from supply-demand iteration=%s to provider boundary=%s so native "
-        "steps republish ActivitySim inputs.",
-        resumed_iteration,
-        provider_name,
-    )
-    return True
 
 
 def _prepare_run_context(
@@ -380,16 +299,41 @@ def _prepare_run_context(
 
     output_path, local_root = _resolve_run_storage_roots(settings)
 
-    is_restart_run = bool(state.run_info_path)
-    if is_restart_run:
+    runtime_obj = getattr(settings, "runtime", None)
+    runtime_options = getattr(runtime_obj, "options", None)
+    explicit_run_dir = getattr(
+        runtime_options, "run_dir", getattr(settings, "run_dir", None)
+    )
+    timestamp_opt = getattr(
+        runtime_options, "timestamp", getattr(settings, "timestamp", False)
+    )
+
+    is_restart_run = False
+    if explicit_run_dir:
+        run_dir_path = Path(explicit_run_dir)
+        run_name = run_dir_path.name
+        is_restart_run = run_dir_path.exists()
+        if is_restart_run:
+            logger.info(f"Resuming run from explicit run folder: {run_name}")
+        else:
+            logger.info(f"Starting run with explicit run folder: {run_name}")
+    elif is_restart_run:
         run_name = os.path.basename(os.path.dirname(state.run_info_path))
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
         custom_label = settings.run.output_run_name
         region = settings.run.region
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        run_name = f"pilates-run--{region}--{custom_label}--{timestamp}"
-        logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
+        if timestamp_opt:
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            run_name = f"pilates-run--{region}--{custom_label}--{timestamp}"
+        else:
+            run_name = f"pilates-run--{region}--{custom_label}"
+        candidate_archive = os.path.join(output_path, run_name)
+        if os.path.exists(candidate_archive):
+            is_restart_run = True
+            logger.info(f"Resuming existing run. Reusing output folder: {run_name}")
+        else:
+            logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     scenario_id = scenario_runtime.resolve_scenario_id(settings)
     run_seed = scenario_runtime.resolve_seed(settings)
     logger.info(
@@ -523,20 +467,6 @@ def _prepare_run_context(
         if isinstance(workspace, _RealWorkspace):
             workspace.on_archive_commit = on_archive_commit
             workspace.expected_prefix_steps = expected_prefix_steps
-    archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
-    local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
-    set_run_failure_context(archive_state_path=archive_state_path)
-    if is_restart_run:
-        _enforce_resume_rewind_guardrail(
-            state=state,
-            archive_state_path=archive_state_path,
-            allow_rewind_resume=settings.allow_rewind_resume,
-        )
-        _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
-    state.file_loc = archive_state_path
-    state.mirror_file_loc = local_state_path
-    if state.run_info_path != archive_state_path:
-        state.set_run_info_path(archive_state_path)
     runtime_context = WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
@@ -705,11 +635,6 @@ def main(
                 warn_undefined=True,
                 description=coupler_schema,
             )
-            # Primary rewind runs in _prepare_run_context; this second call is an
-            # idempotent guard when _prepare_run_context is stubbed in unit tests.
-            _rewind_uncommitted_activitysim_restart_to_provider_boundary(
-                state=state,
-            )
             # ponytail: bootstrap_initialization is retired; admit initial inputs
             # directly on fresh start or restart at the initial workflow boundary.
             if not is_restart_run or _is_at_initial_workflow_boundary(state):
@@ -737,14 +662,6 @@ def main(
                             cr.current_run()
                         ),
                     )
-            if is_restart_run and not _is_at_initial_workflow_boundary(state):
-                restart_runtime.restore_restart_coupler_snapshot(
-                    scenario=scenario,
-                    tracker=tracker,
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                )
             seed_bootstrap_artifacts_to_coupler(
                 settings=settings,
                 state=state,
@@ -752,19 +669,7 @@ def main(
                 coupler=coupler,
                 scenario=scenario,
             )
-            if not is_restart_run:
-                scenario.capture_coupler_snapshot(phase="init")
-            else:
-                restart_runtime.hydrate_restart_atlas_continuation_inputs(
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                    workflow_stage=WorkflowState.Stage,
-                )
-                logger.info(
-                    "Restart replay mode active: skipping bespoke restart "
-                    "hydration and relying on scenario replay plus Consist cache hits."
-                )
+            scenario.capture_coupler_snapshot(phase="init")
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:

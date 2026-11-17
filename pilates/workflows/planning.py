@@ -969,13 +969,12 @@ class _PlanBuilder:
             or contract["dynamic_output_families"]
         )
 
-        if not has_declared_inputs and (
-            step_run.depends_on or step_run.step_name == "postprocessing"
-        ):
-            message = "No declared input contract is available for this step."
-            if step_run.step_name == "postprocessing":
-                message = "Postprocessing currently reads workspace outputs directly; inbound artifact contract is not declared."
-            self._append_gap(step_run, "underdeclared_inputs", message)
+        if not has_declared_inputs and step_run.depends_on:
+            self._append_gap(
+                step_run,
+                "underdeclared_inputs",
+                "No declared input contract is available for this step.",
+            )
 
         if not has_declared_outputs and spec is not None and spec.tracked:
             self._append_gap(

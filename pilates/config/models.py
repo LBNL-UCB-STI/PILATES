@@ -721,12 +721,20 @@ class PilatesConfig(BaseModel):
         self._runtime.flags.replanning_enabled = value
 
     @property
-    def state_file_loc(self) -> Optional[str]:
-        return self._runtime.options.state_file_loc
+    def run_dir(self) -> Optional[str]:
+        return self._runtime.options.run_dir
 
-    @state_file_loc.setter
-    def state_file_loc(self, value: Optional[str]) -> None:
-        self._runtime.options.state_file_loc = value
+    @run_dir.setter
+    def run_dir(self, value: Optional[str]) -> None:
+        self._runtime.options.run_dir = value
+
+    @property
+    def timestamp(self) -> bool:
+        return self._runtime.options.timestamp
+
+    @timestamp.setter
+    def timestamp(self, value: bool) -> None:
+        self._runtime.options.timestamp = bool(value)
 
     @property
     def settings_file(self) -> Optional[str]:
@@ -735,14 +743,6 @@ class PilatesConfig(BaseModel):
     @settings_file.setter
     def settings_file(self, value: Optional[str]) -> None:
         self._runtime.options.settings_file = value
-
-    @property
-    def allow_rewind_resume(self) -> bool:
-        return self._runtime.options.allow_rewind_resume
-
-    @allow_rewind_resume.setter
-    def allow_rewind_resume(self, value: bool) -> None:
-        self._runtime.options.allow_rewind_resume = bool(value)
 
     def get_enabled_models(self) -> List[str]:
         """Get list of enabled model names."""

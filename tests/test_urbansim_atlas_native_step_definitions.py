@@ -21,7 +21,7 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.stages.vehicle_ownership import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, atlas, urbansim
 from pilates.workflows import consist_metadata as step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
