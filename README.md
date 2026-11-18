@@ -31,6 +31,13 @@ conda activate pilates
 python run.py -c <settings.yaml>
 ```
 
+For Apple Silicon macOS development, create the separate modern dependency environment used by VS Code:
+
+```bash
+conda env create -f environment-macos.yml
+conda activate pilates-macos
+```
+
 Use the site for the real paths through the project:
 
 - First local run: [docs/start-here/getting_started.md](docs/start-here/getting_started.md)
