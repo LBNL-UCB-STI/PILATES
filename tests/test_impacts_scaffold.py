@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-import csv
 
-from pilates.impacts.postprocessor import ImpactsPostprocessor
-from pilates.impacts.preprocessor import ImpactsPreprocessor
-from pilates.impacts.runner import ImpactsRunner
+import yaml
+
+from pilates.config.models import ImpactsConfig
+from pilates.impacts import ImpactsPostsimRunner, ImpactsPresimRunner
+from pilates.impacts.settings_bridge import (
+    BEAM_INPUT_CONTAINER_DIR,
+    WORKSPACE_CONTAINER_DIR,
+    _deep_merge,
+    _to_container_path,
+    build_pilates_bridge_settings,
+    resolve_population_override,
+)
+from pilates.workflows.stages.impacts_presim import run_impacts_presim_stage
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -24,16 +33,18 @@ def _wrap(value):
     return value
 
 
-def _make_settings(tmp_path: Path) -> AttrDict:
-    del tmp_path
-    return _wrap(
+def _make_settings(**impacts_kwargs) -> AttrDict:
+    settings = _wrap(
         {
             "infrastructure": {
                 "container_manager": "docker",
                 "docker_images": {"impacts": "impacts:latest"},
             },
             "run": {
-                "use_stubs": True,
+                "region": "seattle",
+                "scenario": "baseline",
+                "start_year": 2020,
+                "output_run_name": "testrun",
                 "models": {
                     "land_use": None,
                     "travel": None,
@@ -42,96 +53,291 @@ def _make_settings(tmp_path: Path) -> AttrDict:
                     "impacts": "impacts",
                 },
             },
-            "impacts": {
-                "local_input_folder": "impacts/input",
-                "local_output_folder": "impacts/output",
-                "container_input_folder": "/app/input",
-                "container_output_folder": "/app/output",
-                "command_template": (
-                    "python -m impacts "
-                    "--input-manifest {container_input_manifest} "
-                    "--output {container_exposure_output}"
-                ),
-                "exposure_output_filename": "exposure_table.csv",
-                "raw_exposure_output_filename": "exposure_raw.csv",
-                "input_manifest_filename": "inputs_manifest.yaml",
-                "run_manifest_filename": "run_manifest.yaml",
-                "postprocess_manifest_filename": "postprocess_manifest.yaml",
+            "shared": {
+                "geography": {
+                    "FIPS": {"state": "53", "county": "033"},
+                    "local_crs": "EPSG:32148",
+                },
             },
             "beam": {
                 "local_mutable_data_folder": "beam/input",
                 "local_output_folder": "beam/output",
-                "config": "beam.conf",
+                "router_directory": "beam/router",
             },
-            "activitysim": {
-                "local_mutable_data_folder": "activitysim/data",
-                "local_output_folder": "activitysim/output",
-            },
-            "urbansim": {"local_mutable_data_folder": "urbansim/data"},
-            "atlas": {
-                "host_mutable_input_folder": "atlas/input",
-                "host_output_folder": "atlas/output",
-            },
+            "impacts_enabled": True,
         }
     )
+    impacts_kwargs.setdefault("local_input_folder", "impacts/input")
+    impacts_kwargs.setdefault("local_output_folder", "impacts/output")
+    impacts_kwargs.setdefault("seed", 42)
+    settings["impacts"] = ImpactsConfig(**impacts_kwargs)
+    return settings
 
 
-def _make_state(settings: AttrDict):
+def _make_state(settings: AttrDict, forecast_year: int = 2020) -> AttrDict:
     return AttrDict(
         {
             "full_settings": settings,
+            "forecast_year": forecast_year,
+            "iteration": 0,
             "set_sub_stage_progress": lambda *_args, **_kwargs: None,
         }
     )
 
 
-def test_impacts_scaffold_stages_inputs_and_stub_output(tmp_path: Path) -> None:
-    settings = _make_settings(tmp_path)
-    workspace = Workspace(settings, str(tmp_path), "run")
+def _make_workspace(tmp_path: Path, settings: AttrDict) -> Workspace:
+    return Workspace(settings, str(tmp_path), "run")
 
-    beam_output = Path(workspace.get_beam_output_dir())
-    beam_output.mkdir(parents=True, exist_ok=True)
-    (beam_output / "network.csv.gz").write_text("network", encoding="utf-8")
-    (beam_output / "skims_emissions.csv").write_text("emissions", encoding="utf-8")
 
-    beam_input = Path(workspace.get_beam_mutable_data_dir())
-    beam_input.mkdir(parents=True, exist_ok=True)
-    (beam_input / "region.osm.pbf").write_text("pbf", encoding="utf-8")
+def test_deep_merge_recurses_nested_dicts() -> None:
+    base = {"a": 1, "b": {"c": 2, "d": 3}}
+    override = {"b": {"d": 30, "e": 40}, "f": 50}
+    merged = _deep_merge(base, override)
+    assert merged == {"a": 1, "b": {"c": 2, "d": 30, "e": 40}, "f": 50}
+    # base is left untouched
+    assert base == {"a": 1, "b": {"c": 2, "d": 3}}
 
-    asim_output = Path(workspace.get_asim_output_dir())
-    asim_output.mkdir(parents=True, exist_ok=True)
-    (asim_output / "households.parquet").write_text("hh", encoding="utf-8")
-    (asim_output / "persons.parquet").write_text("pp", encoding="utf-8")
 
-    asim_data = Path(workspace.get_asim_mutable_data_dir())
-    asim_data.mkdir(parents=True, exist_ok=True)
-    (asim_data / "land_use.csv").write_text("TAZ\n1\n", encoding="utf-8")
+def test_to_container_path_translates_relative_to_workspace_root(tmp_path: Path) -> None:
+    host_path = str(tmp_path / "impacts" / "output")
+    result = _to_container_path(WORKSPACE_CONTAINER_DIR, host_path, str(tmp_path))
+    assert result == "/app/workspace/impacts/output"
 
-    state = _make_state(settings)
 
-    preprocess = ImpactsPreprocessor("impacts", state)
-    preprocess_outputs = preprocess.preprocess(workspace)
-    assert preprocess_outputs.input_manifest.exists()
-    assert preprocess_outputs.staged_inputs["beam_network"].endswith("network.csv.gz")
-    assert preprocess_outputs.staged_inputs["beam_emissions_skims"].endswith(
-        "skims_emissions.csv"
+def test_build_pilates_bridge_settings_presim(tmp_path: Path) -> None:
+    settings = _make_settings(overrides={"scenario": "custom-scenario"})
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    bridge = build_pilates_bridge_settings(settings, state, workspace, stage="presim")
+
+    assert bridge["run"] == {
+        "region": "seattle",
+        "scenario": "baseline",
+        "start_year": 2025,
+        "output_run_name": "testrun_y2025",
+    }
+    assert bridge["shared"]["geography"] == {
+        "FIPS": {"state": "53", "county": "033"},
+        "local_crs": "EPSG:32148",
+    }
+    assert bridge["beam"]["local_input_folder"] == BEAM_INPUT_CONTAINER_DIR
+    assert bridge["beam"]["local_output_folder"] == "/app/workspace/beam/output"
+    assert bridge["beam"]["router_directory"] == "beam/router"
+
+    impacts_section = bridge["impacts"]
+    assert impacts_section["local_input_folder"] == "/app/workspace/impacts/input"
+    assert impacts_section["local_output_folder"] == "/app/workspace/impacts/output"
+    assert impacts_section["seed"] == 42
+    assert impacts_section["pipeline"]["presim"] == {"activities": True, "fleet": True}
+    assert impacts_section["pipeline"]["postsim"] == {
+        "emissions": True,
+        "inmap": True,
+        "aermod": True,
+        "exposure": True,
+    }
+    # overrides are deep-merged into the impacts section
+    assert impacts_section["scenario"] == "custom-scenario"
+    # presim does not touch population
+    assert "population" not in impacts_section
+
+
+def test_build_pilates_bridge_settings_postsim_without_population_data(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    bridge = build_pilates_bridge_settings(settings, state, workspace, stage="postsim")
+
+    assert bridge["run"]["output_run_name"] == "testrun_y2025"
+    assert "population" not in bridge["impacts"]
+
+
+def test_build_pilates_bridge_settings_postsim_with_population_fallback(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    beam_mutable_dir = Path(workspace.get_beam_mutable_data_dir())
+    beam_mutable_dir.mkdir(parents=True, exist_ok=True)
+    (beam_mutable_dir / "households.csv.gz").write_text("hh", encoding="utf-8")
+    (beam_mutable_dir / "persons.csv.gz").write_text("pp", encoding="utf-8")
+
+    bridge = build_pilates_bridge_settings(settings, state, workspace, stage="postsim")
+
+    assert bridge["impacts"]["population"] == {
+        "passenger_folder": "/app/workspace/beam/input"
+    }
+
+
+def test_build_pilates_bridge_settings_postsim_population_fallback_disabled(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings(population_fallback_to_beam_inputs=False)
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    beam_mutable_dir = Path(workspace.get_beam_mutable_data_dir())
+    beam_mutable_dir.mkdir(parents=True, exist_ok=True)
+    (beam_mutable_dir / "households.csv.gz").write_text("hh", encoding="utf-8")
+    (beam_mutable_dir / "persons.csv.gz").write_text("pp", encoding="utf-8")
+
+    bridge = build_pilates_bridge_settings(settings, state, workspace, stage="postsim")
+
+    assert "population" not in bridge["impacts"]
+
+
+def test_resolve_population_override_returns_empty_when_no_exchange_files(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+    assert resolve_population_override(settings, workspace) == {}
+
+
+def test_resolve_population_override_returns_container_path_when_present(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+
+    beam_mutable_dir = Path(workspace.get_beam_mutable_data_dir())
+    beam_mutable_dir.mkdir(parents=True, exist_ok=True)
+    (beam_mutable_dir / "households.csv.gz").write_text("hh", encoding="utf-8")
+    (beam_mutable_dir / "persons.csv.gz").write_text("pp", encoding="utf-8")
+
+    assert resolve_population_override(settings, workspace) == {
+        "population": {"passenger_folder": "/app/workspace/beam/input"}
+    }
+
+
+def test_impacts_presim_runner_run(tmp_path: Path, monkeypatch) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    calls = []
+
+    def fake_run_container(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        ImpactsPresimRunner, "run_container", staticmethod(fake_run_container)
     )
 
-    runner = ImpactsRunner("impacts", state)
-    run_outputs = runner.run(preprocess_outputs, workspace)
-    assert run_outputs.run_manifest.exists()
-    assert run_outputs.raw_exposure_table.exists()
+    runner = ImpactsPresimRunner("impacts_presim", state)
+    outputs = runner.run(None, workspace)
 
-    postprocessor = ImpactsPostprocessor("impacts", state)
-    postprocess_outputs = postprocessor.postprocess(run_outputs, workspace)
-    assert postprocess_outputs.exposure_table.exists()
-    assert postprocess_outputs.postprocess_manifest.exists()
+    assert len(calls) == 2
+    assert "derive_settings_from_pilates" in calls[0]["command"]
+    assert calls[1]["command"].startswith("presim --config")
 
-    with postprocess_outputs.exposure_table.open(encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    assert rows
-    assert "exposure_value" in rows[0]
-    assert "population_mix" in rows[0]
+    impacts_output_dir = Path(workspace.get_impacts_output_dir())
+    assert outputs.output_dir == impacts_output_dir / "impacts_presim--seattle--testrun_y2025"
+    assert outputs.settings_path == Path(workspace.get_impacts_settings_path("presim"))
+    assert outputs.bridge_settings_path == Path(
+        workspace.get_impacts_bridge_settings_path("presim")
+    )
+    assert outputs.bridge_settings_path.exists()
+
+    bridge = yaml.safe_load(outputs.bridge_settings_path.read_text(encoding="utf-8"))
+    assert bridge["run"]["output_run_name"] == "testrun_y2025"
+
+
+def test_impacts_postsim_runner_run(tmp_path: Path, monkeypatch) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    beam_mutable_dir = Path(workspace.get_beam_mutable_data_dir())
+    beam_mutable_dir.mkdir(parents=True, exist_ok=True)
+    (beam_mutable_dir / "households.csv.gz").write_text("hh", encoding="utf-8")
+    (beam_mutable_dir / "persons.csv.gz").write_text("pp", encoding="utf-8")
+
+    calls = []
+
+    def fake_run_container(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        ImpactsPostsimRunner, "run_container", staticmethod(fake_run_container)
+    )
+
+    runner = ImpactsPostsimRunner("impacts_postsim", state)
+    outputs = runner.run(None, workspace)
+
+    assert len(calls) == 2
+    assert "derive_settings_from_pilates" in calls[0]["command"]
+    assert calls[1]["command"].startswith("postsim --config")
+
+    impacts_output_dir = Path(workspace.get_impacts_output_dir())
+    expected_output_dir = impacts_output_dir / "impacts-postsim--seattle--testrun_y2025"
+    assert outputs.output_dir == expected_output_dir
+    assert outputs.pipeline_manifest == expected_output_dir / "pipeline_manifest.yaml"
+    assert outputs.postprocess_manifest == expected_output_dir / "postprocess_manifest.yaml"
+    assert (
+        outputs.exposure_table
+        == expected_output_dir / "exposure" / "beam_concentration_distribution.parquet"
+    )
+
+    expected_env_path = _to_container_path(
+        WORKSPACE_CONTAINER_DIR, str(expected_output_dir), workspace.full_path
+    )
+    assert calls[1]["environment"] == {"IMPACTS_POSTSIM_OUTPUT_DIR": expected_env_path}
+
+    bridge = yaml.safe_load(outputs.bridge_settings_path.read_text(encoding="utf-8"))
+    assert bridge["impacts"]["population"] == {
+        "passenger_folder": "/app/workspace/beam/input"
+    }
+
+
+def test_impacts_runner_raises_when_container_fails(tmp_path: Path, monkeypatch) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    monkeypatch.setattr(
+        ImpactsPresimRunner, "run_container", staticmethod(lambda **_kwargs: False)
+    )
+
+    runner = ImpactsPresimRunner("impacts_presim", state)
+    try:
+        runner.run(None, workspace)
+    except RuntimeError as exc:
+        assert "derive_settings_from_pilates" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError when container run fails")
+
+
+def test_run_impacts_presim_stage_returns_early_when_disabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = _make_settings()
+    settings["impacts_enabled"] = False
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    def _fail_run_workflow(*_args, **_kwargs):
+        raise AssertionError("run_workflow should not be called when impacts is disabled")
+
+    monkeypatch.setattr(
+        "pilates.workflows.stages.impacts_presim.run_workflow", _fail_run_workflow
+    )
+
+    context = AttrDict({"settings": settings, "state": state, "workspace": workspace})
+
+    run_impacts_presim_stage(
+        scenario=None,
+        coupler=None,
+        year=2025,
+        context=context,
+    )
 
 
 def test_workflow_state_enables_terminal_postprocessing_for_impacts() -> None:

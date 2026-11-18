@@ -1,19 +1,12 @@
-"""Impacts model scaffold."""
+"""IMPACTS presim/postsim integration."""
 
-from .outputs import (
-    ImpactsPostprocessOutputs,
-    ImpactsPreprocessOutputs,
-    ImpactsRunOutputs,
-)
-from .postprocessor import ImpactsPostprocessor
-from .preprocessor import ImpactsPreprocessor
-from .runner import ImpactsRunner
+from .outputs import ImpactsPostsimOutputs, ImpactsPresimOutputs
+from .postsim import ImpactsPostsimRunner
+from .presim import ImpactsPresimRunner
 
 __all__ = [
-    "ImpactsPreprocessOutputs",
-    "ImpactsRunOutputs",
-    "ImpactsPostprocessOutputs",
-    "ImpactsPreprocessor",
-    "ImpactsRunner",
-    "ImpactsPostprocessor",
+    "ImpactsPresimOutputs",
+    "ImpactsPostsimOutputs",
+    "ImpactsPresimRunner",
+    "ImpactsPostsimRunner",
 ]

@@ -46,9 +46,8 @@ from pilates.workflows.steps import (
     make_beam_postprocess_step,
     make_beam_preprocess_step,
     make_beam_run_step,
-    make_impacts_postprocess_step,
-    make_impacts_preprocess_step,
-    make_impacts_run_step,
+    make_impacts_postsim_step,
+    make_impacts_presim_step,
     make_urbansim_postprocess_step,
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
@@ -85,9 +84,8 @@ def _declared_schema_steps():
         make_beam_run_step(coupler=coupler, outputs_holder=holder),
         make_beam_postprocess_step(coupler=coupler, outputs_holder=holder),
         make_beam_full_skim_step(coupler=coupler, outputs_holder=holder),
-        make_impacts_preprocess_step(coupler=coupler, outputs_holder=holder),
-        make_impacts_run_step(coupler=coupler, outputs_holder=holder),
-        make_impacts_postprocess_step(coupler=coupler, outputs_holder=holder),
+        make_impacts_presim_step(coupler=coupler, outputs_holder=holder),
+        make_impacts_postsim_step(coupler=coupler, outputs_holder=holder),
     ]
 
 

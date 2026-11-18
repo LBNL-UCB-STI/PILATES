@@ -24,6 +24,7 @@ run:
     travel: beam
     activity_demand: null
     vehicle_ownership: null
+    impacts: impacts
 
 # =============================================================================
 # SHARED CONFIGURATION
@@ -242,12 +243,14 @@ infrastructure:
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
     beam: docker://haitamlaarabi/beam:1.1-beta-v260424
     activitysim: docker://zaneedell/activitysim:0.2.5
+    impacts: tbd
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
     beam: haitamlaarabi/beam:1.1-beta-v260424
     activitysim: zaneedell/activitysim:0.2.5
     polaris: tbd
+    impacts: tbd
   docker_config:
     stdout: false
     pull_latest: false
@@ -323,6 +326,124 @@ beam:
   ridehail_path_map:
     RH_SOLO: Solo
     RH_POOLED: Pooled
+
+# =============================================================================
+# IMPACTS CONFIGURATION
+# Downstream exposure/health-impacts model: presim (EMFAC activities + fleet)
+# runs before BEAM each forecast year, postsim (emissions/inmap/aermod/
+# exposure) runs after BEAM each forecast year.
+# =============================================================================
+impacts:
+  local_input_folder: impacts/impacts_input
+  local_output_folder: impacts/impacts_output
+  seed: 0
+  pipeline_presim:
+    activities: true
+    fleet: true
+  pipeline_postsim:
+    emissions: true
+    inmap: true
+    aermod: true
+    exposure: true
+  population_fallback_to_beam_inputs: true
+  overrides:
+    scenario: 2018-Baseline
+    population:
+      passenger_folder: urbansim/atlas-2019
+      freight_folder: freight/20250730/2018-Baseline
+      vehicle_folder: vehicle-tech
+      atlas_year: 2019
+      frism_year: 2018
+      population_sample: 0.005
+      transit_sample: 1.0
+    activities:
+      emissions_raw_archive: vehicle-tech/emissions/emissions_raw.tar.zst
+      region_label: SF
+      model_year_groups:
+        light_duty:
+          - "<=2003"
+          - "2004-2014"
+          - ">=2015"
+        medium_heavy_duty:
+          - "<=2002"
+          - "2003-2006"
+          - "2007-2009"
+          - "2010-2012"
+          - "2013-2015"
+          - ">=2016"
+      project_analysis:
+        main:
+          folder_in_archive: sfbay-emfac-project-analysis
+          pto_as_process:
+            enabled: true
+            vehicle_category:
+              - T7 Public Class 8
+              - T7 Utility Class 8
+              - T7 Single Concrete/Transit Mix Class 8
+              - T7 Single Dump Class 8
+              - T7 Single Other Class 8
+              - T7 SWCV Class 8
+        black_carbon:
+          folder_in_archive: sfbay-emfac-moves-bc
+          pollutant: BCh
+        paved_road_dust:
+          folder_in_archive: statewide-carb-road-dust
+          road_category_map:
+            motorway: Freeway
+            motorway_link: Freeway
+            trunk: Freeway
+            trunk_link: Major
+            primary: Major
+            primary_link: Major
+            secondary: Collector
+            secondary_link: Collector
+            tertiary: Collector
+            tertiary_link: Collector
+            unclassified: Collector
+            residential: Local Urban
+            residential_link: Local Urban
+      emissions_inventory:
+        folder_in_archive: sfbay-emfac-emissions-inventory
+        fallback_folder_in_archive: statewide-emfac-emissions-inventory
+        fuel_map:
+          Dsl: [Diesel]
+          Elec: [Electricity]
+          Gas: [Gasoline]
+          NG: [Natural Gas]
+          Phe: [Plug-in Hybrid]
+    fleet:
+      assignment_model: vehicle-tech/emissions/fleet_assignment.yaml
+      atlas:
+        fuel_map:
+          gasoline: [conv, hybrid, cng]
+          electricity: [ev]
+          hydrogen: [fuelcell]
+          electricity+gasoline: [phev]
+        income_bins: [0, 30, 60, 100, 200, 9999]
+    emissions:
+      pollutants: [NH3, NOx, PM25, SOx, ROG, BC]
+      include_non_osm_car_links: true
+      include_passenger: true
+      include_freight: true
+      enable_passenger_activity_correction: false
+      enable_freight_activity_correction: false
+      default_annualization_days:
+        light_duty: 327.0
+        medium_heavy_duty: 312.0
+    dispersions:
+      inmap:
+        isrm_zarr: ~/Workspace/Simulation/sfbay/inmap/isrm_v1.2.1.zarr
+        isrm_nox_to_no2_ratios_file: vehicle-tech/dispersions/inmap/nox_to_no2_full_isrm_matrix.npz
+        isrm_nox_to_no2_ratios_apply_tons_per_year_to_ug_per_s: false
+        grid_path: vehicle-tech/dispersions/inmap/isrm_polygon_wgs84.gpkg
+        grid_id: isrm
+        grid_epsg: 4326
+      aermod:
+        grid_size_meters: 100.0
+        asrv_patterns_file: vehicle-tech/dispersions/aermod/aermod_patterns_wgs84.parquet
+        asrv_patterns_epsg: 4326
+    exposure:
+      primary_pm25_integration_strategy: impute_inmap_primary_in_aermod_domain
 
 # =============================================================================
 # POSTPROCESSING CONFIGURATION

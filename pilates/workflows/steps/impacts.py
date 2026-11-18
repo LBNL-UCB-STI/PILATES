@@ -5,20 +5,17 @@ from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
-from pilates.impacts.outputs import (
-    ImpactsPostprocessOutputs,
-    ImpactsPreprocessOutputs,
-    ImpactsRunOutputs,
-)
+from pilates.impacts.outputs import ImpactsPostsimOutputs, ImpactsPresimOutputs
 from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
 
 from .shared import (
     CouplerProtocol,
     IMPACTS_EXPOSURE_TABLE,
-    IMPACTS_INPUT_MANIFEST,
+    IMPACTS_PIPELINE_MANIFEST,
     IMPACTS_POSTPROCESS_MANIFEST,
-    IMPACTS_RUN_MANIFEST,
+    IMPACTS_POSTSIM_SETTINGS,
+    IMPACTS_PRESIM_SETTINGS,
     StepOutputsHolder,
     WorkflowState,
     _decorate_step_with_consist,
@@ -27,7 +24,6 @@ from .shared import (
     _upstream_outputs_view,
     cr,
     log_and_set_output,
-    log_input_only,
     log_output_only,
 )
 
@@ -96,53 +92,31 @@ def _make_impacts_typed_step_function(
     )
 
 
-def _execute_impacts_preprocess(
-    preprocessor: Any,
-    workspace: Workspace,
-    outputs_holder: StepOutputsHolder,
-    **_: Any,
-) -> ImpactsPreprocessOutputs:
-    del outputs_holder
-    return preprocessor.preprocess(workspace)
-
-
-def _execute_impacts_run(
+def _execute_impacts_presim(
     runner: Any,
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
     **_: Any,
-) -> ImpactsRunOutputs:
-    upstream = outputs_holder.impacts_preprocess
-    if upstream is None:
-        raise RuntimeError("Impacts preprocess must complete first")
-    if not isinstance(upstream, ImpactsPreprocessOutputs):
-        raise TypeError(
-            "impacts_run requires ImpactsPreprocessOutputs from impacts_preprocess"
-        )
-    return runner.run(upstream, workspace)
+) -> ImpactsPresimOutputs:
+    del outputs_holder
+    return runner.run(None, workspace)
 
 
-def _execute_impacts_postprocess(
-    postprocessor: Any,
+def _execute_impacts_postsim(
+    runner: Any,
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
     **_: Any,
-) -> ImpactsPostprocessOutputs:
-    upstream = outputs_holder.impacts_run
-    if upstream is None:
-        raise RuntimeError("Impacts run must complete first")
-    if not isinstance(upstream, ImpactsRunOutputs):
-        raise TypeError(
-            "impacts_postprocess requires ImpactsRunOutputs from impacts_run"
-        )
-    return postprocessor.postprocess(upstream, workspace)
+) -> ImpactsPostsimOutputs:
+    del outputs_holder
+    return runner.run(None, workspace)
 
 
-def make_impacts_preprocess_step(
+def make_impacts_presim_step(
     *, coupler: CouplerProtocol, outputs_holder: StepOutputsHolder
 ) -> Callable[..., None]:
     def _log_outputs(
-        outputs: ImpactsPreprocessOutputs,
+        outputs: ImpactsPresimOutputs,
         settings: PilatesConfig,
         state: WorkflowState,
         workspace: Workspace,
@@ -152,39 +126,32 @@ def make_impacts_preprocess_step(
         del state
         del workspace
         del holder
-        for source_key, source_path in outputs.staged_inputs.items():
-            if source_path:
-                log_input_only(
-                    key=f"impacts_source_{source_key}",
-                    path=source_path,
-                    description=f"Impacts upstream source: {source_key}",
-                )
         log_output_only(
-            key=IMPACTS_INPUT_MANIFEST,
-            path=str(outputs.input_manifest),
-            description="Impacts staged-input manifest",
+            key=IMPACTS_PRESIM_SETTINGS,
+            path=str(outputs.settings_path),
+            description="Derived IMPACTS presim settings file",
         )
 
     return _make_impacts_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="impacts",
-        phase="preprocess",
-        outputs_class=ImpactsPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor("impacts", state),
-        component_executor=_execute_impacts_preprocess,
+        phase="presim",
+        outputs_class=ImpactsPresimOutputs,
+        component_getter=lambda factory, state: factory.get_runner("impacts_presim", state),
+        component_executor=_execute_impacts_presim,
         outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "impacts_preprocess", outputs
+            holder, "impacts_presim", outputs
         ),
         output_logger=_log_outputs,
     )
 
 
-def make_impacts_run_step(
+def make_impacts_postsim_step(
     *, coupler: CouplerProtocol, outputs_holder: StepOutputsHolder
 ) -> Callable[..., None]:
     def _log_outputs(
-        outputs: ImpactsRunOutputs,
+        outputs: ImpactsPostsimOutputs,
         settings: PilatesConfig,
         state: WorkflowState,
         workspace: Workspace,
@@ -194,48 +161,20 @@ def make_impacts_run_step(
         del state
         del workspace
         del holder
-        log_input_only(
-            key=IMPACTS_INPUT_MANIFEST,
-            path=str(outputs_holder.impacts_preprocess.input_manifest),
-            description="Impacts staged-input manifest consumed by Docker runner",
+        log_output_only(
+            key=IMPACTS_POSTSIM_SETTINGS,
+            path=str(outputs.settings_path),
+            description="Derived IMPACTS postsim settings file",
         )
         log_output_only(
-            key=IMPACTS_RUN_MANIFEST,
-            path=str(outputs.run_manifest),
-            description="Impacts Docker run manifest",
+            key=IMPACTS_PIPELINE_MANIFEST,
+            path=str(outputs.pipeline_manifest),
+            description="Impacts pipeline manifest",
         )
-
-    return _make_impacts_typed_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="impacts",
-        phase="run",
-        outputs_class=ImpactsRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner("impacts", state),
-        component_executor=_execute_impacts_run,
-        outputs_holder_setter=lambda holder, outputs: setattr(holder, "impacts_run", outputs),
-        output_logger=_log_outputs,
-    )
-
-
-def make_impacts_postprocess_step(
-    *, coupler: CouplerProtocol, outputs_holder: StepOutputsHolder
-) -> Callable[..., None]:
-    def _log_outputs(
-        outputs: ImpactsPostprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        del settings
-        del state
-        del workspace
-        del holder
-        log_input_only(
-            key=IMPACTS_RUN_MANIFEST,
-            path=str(outputs_holder.impacts_run.run_manifest),
-            description="Impacts Docker run manifest consumed by postprocess",
+        log_output_only(
+            key=IMPACTS_POSTPROCESS_MANIFEST,
+            path=str(outputs.postprocess_manifest),
+            description="Impacts postprocess manifest",
         )
         log_and_set_output(
             key=IMPACTS_EXPOSURE_TABLE,
@@ -244,22 +183,17 @@ def make_impacts_postprocess_step(
             coupler=coupler,
             profile_file_schema=True,
         )
-        log_output_only(
-            key=IMPACTS_POSTPROCESS_MANIFEST,
-            path=str(outputs.postprocess_manifest),
-            description="Impacts postprocess manifest",
-        )
 
     return _make_impacts_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="impacts",
-        phase="postprocess",
-        outputs_class=ImpactsPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor("impacts", state),
-        component_executor=_execute_impacts_postprocess,
+        phase="postsim",
+        outputs_class=ImpactsPostsimOutputs,
+        component_getter=lambda factory, state: factory.get_runner("impacts_postsim", state),
+        component_executor=_execute_impacts_postsim,
         outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "impacts_postprocess", outputs
+            holder, "impacts_postsim", outputs
         ),
         output_logger=_log_outputs,
     )

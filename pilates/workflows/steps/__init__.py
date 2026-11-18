@@ -37,9 +37,8 @@ from .beam import (
     make_beam_run_step as make_beam_run_step,
 )
 from .impacts import (
-    make_impacts_postprocess_step as make_impacts_postprocess_step,
-    make_impacts_preprocess_step as make_impacts_preprocess_step,
-    make_impacts_run_step as make_impacts_run_step,
+    make_impacts_postsim_step as make_impacts_postsim_step,
+    make_impacts_presim_step as make_impacts_presim_step,
 )
 from .postprocessing import (
     make_postprocessing_step as make_postprocessing_step,
@@ -80,9 +79,8 @@ SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {
     "beam_run": make_beam_run_step,
     "beam_postprocess": make_beam_postprocess_step,
     "beam_full_skim": make_beam_full_skim_step,
-    "impacts_preprocess": make_impacts_preprocess_step,
-    "impacts_run": make_impacts_run_step,
-    "impacts_postprocess": make_impacts_postprocess_step,
+    "impacts_presim": make_impacts_presim_step,
+    "impacts_postsim": make_impacts_postsim_step,
 }
 
 

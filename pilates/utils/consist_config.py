@@ -192,9 +192,8 @@ class ImpactsConfigBuilder:
 
     def get_facet_schema_version(self, model: str) -> str:
         return {
-            "impacts_preprocess": "impacts_preprocess_v1",
-            "impacts_run": "impacts_run_v1",
-            "impacts_postprocess": "impacts_postprocess_v1",
+            "impacts_presim": "impacts_presim_v1",
+            "impacts_postsim": "impacts_postsim_v1",
         }.get(model, "impacts_v1")
 
 
@@ -488,12 +487,10 @@ def build_impacts_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         return {
             key: dumped.get(key)
             for key in (
-                "command_template",
-                "exposure_output_filename",
-                "raw_exposure_output_filename",
-                "input_manifest_filename",
-                "run_manifest_filename",
-                "postprocess_manifest_filename",
+                "local_input_folder",
+                "local_output_folder",
+                "seed",
+                "population_fallback_to_beam_inputs",
             )
         }
     return {}

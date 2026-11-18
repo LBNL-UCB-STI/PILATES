@@ -119,6 +119,14 @@ class Workspace:
             get_setting(self.settings, "impacts.local_output_folder"),
         )
 
+    def get_impacts_settings_path(self, stage: str) -> str:
+        return os.path.join(self.get_impacts_output_dir(), f"settings_{stage}.yaml")
+
+    def get_impacts_bridge_settings_path(self, stage: str) -> str:
+        return os.path.join(
+            self.get_impacts_output_dir(), f"pilates_bridge_{stage}.yaml"
+        )
+
     def set_asim_mutable_data_dir_override(self, path: Optional[str]) -> None:
         self._asim_mutable_data_dir_override = os.path.abspath(path) if path else None
 

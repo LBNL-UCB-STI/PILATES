@@ -678,48 +678,56 @@ class BeamConfig(BaseModel):
     )
 
 
+class ImpactsPipelinePresimConfig(BaseModel):
+    """Which IMPACTS presim sub-steps to run."""
+
+    activities: bool = True
+    fleet: bool = True
+
+
+class ImpactsPipelinePostsimConfig(BaseModel):
+    """Which IMPACTS postsim sub-steps to run."""
+
+    emissions: bool = True
+    inmap: bool = True
+    aermod: bool = True
+    exposure: bool = True
+
+
 class ImpactsConfig(BaseModel):
     """Downstream exposure/impacts model configuration."""
 
     local_input_folder: str = Field(
-        ..., description="Workspace-relative staged input folder"
+        ..., description="Workspace-relative impacts input folder"
     )
     local_output_folder: str = Field(
         ..., description="Workspace-relative impacts output folder"
     )
-    container_input_folder: str = Field(
-        ..., description="Container-visible input folder"
+    seed: int = Field(0, description="Random seed passed through to IMPACTS")
+    pipeline_presim: ImpactsPipelinePresimConfig = Field(
+        default_factory=ImpactsPipelinePresimConfig,
+        description="IMPACTS presim pipeline toggles",
     )
-    container_output_folder: str = Field(
-        ..., description="Container-visible output folder"
+    pipeline_postsim: ImpactsPipelinePostsimConfig = Field(
+        default_factory=ImpactsPipelinePostsimConfig,
+        description="IMPACTS postsim pipeline toggles",
     )
-    command_template: str = Field(
-        ...,
+    population_fallback_to_beam_inputs: bool = Field(
+        True,
         description=(
-            "Docker command template. May reference {container_input_dir}, "
-            "{container_output_dir}, {container_input_manifest}, "
-            "{container_output_manifest}, and {container_exposure_output}."
+            "If true, prefer this run's PILATES-generated population "
+            "(households/persons fed to BEAM) over the static reference "
+            "population for the postsim population.passenger_folder override."
         ),
     )
-    exposure_output_filename: str = Field(
-        "exposure_table.csv",
-        description="Final impacts exposure table filename",
-    )
-    raw_exposure_output_filename: str = Field(
-        "exposure_raw.csv",
-        description="Raw impacts exposure table filename emitted by the runner",
-    )
-    input_manifest_filename: str = Field(
-        "inputs_manifest.yaml",
-        description="Preprocess manifest filename describing staged inputs",
-    )
-    run_manifest_filename: str = Field(
-        "run_manifest.yaml",
-        description="Runner manifest filename describing the Docker invocation",
-    )
-    postprocess_manifest_filename: str = Field(
-        "postprocess_manifest.yaml",
-        description="Postprocess manifest filename describing finalized outputs",
+    overrides: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Passthrough overrides deep-merged into the derived IMPACTS "
+            "settings' `impacts:` block (population/activities/fleet/"
+            "emissions/dispersions/exposure/analysis), shaped like "
+            "examples/pilates/settings.yaml's `impacts:` section."
+        ),
     )
 
     def to_consist_facet(self) -> Dict[str, Any]:

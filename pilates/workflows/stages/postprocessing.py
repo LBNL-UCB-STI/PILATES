@@ -12,9 +12,7 @@ from pilates.workspace import Workspace
 from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
 from pilates.workflows.steps import (
     StepOutputsHolder,
-    make_impacts_postprocess_step,
-    make_impacts_preprocess_step,
-    make_impacts_run_step,
+    make_impacts_postsim_step,
     make_postprocessing_step,
 )
 
@@ -66,45 +64,19 @@ def run_postprocessing_stage(
     )
     postprocess_steps = []
     if getattr(settings, "impacts_enabled", False):
-        postprocess_steps.extend(
-            [
-                StepRef(
-                    name="impacts_preprocess",
-                    step_func=make_impacts_preprocess_step(
-                        coupler=coupler, outputs_holder=outputs_holder
-                    ),
-                    cache_mode="overwrite",
-                    load_inputs=False,
-                    model="impacts_preprocess",
-                    year=year,
-                    iteration=getattr(state, "iteration", None),
-                    phase="preprocess",
+        postprocess_steps.append(
+            StepRef(
+                name="impacts_postsim",
+                step_func=make_impacts_postsim_step(
+                    coupler=coupler, outputs_holder=outputs_holder
                 ),
-                StepRef(
-                    name="impacts_run",
-                    step_func=make_impacts_run_step(
-                        coupler=coupler, outputs_holder=outputs_holder
-                    ),
-                    cache_mode="overwrite",
-                    load_inputs=False,
-                    model="impacts_run",
-                    year=year,
-                    iteration=getattr(state, "iteration", None),
-                    phase="run",
-                ),
-                StepRef(
-                    name="impacts_postprocess",
-                    step_func=make_impacts_postprocess_step(
-                        coupler=coupler, outputs_holder=outputs_holder
-                    ),
-                    cache_mode="overwrite",
-                    load_inputs=False,
-                    model="impacts_postprocess",
-                    year=year,
-                    iteration=getattr(state, "iteration", None),
-                    phase="postprocess",
-                ),
-            ]
+                cache_mode="overwrite",
+                load_inputs=False,
+                model="impacts_postsim",
+                year=year,
+                iteration=getattr(state, "iteration", None),
+                phase="postprocess",
+            )
         )
 
     if getattr(settings, "postprocessing", None) is not None:
