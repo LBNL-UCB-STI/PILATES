@@ -3,8 +3,8 @@ import re
 import shutil
 from pathlib import Path
 
+from consist.digest import file_sha256
 import pandas as pd
-import zipfile
 import os
 from typing import Tuple, Optional, Dict, Any
 
@@ -14,11 +14,10 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
 )
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
-    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     normalize_asim_output_key,
     has_asim_run_marker,
+    configured_asim_output_keys,
 )
 from pilates.activitysim.runner import (
     asim_required_run_output_paths,
@@ -26,8 +25,10 @@ from pilates.activitysim.runner import (
     asim_staged_input_paths,
 )
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
+from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,178 @@ def _postprocess_output_stem(output_key: str) -> str:
     return re.sub(r"_asim_out$", "", output_key)
 
 
+def _atlas_owns_vehicle_ownership(settings: PilatesConfig) -> bool:
+    """Return whether ATLAS, rather than ActivitySim, owns household cars."""
+
+    if not bool(settings.vehicle_ownership_model_enabled):
+        return False
+    run_cfg = settings.run
+    if run_cfg is None:
+        return False
+    models = run_cfg.models
+    if models is None:
+        return False
+    return models.vehicle_ownership == "atlas"
+
+
+def _align_overlay_series(series: pd.Series, target_dtype: Any) -> pd.Series:
+    """
+    Align overlay series dtype to match target column dtype safely.
+
+    Handles conversions between numeric ActivitySim outputs (which may contain
+    NaN or -1 for unassigned locations) and target UrbanSim dtypes (such as
+    Arrow string arrays, object strings, nullable or non-nullable integers).
+    """
+    if series.dtype == target_dtype:
+        return series
+
+    if pd.api.types.is_string_dtype(target_dtype):
+        if pd.api.types.is_numeric_dtype(series.dtype):
+            numeric = pd.to_numeric(series, errors="coerce")
+            valid_numeric = numeric.dropna()
+            if not valid_numeric.empty and (valid_numeric % 1 == 0).all():
+                int_candidate = numeric.round().astype("Int64")
+                if target_dtype is object or target_dtype == "object":
+                    return int_candidate.astype(pd.StringDtype()).astype(object)
+                return int_candidate.astype(target_dtype)
+        if target_dtype is object or target_dtype == "object":
+            return series.astype(object)
+        return series.astype(target_dtype)
+
+    if pd.api.types.is_integer_dtype(target_dtype):
+        numeric = pd.to_numeric(series, errors="coerce")
+        if isinstance(
+            target_dtype,
+            (pd.Int64Dtype, pd.Int32Dtype, pd.Int16Dtype, pd.Int8Dtype),
+        ) or (
+            isinstance(target_dtype, pd.ArrowDtype) and target_dtype.kind in ("i", "u")
+        ):
+            return numeric.round().astype("Int64").astype(target_dtype)
+        return numeric.fillna(-1).round().astype(target_dtype)
+
+    if pd.api.types.is_float_dtype(target_dtype):
+        return pd.to_numeric(series, errors="coerce").astype(target_dtype)
+
+    return series.astype(target_dtype)
+
+
+def _read_household_table(path: Path) -> pd.DataFrame:
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path)
+    if path.suffix in {".csv", ".gz"}:
+        return pd.read_csv(path)
+    if path.suffix == "" and path.is_file():
+        with path.open("rb") as handle:
+            magic = handle.read(4)
+        if magic == b"PAR1":
+            return pd.read_parquet(path)
+        if magic[:2] == b"\x1f\x8b":
+            return pd.read_csv(path, compression="gzip")
+        return pd.read_csv(path)
+    raise ValueError(
+        f"Cannot restore ATLAS household cars from unsupported table format: {path}"
+    )
+
+
+def _write_household_table(table: pd.DataFrame, path: Path) -> None:
+    if path.suffix == ".parquet":
+        table.to_parquet(path)
+        return
+    if path.suffix in {".csv", ".gz"}:
+        table.to_csv(path)
+        return
+    raise ValueError(
+        f"Cannot restore ATLAS household cars to unsupported table format: {path}"
+    )
+
+
+def _household_index(table: pd.DataFrame, *, path: Path) -> pd.DataFrame:
+    """Normalize a household table to a unique integer household_id index."""
+
+    if table.index.name == "household_id":
+        normalized = table.copy()
+    elif "household_id" in table.columns:
+        normalized = table.set_index("household_id", drop=True)
+    else:
+        raise ValueError(
+            "ATLAS household cars handoff requires a household_id column or index; "
+            f"path={path}"
+        )
+
+    numeric_ids = pd.to_numeric(
+        pd.Series(normalized.index, index=normalized.index), errors="coerce"
+    )
+    invalid_ids = numeric_ids.isna() | (numeric_ids % 1 != 0)
+    if invalid_ids.any() or normalized.index.has_duplicates:
+        invalid_or_duplicate = invalid_ids.to_numpy() | normalized.index.duplicated()
+        sample = normalized.index[invalid_or_duplicate].tolist()[:10]
+        raise ValueError(
+            "ATLAS household cars handoff requires unique integer household_id values; "
+            f"path={path} sample={sample}"
+        )
+    normalized.index = pd.Index(numeric_ids.astype("int64"), name="household_id")
+    return normalized
+
+
+def restore_atlas_household_cars(
+    *,
+    households_output_path: Path,
+    households_input_path: Path,
+) -> str:
+    """Restore ATLAS-owned ``cars`` into ActivitySim's final households table.
+
+    ActivitySim can retain a historical ``auto_ownership`` column even when its
+    ownership model is disabled.  The input table is the authoritative handoff
+    from ATLAS, so require an exact household-id match and preserve the stale
+    ActivitySim column separately for diagnostics.
+    """
+
+    output_households = _household_index(
+        _read_household_table(households_output_path), path=households_output_path
+    )
+    input_households = _household_index(
+        _read_household_table(households_input_path), path=households_input_path
+    )
+    if "cars" not in input_households.columns:
+        raise ValueError(
+            "ATLAS household cars handoff requires canonical 'cars' in the "
+            f"ActivitySim household input; path={households_input_path}"
+        )
+
+    missing_from_input = output_households.index.difference(input_households.index)
+    missing_from_output = input_households.index.difference(output_households.index)
+    if len(missing_from_input) or len(missing_from_output):
+        raise ValueError(
+            "ATLAS household cars handoff requires exact household-id coverage; "
+            f"output_path={households_output_path} input_path={households_input_path} "
+            f"missing_from_input={missing_from_input.tolist()[:10]} "
+            f"missing_from_output={missing_from_output.tolist()[:10]}"
+        )
+
+    cars = pd.to_numeric(input_households["cars"], errors="coerce")
+    invalid_cars = cars.isna() | (cars % 1 != 0) | (cars < 0)
+    if invalid_cars.any():
+        sample = cars.loc[invalid_cars].head(10).to_dict()
+        raise ValueError(
+            "ATLAS household cars handoff requires non-negative integer 'cars'; "
+            f"input_path={households_input_path} sample={sample}"
+        )
+
+    output_households["cars"] = cars.astype("int64").reindex(output_households.index)
+    _write_household_table(output_households, households_output_path)
+    digest = file_sha256(households_output_path)
+    logger.info(
+        "Restored ATLAS-authoritative cars into ActivitySim households output: "
+        "output=%s input=%s households=%s",
+        households_output_path,
+        households_input_path,
+        len(output_households),
+    )
+    return digest
+
+
 def _activitysim_iteration_output_paths(
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
 ) -> Dict[str, str]:
@@ -51,7 +223,7 @@ def _activitysim_iteration_output_paths(
         output_key: str(
             iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet"
         )
-        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+        for output_key in configured_asim_output_keys(settings)
     }
 
 
@@ -76,37 +248,27 @@ def _activitysim_archived_input_paths(
         "asim_input_persons_csv_archived": str(archived_inputs_dir / "persons.csv"),
         "asim_input_land_use_csv_archived": str(archived_inputs_dir / "land_use.csv"),
         "asim_input_skims_omx_archived": str(archived_inputs_dir / "skims.omx"),
-        "asim_input_skims_zarr_archived": str(archived_inputs_dir / "skims.zarr"),
     }
 
 
-def _default_usim_datastore_output_path(
+def _next_iter_usim_input_store_path(
     settings: PilatesConfig,
     workspace: Workspace,
+    state: WorkflowState,
 ) -> Optional[str]:
+    """Path of the canonical USIM input store that the asim postprocess writes
+    the merged next-iteration input to.
+
+    Must match the filename the urbansim postprocess writes to (see
+    ``pilates/urbansim/postprocessor.py:create_next_iter_usim_data``); the two
+    postprocessors are sequential and produce successive versions of the same
+    artifact. Writing to ``model_data_<year>.h5`` instead would clobber the
+    urbansim run output and destroy its ``/<year>/``-prefixed table layout.
+    """
     try:
         datastore_name = get_usim_datastore_fname(settings, io="input")
     except Exception:
         return None
-    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
-
-
-def _forecast_usim_datastore_output_path(
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Optional[str]:
-    forecast_year = getattr(state, "forecast_year", None)
-    if forecast_year is None:
-        return _default_usim_datastore_output_path(settings, workspace)
-    try:
-        datastore_name = get_usim_datastore_fname(
-            settings,
-            io="output",
-            year=forecast_year,
-        )
-    except Exception:
-        return _default_usim_datastore_output_path(settings, workspace)
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
@@ -115,12 +277,18 @@ def _load_asim_outputs(
     workspace: Workspace,
     state: WorkflowState,
     fallback_dir: Optional[str] = None,
+    raw_outputs: Optional[ActivitySimRunOutputs] = None,
 ):
     prefix = settings.activitysim.output_tables["prefix"]
     output_tables = settings.activitysim.output_tables["tables"]
     asim_output_dict = {}
     asim_output_dir = workspace.get_asim_output_dir()
-    allow_final_pipeline = has_asim_run_marker(
+    has_bound_raw_outputs = bool(
+        raw_outputs is not None
+        and raw_outputs.raw_outputs
+        and all(os.path.isfile(str(p)) for p in raw_outputs.raw_outputs.values())
+    )
+    allow_final_pipeline = has_bound_raw_outputs or has_asim_run_marker(
         asim_output_dir, state.current_year, state.current_inner_iter
     )
     if not allow_final_pipeline:
@@ -131,16 +299,41 @@ def _load_asim_outputs(
             state.current_inner_iter,
         )
     for table_name in output_tables:
+        bound_path = None
+        if raw_outputs is not None and raw_outputs.raw_outputs:
+            bound_path = raw_outputs.raw_outputs.get(
+                f"{table_name}_asim_out"
+            ) or raw_outputs.raw_outputs.get(f"{table_name}_asim_out_temp")
         file_format = settings.activitysim.file_format
         if file_format == "parquet":
-            file_name = "%s%s.parquet" % (prefix, table_name)
-            file_path = os.path.join(
-                asim_output_dir, "final_pipeline", table_name, "final.parquet"
-            )
-            if allow_final_pipeline:
-                try:
-                    table = pd.read_parquet(file_path)
-                except FileNotFoundError:
+            if bound_path is not None and os.path.isfile(str(bound_path)):
+                table = pd.read_parquet(bound_path)
+            else:
+                file_name = "%s%s.parquet" % (prefix, table_name)
+                file_path = os.path.join(
+                    asim_output_dir, "final_pipeline", table_name, "final.parquet"
+                )
+                if allow_final_pipeline:
+                    try:
+                        table = pd.read_parquet(file_path)
+                    except FileNotFoundError:
+                        if fallback_dir:
+                            fallback_path = os.path.join(
+                                fallback_dir, f"{table_name}.parquet"
+                            )
+                            try:
+                                table = pd.read_parquet(fallback_path)
+                            except FileNotFoundError:
+                                logger.warning(
+                                    "Parquet file not found: %s (fallback: %s)",
+                                    file_path,
+                                    fallback_path,
+                                )
+                                continue
+                        else:
+                            logger.warning("Parquet file not found: %s", file_path)
+                            continue
+                else:
                     if fallback_dir:
                         fallback_path = os.path.join(
                             fallback_dir, f"{table_name}.parquet"
@@ -149,34 +342,23 @@ def _load_asim_outputs(
                             table = pd.read_parquet(fallback_path)
                         except FileNotFoundError:
                             logger.warning(
-                                "Parquet file not found: %s (fallback: %s)",
-                                file_path,
+                                "Parquet file not found (final_pipeline ignored): %s",
                                 fallback_path,
                             )
                             continue
                     else:
-                        logger.warning("Parquet file not found: %s", file_path)
-                        continue
-            else:
-                if fallback_dir:
-                    fallback_path = os.path.join(fallback_dir, f"{table_name}.parquet")
-                    try:
-                        table = pd.read_parquet(fallback_path)
-                    except FileNotFoundError:
                         logger.warning(
-                            "Parquet file not found (final_pipeline ignored): %s",
-                            fallback_path,
+                            "Parquet file not found; final_pipeline ignored and no fallback provided: %s",
+                            file_path,
                         )
                         continue
-                else:
-                    logger.warning(
-                        "Parquet file not found; final_pipeline ignored and no fallback provided: %s",
-                        file_path,
-                    )
-                    continue
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
-            file_path = os.path.join(asim_output_dir, file_name)
+            file_path = (
+                str(bound_path)
+                if bound_path is not None and os.path.isfile(str(bound_path))
+                else os.path.join(asim_output_dir, file_name)
+            )
             if table_name == "persons":
                 index_col = "person_id"
             elif table_name == "households":
@@ -282,7 +464,7 @@ def _prepare_updated_tables(
             resolved_prefix,
             prefix,
         )
-    usim_output_store = pd.HDFStore(usim_output_store_path)
+    usim_output_store = pd.HDFStore(usim_output_store_path, mode="r")
     normalized_usim_keys = _normalized_h5_keys(usim_output_store)
 
     def _resolve_h5_key(table_name: str) -> str:
@@ -306,10 +488,7 @@ def _prepare_updated_tables(
     required_cols = {}
     usim_tables = {}
 
-    vehicle_ownership_model = getattr(
-        getattr(settings, "run", None), "models", None
-    ) and getattr(settings.run.models, "vehicle_ownership", None)
-    use_asim_auto_ownership = vehicle_ownership_model != "atlas"
+    use_asim_auto_ownership = not _atlas_owns_vehicle_ownership(settings)
 
     def _ensure_index(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
         if df.index.name == index_col:
@@ -467,7 +646,10 @@ def _prepare_updated_tables(
         if overlay_cols:
             common_idx = persons.index.intersection(persons_overlay.index)
             for col in overlay_cols:
-                persons.loc[common_idx, col] = persons_overlay.loc[common_idx, col]
+                persons.loc[common_idx, col] = _align_overlay_series(
+                    persons_overlay.loc[common_idx, col],
+                    persons[col].dtype,
+                )
 
         persons = _normalize_person_household_ids(
             persons, usim_persons["household_id"].dtype
@@ -485,9 +667,10 @@ def _prepare_updated_tables(
         if use_asim_auto_ownership and "cars" in required_cols["households"]:
             if "auto_ownership" in households_overlay.columns:
                 common_idx = households.index.intersection(households_overlay.index)
-                households.loc[common_idx, "cars"] = households_overlay.loc[
-                    common_idx, "auto_ownership"
-                ]
+                households.loc[common_idx, "cars"] = _align_overlay_series(
+                    households_overlay.loc[common_idx, "auto_ownership"],
+                    households["cars"].dtype,
+                )
             else:
                 logger.warning(
                     "ASim households output missing auto_ownership; preserving UrbanSim cars."
@@ -522,11 +705,9 @@ def _prepare_updated_tables(
             dtypes = usim_output_store[h5_key].dtypes.to_dict()
             for col in required_cols[table_name]:
                 if asim_output_dict[table_name][col].dtype != dtypes[col]:
-                    asim_output_dict[table_name][col] = (
-                        asim_output_dict[table_name]
-                        .loc[~asim_output_dict[table_name][col].isna(), col]
-                        .fillna(0)
-                        .astype(dtypes[col])
+                    asim_output_dict[table_name][col] = _align_overlay_series(
+                        asim_output_dict[table_name][col],
+                        dtypes[col],
                     )
     usim_output_store.close()
 
@@ -538,35 +719,6 @@ def _prepare_updated_tables(
     return asim_output_dict
 
 
-def create_beam_input_data(
-    settings,
-    state: WorkflowState,
-    workspace: Workspace,
-    asim_output_dict,
-    source_file_paths: list,
-) -> Tuple[str, Optional[FileRecord]]:
-    forecast_year = state.forecast_year
-    asim_output_data_dir = workspace.get_asim_output_dir()
-    archive_name = "asim_outputs_{0}.zip".format(forecast_year)
-    outpath = os.path.join(asim_output_data_dir, archive_name)
-    logger.info("Merging results back into UrbanSim format and storing as .zip!")
-
-    with zipfile.ZipFile(outpath, "w") as csv_zip:
-        # copy asim outputs into archive
-        for table_name in asim_output_dict.keys():
-            logger.info("Zipping {0} asim table to output archive!".format(table_name))
-            csv_zip.writestr(table_name + ".csv", asim_output_dict[table_name].to_csv())
-    logger.info("Done creating .zip archive!")
-
-    output_record = FileRecord(
-        file_path=outpath,
-        year=forecast_year,
-        description="Zipped ActivitySim outputs for BEAM",
-        short_name="asim_outputs_zip",
-    )
-    return outpath, output_record
-
-
 def create_usim_input_data(
     settings,
     state: WorkflowState,
@@ -576,7 +728,8 @@ def create_usim_input_data(
     current_input_store_path: str,
     population_source_store_path: Optional[str],
     target_store_path: Optional[str] = None,
-) -> Tuple[str, Optional[FileRecord]]:
+    base_input_store_path: Optional[str] = None,
+) -> Tuple[str, Optional[str]]:
     """
     Creates UrbanSim input data for the next iteration.
 
@@ -610,19 +763,35 @@ def create_usim_input_data(
     )
 
     archived_input_store_path: Optional[str] = None
+    prior_step_store_path: Optional[str] = None
     if os.path.exists(input_store_path):
-        logger.info(
-            "Moving urbansim inputs from the previous iteration to {0}".format(
-                archive_fname
+        if os.path.exists(archive_path) and os.path.abspath(
+            input_store_path
+        ) != os.path.abspath(archive_path):
+            prior_step_store_path = os.path.join(
+                os.path.dirname(input_store_path),
+                f".prior_step_{input_datastore_name}",
             )
-        )
-        os.rename(input_store_path, archive_path)
-        archived_input_store_path = archive_path
+            logger.info(
+                "Preserving existing pre-UrbanSim archive %s; moving prior step datastore to %s",
+                archive_fname,
+                os.path.basename(prior_step_store_path),
+            )
+            os.replace(input_store_path, prior_step_store_path)
+            archived_input_store_path = prior_step_store_path
+        else:
+            logger.info(
+                "Moving urbansim inputs from the previous iteration to {0}".format(
+                    archive_fname
+                )
+            )
+            os.rename(input_store_path, archive_path)
+            archived_input_store_path = archive_path
         if fallback_to_current_input or (
             source_store_path
             and os.path.abspath(source_store_path) == os.path.abspath(input_store_path)
         ):
-            source_store_path = archive_path
+            source_store_path = archived_input_store_path
     elif os.path.exists(archive_path):
         archived_input_store_path = archive_path
     elif current_input_store_path and os.path.exists(current_input_store_path):
@@ -653,6 +822,25 @@ def create_usim_input_data(
         )
         return None, None
 
+    # If the source file is named
+    # model_data_<Y>.h5, it must contain /<Y>/-prefixed tables.  A root-level
+    # layout in a year-named file means the file was silently clobbered (e.g.
+    # by a postprocessor that wrote a merged canonical-input store to the wrong
+    # path).  Fail loud here rather than propagating corrupted inputs.
+    _fname_year_match = re.search(
+        r"model_data_(\d+)\.h5$", os.path.basename(source_store_path)
+    )
+    if _fname_year_match:
+        _fname_year = _fname_year_match.group(1)
+        if str(source_prefix) != _fname_year:
+            raise ValueError(
+                f"H5 layout mismatch: {source_store_path!r} is named for year "
+                f"{_fname_year} but its tables are prefixed with "
+                f"{source_prefix!r} instead of '/{_fname_year}/'. "
+                "The file may have been overwritten with a root-level merged "
+                "store by a postprocessor targeting the wrong output path."
+            )
+
     if fallback_to_current_input:
         logger.info(
             "Falling back to %s for ActivitySim postprocess because forecast output is missing: %s",
@@ -678,7 +866,7 @@ def create_usim_input_data(
 
     # load last iter UrbanSim output/current data
     same_source_as_archive = os.path.abspath(usim_output_store_path) == os.path.abspath(
-        archive_path
+        archived_input_store_path
     )
     usim_output_store = (
         og_input_store
@@ -695,138 +883,132 @@ def create_usim_input_data(
 
     # instantiate empty .h5 store (e.g. custom_mpo_321487234_model_data.h5)
     new_input_store = pd.HDFStore(input_store_path, mode="w")
-    assert len(new_input_store.keys()) == 0
 
-    # Keep track of which tables have already been added (i.e. updated)
-    updated_tables = []
+    def _select_preferred_h5_key_by_table(
+        store: pd.HDFStore, preferred_year: object
+    ) -> Dict[str, str]:
+        preferred_prefix = (
+            str(preferred_year).strip("/") if preferred_year not in (None, "") else ""
+        )
+        candidates_by_table: Dict[str, list[str]] = {}
+        for h5_key in store.keys():
+            table_name = h5_key.split("/")[-1]
+            candidates_by_table.setdefault(table_name, []).append(h5_key)
 
-    # 1. copy ASIM OUTPUTS into new input data store
-    logger.info(
-        "Copying ActivitySim outputs to the new Urbansim input store at {0}! "
-        "Tables: {1}".format(input_store_path, tables_updated_by_asim)
-    )
-    for table_name in tables_updated_by_asim:
-        logger.info("   Moving {0}".format(table_name))
-        new_input_store["/" + table_name] = asim_output_dict[table_name]
-        updated_tables.append(table_name)
+        selected: Dict[str, str] = {}
+        for table_name, keys in candidates_by_table.items():
+            exact_prefixed = (
+                f"/{preferred_prefix}/{table_name}" if preferred_prefix else None
+            )
+            if exact_prefixed and exact_prefixed in keys:
+                selected[table_name] = exact_prefixed
+            elif f"/{table_name}" in keys:
+                selected[table_name] = f"/{table_name}"
+            else:
+                selected[table_name] = sorted(keys)[-1]
+        return selected
 
-    # 2. copy USIM OUTPUTS into new input data store if not present already
-    logger.info(
-        (
-            "Passing last set of UrbanSim outputs through to the new "
-            "Urbansim input store! {0} -> {1}".format(
-                usim_output_datastore_name, input_store_path
+    try:
+        assert len(new_input_store.keys()) == 0
+
+        # Keep track of which tables have already been added (i.e. updated)
+        updated_tables = []
+
+        # 1. copy ASIM OUTPUTS into new input data store
+        logger.info(
+            "Copying ActivitySim outputs to the new Urbansim input store at {0}! "
+            "Tables: {1}".format(input_store_path, tables_updated_by_asim)
+        )
+        for table_name in tables_updated_by_asim:
+            logger.info("   Moving {0}".format(table_name))
+            new_input_store["/" + table_name] = asim_output_dict[table_name]
+            updated_tables.append(table_name)
+
+        # 2. copy USIM OUTPUTS into new input data store if not present already
+        logger.info(
+            (
+                "Passing last set of UrbanSim outputs through to the new "
+                "Urbansim input store! {0} -> {1}".format(
+                    usim_output_datastore_name, input_store_path
+                )
             )
         )
-    )
-    for h5_key in usim_output_store.keys():
-        table_name = h5_key.split("/")[-1]
-        if table_name not in updated_tables:
-            if os.path.join("/", table_prefix_year, table_name) == h5_key:
-                new_input_store[table_name] = usim_output_store[h5_key]
+        for h5_key in usim_output_store.keys():
+            table_name = h5_key.split("/")[-1]
+            if table_name not in updated_tables:
+                if os.path.join("/", table_prefix_year, table_name) == h5_key:
+                    new_input_store[table_name] = usim_output_store[h5_key]
+                    updated_tables.append(table_name)
+                    logger.info(
+                        (
+                            "    Passing static UrbanSim table {0} through to the new Urbansim "
+                            "input store!"
+                        ).format(table_name)
+                    )
+                else:
+                    logger.info(
+                        "    Skipping key {0} because it is not formatted correctly".format(
+                            h5_key
+                        )
+                    )
+            else:
+                logger.info(
+                    "    Skipping {0} because it was updated by Asim".format(h5_key)
+                )
+
+        # 3. copy USIM INPUTS into new input data store if not present already
+        for table_name, h5_key in _select_preferred_h5_key_by_table(
+            og_input_store, forecast_year
+        ).items():
+            if table_name not in updated_tables:
+                new_input_store[table_name] = og_input_store[h5_key]
                 updated_tables.append(table_name)
                 logger.info(
                     (
-                        "    Passing static UrbanSim table {0} through to the new Urbansim "
+                        "Passing original UrbanSim table {0} through to the new Urbansim "
                         "input store!"
                     ).format(table_name)
                 )
-            else:
-                logger.info(
-                    "    Skipping key {0} because it is not formatted correctly".format(
-                        h5_key
-                    )
-                )
-        else:
-            logger.info(
-                "    Skipping {0} because it was updated by Asim".format(h5_key)
-            )
 
-    # 3. copy USIM INPUTS into new input data store if not present already
+        if (
+            prior_step_store_path is not None
+            and os.path.exists(archive_path)
+            and os.path.abspath(archive_path)
+            != os.path.abspath(archived_input_store_path)
+        ):
+            with pd.HDFStore(archive_path, mode="r") as pre_usim_archive_store:
+                for table_name, h5_key in _select_preferred_h5_key_by_table(
+                    pre_usim_archive_store, forecast_year
+                ).items():
+                    if table_name not in updated_tables:
+                        new_input_store[table_name] = pre_usim_archive_store[h5_key]
+                        updated_tables.append(table_name)
 
-    for h5_key in og_input_store.keys():
-        table_name = h5_key.split("/")[-1]
-        if table_name not in updated_tables:
-            new_input_store[table_name] = og_input_store[h5_key]
-            logger.info(
-                (
-                    "Passing original UrbanSim table {0} through to the new Urbansim "
-                    "input store!"
-                ).format(table_name)
-            )
+        if (
+            base_input_store_path is not None
+            and os.path.exists(base_input_store_path)
+            and os.path.abspath(base_input_store_path)
+            != os.path.abspath(archived_input_store_path)
+            and os.path.abspath(base_input_store_path)
+            != os.path.abspath(input_store_path)
+        ):
+            with pd.HDFStore(base_input_store_path, mode="r") as base_store:
+                for table_name, h5_key in _select_preferred_h5_key_by_table(
+                    base_store, forecast_year
+                ).items():
+                    if table_name not in updated_tables:
+                        new_input_store[table_name] = base_store[h5_key]
+                        updated_tables.append(table_name)
+    finally:
+        og_input_store.close()
+        new_input_store.close()
+        if not same_source_as_archive:
+            usim_output_store.close()
+        if prior_step_store_path is not None and os.path.exists(prior_step_store_path):
+            os.remove(prior_step_store_path)
+        logger.info("Closing all open h5 files")
 
-    og_input_store.close()
-    new_input_store.close()
-    if not same_source_as_archive:
-        usim_output_store.close()
-    logger.info("Closing all open h5 files")
-
-    output_record = FileRecord(
-        file_path=input_store_path,
-        year=forecast_year,
-        description="New UrbanSim input data for next iteration",
-        short_name=USIM_DATASTORE_H5,
-    )
-
-    return input_store_path, output_record
-
-
-def update_usim_inputs_after_warm_start(
-    settings,
-    state: WorkflowState,
-    workspace: Workspace,
-    model_run_hash: Optional[str] = None,
-):
-    """
-    TODO: Combine this method with create_usim_input_data() above
-    """
-    # load usim data
-    usim_data_dir = workspace.get_usim_mutable_data_dir()
-    datastore_name = get_usim_datastore_fname(settings, io="input")
-    input_store_path = os.path.join(usim_data_dir, datastore_name)
-    if not os.path.exists(input_store_path):
-        raise ValueError("No input data found at {0}".format(input_store_path))
-
-    # load warm start data
-    warm_start_dir = workspace.get_asim_output_dir()
-    warm_start_persons_path = os.path.join(warm_start_dir, "warm_start_persons.csv")
-    warm_start_households_path = os.path.join(
-        warm_start_dir, "warm_start_households.csv"
-    )
-
-    # --- Perform Transformation ---
-    usim_datastore = pd.HDFStore(input_store_path)
-    p = usim_datastore["persons"]
-    hh = usim_datastore["households"]
-
-    warm_start_persons = pd.read_csv(
-        warm_start_persons_path,
-        index_col="person_id",
-        dtype={"workplace_taz": str, "school_taz": str},
-    )
-    warm_start_households = pd.read_csv(
-        warm_start_households_path,
-        index_col="household_id",
-    )
-
-    # replace persons and households with warm start data
-    assert p.shape[0] == warm_start_persons.shape[0]
-    assert hh.shape[0] == warm_start_households.shape[0]
-
-    p.loc[:, "work_zone_id"] = warm_start_persons.loc[:, "workplace_taz"].reindex(
-        p.index
-    )
-    p.loc[:, "school_zone_id"] = warm_start_persons.loc[:, "school_taz"].reindex(
-        p.index
-    )
-    hh.loc[:, "cars"] = warm_start_households["auto_ownership"].reindex(hh.index)
-
-    usim_datastore["persons"] = p
-    usim_datastore["households"] = hh
-
-    usim_datastore.close()
-
-    return
+    return input_store_path, USIM_DATASTORE_H5
 
 
 class ActivitysimPostprocessor(GenericPostprocessor):
@@ -842,80 +1024,13 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         Declare the input paths/artifacts this postprocessor expects without
         disk checks.
         """
-        del settings
         inputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
             **asim_staged_input_paths(workspace),
-            **asim_required_run_output_paths(workspace),
+            **asim_required_run_output_paths(settings, workspace),
         }
         inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
         return inputs
-
-    @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        inputs = ActivitysimPostprocessor.declared_expected_inputs(
-            settings, state, workspace
-        )
-        asim_output_dir = inputs.get("asim_output_dir")
-        inputs["asim_output_dir"] = (
-            asim_output_dir
-            if asim_output_dir and os.path.exists(asim_output_dir)
-            else None
-        )
-        zarr_path = inputs.get(ZARR_SKIMS)
-        inputs[ZARR_SKIMS] = (
-            zarr_path if zarr_path and os.path.exists(zarr_path) else None
-        )
-        return inputs
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        return ActivitysimPostprocessor.runtime_expected_inputs(
-            settings, state, workspace
-        )
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this postprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``asim_output_dir``: ActivitySim output directory retained after
-              postprocessing. This coarse directory contract remains because
-              archived inputs and per-iteration outputs share stable topology
-              underneath it.
-            - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) written
-              for downstream UrbanSim/ATLAS steps when land use writeback is enabled.
-            - required ``*_asim_out`` keys: Canonical postprocessed parquet
-              outputs archived under the year/iteration directory.
-            - ``asim_input_*_archived``: Archived source inputs retained for
-              provenance-aware recovery.
-        Related docs
-            - See `pilates/activitysim/inputs.py` for the corresponding input
-              descriptions used by ActivitySim and downstream models.
-        """
-        outputs: Dict[str, Any] = {
-            "asim_output_dir": workspace.get_asim_output_dir(),
-            USIM_DATASTORE_H5: _forecast_usim_datastore_output_path(
-                settings,
-                state,
-                workspace,
-            ),
-        }
-        outputs.update(_activitysim_iteration_output_paths(state, workspace))
-        outputs.update(_activitysim_archived_input_paths(state, workspace))
-        return outputs
 
     def __init__(
         self,
@@ -928,9 +1043,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
         population_source_h5_path: Optional[str] = None,
         current_input_h5_path: Optional[str] = None,
+        households_asim_input_path: Optional[str] = None,
+        base_input_h5_path: Optional[str] = None,
     ) -> ActivitySimPostprocessOutputs:
         if not isinstance(raw_outputs, ActivitySimRunOutputs):
             raise TypeError(
@@ -942,99 +1058,77 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             postprocess_kwargs["population_source_h5_path"] = population_source_h5_path
         if current_input_h5_path is not None:
             postprocess_kwargs["current_input_h5_path"] = current_input_h5_path
+        if households_asim_input_path is not None:
+            postprocess_kwargs["households_asim_input_path"] = (
+                households_asim_input_path
+            )
+        if base_input_h5_path is not None:
+            postprocess_kwargs["base_input_h5_path"] = base_input_h5_path
         return self._postprocess(
             raw_outputs,
             workspace,
-            model_run_hash,
             **postprocess_kwargs,
         )
 
-    def _postprocess(
-        self,
+    @staticmethod
+    def _build_content_hash_map(raw_outputs: ActivitySimRunOutputs) -> Dict[str, str]:
+        hash_map: Dict[str, str] = {}
+        for short_name, path in raw_outputs.raw_outputs.items():
+            record_hash = raw_outputs.raw_output_hashes.get(short_name)
+            if record_hash:
+                hash_map[os.path.abspath(str(path))] = record_hash
+        source_input_paths = raw_outputs.source_input_paths
+        source_input_hashes = raw_outputs.source_input_hashes
+        if not source_input_paths and not source_input_hashes:
+            logger.debug(
+                "ActivitySim postprocess raw outputs are missing source input metadata; "
+                "archived input content hashes may be unavailable."
+            )
+        for short_name, source_path in source_input_paths.items():
+            record_hash = source_input_hashes.get(short_name)
+            if not record_hash or not source_path:
+                continue
+            hash_map[os.path.abspath(str(source_path))] = record_hash
+        return hash_map
+
+    @staticmethod
+    def _resolve_atlas_households_input_path(
+        settings: PilatesConfig,
         raw_outputs: ActivitySimRunOutputs,
+        households_asim_input_path: Optional[str],
+    ) -> Optional[Path]:
+        if not _atlas_owns_vehicle_ownership(settings):
+            return None
+        if households_asim_input_path is None:
+            raise ValueError(
+                "ActivitySim postprocess requires households_asim_input_path when "
+                "ATLAS owns vehicle ownership."
+            )
+        household_output_key = next(
+            (
+                raw_key
+                for raw_key in raw_outputs.raw_outputs
+                if normalize_asim_output_key(re.sub(r"_asim_out_temp$", "", raw_key))
+                == "households_asim_out"
+            ),
+            None,
+        )
+        if household_output_key is None:
+            raise ValueError(
+                "ActivitySim postprocess requires a households_asim_out raw output "
+                "when ATLAS owns vehicle ownership."
+            )
+        return Path(households_asim_input_path)
+
+    @staticmethod
+    def _archive_iteration_asim_inputs(
         workspace: Workspace,
-        model_run_hash: Optional[str] = None,
-        population_source_h5_path: Optional[str] = None,
-        current_input_h5_path: Optional[str] = None,
-    ) -> ActivitySimPostprocessOutputs:
-        """
-        Consolidates all postprocessing steps for ActivitySim.
-        This involves taking the raw outputs from the ActivitySim run,
-        processing them, and creating the necessary inputs for the next
-        models in the workflow (e.g., UrbanSim, BEAM).
-
-        Args:
-            raw_outputs (ActivitySimRunOutputs): The raw outputs from the model run.
-            workspace (Workspace): The workspace object for path management.
-            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
-
-        Returns:
-            ActivitySimPostprocessOutputs: Postprocessed output data.
-        """
-        settings = self.state.full_settings
-        year = self.state.year
-        forecast_year = self.state.forecast_year
-        replanning_iteration_number = self.state.current_inner_iter
-        logger.info(
-            "Running ActivitySim postprocessor for year %s, forecast year %s",
-            year,
-            forecast_year,
-        )
-
-        iteration_folder_name = "year-{0}-iteration-{1}".format(
-            year, replanning_iteration_number
-        )
-
-        iteration_folder_path = os.path.join(
-            workspace.get_asim_output_dir(), iteration_folder_name
-        )
-        if not os.path.exists(os.path.abspath(iteration_folder_path)):
-            os.makedirs(iteration_folder_path, exist_ok=True)
-
-        # Archive ActivitySim inputs for this iteration
-        # This ensures Consist can find input files at stable paths for hybrid views
-        inputs_folder_name = "inputs-year-{0}-iteration-{1}".format(
-            forecast_year, replanning_iteration_number
-        )
-        inputs_folder_path = os.path.join(
-            workspace.get_asim_output_dir(), inputs_folder_name
-        )
-        if not os.path.exists(os.path.abspath(inputs_folder_path)):
-            os.makedirs(inputs_folder_path, exist_ok=True)
-
-        processed_outputs: Dict[str, str] = {}
-        processed_output_hashes: Dict[str, str] = {}
-        usim_datastore_h5: Optional[str] = None
-        usim_datastore_key: Optional[str] = None
-
-        def _build_content_hash_map() -> Dict[str, str]:
-            hash_map: Dict[str, str] = {}
-            for short_name, path in raw_outputs.raw_outputs.items():
-                record_hash = raw_outputs.raw_output_hashes.get(short_name)
-                if record_hash:
-                    hash_map[os.path.abspath(str(path))] = record_hash
-            source_input_paths = raw_outputs.source_input_paths
-            source_input_hashes = raw_outputs.source_input_hashes
-            if not source_input_paths and not source_input_hashes:
-                logger.warning(
-                    "ActivitySim postprocess raw outputs are missing source input metadata; "
-                    "archived input content hashes may be unavailable."
-                )
-            for short_name, source_path in source_input_paths.items():
-                record_hash = source_input_hashes.get(short_name)
-                if not record_hash or not source_path:
-                    continue
-                hash_map[os.path.abspath(str(source_path))] = record_hash
-            return hash_map
-
-        content_hash_map = _build_content_hash_map()
-
-        def _resolve_content_hash(source_path: str) -> Optional[str]:
-            if not source_path:
-                return None
-            return content_hash_map.get(os.path.abspath(source_path))
-
-        # Archive input files from activitysim/data/
+        raw_outputs: ActivitySimRunOutputs,
+        inputs_folder_path: str,
+        content_hash_map: Dict[str, str],
+        processed_outputs: Dict[str, str],
+        processed_output_hashes: Dict[str, str],
+    ) -> None:
         asim_data_dir = workspace.get_asim_mutable_data_dir()
         input_files_to_archive = [
             "households.csv",
@@ -1050,7 +1144,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if os.path.exists(source_path):
                 target_path = os.path.join(inputs_folder_path, input_file)
                 shutil.copy(source_path, target_path)
-                content_hash = _resolve_content_hash(source_path)
+                content_hash = content_hash_map.get(os.path.abspath(source_path))
 
                 archived_key = f"asim_input_{input_file.replace('.', '_')}_archived"
                 processed_outputs[archived_key] = target_path
@@ -1060,116 +1154,229 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             else:
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
 
-        # Archive skims.zarr from activitysim/output/cache/
-        zarr_source_path = asim_runtime_zarr_path(workspace)
-        if os.path.exists(zarr_source_path):
-            zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
-            if os.path.exists(zarr_target_path):
-                if os.path.isdir(zarr_target_path):
-                    shutil.rmtree(zarr_target_path)
-                else:
-                    os.remove(zarr_target_path)
-            if os.path.isdir(zarr_source_path):
-                shutil.copytree(zarr_source_path, zarr_target_path)
-            else:
-                shutil.copy2(zarr_source_path, zarr_target_path)
-            content_hash = _resolve_content_hash(zarr_source_path)
+    def _update_urbansim_datastore_if_enabled(
+        self,
+        settings: PilatesConfig,
+        workspace: Workspace,
+        raw_outputs: ActivitySimRunOutputs,
+        iteration_folder_path: str,
+        forecast_year: int,
+        population_source_h5_path: Optional[str],
+        current_input_h5_path: Optional[str],
+        base_input_h5_path: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if not self.state.is_enabled(WorkflowState.Stage.land_use):
+            return None, None
+        if not population_source_h5_path:
+            raise ValueError(
+                "ActivitySim postprocess requires population_source_h5_path when land use is enabled."
+            )
+        if not current_input_h5_path:
+            raise ValueError(
+                "ActivitySim postprocess requires current_input_h5_path when land use is enabled."
+            )
 
-            processed_outputs["asim_input_skims_zarr_archived"] = zarr_target_path
-            if content_hash:
-                processed_output_hashes["asim_input_skims_zarr_archived"] = content_hash
-            logger.info("Archived ActivitySim input: skims.zarr")
-        else:
-            logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
+        asim_output_dict = _load_asim_outputs(
+            settings,
+            workspace,
+            self.state,
+            fallback_dir=iteration_folder_path,
+            raw_outputs=raw_outputs,
+        )
+        source_file_paths = [str(path) for path in raw_outputs.raw_outputs.values()]
+        tables_updated_by_asim = ["households", "persons"]
+        asim_output_dict = _prepare_updated_tables(
+            settings,
+            self.state,
+            asim_output_dict,
+            tables_updated_by_asim,
+            population_source_store_path=population_source_h5_path,
+            prefix=forecast_year,
+        )
 
-        if self.state.is_enabled(WorkflowState.Stage.land_use):
-            if not population_source_h5_path:
-                raise ValueError(
-                    "ActivitySim postprocess requires population_source_h5_path when land use is enabled."
-                )
-            if not current_input_h5_path:
-                raise ValueError(
-                    "ActivitySim postprocess requires current_input_h5_path when land use is enabled."
-                )
-
-            # 1. Load raw ActivitySim outputs from files
-            # The raw_outputs RecordStore contains the paths to these files.
-            # TODO: update this to only grad tables_updated_by_asim
-            asim_output_dict = _load_asim_outputs(
+        next_usim_input_path, usim_datastore_key = create_usim_input_data(
+            settings,
+            self.state,
+            asim_output_dict,
+            tables_updated_by_asim,
+            source_file_paths,
+            current_input_store_path=current_input_h5_path,
+            population_source_store_path=population_source_h5_path,
+            target_store_path=_next_iter_usim_input_store_path(
                 settings,
                 workspace,
                 self.state,
-                fallback_dir=iteration_folder_path,
-            )
+            ),
+            base_input_store_path=base_input_h5_path,
+        )
+        if not next_usim_input_path or not usim_datastore_key:
+            return None, None
+        return next_usim_input_path, usim_datastore_key
 
-            # The raw output files are implicitly the source for all derived products in this post-processing step.
-            source_file_paths = [str(path) for path in raw_outputs.raw_outputs.values()]
-
-            # 2. Prepare tables for integration with UrbanSim
-            tables_updated_by_asim = ["households", "persons"]
-            asim_output_dict = _prepare_updated_tables(
-                settings,
-                self.state,
-                asim_output_dict,
-                tables_updated_by_asim,
-                population_source_store_path=population_source_h5_path,
-                prefix=forecast_year,
+    @staticmethod
+    def _archive_single_asim_raw_output(
+        short_name: str,
+        path: Any,
+        raw_outputs: ActivitySimRunOutputs,
+        iteration_folder_path: str,
+        atlas_households_input_path: Optional[Path],
+        content_hash_map: Dict[str, str],
+        processed_outputs: Dict[str, str],
+        processed_output_hashes: Dict[str, str],
+    ) -> None:
+        source = os.path.abspath(str(path))
+        clean_name = re.sub(r"_asim_out_temp$", "", short_name)
+        output_key = normalize_asim_output_key(clean_name)
+        target = os.path.join(
+            iteration_folder_path,
+            _postprocess_output_stem(output_key) + ".parquet",
+        )
+        content_hash = raw_outputs.raw_output_hashes.get(short_name)
+        restore_atlas_cars = (
+            atlas_households_input_path is not None
+            and output_key == "households_asim_out"
+        )
+        if restore_atlas_cars and atlas_households_input_path is not None:
+            if os.path.abspath(source) != os.path.abspath(target):
+                if not os.path.exists(source):
+                    if not os.path.exists(target):
+                        logger.debug("ASim output missing, skipping copy: %s", source)
+                        return
+                else:
+                    shutil.copy2(source, target)
+            content_hash = restore_atlas_household_cars(
+                households_output_path=Path(target),
+                households_input_path=atlas_households_input_path,
             )
+            processed_outputs[output_key] = target
+            processed_output_hashes[output_key] = content_hash
+            return
 
-            # 3. Create UrbanSim input data for the next iteration
-            # This function will handle its own provenance logging.
-            next_usim_input_path, usim_record = create_usim_input_data(
-                settings,
-                self.state,
-                asim_output_dict,
-                tables_updated_by_asim,
-                source_file_paths,
-                current_input_store_path=current_input_h5_path,
-                population_source_store_path=population_source_h5_path,
-                target_store_path=_forecast_usim_datastore_output_path(
-                    settings,
-                    self.state,
-                    workspace,
-                ),
-            )
-            if usim_record:
-                usim_datastore_h5 = next_usim_input_path
-                usim_datastore_key = getattr(usim_record, "short_name", None)
-
-        # Record raw outputs as inputs to this post-processing run
-        for short_name, path in raw_outputs.raw_outputs.items():
-            source = os.path.abspath(str(path))
-            clean_name = re.sub(r"_asim_out_temp$", "", short_name)
-            output_key = normalize_asim_output_key(clean_name)
-            target = os.path.join(
-                iteration_folder_path,
-                clean_name + ".parquet",
-            )
-            content_hash = raw_outputs.raw_output_hashes.get(short_name)
-            if os.path.abspath(source) == os.path.abspath(target):
-                processed_outputs[output_key] = target
-                if content_hash:
-                    processed_output_hashes[output_key] = content_hash
-                continue
-            if os.path.exists(target):
-                logger.debug("ASim output already archived: %s", target)
-                processed_outputs[output_key] = target
-                if content_hash is None:
-                    content_hash = _resolve_content_hash(
-                        source
-                    ) or _resolve_content_hash(target)
-                if content_hash:
-                    processed_output_hashes[output_key] = content_hash
-                continue
-            if not os.path.exists(source):
-                logger.debug("ASim output missing, skipping move: %s", source)
-                continue
-            shutil.move(source, target)
-            if content_hash is None:
-                content_hash = _resolve_content_hash(source)
+        if os.path.abspath(source) == os.path.abspath(target):
             processed_outputs[output_key] = target
             if content_hash:
                 processed_output_hashes[output_key] = content_hash
+            return
+
+        if os.path.exists(target):
+            logger.debug("ASim output already archived: %s", target)
+            processed_outputs[output_key] = target
+            if content_hash is None:
+                content_hash = content_hash_map.get(source) or content_hash_map.get(
+                    os.path.abspath(target)
+                )
+            if content_hash:
+                processed_output_hashes[output_key] = content_hash
+            return
+
+        if not os.path.exists(source):
+            logger.debug("ASim output missing, skipping move: %s", source)
+            return
+
+        shutil.move(source, target)
+        if content_hash is None:
+            content_hash = content_hash_map.get(source)
+        processed_outputs[output_key] = target
+        if content_hash:
+            processed_output_hashes[output_key] = content_hash
+
+    def _postprocess(
+        self,
+        raw_outputs: ActivitySimRunOutputs,
+        workspace: Workspace,
+        population_source_h5_path: Optional[str] = None,
+        current_input_h5_path: Optional[str] = None,
+        households_asim_input_path: Optional[str] = None,
+        base_input_h5_path: Optional[str] = None,
+    ) -> ActivitySimPostprocessOutputs:
+        """
+        Consolidates all postprocessing steps for ActivitySim.
+        This involves taking the raw outputs from the ActivitySim run,
+        processing them, and creating the necessary inputs for the next
+        models in the workflow (e.g., UrbanSim, BEAM).
+
+        Args:
+            raw_outputs (ActivitySimRunOutputs): The raw outputs from the model run.
+            workspace (Workspace): The workspace object for path management.
+
+        Returns:
+            ActivitySimPostprocessOutputs: Postprocessed output data.
+        """
+        settings = self.state.full_settings
+        year = get_setting(
+            self.state, "year", get_setting(self.state, "current_year", None)
+        )
+        forecast_year = resolve_forecast_year(self.state)
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ActivitySim postprocess."
+            )
+        replanning_iteration_number = self.state.current_inner_iter
+        logger.info(
+            "Running ActivitySim postprocessor for year %s, forecast year %s",
+            year,
+            forecast_year,
+        )
+
+        iteration_folder_name = "year-{0}-iteration-{1}".format(
+            year, replanning_iteration_number
+        )
+        iteration_folder_path = os.path.join(
+            workspace.get_asim_output_dir(), iteration_folder_name
+        )
+        if not os.path.exists(os.path.abspath(iteration_folder_path)):
+            os.makedirs(iteration_folder_path, exist_ok=True)
+
+        inputs_folder_name = "inputs-year-{0}-iteration-{1}".format(
+            forecast_year, replanning_iteration_number
+        )
+        inputs_folder_path = os.path.join(
+            workspace.get_asim_output_dir(), inputs_folder_name
+        )
+        if not os.path.exists(os.path.abspath(inputs_folder_path)):
+            os.makedirs(inputs_folder_path, exist_ok=True)
+
+        processed_outputs: Dict[str, str] = {}
+        processed_output_hashes: Dict[str, str] = {}
+
+        atlas_households_input_path = self._resolve_atlas_households_input_path(
+            settings, raw_outputs, households_asim_input_path
+        )
+        content_hash_map = self._build_content_hash_map(raw_outputs)
+
+        self._archive_iteration_asim_inputs(
+            workspace,
+            raw_outputs,
+            inputs_folder_path,
+            content_hash_map,
+            processed_outputs,
+            processed_output_hashes,
+        )
+
+        usim_datastore_h5, usim_datastore_key = (
+            self._update_urbansim_datastore_if_enabled(
+                settings,
+                workspace,
+                raw_outputs,
+                iteration_folder_path,
+                forecast_year,
+                population_source_h5_path,
+                current_input_h5_path,
+                base_input_h5_path=base_input_h5_path,
+            )
+        )
+
+        for short_name, path in raw_outputs.raw_outputs.items():
+            self._archive_single_asim_raw_output(
+                short_name,
+                path,
+                raw_outputs,
+                iteration_folder_path,
+                atlas_households_input_path,
+                content_hash_map,
+                processed_outputs,
+                processed_output_hashes,
+            )
 
         return ActivitySimPostprocessOutputs(
             usim_datastore_h5=Path(usim_datastore_h5) if usim_datastore_h5 else None,

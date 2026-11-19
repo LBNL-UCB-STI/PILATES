@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from typing import List, Optional, Dict, Any, Mapping
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from pilates.config import PilatesConfig
 from pilates.beam.outputs import (
@@ -11,8 +11,9 @@ from pilates.beam.outputs import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
 )
+from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.generic.runner import GenericRunner
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import FileRecord
 from pilates.beam.postprocessor import (
     find_latest_beam_iteration,
     find_beam_iterations,
@@ -20,43 +21,31 @@ from pilates.beam.postprocessor import (
 )
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
-    BEAM_CONFIG_FILE,
     BEAM_FULL_SKIMS,
-    BEAM_MUTABLE_DATA_DIR,
     BEAM_NETWORK_FINAL,
-    BEAM_OUTPUT_DIR,
+    FINAL_SKIMS_OMX,
 )
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
-from pilates.activitysim.runner import asim_runtime_zarr_path
-from pilates.utils.consist_runtime import artifact_fingerprint
 
 logger = logging.getLogger(__name__)
 
 
-def _append_artifact_mapping_records(
-    record_store: RecordStore,
-    artifact_mapping: Optional[Mapping[str, Any]],
-    *,
-    description_prefix: str,
-) -> None:
-    if not artifact_mapping:
-        return
-    for key, value in artifact_mapping.items():
+def _collect_input_paths(
+    inputs: BeamPreprocessOutputs,
+    extra_inputs: Optional[Mapping[str, Any]] = None,
+) -> List[str]:
+    input_paths = [str(path) for _, path, _ in inputs._iter_record_items()]
+    if not extra_inputs:
+        return input_paths
+    for value in extra_inputs.values():
         path = artifact_to_path(value, None)
         if path is None and isinstance(value, (str, os.PathLike)):
             path = os.fspath(value)
-        if not path:
-            continue
-        record_store.add_record(
-            FileRecord(
-                file_path=str(path),
-                short_name=key,
-                description=f"{description_prefix}: {key}",
-                content_hash=artifact_fingerprint(value),
-            )
-        )
+        if path:
+            input_paths.append(str(path))
+    return input_paths
 
 
 def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
@@ -83,6 +72,19 @@ def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     return optimal
 
 
+def _resolve_beam_memory(settings: Any) -> str:
+    """
+    Resolve BEAM JVM heap memory string, expanding environment variables
+    and falling back to a safe default if an unexpanded template is encountered.
+    """
+    raw_memory = getattr(getattr(settings, "beam", None), "memory", None)
+    if raw_memory:
+        expanded = os.path.expandvars(str(raw_memory)).strip()
+        if expanded and not expanded.startswith("${"):
+            return expanded
+    return os.environ.get("BEAM_MEMORY", "150g")
+
+
 def _map_host_path_to_container(
     host_path: str, abs_beam_input: str, abs_beam_output: str
 ) -> str:
@@ -98,20 +100,112 @@ def _map_host_path_to_container(
     return host_path
 
 
+def _beam_container_volumes(
+    *,
+    input_root: Path,
+    output_root: Path,
+    launch_config: BeamLaunchConfig,
+) -> dict[str, dict[str, str]]:
+    """Mount the launch snapshot at its container and configured host paths."""
+
+    shared_tmp_dir = output_root / "tmp"
+    shared_tmp_dir.mkdir(parents=True, exist_ok=True)
+    volumes = {
+        str(input_root): {"bind": "/app/input", "mode": "rw"},
+        str(output_root): {"bind": "/app/output", "mode": "rw"},
+        str(shared_tmp_dir): {"bind": "/tmp", "mode": "rw"},
+    }
+    host_path_root = input_root.parent
+    volumes[str(host_path_root)] = {
+        "bind": str(host_path_root),
+        "mode": "rw",
+    }
+    return volumes
+
+
+def _require_beam_launch_config(
+    launch_config: BeamLaunchConfig | None,
+) -> BeamLaunchConfig:
+    """Require the resolver-produced launch tree for BEAM execution."""
+
+    if not isinstance(launch_config, BeamLaunchConfig):
+        raise RuntimeError(
+            "BEAM runner requires the resolver-produced launch configuration; "
+            "it must not derive material input paths from Workspace."
+        )
+    return launch_config
+
+
+def _full_skim_output_filename(skims_kind: Optional[str]) -> str:
+    """Return the canonical FullSkimsCreatorApp output filename for ``skims_kind``."""
+    if skims_kind in (None, "activitySimOmx"):
+        return "skims.omx"
+    if skims_kind in ("activitySimZarr", "zarr"):
+        return "skims.zarr"
+    return "skimsODFull.csv.gz"
+
+
+def _resolve_full_skim_input_path(
+    configured_path: str,
+    *,
+    abs_beam_input: str,
+    abs_beam_output: str,
+    region: str,
+) -> tuple[str, Optional[str]]:
+    """Resolve a configured full-skim path to ``(container_path, host_path)``."""
+    if configured_path == "/app/input" or configured_path.startswith("/app/input/"):
+        rel = os.path.relpath(configured_path, "/app/input")
+        host_candidate = os.path.normpath(os.path.join(abs_beam_input, rel))
+        return configured_path, host_candidate
+    if configured_path == "/app/output" or configured_path.startswith("/app/output/"):
+        rel = os.path.relpath(configured_path, "/app/output")
+        host_candidate = os.path.normpath(os.path.join(abs_beam_output, rel))
+        return configured_path, host_candidate
+    if os.path.isabs(configured_path):
+        container_path = _map_host_path_to_container(
+            configured_path, abs_beam_input, abs_beam_output
+        )
+        return container_path, configured_path
+
+    region_candidate = os.path.join(abs_beam_input, region, configured_path)
+    root_candidate = os.path.join(abs_beam_input, configured_path)
+    input_is_region_root = os.path.basename(os.path.normpath(abs_beam_input)) == region
+    if input_is_region_root:
+        candidates = (root_candidate, region_candidate)
+        fallback = root_candidate
+    else:
+        candidates = (region_candidate, root_candidate)
+        fallback = region_candidate
+    host_path = fallback
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            host_path = candidate
+            break
+    container_path = _map_host_path_to_container(
+        host_path, abs_beam_input, abs_beam_output
+    )
+    return container_path, host_path
+
+
 def _select_latest_linkstats_path(
-    records: Optional[RecordStore],
+    inputs: Optional[Union[BeamPreprocessOutputs, Mapping[str, Any]]],
     abs_beam_input: str,
     abs_beam_output: str,
 ) -> Optional[str]:
     """
     Select the newest linkstats artifact and map it to a container path.
     """
-    if records is None:
+    if inputs is None:
         return None
+    mapping = (
+        inputs.prepared_inputs if isinstance(inputs, BeamPreprocessOutputs) else inputs
+    )
 
     def _linkstats_rank(short_name: str) -> Optional[tuple[int, int, int]]:
         if "_sub" in short_name:
             return None
+        if short_name == "linkstats_warmstart":
+            return (-1, 0, 1)
         if short_name == "linkstats":
             return (0, 0, 1)
         if short_name == "linkstats_parquet":
@@ -135,23 +229,47 @@ def _select_latest_linkstats_path(
             return (year, iteration, format_priority)
         return None
 
-    best_record: Optional[FileRecord] = None
+    best_name: Optional[str] = None
+    best_path: Optional[str] = None
     best_rank: Optional[tuple[int, int, int]] = None
-    for record in records.all_records():
-        short_name = getattr(record, "short_name", "") or ""
+    for short_name, value in mapping.items():
         rank = _linkstats_rank(short_name)
         if rank is None:
             continue
         if best_rank is None or rank >= best_rank:
             best_rank = rank
-            best_record = record
+            best_name = short_name
+            best_path = str(value)
 
-    if best_record is None:
+    if best_name is None or best_path is None:
         return None
 
-    path = best_record.file_path
+    path = best_path
     if not os.path.isabs(path):
         path = os.path.abspath(path)
+    norm_path = os.path.normpath(path)
+    norm_in = os.path.normpath(abs_beam_input)
+    norm_out = os.path.normpath(abs_beam_output)
+    is_under_mounted_root = (
+        norm_path == norm_in
+        or norm_path.startswith(norm_in + os.sep)
+        or norm_path == norm_out
+        or norm_path.startswith(norm_out + os.sep)
+    )
+    if not is_under_mounted_root and best_name == "linkstats_warmstart":
+        warmstart_dir = Path(abs_beam_input) / ".pilates" / "warmstarts"
+        staged_candidates: list[Path] = []
+        if os.path.isfile(path):
+            from pilates.beam.launch_config import _warmstart_destination_name
+
+            staged_candidates.append(
+                warmstart_dir / _warmstart_destination_name(Path(path))
+            )
+        staged_candidates.append(warmstart_dir / Path(path).name)
+        for staged_candidate in staged_candidates:
+            if os.path.exists(staged_candidate):
+                path = str(staged_candidate)
+                break
     return _map_host_path_to_container(path, abs_beam_input, abs_beam_output)
 
 
@@ -167,24 +285,23 @@ def rename_beam_output_directory(
     beam_output_dir, settings, year, replanning_iteration_number=0
 ) -> (str, str):
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
+    if iteration_output_directory is None:
+        raise RuntimeError(
+            f"No BEAM iteration output directory found under {beam_output_dir} to rename"
+        )
     beam_run_output_dir = os.path.dirname(os.path.dirname(iteration_output_directory))
     new_iteration_output_directory = os.path.join(
         beam_output_dir,
         get_setting(settings, "run.region"),
         "year-{0}-iteration-{1}".format(year, replanning_iteration_number),
     )
+    Path(new_iteration_output_directory).parent.mkdir(parents=True, exist_ok=True)
     if os.path.exists(new_iteration_output_directory):
         os.rename(
             new_iteration_output_directory,
             find_not_taken_dir_name(new_iteration_output_directory),
         )
-    try:
-        os.rename(beam_run_output_dir, new_iteration_output_directory)
-    except FileNotFoundError:
-        logger.warning(
-            "Files {0} not found. Adding a slash".format(beam_run_output_dir)
-        )
-        os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
+    os.rename(beam_run_output_dir, new_iteration_output_directory)
     return beam_run_output_dir, new_iteration_output_directory
 
 
@@ -226,60 +343,6 @@ class BeamRunner(GenericRunner):
     Runner for the BEAM model.
     """
 
-    @staticmethod
-    def declared_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this runner expects without disk checks.
-        """
-        zarr_path = None
-        if getattr(settings, "activitysim", None) is not None:
-            zarr_path = asim_runtime_zarr_path(workspace)
-        return {
-            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "zarr_skims": zarr_path,
-        }
-
-    @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        inputs = {
-            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-        }
-        if getattr(settings, "activitysim", None) is not None:
-            candidate = asim_runtime_zarr_path(workspace)
-            if os.path.exists(candidate):
-                inputs["zarr_skims"] = candidate
-        return inputs
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        return BeamRunner.runtime_expected_inputs(settings, state, workspace)
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this runner produces.
-
-        Notes
-        -----
-        Output keys
-            - ``beam_output_dir``: BEAM output directory for the run.
-        Related docs
-            - See `pilates/beam/inputs.py` for the corresponding input
-              descriptions used by BEAM and downstream models.
-        """
-        return {"beam_output_dir": workspace.get_beam_output_dir()}
-
     def __init__(
         self,
         model_name: str,
@@ -291,13 +354,25 @@ class BeamRunner(GenericRunner):
         self,
         beam_local_output_folder: str,
         skimFormat: str = "omx",
+        activitysim_skims_file_base_name: str = "skimsActivitySimOD",
     ) -> List[FileRecord]:
+        activitysim_skim_base_names = tuple(
+            dict.fromkeys(
+                (
+                    activitysim_skims_file_base_name,
+                    "skimsActivitySimOD",
+                    "activitySimODSkims",
+                )
+            )
+        )
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
-            # Zarr OD skims naming differs across BEAM builds/configs:
+            # BEAM OD skims naming differs across builds/configs:
+            # - `{it}.skimsActivitySimOD_current.omx` (legacy/observed)
+            # - `{it}.activitySimODSkims_current.omx` (observed in production)
             # - `{it}.skimsActivitySimOD_current.zarr` (observed in production)
             # - `{it}.activitySimODSkims_current.zarr` (observed in some builds)
-            # We handle both below.
+            # We handle both basenames below.
             "raw_od_skims_zarr": (None, ".zarr"),
             "raw_origin_skims": ("skimsRidehail", ".csv.gz"),
             "linkstats": ("linkstats", ".csv.gz"),
@@ -369,11 +444,31 @@ class BeamRunner(GenericRunner):
         paths, last_iter = find_beam_iterations(beam_local_output_folder)
         for it, path in paths.items():
             for short_name, (file_name, extension) in files_to_get.items():
-                if short_name == "raw_od_skims_zarr":
-                    full_path = find_iteration_file(
-                        path, it, "skimsActivitySimOD_current", ".zarr"
-                    ) or find_iteration_file(
-                        path, it, "activitySimODSkims_current", ".zarr"
+                if short_name == "raw_od_skims":
+                    full_path = next(
+                        (
+                            candidate
+                            for base_name in activitysim_skim_base_names
+                            if (
+                                candidate := find_iteration_file(
+                                    path, it, f"{base_name}_current", ".omx"
+                                )
+                            )
+                        ),
+                        None,
+                    )
+                elif short_name == "raw_od_skims_zarr":
+                    full_path = next(
+                        (
+                            candidate
+                            for base_name in activitysim_skim_base_names
+                            if (
+                                candidate := find_iteration_file(
+                                    path, it, f"{base_name}_current", ".zarr"
+                                )
+                            )
+                        ),
+                        None,
                     )
                 else:
                     full_path = find_iteration_file(path, it, file_name, extension)
@@ -470,23 +565,25 @@ class BeamRunner(GenericRunner):
 
     def _run(
         self,
-        store: RecordStore,
+        inputs: BeamPreprocessOutputs,
         workspace: Workspace,
-    ) -> RecordStore:
+        launch_config: BeamLaunchConfig,
+        extra_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> BeamRunOutputs:
+        launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
-        region = settings.run.region
-        beam_memory = settings.beam.memory
-        extra_jvm_args = (getattr(settings.beam, "extra_jvm_args", None) or "").strip()
+        beam_memory = _resolve_beam_memory(settings)
 
         client = None  # Handled by Consist
 
         travel_model, travel_model_image = self.get_model_and_image(
             settings, "travel_model"
         )
-        beam_config = settings.beam.config
-        path_to_beam_config = f"/app/input/{region}/{beam_config}"
-
-        abs_beam_input = workspace.get_beam_mutable_data_dir()
+        config_relative_path = launch_config.primary_config.relative_to(
+            launch_config.root
+        )
+        path_to_beam_config = str(Path("/app/input") / config_relative_path)
+        abs_beam_input = str(launch_config.root)
         abs_beam_output = workspace.get_beam_output_dir()
 
         # Make sure there's a temp dir for the JVM to use
@@ -496,9 +593,13 @@ class BeamRunner(GenericRunner):
             "[BEAM Runner] Starting BEAM container, input: %s, output: %s, config: %s",
             abs_beam_input,
             abs_beam_output,
-            beam_config,
+            path_to_beam_config,
         )
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+        system_cpus = os.cpu_count() or 4
+        parallel_gc = max(2, min(system_cpus, 36))
+        conc_gc = max(1, parallel_gc // 4)
 
         java_opts = (
             # Memory settings (match Xms and Xmx)
@@ -507,9 +608,9 @@ class BeamRunner(GenericRunner):
             # G1GC with more aggressive settings
             "-XX:+UseG1GC "
             "-XX:G1HeapRegionSize=32M "
-            # More GC threads for burst capacity
-            "-XX:ParallelGCThreads=36 "
-            "-XX:ConcGCThreads=9 "
+            # Scaled GC threads for burst capacity without oversubscription
+            f"-XX:ParallelGCThreads={parallel_gc} "
+            f"-XX:ConcGCThreads={conc_gc} "
             "-XX:+UseNUMA "
             "-XX:+AlwaysPreTouch "
             # Flexible young gen - WIDE range for adaptability
@@ -528,25 +629,21 @@ class BeamRunner(GenericRunner):
             "-Djava.io.tmpdir=/app/output/tmp "
             "-Djna.tmpdir=/app/output/tmp"
         )
+        extra_jvm_args = (getattr(settings.beam, "extra_jvm_args", None) or "").strip()
         if extra_jvm_args:
             java_opts = f"{java_opts} {extra_jvm_args}"
 
-        # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
-        # Consist container input lineage expects filesystem paths, so filter to FileRecord instances.
-        from pilates.generic.records import FileRecord
-
-        input_paths = [
-            r.file_path for r in store.all_records() if isinstance(r, FileRecord)
-        ]
+        input_paths = _collect_input_paths(inputs, extra_inputs)
 
         success = self.run_container(
             client=client,
             settings=settings,
             image=travel_model_image,
-            volumes={
-                abs_beam_input: {"bind": "/app/input", "mode": "rw"},
-                abs_beam_output: {"bind": "/app/output", "mode": "rw"},
-            },
+            volumes=_beam_container_volumes(
+                input_root=Path(abs_beam_input),
+                output_root=Path(abs_beam_output),
+                launch_config=launch_config,
+            ),
             command=f"--config={path_to_beam_config}",
             model_name=self.model_name,
             working_dir="/app",
@@ -559,20 +656,19 @@ class BeamRunner(GenericRunner):
         if not success:
             raise RuntimeError("BEAM run failed after container execution.")
 
-        output_path_for_gather: str
         try:
-            old_path, new_path = rename_beam_output_directory(
+            _, output_path_for_gather = rename_beam_output_directory(
                 workspace.get_beam_output_dir(),
                 settings,
                 self.state.current_year,
                 self.state.current_inner_iter,
             )
-            output_path_for_gather = new_path
-        except Exception as e:
-            logger.error(
-                f"Failed to rename BEAM output directory: {e}. Proceeding without rename."
-            )
-            output_path_for_gather = workspace.get_beam_output_dir()
+        except OSError as exc:
+            raise RuntimeError(
+                "Failed to rename BEAM output directory to its declared "
+                "region/year/iteration root; refusing to gather from the "
+                "broad BEAM output root."
+            ) from exc
 
         # ASSEMBLE OUTPUTS
         skims_fname = get_setting(settings, "shared.skims.fname")
@@ -586,20 +682,37 @@ class BeamRunner(GenericRunner):
                 "[BEAM Runner] Defaulting to 'omx' skim format for finding BEAM outputs."
             )
 
-        output_records = self.gather_outputs(output_path_for_gather, skimFormat)
-        output_store = RecordStore(recordList=output_records)
+        output_records = self.gather_outputs(
+            output_path_for_gather,
+            skimFormat,
+            get_setting(
+                settings,
+                "beam.activitysim_skims_file_base_name",
+                "skimsActivitySimOD",
+            ),
+        )
+        raw_outputs: Dict[str, Path] = {}
+        for record in output_records:
+            key = record.short_name or record.unique_id
+            path = artifact_to_path(record.file_path, workspace)
+            if path is not None:
+                raw_outputs[key] = Path(path)
 
         logger.info(
             f"[BEAM Runner] BEAM run complete. Output records: {len(output_records)}"
         )
 
-        return output_store
+        return BeamRunOutputs(
+            beam_output_dir=Path(workspace.get_beam_output_dir()),
+            raw_outputs=raw_outputs,
+        )
 
     def run(
         self,
         inputs: BeamPreprocessOutputs,
         workspace: Workspace,
         *,
+        launch_config: BeamLaunchConfig,
         extra_inputs: Optional[Mapping[str, Any]] = None,
     ) -> BeamRunOutputs:
         """
@@ -608,79 +721,83 @@ class BeamRunner(GenericRunner):
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamRunner.run expects BeamPreprocessOutputs")
         self.state.set_sub_stage_progress("runner")
-        input_store = RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-                for short_name, path, description in inputs._iter_record_items()
-            ]
+        return self._run(
+            inputs,
+            workspace,
+            launch_config,
+            extra_inputs=extra_inputs,
         )
-        _append_artifact_mapping_records(
-            input_store,
-            extra_inputs,
-            description_prefix="BEAM run extra input",
+
+
+def beam_full_skim_output_paths(
+    settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+) -> Dict[str, Path]:
+    """
+    Resolve expected output paths for BEAM's ``FullSkimsCreatorApp`` step.
+
+    Resolves ``(year, iteration)`` from ``WorkflowState`` (falling back to
+    ``year``/``iteration`` attributes on lightweight test stubs; returns ``{}``
+    if no year is available). Always declares ``BEAM_FULL_SKIMS`` under
+    ``<beam_output_dir>/<region>/year-<year>-iteration-<iteration>/`` using the
+    extension implied by ``beam.full_skim.skims_kind`` (defaulting to
+    ``"activitySimOmx"``). Also declares ``FINAL_SKIMS_OMX`` in BEAM's mutable
+    data directory only for OMX mode, since ``.zarr``/``.csv.gz`` full-skim runs
+    do not produce the shared OMX skims artifact.
+    """
+    try:
+        year = state.current_year
+    except AttributeError:
+        try:
+            year = state.year
+        except AttributeError:
+            year = None
+    if year is None:
+        return {}
+
+    try:
+        iteration = state.current_inner_iter
+    except AttributeError:
+        try:
+            iteration = state.iteration
+        except AttributeError:
+            iteration = 0
+    if iteration is None:
+        iteration = 0
+
+    try:
+        beam_cfg = settings.beam
+    except AttributeError:
+        beam_cfg = None
+
+    skim_cfg = beam_cfg.full_skim if beam_cfg is not None else None
+    skims_kind = (
+        skim_cfg.skims_kind
+        if skim_cfg is not None and skim_cfg.skims_kind
+        else "activitySimOmx"
+    )
+    output_filename = _full_skim_output_filename(skims_kind)
+    outputs: Dict[str, Path] = {
+        BEAM_FULL_SKIMS: (
+            Path(workspace.get_beam_output_dir())
+            / settings.run.region
+            / f"year-{int(year)}-iteration-{int(iteration)}"
+            / output_filename
         )
-        output_store = self._run(input_store, workspace)
-        raw_outputs: Dict[str, Path] = {}
-        for key, value in output_store.to_mapping().items():
-            path = artifact_to_path(value, workspace)
-            if path is None:
-                continue
-            raw_outputs[key] = Path(path)
-        return BeamRunOutputs(
-            beam_output_dir=Path(workspace.get_beam_output_dir()),
-            raw_outputs=raw_outputs,
+    }
+    if skims_kind in (None, "activitySimOmx"):
+        omx_name = get_setting(settings, "beam.skims_fname", "skims.omx") or "skims.omx"
+        outputs[FINAL_SKIMS_OMX] = (
+            Path(workspace.get_beam_mutable_data_dir())
+            / settings.run.region
+            / str(omx_name)
         )
+    return outputs
 
 
 class BeamFullSkimRunner(GenericRunner):
     """
     Runner for BEAM FullSkimsCreatorApp as a dedicated workflow step.
     """
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this runner expects without disk checks.
-        """
-        return {
-            BEAM_CONFIG_FILE: (
-                Path(workspace.get_beam_mutable_data_dir())
-                / settings.run.region
-                / settings.beam.config
-            ),
-            BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
-            BEAM_OUTPUT_DIR: workspace.get_beam_output_dir(),
-        }
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this runner produces.
-        """
-        year = getattr(state, "current_year", None)
-        if year is None:
-            year = getattr(state, "year", None)
-        iteration = getattr(state, "current_inner_iter", None)
-        if iteration is None:
-            iteration = getattr(state, "iteration", 0)
-        if year is None:
-            return {}
-        return {
-            BEAM_FULL_SKIMS: (
-                Path(workspace.get_beam_output_dir())
-                / settings.run.region
-                / f"year-{int(year)}-iteration-{int(iteration)}"
-                / "skimsODFull.csv.gz"
-            )
-        }
 
     def __init__(
         self,
@@ -691,13 +808,14 @@ class BeamFullSkimRunner(GenericRunner):
 
     def _run(
         self,
-        store: RecordStore,
+        inputs: BeamPreprocessOutputs,
         workspace: Workspace,
-    ) -> RecordStore:
+        launch_config: BeamLaunchConfig,
+    ) -> BeamFullSkimOutputs:
+        launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
         region = settings.run.region
-        beam_memory = settings.beam.memory
-        extra_jvm_args = (getattr(settings.beam, "extra_jvm_args", None) or "").strip()
+        beam_memory = _resolve_beam_memory(settings)
 
         beam_cfg = getattr(settings, "beam", None)
         skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
@@ -710,7 +828,11 @@ class BeamFullSkimRunner(GenericRunner):
                 "BEAM full skim requested but beam.full_skim.run_schedule is disabled."
             )
 
-        abs_beam_input = workspace.get_beam_mutable_data_dir()
+        abs_beam_input = str(launch_config.root)
+        path_to_beam_config = str(
+            Path("/app/input")
+            / launch_config.primary_config.relative_to(launch_config.root)
+        )
         abs_beam_output = workspace.get_beam_output_dir()
 
         output_dir = os.path.join(
@@ -722,9 +844,6 @@ class BeamFullSkimRunner(GenericRunner):
         os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
 
         _, travel_model_image = self.get_model_and_image(settings, "travel_model")
-        beam_config = settings.beam.config
-        path_to_beam_config = f"/app/input/{region}/{beam_config}"
-
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         java_opts = (
             f"-Xms{beam_memory} "
@@ -751,6 +870,7 @@ class BeamFullSkimRunner(GenericRunner):
             "-Djava.io.tmpdir=/app/output/tmp "
             "-Djna.tmpdir=/app/output/tmp"
         )
+        extra_jvm_args = (getattr(settings.beam, "extra_jvm_args", None) or "").strip()
         if extra_jvm_args:
             java_opts = f"{java_opts} {extra_jvm_args}"
 
@@ -761,7 +881,9 @@ class BeamFullSkimRunner(GenericRunner):
         )
         parallelism = _calculate_optimal_parallelism(cpu_ratio)
 
-        host_output_file = os.path.join(output_dir, "skimsODFull.csv.gz")
+        skims_kind = getattr(skim_cfg, "skims_kind", "activitySimOmx")
+        output_filename = _full_skim_output_filename(skims_kind)
+        host_output_file = os.path.join(output_dir, output_filename)
         container_output_file = _map_host_path_to_container(
             host_output_file, abs_beam_input, abs_beam_output
         )
@@ -772,7 +894,7 @@ class BeamFullSkimRunner(GenericRunner):
             f"--parallelism={parallelism}",
             f"--routerType={skim_cfg.router_type}",
             f"--skimsGeoType={skim_cfg.skims_geo_type}",
-            f"--skimsKind={skim_cfg.skims_kind}",
+            f"--skimsKind={skims_kind}",
             f"--peakHours={','.join(str(hour) for hour in skim_cfg.peak_hours)}",
         ]
 
@@ -782,43 +904,97 @@ class BeamFullSkimRunner(GenericRunner):
         if enabled_modes:
             cmd_parts.append(f"--modesToBuild={','.join(enabled_modes)}")
 
-        linkstats_path = _select_latest_linkstats_path(
-            store, abs_beam_input, abs_beam_output
-        )
+        bifurcate_tolls = getattr(skim_cfg, "bifurcate_tolls", None)
+        if bifurcate_tolls is not None:
+            cmd_parts.append(f"--bifurcateTolls={str(bool(bifurcate_tolls)).lower()}")
+
+        generate_return_trips = getattr(skim_cfg, "generate_return_trips", None)
+        if generate_return_trips is not None:
+            cmd_parts.append(
+                f"--generateReturnTrips={str(bool(generate_return_trips)).lower()}"
+            )
+
+        extra_input_paths: list[str] = []
+        for attr_name, cli_flag in (
+            ("toll_file_path", "--tollFilePath"),
+            ("directory2", "--directory2"),
+            ("od_skims_path", "--ODSkimsPath"),
+            ("input_path", "--input"),
+        ):
+            configured_val = getattr(skim_cfg, attr_name, None)
+            if configured_val:
+                container_val, host_val = _resolve_full_skim_input_path(
+                    configured_val,
+                    abs_beam_input=abs_beam_input,
+                    abs_beam_output=abs_beam_output,
+                    region=region,
+                )
+                cmd_parts.append(f"{cli_flag}={container_val}")
+                if host_val is not None:
+                    extra_input_paths.append(host_val)
+
+        explicit_linkstats = getattr(skim_cfg, "linkstats_path", None)
+        linkstats_path: Optional[str] = None
+        if explicit_linkstats:
+            linkstats_path, host_linkstats = _resolve_full_skim_input_path(
+                explicit_linkstats,
+                abs_beam_input=abs_beam_input,
+                abs_beam_output=abs_beam_output,
+                region=region,
+            )
+            if host_linkstats is not None:
+                extra_input_paths.append(host_linkstats)
+        else:
+            linkstats_path = _select_latest_linkstats_path(
+                inputs, abs_beam_input, abs_beam_output
+            )
         if linkstats_path is None:
             router_dir = getattr(settings.beam, "router_directory", None)
             if router_dir:
-                init_parquet = os.path.join(
-                    abs_beam_input, region, router_dir, "init.linkstats.parquet"
+                input_is_region_root = (
+                    os.path.basename(os.path.normpath(abs_beam_input)) == region
                 )
-                init_csv = os.path.join(
-                    abs_beam_input, region, router_dir, "init.linkstats.csv.gz"
+                base_dirs = (
+                    (abs_beam_input, os.path.join(abs_beam_input, region))
+                    if input_is_region_root
+                    else (os.path.join(abs_beam_input, region), abs_beam_input)
                 )
-                if os.path.exists(init_parquet):
-                    linkstats_path = _map_host_path_to_container(
-                        init_parquet, abs_beam_input, abs_beam_output
+                for base_dir in base_dirs:
+                    init_parquet = os.path.join(
+                        base_dir, router_dir, "init.linkstats.parquet"
                     )
-                elif os.path.exists(init_csv):
-                    linkstats_path = _map_host_path_to_container(
-                        init_csv, abs_beam_input, abs_beam_output
+                    init_csv = os.path.join(
+                        base_dir, router_dir, "init.linkstats.csv.gz"
                     )
+                    if os.path.exists(init_parquet):
+                        linkstats_path = _map_host_path_to_container(
+                            init_parquet, abs_beam_input, abs_beam_output
+                        )
+                        extra_input_paths.append(init_parquet)
+                        break
+                    if os.path.exists(init_csv):
+                        linkstats_path = _map_host_path_to_container(
+                            init_csv, abs_beam_input, abs_beam_output
+                        )
+                        extra_input_paths.append(init_csv)
+                        break
         if linkstats_path is not None:
             cmd_parts.append(f"--linkstatsPath={linkstats_path}")
 
-        input_paths = [
-            record.file_path
-            for record in store.all_records()
-            if isinstance(record, FileRecord)
-        ]
+        input_paths = _collect_input_paths(inputs)
+        for extra_path in extra_input_paths:
+            if extra_path not in input_paths:
+                input_paths.append(extra_path)
 
         success = self.run_container(
             client=None,
             settings=settings,
             image=travel_model_image,
-            volumes={
-                abs_beam_input: {"bind": "/app/input", "mode": "rw"},
-                abs_beam_output: {"bind": "/app/output", "mode": "rw"},
-            },
+            volumes=_beam_container_volumes(
+                input_root=Path(abs_beam_input),
+                output_root=Path(abs_beam_output),
+                launch_config=launch_config,
+            ),
             command=" ".join(cmd_parts),
             model_name=self.model_name,
             working_dir="/app",
@@ -837,15 +1013,17 @@ class BeamFullSkimRunner(GenericRunner):
                 f"BEAM full skim completed but output was not found: {host_output_file}"
             )
 
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=host_output_file,
-                    year=self.state.forecast_year,
-                    short_name=BEAM_FULL_SKIMS,
-                    description="BEAM full-skim background skims output",
-                )
-            ]
+        full_skims_path = artifact_to_path(host_output_file, workspace)
+        if full_skims_path is None:
+            raise ValueError("Missing beam_full_skims in run outputs.")
+        final_omx_path = (
+            full_skims_path if skims_kind in (None, "activitySimOmx") else None
+        )
+        return BeamFullSkimOutputs(
+            full_skims=Path(full_skims_path),
+            final_skims_omx=(
+                Path(final_omx_path) if final_omx_path is not None else None
+            ),
         )
 
     def run(
@@ -853,33 +1031,12 @@ class BeamFullSkimRunner(GenericRunner):
         inputs: BeamPreprocessOutputs,
         workspace: Workspace,
         *,
-        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
+        launch_config: BeamLaunchConfig,
     ) -> BeamFullSkimOutputs:
         """
-        Run FullSkimsCreatorApp from typed preprocess outputs and optional warm-start artifacts.
+        Run FullSkimsCreatorApp from typed preprocess outputs.
         """
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamFullSkimRunner.run expects BeamPreprocessOutputs")
         self.state.set_sub_stage_progress("runner")
-        input_store = RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-                for short_name, path, description in inputs._iter_record_items()
-            ]
-        )
-        _append_artifact_mapping_records(
-            input_store,
-            previous_beam_outputs,
-            description_prefix="BEAM full-skim warm-start input",
-        )
-        output_store = self._run(input_store, workspace)
-        full_skims_path = artifact_to_path(
-            output_store.to_mapping().get(BEAM_FULL_SKIMS), workspace
-        )
-        if full_skims_path is None:
-            raise ValueError("Missing beam_full_skims in run outputs.")
-        return BeamFullSkimOutputs(full_skims=Path(full_skims_path))
+        return self._run(inputs, workspace, launch_config)

@@ -1,70 +1,91 @@
----
-title: Scenario Comparison
-summary: Comparing scenario outputs, aligned runs, and summarized differences across runsets.
----
-
 # Scenario Comparison
 
-## Adjacent Pages
+PILATES tracks run configurations, input bindings, and output artifacts in `.consist/provenance.duckdb`, enabling structured comparisons across policy scenarios, parameter sweeps, and warm-start branches.
 
-- Read [Run Discovery and Runsets](run_discovery_and_runsets.md) first.
-- Pair this with [Datasets](datasets.md).
-- Use [Analysis Patterns](analysis_patterns.md) for question-driven workflows.
+## Faceted Outcome Comparison
 
-## Comparison Objects
+Group related archives into a `RunSet` via `AnalysisSession.from_roots(...)` and compute outcome differences against a baseline scenario:
 
-`compare_scenarios()` builds a `ScenarioComparison` object with:
+```python
+from pilates_consist_analysis import (
+    AnalysisSession,
+    delta,
+    delta_change,
+    difference,
+    rank,
+)
 
-- `left_name` and `right_name`
-- `left_run_ids` and `right_run_ids`
-- `aligned_on`
-- `aligned_keys`
-- `config_diff`
-- `dataset_summaries`
-- `dataset_frames`
+session = AnalysisSession.from_roots(["outputs/scenarios"])
+runset = session.filter(status="completed", region="sfbay")
 
-The higher-level `Comparison` wrapper adds convenience accessors for:
+# Load an aligned table of measures across scenarios and forecast years
+vmt = runset.measure("beam_vmt_total")
+mode_share = runset.table("mode_choice_summary", year=2020)
 
-- `summary()`
-- `dataset_summaries()`
-- `config_diff()`
-- `frame(dataset)`
-- `linkstats_summary()`
-- `asim_iteration_summary()`
-- `skims_summary()`
-- `mode_shares()`
-- `trip_purposes()`
+# Compute absolute and relative deltas against the baseline run
+vmt_diff = difference(vmt, baseline="sf_baseline")
+vmt_pct = delta_change(vmt, baseline="sf_baseline")
+scenario_ranks = rank(vmt, by="value", ascending=True)
+```
 
-## Alignment
+For a self-contained runnable script that compares scenario metrics side by side, see `examples/consist/run_comparison.py`.
 
-The comparison path first aligns the selected run sets.
-It can:
+## Boundary Overlap and Shared Upstream Artifacts
 
-- use `align_on` to choose the key used for pairing
-- call `latest(group_by=...)` before alignment
-- call `converged(group_by=...)` before alignment when `use_converged=True`
+Policy scenarios that branch from a shared baseline often reuse prior forecast years or warm-start steps. Inspect shared vs. diverged artifacts across scenario boundaries to confirm which stages executed fresh and which hydrated from cache:
 
-If converged comparison is requested but one side does not have complete epoch candidates for the overlapping alignment keys, the code raises a `ValueError`.
-That failure is intentional and pinned by tests.
+```python
+overlap = session.boundary_overlap(
+    left_run_id="sf_baseline_2020",
+    right_run_id="sf_transit_boost_2020",
+)
+print(overlap.shared_steps)
+print(overlap.diverged_steps)
+```
 
-## Dataset Surfaces
+See `examples/consist/cache_hit_inspection.py` for a walkthrough of cache reuse across scenario branches.
 
-The comparison builder compares these dataset families:
+## Diagnosing Cache Hits, Misses, and Config Diffs
 
-- `linkstats`
-- `asim_trips`
-- `skims`
+To investigate a cache miss or step divergence between two runs, compare their resolved configuration facets and input artifact hashes with `diff_runs` and `session.diff_configs(...)`:
 
-For each dataset it builds:
+```python
+from pilates_consist_analysis import diff_runs
 
-- a per-aligned-pair comparison frame
-- a dataset summary row with row counts, overlap counts, and delta aggregates
+# Compare step-by-step cache signatures, input hashes, and config facets
+step_diff = diff_runs(
+    left_archive="outputs/scenarios/sf_baseline",
+    right_archive="outputs/scenarios/sf_transit_boost",
+    step_name="activitysim_demand",
+    year=2015,
+)
+print(step_diff.changed_inputs)
+print(step_diff.changed_config_keys)
 
-It also builds a config-diff frame from the tracker query service when available.
+# Inspect config facet differences across an entire RunSet
+config_diffs = session.diff_configs("sf_baseline", "sf_transit_boost")
+print(runset.config_diffs())
+```
 
-`write_scenario_comparison()` writes:
+`step_diff` pinpoints whether the divergence came from an upstream coupler artifact (such as updated skims or households), a parameter change in `config.yaml`, or an adapter file edit. See [Step Contracts](../workflow/step_contracts.md) for how Consist computes step identity.
 
-- `scenario_comparison_summary.csv`
-- `scenario_comparison_config_diff.csv`
-- one CSV per dataset family, such as `scenario_linkstats_comparison.csv`
-- `dataset_manifest.json`
+## Tracing Artifact Lineage
+
+Trace any output artifact backward to the exact steps, configuration parameters, and upstream inputs that produced it:
+
+```python
+import consist
+
+# Return the upstream Merkle DAG for an artifact or run
+lineage_tree = consist.lineage(
+    artifact_or_run_id="final_trips_2020",
+    db_path="outputs/scenarios/sf_transit_boost/.consist/provenance.duckdb",
+)
+print(lineage_tree)
+```
+
+You can also print the lineage tree from the terminal using the Consist CLI:
+
+```bash
+consist lineage final_trips_2020 --db outputs/scenarios/sf_transit_boost/.consist/provenance.duckdb
+```

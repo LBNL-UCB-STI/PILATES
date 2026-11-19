@@ -1,9 +1,8 @@
-import logging
 import os
-from typing import Any, Dict, Optional
+import logging
+from typing import Optional
 
-from pilates.generic.records import RecordStore
-from pilates.utils.settings_helper import get as get_setting
+from pilates.config import PilatesConfig
 
 logger = logging.getLogger(__name__)
 
@@ -17,15 +16,18 @@ class Workspace:
 
     def __init__(
         self,
-        settings: Any,
+        settings: PilatesConfig,
         output_path: str,
         folder_name: str,
+        *,
+        archive_run_dir: Optional[str] = None,
     ):
         self.settings = settings
         self.output_path = output_path
         self.folder_name = folder_name
-        self.input_data: Dict[str, RecordStore] = {}
-        self.output_data: Dict[str, RecordStore] = {}
+        self.archive_run_dir: Optional[str] = (
+            os.path.expanduser(archive_run_dir) if archive_run_dir is not None else None
+        )
         self._asim_mutable_data_dir_override: Optional[str] = None
         self._asim_runtime_cache_dir_override: Optional[str] = None
         self._beam_mutable_data_dir_override: Optional[str] = None
@@ -50,30 +52,51 @@ class Workspace:
         os.makedirs(self.full_path, exist_ok=True)
         logger.info(f"Workspace initialized at: {self.full_path}")
 
+    # Path getter methods
     def get_usim_mutable_data_dir(self) -> str:
+        urbansim_settings = self.settings.urbansim
+        if urbansim_settings is None:
+            raise RuntimeError(
+                "UrbanSim config is required for UrbanSim workspace paths."
+            )
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "urbansim.local_mutable_data_folder"),
+            urbansim_settings.local_mutable_data_folder,
         )
 
     def get_asim_mutable_data_dir(self) -> str:
         if self._asim_mutable_data_dir_override:
             return self._asim_mutable_data_dir_override
+        activitysim_settings = self.settings.activitysim
+        if activitysim_settings is None:
+            raise RuntimeError(
+                "ActivitySim config is required for ActivitySim workspace paths."
+            )
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "activitysim.local_mutable_data_folder"),
+            activitysim_settings.local_mutable_data_folder,
         )
 
     def get_asim_mutable_configs_dir(self) -> str:
+        activitysim_settings = self.settings.activitysim
+        if activitysim_settings is None:
+            raise RuntimeError(
+                "ActivitySim config is required for ActivitySim workspace paths."
+            )
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "activitysim.local_mutable_configs_folder"),
+            activitysim_settings.local_mutable_configs_folder,
         )
 
     def get_asim_output_dir(self) -> str:
+        activitysim_settings = self.settings.activitysim
+        if activitysim_settings is None:
+            raise RuntimeError(
+                "ActivitySim config is required for ActivitySim workspace paths."
+            )
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "activitysim.local_output_folder"),
+            activitysim_settings.local_output_folder,
         )
 
     def get_asim_runtime_cache_dir(self) -> str:
@@ -84,45 +107,59 @@ class Workspace:
     def get_beam_mutable_data_dir(self) -> str:
         if self._beam_mutable_data_dir_override:
             return self._beam_mutable_data_dir_override
+        beam_settings = self.settings.beam
+        if beam_settings is None:
+            raise RuntimeError("BEAM config is required for BEAM workspace paths.")
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "beam.local_mutable_data_folder"),
+            beam_settings.local_mutable_data_folder,
         )
 
     def get_beam_output_dir(self) -> str:
+        beam_settings = self.settings.beam
+        if beam_settings is None:
+            raise RuntimeError("BEAM config is required for BEAM workspace paths.")
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "beam.local_output_folder"),
+            beam_settings.local_output_folder,
         )
 
     def get_atlas_mutable_input_dir(self) -> str:
+        atlas_settings = self.settings.atlas
+        if atlas_settings is None:
+            raise RuntimeError("ATLAS config is required for ATLAS workspace paths.")
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "atlas.host_mutable_input_folder"),
+            atlas_settings.host_mutable_input_folder,
         )
 
     def get_atlas_output_dir(self) -> str:
+        atlas_settings = self.settings.atlas
+        if atlas_settings is None:
+            raise RuntimeError("ATLAS config is required for ATLAS workspace paths.")
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "atlas.host_output_folder"),
+            atlas_settings.host_output_folder,
         )
 
     def get_impacts_input_dir(self) -> str:
-        return os.path.join(
-            self.full_path,
-            get_setting(self.settings, "impacts.local_input_folder"),
-        )
+        if self.settings.impacts is None:
+            raise RuntimeError("IMPACTS config is required for IMPACTS workspace paths.")
+        return os.path.join(self.full_path, self.settings.impacts.local_input_folder)
 
     def get_impacts_output_dir(self) -> str:
-        return os.path.join(
-            self.full_path,
-            get_setting(self.settings, "impacts.local_output_folder"),
-        )
+        if self.settings.impacts is None:
+            raise RuntimeError("IMPACTS config is required for IMPACTS workspace paths.")
+        return os.path.join(self.full_path, self.settings.impacts.local_output_folder)
 
     def get_impacts_settings_path(self, stage: str) -> str:
+        if stage not in {"presim", "postsim"}:
+            raise ValueError(f"Unknown IMPACTS stage: {stage!r}")
         return os.path.join(self.get_impacts_output_dir(), f"settings_{stage}.yaml")
 
     def get_impacts_bridge_settings_path(self, stage: str) -> str:
+        if stage not in {"presim", "postsim"}:
+            raise ValueError(f"Unknown IMPACTS stage: {stage!r}")
         return os.path.join(
             self.get_impacts_output_dir(), f"pilates_bridge_{stage}.yaml"
         )

@@ -1,0 +1,107 @@
+# PILATES Configuration File (Inherited Format)
+# SFBay Standalone Full-Skim Generation on HPC (2019-2020)
+
+base: settings-sfbay-consist-base-hpc.yaml
+
+run:
+  start_year: 2019
+  end_year: 2020
+  travel_model_freq: 1
+  vehicle_ownership_freq: 1
+  output_run_name: consist-sfbay-fullskim-base-2019
+  models:
+    land_use: null
+    travel: beam
+    activity_demand: null
+    vehicle_ownership: null
+
+shared:
+  skims:
+    fname: as-base-skims-sfbay-taz.omx
+    transit_paths:
+      DRV_LOC_WLK:
+      - TOTIVT
+      - FAR
+      - XWAIT
+      - IWAIT
+      - DTIM
+      - BOARDS
+      - DDIST
+      - WAUX
+      WLK_COM_DRV:
+      - TOTIVT
+      - FAR
+      - XWAIT
+      - KEYIVT
+      - IWAIT
+      - DTIM
+      - BOARDS
+      - DDIST
+      - WAUX
+      WLK_HVY_DRV:
+      - TOTIVT
+      - FAR
+      - XWAIT
+      - KEYIVT
+      - IWAIT
+      - DTIM
+      - BOARDS
+      - DDIST
+      - WAUX
+      WLK_LOC_DRV:
+      - TOTIVT
+      - FAR
+      - XWAIT
+      - IWAIT
+      - DTIM
+      - BOARDS
+      - DDIST
+      - WAUX
+      WLK_LRF_DRV:
+      - TOTIVT
+      - FERRYIVT
+      - FAR
+      - XWAIT
+      - KEYIVT
+      - IWAIT
+      - DTIM
+      - BOARDS
+      - DDIST
+      - WAUX
+      WLK_EXP_DRV:
+      - TOTIVT
+      - FAR
+      - XWAIT
+      - KEYIVT
+      - IWAIT
+      - DTIM
+      - BOARDS
+      - DDIST
+      - WAUX
+
+urbansim: null
+atlas: null
+activitysim: null
+postprocessing: null
+
+beam:
+  config: scenarios/sfbay-pilates-base-calibrated.conf
+  full_skim:
+    run_schedule: standalone
+    router_type: r5+gh
+    skims_geo_type: taz
+    skims_kind: activitySimOmx
+    peak_hours:
+    - 5.0
+    - 8.5
+    - 12.0
+    - 17.5
+    - 22.1
+    modes_to_build:
+      drive: true
+      walk: true
+      transit: true
+    bifurcate_tolls: true
+    generate_return_trips: true
+    toll_file_path: toll-prices.csv
+    calculation_timeout_hours: 72

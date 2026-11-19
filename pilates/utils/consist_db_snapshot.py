@@ -68,11 +68,14 @@ def resolve_consist_db_paths(
 def mirror_consist_db_to_archive(
     local_db_path: Optional[str],
     archive_db_path: Optional[str],
+    *,
+    tracker: Optional[Any] = None,
 ) -> None:
     """
     Best-effort mirror of DB (and WAL sidecar when present) from local to archive path.
 
     This is used as a fallback when snapshot publication fails during shutdown.
+    Uses atomic file replacement and checkpoints DuckDB when a tracker is provided.
     """
     if not local_db_path or not archive_db_path:
         return
@@ -89,9 +92,24 @@ def mirror_consist_db_to_archive(
         )
         return
 
+    if tracker is not None:
+        db = getattr(tracker, "db", None)
+        engine = getattr(db, "engine", None)
+        if engine is not None and hasattr(engine, "begin"):
+            try:
+                with engine.begin() as conn:
+                    conn.exec_driver_sql("CHECKPOINT")
+                logger.info(
+                    "Successfully checkpointed DuckDB before mirroring: %s", local_real
+                )
+            except Exception as exc:
+                logger.debug("Could not checkpoint DuckDB before mirror: %s", exc)
+
     try:
         os.makedirs(os.path.dirname(archive_real), exist_ok=True)
-        shutil.copy2(local_real, archive_real)
+        temp_dest = f"{archive_real}.tmp.{os.getpid()}"
+        shutil.copy2(local_real, temp_dest)
+        os.replace(temp_dest, archive_real)
         logger.info("Mirrored Consist DB: %s -> %s", local_real, archive_real)
     except OSError as exc:
         logger.warning(
@@ -103,10 +121,12 @@ def mirror_consist_db_to_archive(
         return
 
     local_wal = f"{local_real}.wal"
+    archive_wal = f"{archive_real}.wal"
     if os.path.exists(local_wal):
-        archive_wal = f"{archive_real}.wal"
         try:
-            shutil.copy2(local_wal, archive_wal)
+            temp_wal = f"{archive_wal}.tmp.{os.getpid()}"
+            shutil.copy2(local_wal, temp_wal)
+            os.replace(temp_wal, archive_wal)
             logger.info("Mirrored Consist DB WAL: %s -> %s", local_wal, archive_wal)
         except OSError as exc:
             logger.warning(
@@ -115,6 +135,11 @@ def mirror_consist_db_to_archive(
                 archive_wal,
                 exc,
             )
+    elif os.path.exists(archive_wal):
+        try:
+            os.remove(archive_wal)
+        except OSError:
+            pass
 
 
 def _is_db_snapshot_enabled(settings: PilatesConfig) -> bool:
@@ -365,12 +390,21 @@ def _fallback_copy_db_snapshot(
         return False
 
     dest_db_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_db, dest_db_path)
+    temp_dest = dest_db_path.with_suffix(f"{dest_db_path.suffix}.tmp.{os.getpid()}")
+    shutil.copy2(source_db, temp_dest)
+    os.replace(temp_dest, dest_db_path)
 
     source_wal = source_db.with_suffix(f"{source_db.suffix}.wal")
     dest_wal = dest_db_path.with_suffix(f"{dest_db_path.suffix}.wal")
     if not checkpoint and source_wal.exists():
-        shutil.copy2(source_wal, dest_wal)
+        temp_wal = dest_wal.with_suffix(f"{dest_wal.suffix}.tmp.{os.getpid()}")
+        shutil.copy2(source_wal, temp_wal)
+        os.replace(temp_wal, dest_wal)
+    elif dest_wal.exists():
+        try:
+            dest_wal.unlink()
+        except OSError:
+            pass
 
     meta_payload: Dict[str, Any] = dict(metadata or {})
     meta_payload.setdefault("source_db_path", str(source_db))

@@ -1,0 +1,26 @@
+# =============================================================================
+# PILATES Configuration File (Inherited Format)
+# SFBay ActivitySim <-> BEAM Smoke Supply-Demand Loop on Lawrencium HPC (lr6)
+# =============================================================================
+
+base: scenarios/sfbay/settings-sfbay-consist-base-hpc.yaml
+
+run:
+  start_year: 2017
+  end_year: 2017
+  supply_demand_iters: 2
+  output_run_name: consist-sfbay-smoke-sd-loop-2019
+  models:
+    land_use: null
+    vehicle_ownership: null
+    activity_demand: activitysim
+    travel: beam
+
+activitysim:
+  # 5,000 households matches the reference baseline in pilates/activitysim/output/final_pipeline/
+  household_sample_size: 5000
+  num_processes: 20
+
+beam:
+  sample: 0.1
+  memory: 150g

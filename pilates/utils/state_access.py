@@ -29,13 +29,40 @@ def iteration_index(state: object, default: Optional[int] = None) -> Optional[in
     return default if value is None else value
 
 
+def is_start_year(state: object, settings: object = None) -> bool:
+    """Return whether the current runtime state represents the start year."""
+    state_fn = getattr(state, "is_start_year", None)
+    if callable(state_fn):
+        return bool(state_fn())
+
+    state_start_year = getattr(state, "start_year", None)
+    if state_start_year is None and settings is not None:
+        run_settings = getattr(settings, "run", None)
+        if run_settings is not None:
+            state_start_year = getattr(run_settings, "start_year", None)
+        if state_start_year is None and isinstance(settings, dict):
+            state_start_year = settings.get("start_year")
+        elif state_start_year is None:
+            state_start_year = getattr(settings, "start_year", None)
+
+    resolved_year = current_year(state)
+    if resolved_year is not None and state_start_year is not None:
+        return resolved_year == state_start_year
+
+    forecast_year = getattr(state, "forecast_year", None)
+    if forecast_year is not None and state_start_year is not None:
+        return forecast_year == state_start_year
+
+    return False
+
+
 def uses_input_datastore(state: object) -> bool:
     """
     Return whether the current state should read the interval input datastore.
     """
-    is_start_year = getattr(state, "is_start_year", None)
-    if callable(is_start_year):
-        return bool(is_start_year())
+    state_fn = getattr(state, "is_start_year", None)
+    if callable(state_fn):
+        return bool(state_fn())
 
     resolved_year = current_year(state)
     forecast_year = getattr(state, "forecast_year", None)

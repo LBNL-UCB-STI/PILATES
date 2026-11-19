@@ -4,7 +4,6 @@ import consist
 import pytest
 from consist.types import CacheOptions
 
-from pilates.generic.model import Model
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.utils import consist_runtime as cr
@@ -42,14 +41,6 @@ def test_noop_scenario_run_returns_outputs_mapping():
     assert isinstance(result, consist.NoopRunResult)
     assert result.run is not None
     assert result.cache_hit is False
-
-
-def test_model_keeps_name_and_state():
-    state = _StubState()
-    model = Model("dummy", state)
-
-    assert model.model_name == "dummy"
-    assert model.state is state
 
 
 def test_run_container_uses_current_tracker(monkeypatch, tmp_path):

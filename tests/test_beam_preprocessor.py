@@ -12,6 +12,7 @@ from shapely.geometry import Polygon
 
 from pilates.config.models import load_config
 from pilates.activitysim.outputs import normalize_asim_output_key
+from pilates.beam.beam_input_staging import copy_with_compression_asim_file_to_beam
 from pilates.beam.preprocessor import BeamPreprocessor
 
 # Define a canonical order for GEOIDs that our test will enforce
@@ -448,6 +449,46 @@ def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_con
     assert "would reorder canonical zones" in caplog.text
 
 
+def test_prepare_beam_zone_shapefile_reprojects_wgs84_zones_to_local_crs(
+    mock_settings, mock_workspace, monkeypatch
+):
+    mock_state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
+    object.__setattr__(mock_settings.shared.geography, "local_crs", "EPSG:26910")
+
+    wgs84_poly = Polygon(
+        [
+            (-122.683629315, 38.205521908),
+            (-122.680000000, 38.205521908),
+            (-122.680000000, 38.210000000),
+            (-122.683629315, 38.210000000),
+        ]
+    )
+    canonical_gdf = gpd.GeoDataFrame(
+        {"geometry": [wgs84_poly for _ in CANONICAL_GEOID_ORDER]},
+        index=pd.Index(CANONICAL_GEOID_ORDER, name="TAZ"),
+        crs="EPSG:4326",
+    )
+    monkeypatch.setattr(
+        "pilates.utils.zone_utils.load_canonical_zones",
+        lambda settings, workspace: canonical_gdf,
+    )
+
+    output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(mock_workspace)
+    assert output_shapefile_path is not None
+
+    with open(output_shapefile_path, "r") as handle:
+        exported_json = json.load(handle)
+    first_vertex = exported_json["features"][0]["geometry"]["coordinates"][0][0]
+    assert first_vertex[0] > 400000.0
+    assert first_vertex[1] > 4000000.0
+
+
 def test_preprocess_ignores_workspace_beam_output_cache(
     monkeypatch, mock_settings, mock_workspace
 ):
@@ -469,22 +510,18 @@ def test_preprocess_ignores_workspace_beam_output_cache(
         SimpleNamespace(file_format="parquet"),
     )
 
-    cached_beam_record = FileRecord(
-        file_path="/tmp/cached_beam_plans.parquet",
-        short_name="beam_plans",
-        description="stale BEAM cache record",
-    )
-    mock_workspace.output_data = {
-        "beam": RecordStore(recordList=[cached_beam_record]),
-    }
-
     previous_records = RecordStore(
         recordList=[
             FileRecord(
                 file_path="/tmp/households.parquet",
                 short_name="households_asim_out",
                 description="fresh ActivitySim households",
-            )
+            ),
+            FileRecord(
+                file_path="/tmp/plans.parquet",
+                short_name="plans_asim_out",
+                description="fresh ActivitySim plans",
+            ),
         ]
     )
 
@@ -524,11 +561,6 @@ def test_preprocess_ignores_workspace_beam_output_cache(
                     short_name="households_beam_in",
                     description="mock staged households",
                 ),
-                FileRecord(
-                    file_path="/tmp/persons.parquet",
-                    short_name="persons_beam_in",
-                    description="mock staged persons",
-                ),
             ]
         )
 
@@ -537,28 +569,21 @@ def test_preprocess_ignores_workspace_beam_output_cache(
     with pytest.raises(RuntimeError, match="canonical BEAM input trio"):
         preprocessor._preprocess(mock_workspace, previous_records=previous_records)
 
-    assert captured["keys"] == ["households_asim_out"]
+    assert captured["keys"] == ["households_asim_out", "plans_asim_out"]
 
 
 def test_normalize_asim_output_key_maps_plans_alias() -> None:
     assert normalize_asim_output_key("plans") == "beam_plans_asim_out"
 
 
-def test_copy_data_to_mutable_location_does_not_try_legacy_skim_zone_config_update(
+def test_ensure_beam_mutable_workspace_does_not_try_legacy_skim_zone_config_update(
     monkeypatch, tmp_path, mock_settings
 ):
-    state = SimpleNamespace(
-        full_settings=mock_settings,
-        current_year=2020,
-        current_inner_iter=0,
-        forecast_year=2020,
-        run_info_path=None,
-    )
-    preprocessor = BeamPreprocessor(model_name="beam", state=state)
+    from pilates.beam.preprocessor import ensure_beam_mutable_workspace
 
     calls = []
     monkeypatch.setattr(
-        preprocessor,
+        BeamPreprocessor,
         "_find_beam_production_path",
         lambda *_args, **_kwargs: str(tmp_path / "beam-production" / "seattle"),
     )
@@ -566,16 +591,11 @@ def test_copy_data_to_mutable_location_does_not_try_legacy_skim_zone_config_upda
         "pilates.beam.preprocessor.shutil.copytree",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        preprocessor,
-        "_update_beam_config",
-        lambda param, **kwargs: calls.append((param, kwargs)),
-    )
 
     production_region = tmp_path / "beam-production" / "seattle"
     production_region.mkdir(parents=True, exist_ok=True)
 
-    preprocessor.copy_data_to_mutable_location(
+    ensure_beam_mutable_workspace(
         settings=mock_settings,
         output_dir=str(tmp_path / "beam" / "input"),
     )
@@ -607,11 +627,13 @@ def test_copy_plans_from_asim_accepts_plans_asim_out_alias(
         tmp_path / "activitysim" / "output"
     )
 
-    plans_path = (
-        tmp_path / "activitysim" / "output" / "year-2020-iteration-0" / "plans.parquet"
-    )
-    plans_path.parent.mkdir(parents=True, exist_ok=True)
-    plans_path.write_text("plans", encoding="utf-8")
+    output_dir = tmp_path / "activitysim" / "output" / "year-2020-iteration-0"
+    plans_path = output_dir / "plans.parquet"
+    households_path = output_dir / "households.parquet"
+    persons_path = output_dir / "persons.parquet"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for path in (plans_path, households_path, persons_path):
+        path.write_text(path.stem, encoding="utf-8")
 
     input_records = RecordStore(
         recordList=[
@@ -619,7 +641,17 @@ def test_copy_plans_from_asim_accepts_plans_asim_out_alias(
                 file_path=str(plans_path),
                 short_name="plans_asim_out",
                 description="ActivitySim plans alias",
-            )
+            ),
+            FileRecord(
+                file_path=str(households_path),
+                short_name="households_asim_out",
+                description="ActivitySim households",
+            ),
+            FileRecord(
+                file_path=str(persons_path),
+                short_name="persons_asim_out",
+                description="ActivitySim persons",
+            ),
         ]
     )
 
@@ -635,3 +667,67 @@ def test_copy_plans_from_asim_accepts_plans_asim_out_alias(
 
     assert "beam_plans" in captured["asim_file_paths"]
     assert captured["asim_file_paths"]["beam_plans"][0] == str(plans_path)
+
+
+def test_copy_plans_from_asim_requires_all_typed_input_records(
+    monkeypatch, mock_settings, mock_workspace, tmp_path
+):
+    state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        forecast_year=2020,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=state)
+    object.__setattr__(
+        preprocessor.settings,
+        "activitysim",
+        SimpleNamespace(file_format="parquet"),
+    )
+    mock_workspace.get_asim_output_dir.return_value = str(
+        tmp_path / "activitysim" / "output"
+    )
+
+    plans_path = tmp_path / "activitysim" / "output" / "plans.parquet"
+    plans_path.parent.mkdir(parents=True, exist_ok=True)
+    plans_path.write_text("plans", encoding="utf-8")
+    fallback_dir = plans_path.parent / "year-2020-iteration-0"
+    fallback_dir.mkdir()
+    (fallback_dir / "households.parquet").write_text("households", encoding="utf-8")
+    (fallback_dir / "persons.parquet").write_text("persons", encoding="utf-8")
+    input_records = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(plans_path),
+                short_name="plans_asim_out",
+                description="ActivitySim plans alias",
+            )
+        ]
+    )
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_copy_initial_asim_files",
+        lambda *_args: pytest.fail("staging must not begin with missing input records"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"BEAM requires ActivitySim input records for: households, persons",
+    ):
+        preprocessor._copy_plans_from_asim(input_records, mock_workspace)
+
+
+def test_copy_with_compression_asim_file_to_beam_rejects_missing_source(tmp_path):
+    with pytest.raises(
+        FileNotFoundError,
+        match=r"ActivitySim input 'plans' does not exist: .*/missing\.parquet",
+    ):
+        copy_with_compression_asim_file_to_beam(
+            asim_file_path=str(tmp_path / "missing.parquet"),
+            beam_file_name="plans",
+            file_format="parquet",
+            beam_scenario_folder=str(tmp_path / "beam-inputs"),
+            state=SimpleNamespace(current_year=2020, current_inner_iter=0),
+        )

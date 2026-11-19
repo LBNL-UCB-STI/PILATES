@@ -1,32 +1,19 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import flush_archive_queue
-from pilates.workspace import Workspace
-
-from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
-from pilates.workflows.steps import (
-    StepOutputsHolder,
-    make_impacts_postsim_step,
-    make_postprocessing_step,
-)
+from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.workflows.step_execution import execute_step
+from pilates.workflows.steps import impacts_postsim
+from pilates.workflows.steps import postprocessing_definition as postprocessing
 
 logger = logging.getLogger(__name__)
-
-
-def _build_postprocessing_manifest_path(workspace: Workspace, year: int) -> Path:
-    return Path(workspace.full_path) / ".workflow" / f"postprocessing_year_{year}.yaml"
 
 
 def run_postprocessing_stage(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
     year: int,
     context: WorkflowRuntimeContext,
 ) -> None:
@@ -58,54 +45,29 @@ def run_postprocessing_stage(
     workspace = context.workspace
     logger.info("[postprocessing] year=%s run_id=%s", year, cr.current_run_id())
 
-    outputs_holder = StepOutputsHolder()
-    manifest_config = ManifestConfig(
-        path=_build_postprocessing_manifest_path(workspace=workspace, year=year)
-    )
-    postprocess_steps = []
-    if getattr(settings, "impacts_enabled", False):
-        postprocess_steps.append(
-            StepRef(
-                name="impacts_postsim",
-                step_func=make_impacts_postsim_step(
-                    coupler=coupler, outputs_holder=outputs_holder
-                ),
-                cache_mode="overwrite",
-                load_inputs=False,
-                model="impacts_postsim",
-                year=year,
-                iteration=getattr(state, "iteration", None),
-                phase="postprocess",
-            )
+    if getattr(getattr(getattr(settings, "run", None), "models", None), "impacts", None):
+        _, impacts_outputs = execute_step(
+            scenario=scenario,
+            definition=impacts_postsim,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            stage="postprocessing",
+            year=year,
+            iteration=getattr(state, "iteration", None),
+            phase="postprocess",
         )
+        del impacts_outputs
 
-    if getattr(settings, "postprocessing", None) is not None:
-        postprocess_steps.append(
-            StepRef(
-                name="postprocessing",
-                step_func=make_postprocessing_step(),
-                cache_mode="overwrite",
-                load_inputs=False,
-                model="postprocessing",
-                year=year,
-                iteration=getattr(state, "iteration", None),
-                phase="postprocess",
-            )
-        )
-
-    if not postprocess_steps:
-        return
-    run_workflow(
-        stage_name="postprocessing",
-        steps=postprocess_steps,
+    _, outputs = execute_step(
         scenario=scenario,
+        definition=postprocessing,
         state=state,
         settings=settings,
         workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix=str(year),
-        iteration=getattr(state, "iteration", 0),
-        manifest_config=manifest_config,
+        stage="postprocessing",
+        year=year,
+        iteration=getattr(state, "iteration", None),
+        phase="postprocess",
     )
-    flush_archive_queue(timeout=300, fail_on_timeout=False)
+    del outputs

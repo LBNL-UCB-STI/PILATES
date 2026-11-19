@@ -1,89 +1,67 @@
 """
 Workflow step public surface.
 
-Shared step infrastructure lives in ``shared.py`` and model-specific factory
-implementations live in sibling modules.
+The public surface exposes only committed native ``StepDefinition`` objects.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any
 
-from pilates.generic.model_factory import ModelFactory as ModelFactory
-
-from .shared import (
-    STEP_OUTPUTS_CLASSES as STEP_OUTPUTS_CLASSES,
-    StepOutputsHolder as StepOutputsHolder,
-    validate_step_ready as validate_step_ready,
-    validate_workflow_step_contracts as validate_workflow_step_contracts,
-    _activitysim_output_facet_meta as _activitysim_output_facet_meta,
-    _atlas_artifact_facet_meta as _atlas_artifact_facet_meta,
-    _beam_artifact_facets as _beam_artifact_facets,
-    _beam_log_facet_meta as _beam_log_facet_meta,
-    _beam_postprocess_split_facet_meta as _beam_postprocess_split_facet_meta,
-    _urbansim_output_facet_meta as _urbansim_output_facet_meta,
-)
+from pilates.workflows.contracts import StepDefinition
 from .activitysim import (
-    activitysim_compile_output_paths as activitysim_compile_output_paths,
-    make_activitysim_compile_step as make_activitysim_compile_step,
-    make_activitysim_postprocess_step as make_activitysim_postprocess_step,
-    make_activitysim_preprocess_step as make_activitysim_preprocess_step,
-    make_activitysim_run_step as make_activitysim_run_step,
+    activitysim_postprocess as activitysim_postprocess,
+    activitysim_preprocess as activitysim_preprocess,
+    activitysim_run as activitysim_run,
 )
 from .beam import (
-    make_beam_full_skim_step as make_beam_full_skim_step,
-    make_beam_postprocess_step as make_beam_postprocess_step,
-    make_beam_preprocess_step as make_beam_preprocess_step,
-    make_beam_run_step as make_beam_run_step,
-)
-from .impacts import (
-    make_impacts_postsim_step as make_impacts_postsim_step,
-    make_impacts_presim_step as make_impacts_presim_step,
+    beam_full_skim as beam_full_skim,
+    beam_postprocess as beam_postprocess,
+    beam_preprocess as beam_preprocess,
+    beam_run as beam_run,
 )
 from .postprocessing import (
-    make_postprocessing_step as make_postprocessing_step,
+    postprocessing as postprocessing_definition,
 )
-from .urbansim_atlas import (
-    make_atlas_postprocess_step as make_atlas_postprocess_step,
-    make_atlas_preprocess_step as make_atlas_preprocess_step,
-    make_atlas_run_step as make_atlas_run_step,
-    make_urbansim_postprocess_step as make_urbansim_postprocess_step,
-    make_urbansim_preprocess_step as make_urbansim_preprocess_step,
-    make_urbansim_run_step as make_urbansim_run_step,
-    urbansim_run_output_paths as urbansim_run_output_paths,
+from .impacts import impacts_postsim, impacts_presim
+from .atlas import (
+    atlas_postprocess as atlas_postprocess,
+    atlas_preprocess as atlas_preprocess,
+    atlas_run as atlas_run,
+)
+from .urbansim import (
+    urbansim_postprocess as urbansim_postprocess,
+    urbansim_run as urbansim_run,
 )
 
 # Re-export modules for callers/tests that monkeypatch module-level symbols.
 from . import (
     activitysim as activitysim,
+    atlas as atlas,
     beam as beam,
-    impacts as impacts,
     postprocessing as postprocessing,
     shared as shared,
-    urbansim_atlas as urbansim_atlas,
+    urbansim as urbansim,
 )
 
 
-SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {
-    "urbansim_preprocess": make_urbansim_preprocess_step,
-    "urbansim_run": make_urbansim_run_step,
-    "urbansim_postprocess": make_urbansim_postprocess_step,
-    "atlas_preprocess": make_atlas_preprocess_step,
-    "atlas_run": make_atlas_run_step,
-    "atlas_postprocess": make_atlas_postprocess_step,
-    "activitysim_preprocess": make_activitysim_preprocess_step,
-    "activitysim_compile": make_activitysim_compile_step,
-    "activitysim_run": make_activitysim_run_step,
-    "activitysim_postprocess": make_activitysim_postprocess_step,
-    "beam_preprocess": make_beam_preprocess_step,
-    "beam_run": make_beam_run_step,
-    "beam_postprocess": make_beam_postprocess_step,
-    "beam_full_skim": make_beam_full_skim_step,
-    "impacts_presim": make_impacts_presim_step,
-    "impacts_postsim": make_impacts_postsim_step,
+STEP_DEFINITIONS: dict[str, StepDefinition[Any]] = {
+    definition.name: definition
+    for definition in (
+        urbansim_run,
+        urbansim_postprocess,
+        atlas_preprocess,
+        atlas_run,
+        atlas_postprocess,
+        activitysim_preprocess,
+        activitysim_run,
+        activitysim_postprocess,
+        beam_preprocess,
+        beam_run,
+        beam_postprocess,
+        beam_full_skim,
+        impacts_presim,
+        impacts_postsim,
+        postprocessing_definition,
+    )
 }
-
-
-def schema_step_builder_registry() -> Dict[str, Callable[..., Any]]:
-    """Return the canonical schema-step builder registry keyed by step name."""
-    return dict(SCHEMA_STEP_BUILDERS)

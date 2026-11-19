@@ -76,6 +76,7 @@ def test_merge_mini_skims_matches_expected(tmp_path, monkeypatch) -> None:
     mini_path = _copy_mini_skims(tmp_path)
     expected_path = _copy_expected_skims(tmp_path)
     main_path = _write_zeroed_main_from_mini(tmp_path, mini_path)
+    output_path = tmp_path / "merged_output_skims.zarr"
 
     monkeypatch.setattr(
         pp,
@@ -86,9 +87,6 @@ def test_merge_mini_skims_matches_expected(tmp_path, monkeypatch) -> None:
         pp.zone_utils,
         "load_canonical_zones",
         lambda settings, workspace: pd.DataFrame(index=range(5)),
-    )
-    monkeypatch.setattr(
-        pp, "ensure_0_based_and_flag_zarr_skims", lambda *args, **kwargs: None
     )
 
     def _get_setting(settings, key, default=None):
@@ -111,10 +109,12 @@ def test_merge_mini_skims_matches_expected(tmp_path, monkeypatch) -> None:
         settings=None,
         workspace=None,
         override=str(mini_path),
+        output_skims_path=str(output_path),
     )
 
     expected = xr.open_zarr(expected_path, consolidated=True)
-    actual = xr.open_zarr(main_path, consolidated=True)
+    actual = xr.open_zarr(output_path, consolidated=False)
+    input_store = xr.open_zarr(main_path, consolidated=True)
     try:
         assert set(expected.data_vars) == set(actual.data_vars)
         for name in expected.data_vars:
@@ -125,9 +125,11 @@ def test_merge_mini_skims_matches_expected(tmp_path, monkeypatch) -> None:
                 atol=1e-6,
                 err_msg=f"Mismatch for {name}",
             )
+            assert np.all(input_store[name].values == 0)
     finally:
         expected.close()
         actual.close()
+        input_store.close()
 
 
 def test_merge_mini_skims_normalizes_beam_time_period_labels(
@@ -135,6 +137,7 @@ def test_merge_mini_skims_normalizes_beam_time_period_labels(
 ) -> None:
     mini_path = _copy_mini_skims(tmp_path)
     main_path = _write_zeroed_main_from_mini(tmp_path, mini_path)
+    output_path = tmp_path / "merged_output_skims.zarr"
     beam_like_path = tmp_path / "beam_like_skims.zarr"
 
     src = xr.open_zarr(mini_path, consolidated=True)
@@ -160,9 +163,6 @@ def test_merge_mini_skims_normalizes_beam_time_period_labels(
         "load_canonical_zones",
         lambda settings, workspace: pd.DataFrame(index=range(5)),
     )
-    monkeypatch.setattr(
-        pp, "ensure_0_based_and_flag_zarr_skims", lambda *args, **kwargs: None
-    )
 
     def _get_setting(settings, key, default=None):
         if key == "shared.skims.periods":
@@ -184,9 +184,10 @@ def test_merge_mini_skims_normalizes_beam_time_period_labels(
         settings=SimpleNamespace(),
         workspace=None,
         override=str(beam_like_path),
+        output_skims_path=str(output_path),
     )
 
-    actual = xr.open_zarr(main_path, consolidated=True)
+    actual = xr.open_zarr(output_path, consolidated=False)
     try:
         assert [str(v) for v in actual.coords["time_period"].values] == [
             "EA",

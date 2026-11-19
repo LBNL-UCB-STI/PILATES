@@ -6,17 +6,26 @@ import logging
 import os
 import shlex
 from collections.abc import Mapping, Sequence
-from typing import Optional, List, Union, Any, Generic, TypeVar
+from typing import (
+    Optional,
+    List,
+    TYPE_CHECKING,
+    Union,
+    Any,
+    Generic,
+    TypeVar,
+)
 
 from pilates.config import PilatesConfig
-from pilates.generic.model import Model
 
 from abc import ABC
 
 from pilates.utils import consist_runtime as cr
-from pilates.workspace import Workspace
-from workflow_state import WorkflowState
+from pilates.utils.archive_paths import workspace_storage_roots
 from pilates.utils.settings_helper import get as get_setting
+
+if TYPE_CHECKING:
+    from pilates.workflows.state import WorkflowState
 
 
 logger = logging.getLogger(__name__)
@@ -25,9 +34,13 @@ CONSIST_CONTAINER_DEBUG_STREAM_ENV = "CONSIST_CONTAINER_DEBUG_STREAM"
 
 RunnerInputsT = TypeVar("RunnerInputsT")
 RunnerOutputsT = TypeVar("RunnerOutputsT")
+RunnerLaunchContextT = TypeVar("RunnerLaunchContextT")
 
 
-class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
+class GenericRunner(
+    ABC,
+    Generic[RunnerInputsT, RunnerOutputsT, RunnerLaunchContextT],
+):
     """
     Base class for model runners with model-specific input and output types.
     """
@@ -37,8 +50,8 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         model_name: str,
         state: "WorkflowState",
     ):
-        super().__init__(model_name, state)
-        self.required_input_files = []
+        self.model_name = model_name
+        self.state = state
 
     @staticmethod
     def get_model_and_image(settings: PilatesConfig, model_type: str):
@@ -83,27 +96,27 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
 
     def run(
         self,
-        store: RunnerInputsT,
-        workspace: Workspace,
+        inputs: RunnerInputsT,
+        launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
         Execute the model run.
 
         Args:
-            store: The model-specific input prepared by preprocessing.
-            workspace (Workspace): The workspace.
+            inputs: The model-specific input prepared by preprocessing.
+            launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:
             The model-specific outputs prepared by the runner.
         """
         self.state.set_sub_stage_progress("runner")
-        return self._run(store, workspace)
+        return self._run(inputs, launch_context)
 
     @abc.abstractmethod
     def _run(
         self,
-        store: RunnerInputsT,
-        workspace: Workspace,
+        inputs: RunnerInputsT,
+        launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
         Do the model run.
@@ -112,8 +125,8 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         effects.
 
         Args:
-            store: The model-specific input prepared by preprocessing.
-            workspace (Workspace): The workspace.
+            inputs: The model-specific input prepared by preprocessing.
+            launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:
             The model-specific outputs prepared by the runner.
@@ -152,6 +165,12 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
 
         mounts = GenericRunner._extract_mounts(volumes)
         consist_volumes = {host: container for host, container, _mode in mounts}
+        consist_volume_modes = {
+            host: mode for host, _container, mode in mounts if mode != "rw"
+        }
+        volume_mode_kwargs: dict[str, dict[str, str]] = {}
+        if consist_volume_modes:
+            volume_mode_kwargs["volume_modes"] = consist_volume_modes
         runtime_tmp_base = GenericRunner._resolve_runtime_tmp_base(mounts)
 
         # Handle command + args: Split if string, combine with args
@@ -181,8 +200,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
             )
 
         strict_mounts = True
-        local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
-        archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
+        local_root, archive_root = workspace_storage_roots() or (None, None)
         output_values: Sequence[Any]
         if isinstance(output_paths, Mapping):
             output_values = list(output_paths.values())
@@ -233,6 +251,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                 image=image,
                 command=full_command_list,
                 volumes=consist_volumes,
+                **volume_mode_kwargs,
                 inputs=input_artifacts or [],
                 outputs=output_paths if output_paths is not None else [],
                 environment=environment or {},

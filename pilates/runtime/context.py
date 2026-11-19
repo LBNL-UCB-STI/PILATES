@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from pilates.config.models import PilatesConfig
     from pilates.workflows.surface import EnabledWorkflowSurface
     from pilates.workspace import Workspace
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 
 @dataclass(frozen=True)
@@ -55,44 +55,3 @@ class WorkflowRuntimeContext:
             surface=surface,
             workspace=workspace,
         )
-
-
-def ensure_workflow_runtime_context(
-    *,
-    context: Optional[WorkflowRuntimeContext] = None,
-    settings: Optional["PilatesConfig"] = None,
-    state: Optional["WorkflowState"] = None,
-    workspace: Optional["Workspace"] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
-) -> WorkflowRuntimeContext:
-    """
-    Return a runtime context from either an existing context or loose parts.
-
-    This preserves compatibility for direct stage/helper tests that still pass
-    the legacy ``settings/state/workspace/surface`` tuple while letting new
-    orchestration call sites use one explicit context object.
-    """
-    if context is not None:
-        return context
-
-    missing = [
-        name
-        for name, value in (
-            ("settings", settings),
-            ("state", state),
-            ("workspace", workspace),
-        )
-        if value is None
-    ]
-    if missing:
-        raise TypeError(
-            "WorkflowRuntimeContext requires either `context=` or explicit "
-            + ", ".join(missing)
-        )
-
-    return WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )

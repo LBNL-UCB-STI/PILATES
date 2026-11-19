@@ -13,6 +13,7 @@ from pilates.beam.config_hocon import (
 from pilates.config import PilatesConfig
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.io import locate_beam_file
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -114,6 +115,22 @@ def beam_exchange_scenario_folder_candidates(
         for existing in candidates
     ):
         candidates.append(config_folder)
+
+    try:
+        from pilates.beam.preprocessor import BeamPreprocessor
+
+        prod_path = BeamPreprocessor._find_beam_production_path(
+            settings, settings.run.region
+        )
+        prod_scenario_folder = os.path.join(prod_path, settings.beam.scenario_folder)
+        if os.path.isdir(prod_scenario_folder) and all(
+            os.path.normpath(prod_scenario_folder) != os.path.normpath(existing)
+            for existing in candidates
+        ):
+            candidates.append(prod_scenario_folder)
+    except Exception:
+        pass
+
     return candidates
 
 
@@ -160,13 +177,17 @@ def register_existing_beam_exchange_inputs(
         BEAM_PERSONS_IN: "persons",
     }
 
-    file_format = getattr(getattr(settings, "activitysim", None), "file_format", None)
-    if not file_format:
-        file_format = "parquet"
+    file_format = get_setting(settings, "activitysim.file_format") or "parquet"
 
     candidate_folders = beam_exchange_scenario_folder_candidates(settings, workspace)
-    current_year = getattr(state, "current_year", None)
-    current_inner_iter = getattr(state, "current_inner_iter", None)
+    try:
+        current_year = state.current_year
+    except AttributeError:
+        current_year = None
+    try:
+        current_inner_iter = state.current_inner_iter
+    except AttributeError:
+        current_inner_iter = None
     folder_errors: List[str] = []
 
     for idx, beam_scenario_folder in enumerate(candidate_folders):

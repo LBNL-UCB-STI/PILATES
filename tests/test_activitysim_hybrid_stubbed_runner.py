@@ -17,7 +17,7 @@ from pilates.activitysim.outputs import (
 )
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records import FileRecord
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -25,8 +25,8 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
 )
-from tests.test_golden_stub_workflow import _build_settings
-from workflow_state import WorkflowState
+from tests.workflow_contract_harness import build_settings as _build_settings
+from pilates.workflows.state import WorkflowState
 
 
 def _write_file(path: Path, content: bytes = b"x") -> None:
@@ -180,27 +180,19 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     zarr_cache = asim_output_dir / "cache" / "skims.zarr"
     _write_file(zarr_cache, b"zarr-cache")
 
-    runner_outputs = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(raw_households),
-                short_name="households_asim_out_temp",
-                content_hash="hash_households_out",
-            ),
-            FileRecord(
-                file_path=str(raw_persons),
-                short_name="persons_asim_out_temp",
-                content_hash="hash_persons_out",
-            ),
-            FileRecord(
-                file_path=str(raw_beam_plans),
-                short_name="beam_plans_asim_out_temp",
-                content_hash="hash_beam_plans_out",
-            ),
-        ]
+    run_outputs = ActivitySimRunOutputs(
+        output_dir=asim_output_dir,
+        raw_outputs={
+            "households_asim_out_temp": raw_households,
+            "persons_asim_out_temp": raw_persons,
+            "beam_plans_asim_out_temp": raw_beam_plans,
+        },
+        raw_output_hashes={
+            "households_asim_out_temp": "hash_households_out",
+            "persons_asim_out_temp": "hash_persons_out",
+            "beam_plans_asim_out_temp": "hash_beam_plans_out",
+        },
     )
-
-    run_outputs = ActivitySimRunOutputs.from_record_store(runner_outputs, workspace)
     run_outputs.source_input_paths = {
         short_name: path
         for short_name, path, _description in preprocess_outputs._iter_record_items()
@@ -223,7 +215,7 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     assert "asim_input_persons_csv_archived" in output_map
     assert "asim_input_land_use_csv_archived" in output_map
     assert "asim_input_skims_omx_archived" not in output_map
-    assert "asim_input_skims_zarr_archived" in output_map
+    assert "asim_input_skims_zarr_archived" not in output_map
 
     iteration_dir = (
         asim_output_dir
@@ -263,10 +255,6 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
         postprocess_outputs.processed_output_hashes["asim_input_land_use_csv_archived"]
         == "hash_land_use"
     )
-    assert (
-        postprocess_outputs.processed_output_hashes["asim_input_skims_zarr_archived"]
-        == "hash_zarr_skims"
-    )
     assert state.sub_stage_progress == "postprocessor"
 
 
@@ -304,27 +292,19 @@ def test_activitysim_postprocess_archives_omx_when_zarr_was_not_a_run_input(
     zarr_cache = asim_output_dir / "cache" / "skims.zarr"
     _write_file(zarr_cache, b"zarr-cache")
 
-    runner_outputs = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(raw_households),
-                short_name="households_asim_out_temp",
-                content_hash="hash_households_out",
-            ),
-            FileRecord(
-                file_path=str(raw_persons),
-                short_name="persons_asim_out_temp",
-                content_hash="hash_persons_out",
-            ),
-            FileRecord(
-                file_path=str(raw_beam_plans),
-                short_name="beam_plans_asim_out_temp",
-                content_hash="hash_beam_plans_out",
-            ),
-        ]
+    run_outputs = ActivitySimRunOutputs(
+        output_dir=asim_output_dir,
+        raw_outputs={
+            "households_asim_out_temp": raw_households,
+            "persons_asim_out_temp": raw_persons,
+            "beam_plans_asim_out_temp": raw_beam_plans,
+        },
+        raw_output_hashes={
+            "households_asim_out_temp": "hash_households_out",
+            "persons_asim_out_temp": "hash_persons_out",
+            "beam_plans_asim_out_temp": "hash_beam_plans_out",
+        },
     )
-
-    run_outputs = ActivitySimRunOutputs.from_record_store(runner_outputs, workspace)
     run_outputs.source_input_paths = {
         ASIM_HOUSEHOLDS_IN: asim_data_dir / "households.csv",
         ASIM_PERSONS_IN: asim_data_dir / "persons.csv",
@@ -351,7 +331,7 @@ def test_activitysim_postprocess_archives_omx_when_zarr_was_not_a_run_input(
         for short_name, path, _description in postprocess_outputs._iter_record_items()
     }
     assert "asim_input_skims_omx_archived" in output_map
-    assert "asim_input_skims_zarr_archived" in output_map
+    assert "asim_input_skims_zarr_archived" not in output_map
     assert (
         postprocess_outputs.processed_output_hashes["asim_input_skims_omx_archived"]
         == "hash_omx_skims"
@@ -434,4 +414,51 @@ def test_activitysim_postprocess_rehydrates_existing_iteration_outputs(
     assert (
         postprocess_outputs.processed_output_hashes["beam_plans_asim_out"]
         == "hash_beam_plans_out"
+    )
+
+
+def test_activitysim_postprocess_archives_native_semantic_keys_to_table_stems(
+    tmp_path: Path,
+) -> None:
+    """Native semantic keys retain the legacy archive filenames."""
+
+    settings = _build_settings(tmp_path)
+    settings.land_use_enabled = False
+    settings.vehicle_ownership_model_enabled = False
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = False
+    settings.replanning_enabled = False
+    settings.state_file_loc = str(tmp_path / "state.yaml")
+    workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
+    state = WorkflowState.from_settings(settings)
+    state.current_year = settings.run.start_year
+    state.forecast_year = settings.run.start_year
+    state.current_inner_iter = 0
+
+    raw_dir = Path(workspace.get_asim_output_dir()) / "native-raw"
+    households = raw_dir / "households.parquet"
+    persons = raw_dir / "persons.parquet"
+    _write_parquet(households, pd.DataFrame({"household_id": [1]}))
+    _write_parquet(persons, pd.DataFrame({"person_id": [1]}))
+
+    outputs = ActivitySimRunOutputs(
+        output_dir=Path(workspace.get_asim_output_dir()),
+        raw_outputs={
+            "households_asim_out": households,
+            "persons_asim_out": persons,
+        },
+    )
+    postprocess_outputs = ActivitysimPostprocessor("activitysim", state).postprocess(
+        outputs, workspace
+    )
+    archive_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+
+    assert postprocess_outputs.processed_outputs["households_asim_out"] == (
+        archive_dir / "households.parquet"
+    )
+    assert postprocess_outputs.processed_outputs["persons_asim_out"] == (
+        archive_dir / "persons.parquet"
     )

@@ -19,7 +19,7 @@ from pilates.workspace import Workspace
 logger = logging.getLogger(__name__)
 
 
-class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs]):
+class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]):
     """Runs the IMPACTS postsim stage (emissions/inmap/aermod/exposure) after BEAM."""
 
     def _run(

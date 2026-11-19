@@ -76,6 +76,7 @@ class TestRunContainerConsistDelegation:
             "/host/data": "/container/data",
             "/host/output": "/container/output",
         }
+        assert "volume_modes" not in call_kwargs
 
         # 2. Command split and extended with args
         expected_cmd = ["python", "script.py", "--arg", "val"]

@@ -255,13 +255,13 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    activitysim: docker://zaneedell/activitysim:0.2.17
-    beam: docker://zaneedell/beam:1.1-beta-v260422
+    activitysim: docker://zaneedell/activitysim:0.2.18
+    beam: docker://zaneedell/beam:1.1.0
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-    beam: haitamlaarabi/beam:1.1-beta-v260418
-    activitysim: zaneedell/activitysim:0.1.4
+    beam: zaneedell/beam:1.1.0
+    activitysim: zaneedell/activitysim:0.2.18
     polaris: tbd
   docker_config:
     stdout: false
@@ -286,7 +286,7 @@ urbansim:
 
 activitysim:
   household_sample_size: 250000
-  chunk_size: 12000000000
+  chunk_size: 0
   num_processes: 25
   file_format: parquet
   clipped_geoms_path: clipped_tazs.csv
@@ -346,13 +346,12 @@ activitysim:
     enabled: false
     use_processed_data: false
     year: 2018
-  warm_start_activities: false
   replan_iters: 0
   replan_hh_samp_size: 0
   replan_after: non_mandatory_tour_scheduling
   final_plans_folder: pilates/activitysim/output/final_plans
 beam:
-  config: scenarios/network-calibration/beam-pilates-run--seattle--jdeq-calibration-FC08-0.conf
+  config: seattle-pilates-base-nofreight.conf
   sample: 1.0
   replanning_portion: 0.4
   memory: ${BEAM_MEMORY}

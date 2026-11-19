@@ -590,18 +590,17 @@ class BeamPlansOut(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
-    trip_id: Optional[int] = Field(
+    trip_id: Optional[str] = Field(
         default=None,
         description="Trip identifier carried in BEAM plans output.",
-        sa_column=Column("tripId", BigInteger, nullable=True, index=True),
+        sa_column=Column("tripId", String, nullable=True, index=True),
     )
-    person_id: Optional[int] = Field(
+    person_id: Optional[str] = Field(
         default=None,
-        description="Person identifier associated with the BEAM plan output row.",
+        description="Person identifier associated with the BEAM plan output row (supports alphanumeric freight IDs).",
         sa_column=Column(
             "personId",
-            BigInteger,
-            ForeignKey("PersonsBeamIn.person_id"),
+            String,
             nullable=True,
             index=True,
         ),

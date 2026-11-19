@@ -23,15 +23,11 @@ from typing import (
     get_origin,
 )
 
-from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
-from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.coupler_namespace import resolve_coupler_value
-
 if TYPE_CHECKING:
     from pilates.config import PilatesConfig
     from pilates.workspace import Workspace
     from pilates.workflows.atlas_state import AtlasSubState
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
 
 StepOutputsT = TypeVar("StepOutputsT")
 logger = logging.getLogger(__name__)
@@ -71,7 +67,7 @@ class ValidationContext:
     step_name : str, optional
         Canonical step name (for example ``activitysim_preprocess``).
     upstream_outputs : mapping
-        Snapshot view of upstream ``StepOutputsHolder`` entries.
+        Optional typed upstream-output context for semantic validation.
     """
 
     settings: Optional["PilatesConfig"] = None
@@ -138,132 +134,6 @@ def serialize_step_outputs(outputs: Any) -> Dict[str, Any]:
     """
     data = asdict(outputs)
     return _serialize_value(data)
-
-
-def iter_step_output_items(outputs: Any) -> Tuple[Tuple[str, Any, str], ...]:
-    """
-    Return direct typed-output artifact items without round-tripping through RecordStore.
-
-    Parameters
-    ----------
-    outputs : Any
-        Step outputs object exposing ``_iter_record_items()``.
-
-    Returns
-    -------
-    tuple[tuple[str, Any, str], ...]
-        Ordered ``(key, path, description)`` items.
-    """
-    iter_items = getattr(outputs, "_iter_record_items", None)
-    if not callable(iter_items):
-        raise TypeError(
-            f"{outputs.__class__.__name__} must implement _iter_record_items() "
-            "for shared workflow artifact publication."
-        )
-    return tuple(iter_items())
-
-
-def step_output_mapping(
-    outputs: Any,
-    *,
-    warn_lossy: bool = True,
-) -> Dict[str, str]:
-    """
-    Build a lossy key -> path mapping directly from typed outputs.
-
-    Warning
-    -------
-    This helper intentionally strips artifact identity and content-hash-bearing
-    objects down to filesystem path strings. Use
-    ``step_output_handoff_mapping(...)`` for runtime handoffs between workflow
-    steps/stages/iterations where Consist lineage should be preserved.
-
-    Parameters
-    ----------
-    outputs : Any
-        Step outputs object exposing ``_iter_record_items()``.
-    warn_lossy : bool, optional
-        Emit a warning that this helper is lossy. Callers should set this to
-        ``False`` only for intentionally path-only serialization/replay flows.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of output key to filesystem path string.
-    """
-    if warn_lossy:
-        logger.warning(
-            "step_output_mapping(...) is lossy and should not be used for runtime "
-            "workflow handoffs; prefer step_output_handoff_mapping(...)."
-        )
-    mapping: Dict[str, str] = {}
-    for key, path, _ in iter_step_output_items(outputs):
-        sanitized_key = sanitize_artifact_key(key)
-        if sanitized_key is None:
-            logger.warning(
-                "Invalid typed-output artifact key '%s' could not be sanitized; skipping.",
-                key,
-            )
-            continue
-        if sanitized_key != key:
-            logger.warning(
-                "Invalid typed-output artifact key '%s' sanitized to '%s' for Consist compatibility.",
-                key,
-                sanitized_key,
-            )
-        if sanitized_key in mapping:
-            logger.warning(
-                "Duplicate typed-output artifact key '%s' detected; keeping first path and skipping later duplicate.",
-                sanitized_key,
-            )
-            continue
-        mapping[sanitized_key] = str(path)
-    return mapping
-
-
-def step_output_handoff_mapping(
-    outputs: Any,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-) -> Dict[str, Any]:
-    """
-    Build a runtime handoff mapping, preserving coupler-published artifacts.
-
-    This is for step-to-step or iteration-to-iteration handoffs where artifact
-    identity matters. When the current step has already published a key into the
-    coupler, the coupler value is preferred over the raw filesystem path string.
-    """
-    mapping: Dict[str, Any] = {}
-    if coupler is None:
-        logger.warning(
-            "step_output_handoff_mapping(...) called without a readable coupler; "
-            "handoff values will fall back to raw paths."
-        )
-    for key, path, _ in iter_step_output_items(outputs):
-        sanitized_key = sanitize_artifact_key(key)
-        if sanitized_key is None:
-            logger.warning(
-                "Invalid typed-output artifact key '%s' could not be sanitized; skipping.",
-                key,
-            )
-            continue
-        if sanitized_key != key:
-            logger.warning(
-                "Invalid typed-output artifact key '%s' sanitized to '%s' for Consist compatibility.",
-                key,
-                sanitized_key,
-            )
-        if sanitized_key in mapping:
-            logger.warning(
-                "Duplicate typed-output artifact key '%s' detected; keeping first path and skipping later duplicate.",
-                sanitized_key,
-            )
-            continue
-        resolved = resolve_coupler_value(coupler, sanitized_key)
-        mapping[sanitized_key] = (
-            resolved.value if resolved.value is not None else str(path)
-        )
-    return mapping
 
 
 def _is_optional_path_type(field_type: Any) -> bool:
@@ -439,7 +309,7 @@ def required_outputs_for_step_outputs_class(
 
 class StepOutputsBase:
     """
-    Base class for typed step outputs with RecordStore conversion.
+    Base class for typed step outputs.
     """
 
     declared_outputs: ClassVar[Tuple[str, ...]] = ()
@@ -483,7 +353,7 @@ class StepOutputsBase:
         Returns
         -------
         iterable of tuple
-            Record metadata for RecordStore conversion.
+            Record metadata tuples for step output inspection and serialization.
         """
         for field_name, short_name in self.record_keys.items():
             value = getattr(self, field_name, None)
@@ -493,26 +363,6 @@ class StepOutputsBase:
                 field_name, f"{self.default_description}: {short_name}"
             )
             yield short_name, value, description
-
-    def to_record_store(self) -> RecordStore:
-        """
-        Convert outputs to a RecordStore for downstream steps.
-
-        Returns
-        -------
-        RecordStore
-            RecordStore containing output file records.
-        """
-        records = []
-        for short_name, path, description in self._iter_record_items():
-            records.append(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=short_name,
-                    description=description,
-                )
-            )
-        return RecordStore(recordList=records)
 
     def validate(self, context: Optional[ValidationContext] = None) -> None:
         """

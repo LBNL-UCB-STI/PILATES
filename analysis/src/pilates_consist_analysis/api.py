@@ -1,34 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
-from consist import RunSet as ConsistRunSet
 
-from .activitysim_trips import ActivitySimTripsDataset, build_activitysim_trips_dataset
-from .handoff import (
-    ArtifactIngestSpec,
-    TableTransformSpec,
-    export_activitysim_inputs as export_activitysim_inputs_core,
-    export_scenario_bundle,
-    export_sql_query,
-    ingest_artifacts as ingest_artifacts_core,
-    list_run_artifacts as list_run_artifacts_core,
-    resolve_urbansim_activitysim_boundary_h5s as resolve_urbansim_activitysim_boundary_h5s_core,
-)
 from .epochs import (
     EpochPanel,
     SimulationEpoch,
     build_epoch_panel,
     converged_epoch as resolve_converged_epoch,
 )
-from .scenario_compare import (
-    ScenarioComparison,
-    compare_scenarios as compare_scenarios_core,
-    runset_from_run_ids,
-)
-from .skim_analysis import SkimConvergenceDataset, build_skim_convergence_dataset
 from .epoch_views import (
     ARTIFACT_FAMILIES_ENV_VAR,
     EpochViews,
@@ -38,8 +20,7 @@ from .epoch_views import (
 from .runset import (
     RunSet,
     runset_from_query,
-    runset_from_runs,
-    runset_label,
+    runset_from_run_ids,
     runs_to_frame,
 )
 from .runtime import (
@@ -237,52 +218,6 @@ class AnalysisSession:
             artifact_families=self.artifact_families,
         )
 
-    def trips(
-        self,
-        *,
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        artifact_family: str = "trips",
-        namespace: str = "activitysim",
-        grouped_mode: str = "hybrid",
-        grouped_missing_files: str = "warn",
-        grouped_schema_id: Optional[str] = None,
-        latest_per_iteration: bool = True,
-        limit: int = 10000,
-    ) -> ActivitySimTripsDataset:
-        return build_activitysim_trips_dataset(
-            self.tracker,
-            year=year,
-            iteration=iteration,
-            artifact_family=artifact_family,
-            namespace=namespace,
-            grouped_mode=grouped_mode,
-            grouped_missing_files=grouped_missing_files,
-            grouped_schema_id=grouped_schema_id,
-            latest_per_iteration=latest_per_iteration,
-            limit=limit,
-        )
-
-    def skims(
-        self,
-        *,
-        concept_keys: Optional[list[str]] = None,
-        run_ids: Optional[list[str]] = None,
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        key_contains: str = "skim",
-        limit: int = 10000,
-    ) -> SkimConvergenceDataset:
-        return build_skim_convergence_dataset(
-            self.tracker,
-            concept_keys=concept_keys,
-            run_ids=run_ids,
-            year=year,
-            iteration=iteration,
-            key_contains=key_contains,
-            limit=limit,
-        )
-
     def config(
         self,
         run_id: str,
@@ -390,223 +325,6 @@ class AnalysisSession:
             raise_on_issues=raise_on_issues,
         )
         return self.run_tagging_report()
-
-    def ingest_artifacts(
-        self,
-        artifact_specs: Sequence[ArtifactIngestSpec],
-        *,
-        run_id: Optional[str] = None,
-        model: str = "analysis_ingest",
-        scenario_id: Optional[str] = None,
-        seed: Optional[int] = None,
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        parent_run_id: Optional[str] = None,
-        tags: Optional[Sequence[str]] = None,
-        run_config: Optional[Mapping[str, Any]] = None,
-        ingest_data: bool = True,
-        profile_schema: bool = True,
-    ) -> dict[str, Any]:
-        return ingest_artifacts_core(
-            self.tracker,
-            artifact_specs,
-            run_id=run_id,
-            model=model,
-            scenario_id=scenario_id,
-            seed=seed,
-            year=year,
-            iteration=iteration,
-            parent_run_id=parent_run_id,
-            tags=tags,
-            run_config=run_config,
-            ingest_data=ingest_data,
-            profile_schema=profile_schema,
-        )
-
-    def list_run_artifacts(
-        self,
-        *,
-        run_id: str,
-        direction: str = "output",
-        key_contains: Optional[str] = None,
-        artifact_family_prefix: Optional[str] = None,
-    ) -> pd.DataFrame:
-        return list_run_artifacts_core(
-            self.tracker,
-            run_id=run_id,
-            direction=direction,
-            key_contains=key_contains,
-            artifact_family_prefix=artifact_family_prefix,
-        )
-
-    def resolve_urbansim_activitysim_boundary_h5s(
-        self,
-        *,
-        forecast_year: int,
-        next_input_year: Optional[int] = None,
-    ) -> pd.DataFrame:
-        return resolve_urbansim_activitysim_boundary_h5s_core(
-            self.archive_run_dir,
-            forecast_year=forecast_year,
-            next_input_year=next_input_year,
-        )
-
-    def export_scenario_db(
-        self,
-        *,
-        out_path: str | Path,
-        scenario_id: Optional[str] = None,
-        seed: Optional[int] = None,
-        model: Optional[str] = None,
-        status: Optional[str] = "completed",
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        tags: Optional[list[str]] = None,
-        metadata: Optional[Mapping[str, Any]] = None,
-        limit: int = 10000,
-        use_converged: bool = True,
-        converged_group_by: Optional[Iterable[str]] = None,
-        latest_group_by: Optional[Iterable[str]] = None,
-        include_data: bool = True,
-        include_snapshots: bool = False,
-        include_children: bool = True,
-        dry_run: bool = False,
-    ) -> dict[str, Any]:
-        return export_scenario_bundle(
-            self.tracker,
-            archive_run_dir=self.archive_run_dir,
-            out_path=out_path,
-            scenario_id=scenario_id,
-            seed=seed,
-            model=model,
-            status=status,
-            year=year,
-            iteration=iteration,
-            tags=tags,
-            metadata=metadata,
-            limit=limit,
-            use_converged=use_converged,
-            converged_group_by=list(converged_group_by)
-            if converged_group_by is not None
-            else None,
-            latest_group_by=list(latest_group_by)
-            if latest_group_by is not None
-            else None,
-            include_data=include_data,
-            include_snapshots=include_snapshots,
-            include_children=include_children,
-            dry_run=dry_run,
-        )
-
-    def export_sql(
-        self,
-        *,
-        sql: str,
-        output_path: str | Path,
-        output_format: str = "csv",
-        limit: Optional[int] = None,
-    ) -> dict[str, Any]:
-        return export_sql_query(
-            self.tracker,
-            sql=sql,
-            output_path=output_path,
-            output_format=output_format,
-            limit=limit,
-        )
-
-    def export_activitysim_inputs(
-        self,
-        *,
-        output_dir: str | Path,
-        scenario_id: Optional[str] = None,
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        use_converged: bool = True,
-        trips: Optional[TableTransformSpec] = None,
-        persons: Optional[TableTransformSpec] = None,
-        include_trips: bool = True,
-        include_persons: bool = True,
-        output_format: str = "csv",
-    ) -> dict[str, Any]:
-        return export_activitysim_inputs_core(
-            self.tracker,
-            output_dir=output_dir,
-            scenario_id=scenario_id,
-            year=year,
-            iteration=iteration,
-            use_converged=use_converged,
-            trips=trips,
-            persons=persons,
-            include_trips=include_trips,
-            include_persons=include_persons,
-            output_format=output_format,
-        )
-
-    def compare_scenarios(
-        self,
-        left: RunSet | Iterable[str],
-        right: RunSet | Iterable[str],
-        *,
-        left_name: str = "left",
-        right_name: str = "right",
-        datasets: Optional[list[str]] = None,
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        config_namespace: Optional[str] = None,
-        config_prefix: Optional[str] = None,
-        config_include_equal: bool = False,
-        align_on: str = "year",
-        latest_group_by: Optional[Iterable[str]] = None,
-        use_converged: bool = False,
-        converged_group_by: Optional[Iterable[str]] = None,
-    ) -> ScenarioComparison:
-        if isinstance(left, str):
-            left = [left]
-        if isinstance(right, str):
-            right = [right]
-        left_runset = (
-            left
-            if isinstance(left, (RunSet, ConsistRunSet))
-            else self.runset_from_ids(left, name=left_name)
-        )
-        right_runset = (
-            right
-            if isinstance(right, (RunSet, ConsistRunSet))
-            else self.runset_from_ids(right, name=right_name)
-        )
-        if not isinstance(left_runset, RunSet):
-            left_runset = runset_from_runs(
-                left_runset,
-                name=runset_label(left_runset, default=left_name),
-                tracker=self.tracker,
-            )
-        if not isinstance(right_runset, RunSet):
-            right_runset = runset_from_runs(
-                right_runset,
-                name=runset_label(right_runset, default=right_name),
-                tracker=self.tracker,
-            )
-        left_runset.label = runset_label(left_runset, default=left_name)
-        right_runset.label = runset_label(right_runset, default=right_name)
-        return compare_scenarios_core(
-            self.tracker,
-            left_runset,
-            right_runset,
-            datasets=datasets,
-            year=year,
-            iteration=iteration,
-            config_namespace=config_namespace,
-            config_prefix=config_prefix,
-            config_include_equal=config_include_equal,
-            align_on=align_on,
-            latest_group_by=list(latest_group_by)
-            if latest_group_by is not None
-            else None,
-            use_converged=bool(use_converged),
-            converged_group_by=list(converged_group_by)
-            if converged_group_by is not None
-            else None,
-        )
 
 
 def open_run(

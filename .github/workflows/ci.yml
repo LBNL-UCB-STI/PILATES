@@ -21,7 +21,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11.6"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -44,6 +44,10 @@ jobs:
         run: |
           python -m pytest --collect-only -q tests
 
-      - name: Run pytest suite
+      - name: Run unit and integration pytest suite
         run: |
-          python -m pytest -q tests
+          python -m pytest -q tests -m "not slow_ci and not contract_harness"
+
+      - name: Run contract-validating workflow harness
+        run: |
+          python -m pytest -v tests/test_contract_validating_workflow_harness.py

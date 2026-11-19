@@ -1,345 +1,16 @@
+import inspect
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 from pilates.atlas import postprocessor as atlas_postprocessor
-from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
-from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
-from pilates.workflows import steps
-from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
+from pilates.atlas.outputs import AtlasRunOutputs
 
 
-def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_path):
-    captured = {}
-
-    def _fake_build_standard_step(*, spec, **_kwargs):
-        captured["output_logger"] = spec.output_logger
-        return lambda *args, **inner_kwargs: None
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "build_standard_step",
-        _fake_build_standard_step,
-    )
-
-    steps.make_atlas_postprocess_step(
-        coupler=SimpleNamespace(),
-        outputs_holder=SimpleNamespace(),
-    )
-
-    output_logger = captured["output_logger"]
-    output_only_keys = []
-    set_output_keys = []
-    publish_meta = []
-
-    def _log_output_only(*, key, path, description, **meta):
-        output_only_keys.append(key)
-
-    def _log_and_set_output(*, key, path, description, coupler, **meta):
-        set_output_keys.append(key)
-        publish_meta.append(meta)
-
-    monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", _log_output_only)
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "log_and_set_output",
-        _log_and_set_output,
-    )
-    h5_path = tmp_path / "model_data_2023.h5"
-    h5_path.write_text("x")
-    vehicles2_path = tmp_path / "vehicles2_2023.csv"
-    vehicles2_path.write_text("x")
-
-    outputs = AtlasPostprocessOutputs(
-        atlas_output_dir=tmp_path,
-        usim_datastore_h5=h5_path,
-        processed_outputs={
-            "usim_h5_updated": h5_path,
-            "atlas_vehicles2_output": vehicles2_path,
-        },
-    )
-
-    output_logger(
-        outputs,
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(forecast_year=2023, is_start_year=lambda: False),
-        workspace=SimpleNamespace(),
-        holder=SimpleNamespace(),
-    )
-
-    assert output_only_keys == ["atlas_vehicles2_output"]
-    assert set_output_keys == [USIM_POPULATION_SOURCE_H5]
-    assert len(publish_meta) == 1
-    assert publish_meta[0]["child_selection"] == "include_only"
-    assert {
-        path: spec.key for path, spec in publish_meta[0]["child_specs"].items()
-    } == {"/2023/households": "atlas_postprocess_usim_households_table_updated"}
-
-
-def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
-    captured = {}
-
-    def _fake_build_standard_step(*, spec, **_kwargs):
-        captured["input_logger"] = spec.input_logger
-        return lambda *args, **inner_kwargs: None
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "build_standard_step",
-        _fake_build_standard_step,
-    )
-
-    steps.make_atlas_postprocess_step(
-        coupler=SimpleNamespace(),
-        outputs_holder=SimpleNamespace(),
-    )
-
-    input_logger = captured["input_logger"]
-    calls = []
-
-    def _log_input_only(*, key, path, description, **meta):
-        calls.append((key, path, meta))
-
-    monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
-
-    usim_path = tmp_path / "model_data_2023.h5"
-    usim_path.write_text("x")
-    workspace = SimpleNamespace(
-        get_usim_mutable_data_dir=lambda: str(tmp_path),
-        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
-    )
-    settings = SimpleNamespace(
-        urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5"),
-    )
-    state = SimpleNamespace(forecast_year=2023, is_start_year=lambda: False)
-
-    input_logger(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        holder=SimpleNamespace(),
-    )
-
-    assert len(calls) == 1
-    assert calls[0][0] == "usim_datastore_h5"
-    assert calls[0][1] == str(usim_path)
-    assert calls[0][2]["h5_container"] is True
-    assert calls[0][2]["child_selection"] == "include_only"
-    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
-        "/2023/households": "atlas_postprocess_usim_households_table_input"
-    }
-
-
-def test_atlas_postprocess_logs_selected_start_year_h5_as_input(monkeypatch, tmp_path):
-    captured = {}
-
-    def _fake_build_standard_step(*, spec, **_kwargs):
-        captured["input_logger"] = spec.input_logger
-        return lambda *args, **inner_kwargs: None
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "build_standard_step",
-        _fake_build_standard_step,
-    )
-
-    steps.make_atlas_postprocess_step(
-        coupler=SimpleNamespace(),
-        outputs_holder=SimpleNamespace(),
-    )
-
-    input_logger = captured["input_logger"]
-    calls = []
-
-    def _log_input_only(*, key, path, description, **meta):
-        calls.append((key, path, meta))
-
-    monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
-
-    base_h5 = tmp_path / "model_data_000.h5"
-    forecast_h5 = tmp_path / "model_data_2023.h5"
-    base_h5.write_text("base")
-    workspace = SimpleNamespace(
-        get_usim_mutable_data_dir=lambda: str(tmp_path),
-        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
-    )
-    settings = SimpleNamespace(
-        urbansim=SimpleNamespace(
-            output_file_template="model_data_{year}.h5",
-            input_file_template="model_data_{region_id}.h5",
-            region_mappings={"region_to_region_id": {"test": "000"}},
-        ),
-        run=SimpleNamespace(region="test"),
-    )
-    state = SimpleNamespace(
-        forecast_year=2023,
-        is_start_year=lambda: True,
-        atlas_usim_datastore_h5=str(base_h5),
-    )
-
-    input_logger(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        holder=SimpleNamespace(),
-    )
-
-    assert not forecast_h5.exists()
-    assert len(calls) == 1
-    assert calls[0][0] == "usim_datastore_h5"
-    assert calls[0][1] == str(base_h5)
-    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
-        "/households": "atlas_postprocess_usim_households_table_input"
-    }
-
-
-def test_atlas_postprocess_logs_year_scoped_start_subyear_table(monkeypatch, tmp_path):
-    captured = {}
-
-    def _fake_build_standard_step(*, spec, **_kwargs):
-        captured["input_logger"] = spec.input_logger
-        return lambda *args, **inner_kwargs: None
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "build_standard_step",
-        _fake_build_standard_step,
-    )
-
-    steps.make_atlas_postprocess_step(
-        coupler=SimpleNamespace(),
-        outputs_holder=SimpleNamespace(),
-    )
-
-    input_logger = captured["input_logger"]
-    calls = []
-
-    def _log_input_only(*, key, path, description, **meta):
-        calls.append((key, path, meta))
-
-    monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
-
-    year_scoped_h5 = tmp_path / "model_data_2023.h5"
-    pd.DataFrame({"cars": [0]}, index=pd.Index([1], name="household_id")).to_hdf(
-        year_scoped_h5, key="/2023/households", mode="w"
-    )
-    workspace = SimpleNamespace(
-        get_usim_mutable_data_dir=lambda: str(tmp_path),
-        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
-    )
-    settings = SimpleNamespace(
-        urbansim=SimpleNamespace(
-            output_file_template="model_data_{year}.h5",
-            input_file_template="model_data_{region_id}.h5",
-            region_mappings={"region_to_region_id": {"test": "000"}},
-        ),
-        run=SimpleNamespace(region="test"),
-    )
-    state = SimpleNamespace(
-        forecast_year=2023,
-        is_start_year=lambda: True,
-        atlas_usim_datastore_h5=str(year_scoped_h5),
-    )
-
-    input_logger(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        holder=SimpleNamespace(),
-    )
-
-    assert len(calls) == 1
-    assert calls[0][0] == "usim_datastore_h5"
-    assert calls[0][1] == str(year_scoped_h5)
-    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
-        "/2023/households": "atlas_postprocess_usim_households_table_input"
-    }
-
-
-def test_atlas_postprocess_logs_resolved_fallback_households_table(
+def test_atlas_postprocess_does_not_rediscover_or_archive_continuation_files(
     monkeypatch, tmp_path
 ):
-    captured = {}
-
-    def _fake_build_standard_step(*, spec, **_kwargs):
-        captured["input_logger"] = spec.input_logger
-        captured["output_logger"] = spec.output_logger
-        return lambda *args, **inner_kwargs: None
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "build_standard_step",
-        _fake_build_standard_step,
-    )
-
-    steps.make_atlas_postprocess_step(
-        coupler=SimpleNamespace(),
-        outputs_holder=SimpleNamespace(),
-    )
-
-    usim_path = tmp_path / "model_data_2023.h5"
-    pd.DataFrame({"cars": [0]}, index=pd.Index([1], name="household_id")).to_hdf(
-        usim_path, key="/2024/households", mode="w"
-    )
-    workspace = SimpleNamespace(
-        get_usim_mutable_data_dir=lambda: str(tmp_path),
-        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
-    )
-    settings = SimpleNamespace(
-        urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5"),
-    )
-    state = SimpleNamespace(forecast_year=2023, is_start_year=lambda: False)
-
-    input_calls = []
-    output_calls = []
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "log_input_only",
-        lambda **kwargs: input_calls.append(kwargs),
-    )
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "log_and_set_output",
-        lambda **kwargs: output_calls.append(kwargs),
-    )
-    captured["input_logger"](
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        holder=SimpleNamespace(),
-    )
-    captured["output_logger"](
-        AtlasPostprocessOutputs(
-            atlas_output_dir=tmp_path,
-            usim_datastore_h5=usim_path,
-            processed_outputs={"usim_h5_updated": usim_path},
-        ),
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        holder=SimpleNamespace(),
-    )
-
-    assert {path: spec.key for path, spec in input_calls[0]["child_specs"].items()} == {
-        "/2024/households": "atlas_postprocess_usim_households_table_input"
-    }
-    assert {
-        path: spec.key for path, spec in output_calls[0]["child_specs"].items()
-    } == {"/2024/households": "atlas_postprocess_usim_households_table_updated"}
-
-
-def test_atlas_postprocess_enqueues_restart_critical_intermediates(
-    monkeypatch, tmp_path
-):
-    calls = []
-    monkeypatch.setattr(
-        atlas_postprocessor,
-        "enqueue_archive_copy",
-        lambda **kwargs: calls.append(kwargs),
-    )
-
     usim_dir = tmp_path / "urbansim" / "data"
     atlas_output_dir = tmp_path / "atlas" / "atlas_output"
     atlas_input_dir = tmp_path / "atlas" / "atlas_input" / "year2023"
@@ -350,10 +21,10 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(
     usim_h5 = usim_dir / "model_data_2023.h5"
     usim_h5.write_text("h5")
     (atlas_output_dir / "householdv_2023.csv").write_text(
-        "household_id,nvehicles\n1,1\n"
+        "household_id,nvehicles,year\n1,1,2023\n"
     )
     (atlas_output_dir / "vehicles_2023.csv").write_text(
-        "bodytype,pred_power,modelyear\nsedan,gas,2020\n"
+        "household_id,vehicle_id,year,bodytype,pred_power,modelyear\n1,1,2023,sedan,gas,2020\n"
     )
     (atlas_input_dir / "vehicles_output.RData").write_text("rdata")
 
@@ -397,34 +68,37 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(
             },
         ),
         workspace,
+        usim_datastore_h5=usim_h5,
     )
 
-    assert any(
-        call["key"] == "atlas_input_year_dir_2023"
-        and str(call["path"]).endswith("year2023")
-        for call in calls
-    )
-    assert any(
-        call["key"] == "atlas_rdata_2023"
-        and str(call["path"]).endswith("vehicles_output.RData")
-        for call in calls
-    )
+    source = inspect.getsource(atlas_postprocessor.AtlasPostprocessor._postprocess)
+    assert "log_output_only" not in source
+    assert "enqueue_archive_copy" not in source
 
 
 def test_atlas_postprocess_uses_selected_start_year_h5(monkeypatch, tmp_path):
     atlas_output_dir = tmp_path / "atlas" / "atlas_output"
     atlas_input_dir = tmp_path / "atlas" / "atlas_input" / "year2023"
     usim_dir = tmp_path / "urbansim" / "data"
+    atlas_input_root = tmp_path / "atlas" / "atlas_input"
+    year_input_dir = atlas_input_root / "year2023"
     atlas_output_dir.mkdir(parents=True)
-    atlas_input_dir.mkdir(parents=True)
+    year_input_dir.mkdir(parents=True)
+    atlas_input_root.mkdir(parents=True, exist_ok=True)
     usim_dir.mkdir(parents=True)
+
+    for base_dir in (year_input_dir, atlas_input_root, atlas_output_dir):
+        for filename in ("vehicles_output.RData", "households_output.RData"):
+            (base_dir / filename).write_text("x")
 
     base_h5 = usim_dir / "model_data_000.h5"
     base_h5.write_text("h5")
     hh_csv = atlas_output_dir / "householdv_2023.csv"
     veh_csv = atlas_output_dir / "vehicles_2023.csv"
-    hh_csv.write_text("household_id,nvehicles\n1,1\n")
-    veh_csv.write_text("bodytype,pred_power,modelyear\nsedan,gas,2020\n")
+    hh_csv.write_text("household_id,nvehicles,year\n1,1,2023\n")
+    veh_csv.write_text(
+        "household_id,vehicle_id,year,bodytype,pred_power,modelyear\n1,1,2023,sedan,gas,2020\n"
+    )
 
     state = SimpleNamespace(
         full_settings=SimpleNamespace(
@@ -470,6 +144,7 @@ def test_atlas_postprocess_uses_selected_start_year_h5(monkeypatch, tmp_path):
             },
         ),
         workspace,
+        usim_datastore_h5=base_h5,
     )
 
     assert seen["h5_file_path"] == str(base_h5)
@@ -487,8 +162,10 @@ def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
     usim_h5.write_text("h5")
     hh_csv = atlas_output_dir / "householdv_2023.csv"
     veh_csv = atlas_output_dir / "vehicles_2023.csv"
-    hh_csv.write_text("household_id,nvehicles\n1,1\n")
-    veh_csv.write_text("bodytype,pred_power,modelyear\nsedan,gas,2020\n")
+    hh_csv.write_text("household_id,nvehicles,year\n1,1,2023\n")
+    veh_csv.write_text(
+        "household_id,vehicle_id,year,bodytype,pred_power,modelyear\n1,1,2023,sedan,gas,2020\n"
+    )
 
     state = SimpleNamespace(
         full_settings=SimpleNamespace(
@@ -518,6 +195,164 @@ def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
                 },
             ),
             workspace,
+            usim_datastore_h5=usim_h5,
+        )
+
+
+def test_atlas_postprocess_rejects_vehicle_shortfall_before_h5_mutation(tmp_path):
+    """A raw ATLAS vehicle deficit must not reach the population snapshot."""
+    atlas_output_dir = tmp_path / "atlas" / "atlas_output"
+    atlas_output_dir.mkdir(parents=True)
+    h5_path = tmp_path / "model_data_2021.h5"
+    pd.DataFrame(
+        {"cars": [0]},
+        index=pd.Index([1], name="household_id"),
+    ).to_hdf(str(h5_path), key="/2021/households", mode="w")
+
+    householdv_path = atlas_output_dir / "householdv_2021.csv"
+    vehicles_path = atlas_output_dir / "vehicles_2021.csv"
+    householdv_path.write_text(
+        "household_id,nvehicles,year\n1,2,2021\n",
+        encoding="utf-8",
+    )
+    vehicles_path.write_text(
+        "household_id,vehicle_id,year\n1,1,2021\n",
+        encoding="utf-8",
+    )
+
+    state = SimpleNamespace(
+        full_settings=SimpleNamespace(),
+        year=2021,
+        current_year=2021,
+        forecast_year=2021,
+        atlas_interval_start_year=2019,
+        main_forecast_year=2021,
+        is_start_year=lambda: False,
+    )
+    workspace = SimpleNamespace(
+        get_atlas_output_dir=lambda: str(atlas_output_dir),
+    )
+
+    postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "ATLAS household/vehicle contract violation.*"
+            "atlas_interval_start_year=2019.*atlas_subyear=2021.*"
+            "main_forecast_year=2021"
+        ),
+    ):
+        postprocessor._postprocess(
+            AtlasRunOutputs(
+                atlas_output_dir=atlas_output_dir,
+                raw_outputs={
+                    "householdv_2021": householdv_path,
+                    "vehicles_2021": vehicles_path,
+                },
+            ),
+            workspace,
+            usim_datastore_h5=h5_path,
+        )
+
+    with pd.HDFStore(h5_path, mode="r") as store:
+        assert store["/2021/households"]["cars"].tolist() == [0]
+    assert not (atlas_output_dir / "vehicles2_2021.csv").exists()
+
+
+def test_atlas_vehicle_contract_rejects_stale_householdv_year(tmp_path):
+    householdv_path = tmp_path / "householdv_2021.csv"
+    vehicles_path = tmp_path / "vehicles_2021.csv"
+    householdv_path.write_text(
+        "household_id,nvehicles,year\n1,1,2019\n",
+        encoding="utf-8",
+    )
+    vehicles_path.write_text(
+        "household_id,vehicle_id,year\n1,1,2021\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="householdv.year"):
+        atlas_postprocessor.validate_atlas_household_vehicle_contract(
+            householdv_csv_path=str(householdv_path),
+            vehicles_csv_path=str(vehicles_path),
+            atlas_subyear=2021,
+            state=SimpleNamespace(),
+        )
+
+
+def test_atlas_vehicle_contract_accepts_yearless_base_year_outputs(tmp_path):
+    householdv_path = tmp_path / "householdv_2017.csv"
+    vehicles_path = tmp_path / "vehicles_2017.csv"
+    householdv_path.write_text(
+        "household_id,nvehicles\n1,2\n2,0\n",
+        encoding="utf-8",
+    )
+    vehicles_path.write_text(
+        "household_id,vehicle_id\n1,10\n1,11\n",
+        encoding="utf-8",
+    )
+
+    atlas_postprocessor.validate_atlas_household_vehicle_contract(
+        householdv_csv_path=str(householdv_path),
+        vehicles_csv_path=str(vehicles_path),
+        atlas_subyear=2017,
+        state=SimpleNamespace(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("householdv_header", "householdv_row", "vehicles_header", "vehicles_row", "match"),
+    [
+        (
+            "household_id,nvehicles",
+            "1,1",
+            "household_id,vehicle_id,year",
+            "1,10,2019",
+            "sample_vehicle_year_mismatches",
+        ),
+        (
+            "household_id,nvehicles,year",
+            "1,1,2019",
+            "household_id,vehicle_id",
+            "1,10",
+            "householdv.year",
+        ),
+    ],
+)
+def test_atlas_vehicle_contract_validates_present_year_independently(
+    tmp_path,
+    householdv_header,
+    householdv_row,
+    vehicles_header,
+    vehicles_row,
+    match,
+):
+    householdv_path = tmp_path / "householdv_2021.csv"
+    vehicles_path = tmp_path / "vehicles_2021.csv"
+    householdv_path.write_text(f"{householdv_header}\n{householdv_row}\n")
+    vehicles_path.write_text(f"{vehicles_header}\n{vehicles_row}\n")
+
+    with pytest.raises(ValueError, match=match):
+        atlas_postprocessor.validate_atlas_household_vehicle_contract(
+            householdv_csv_path=str(householdv_path),
+            vehicles_csv_path=str(vehicles_path),
+            atlas_subyear=2021,
+            state=SimpleNamespace(),
+        )
+
+
+def test_atlas_vehicle_contract_rejects_yearless_vehicle_shortfall(tmp_path):
+    householdv_path = tmp_path / "householdv_2017.csv"
+    vehicles_path = tmp_path / "vehicles_2017.csv"
+    householdv_path.write_text("household_id,nvehicles\n1,2\n")
+    vehicles_path.write_text("household_id,vehicle_id\n1,10\n")
+
+    with pytest.raises(ValueError, match="households_with_vehicle_shortfall=1"):
+        atlas_postprocessor.validate_atlas_household_vehicle_contract(
+            householdv_csv_path=str(householdv_path),
+            vehicles_csv_path=str(vehicles_path),
+            atlas_subyear=2017,
+            state=SimpleNamespace(),
         )
 
 

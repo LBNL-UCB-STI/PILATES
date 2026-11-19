@@ -17,20 +17,6 @@ from pilates.workflows.artifact_keys import (
 )
 
 
-def test_activitysim_h5_table_path_normalizes_prefixes() -> None:
-    assert (
-        asim_preprocessor._activitysim_h5_table_path("", "households") == "/households"
-    )
-    assert (
-        asim_preprocessor._activitysim_h5_table_path("2017", "households")
-        == "/2017/households"
-    )
-    assert (
-        asim_preprocessor._activitysim_h5_table_path("/2017/", "households")
-        == "/2017/households"
-    )
-
-
 def test_activitysim_preprocess_h5_input_key_uses_start_year_suffix() -> None:
     assert (
         asim_preprocessor._activitysim_preprocess_h5_input_key(
@@ -40,6 +26,53 @@ def test_activitysim_preprocess_h5_input_key_uses_start_year_suffix() -> None:
         )
         == "activitysim_preprocess_usim_households_table_input"
     )
+
+
+def test_activitysim_preprocess_skips_omx_work_when_zarr_is_authoritative(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    preprocessor = asim_preprocessor.ActivitysimPreprocessor(
+        "activitysim_preprocess",
+        SimpleNamespace(full_settings=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        asim_preprocessor,
+        "find_project_root",
+        lambda: pytest.fail("Zarr-mode preprocessing must not locate production OMX"),
+    )
+    from pilates.generic.records import FileRecord
+    from pilates.workflows.artifact_keys import (
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_LAND_USE_IN,
+        ASIM_PERSONS_IN,
+    )
+
+    monkeypatch.setattr(
+        asim_preprocessor,
+        "create_asim_data_from_h5",
+        lambda *_args, **_kwargs: [
+            FileRecord(
+                file_path=str(tmp_path / "land_use.csv"), short_name=ASIM_LAND_USE_IN
+            ),
+            FileRecord(
+                file_path=str(tmp_path / "households.csv"),
+                short_name=ASIM_HOUSEHOLDS_IN,
+            ),
+            FileRecord(
+                file_path=str(tmp_path / "persons.csv"), short_name=ASIM_PERSONS_IN
+            ),
+        ],
+    )
+
+    outputs = preprocessor._preprocess(
+        workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: str(tmp_path)),
+        population_source_h5_path="/bound/population.h5",
+        prepare_omx_skims=False,
+    )
+
+    assert outputs.omx_skims is None
+    assert outputs.mutable_data_dir == tmp_path
     assert (
         asim_preprocessor._activitysim_preprocess_h5_input_key(
             "households",
@@ -82,35 +115,6 @@ def test_log_activitysim_usim_input_tables_logs_expected_keys(monkeypatch) -> No
     assert all(call[4]["profile_file_schema"] is True for call in calls)
 
 
-def test_activitysim_h5_preferred_prefixes_prefers_forecast_year() -> None:
-    state = SimpleNamespace(forecast_year=2019, year=2018)
-
-    assert asim_preprocessor._activitysim_h5_preferred_prefixes(state) == (
-        "2019",
-        "2018",
-        "",
-    )
-
-
-def test_detect_activitysim_h5_prefix_prefers_forecast_year_tables(tmp_path) -> None:
-    h5_path = tmp_path / "model_data_2019.h5"
-    with pd.HDFStore(h5_path, mode="w") as store:
-        for prefix in ("2018", "2019"):
-            for table_name in ("households", "persons", "jobs", "blocks"):
-                store.put(f"/{prefix}/{table_name}", pd.DataFrame({"value": [1]}))
-
-    with pd.HDFStore(h5_path, mode="r") as store:
-        prefix = asim_preprocessor._detect_activitysim_h5_prefix(
-            store,
-            required_tables=("households", "persons", "jobs", "blocks"),
-            preferred_prefixes=asim_preprocessor._activitysim_h5_preferred_prefixes(
-                SimpleNamespace(forecast_year=2019, year=2018)
-            ),
-        )
-
-    assert prefix == "2019"
-
-
 def test_resolve_usim_population_table_paths_prefers_target_year(tmp_path) -> None:
     h5_path = tmp_path / "model_data_2019.h5"
     with pd.HDFStore(h5_path, mode="w") as store:
@@ -129,6 +133,21 @@ def test_resolve_usim_population_table_paths_prefers_target_year(tmp_path) -> No
         USIM_POPULATION_JOBS_TABLE: "/2019/jobs",
         USIM_POPULATION_BLOCKS_TABLE: "/2019/blocks",
     }
+
+
+def test_resolve_usim_population_table_paths_rejects_filename_year_mismatch(
+    tmp_path,
+) -> None:
+    h5_path = tmp_path / "model_data_2019.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2021/{table_name}", pd.DataFrame({"value": [1]}))
+
+    with pytest.raises(ValueError, match="filename/year mismatch"):
+        resolve_usim_population_table_paths(
+            h5_path=str(h5_path),
+            year=2021,
+        )
 
 
 def test_resolve_usim_population_table_paths_falls_back_to_root_tables(
@@ -197,6 +216,27 @@ def test_reconcile_usim_population_table_paths_prefers_target_year_over_stale_ro
         USIM_POPULATION_BLOCKS_TABLE: "/2021/blocks",
     }
     assert "Ignoring stale pre-resolved UrbanSim population table path" in caplog.text
+
+
+def test_reconcile_usim_population_table_paths_rejects_filename_year_mismatch(
+    tmp_path,
+) -> None:
+    h5_path = tmp_path / "model_data_2019.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2021/{table_name}", pd.DataFrame({"value": [1]}))
+
+    with pytest.raises(ValueError, match="requested_year=2021"):
+        reconcile_usim_population_table_paths(
+            h5_path=str(h5_path),
+            year=2021,
+            provided_paths={
+                USIM_POPULATION_HOUSEHOLDS_TABLE: "/2021/households",
+                USIM_POPULATION_PERSONS_TABLE: "/2021/persons",
+                USIM_POPULATION_JOBS_TABLE: "/2021/jobs",
+                USIM_POPULATION_BLOCKS_TABLE: "/2021/blocks",
+            },
+        )
 
 
 def test_reconcile_usim_population_table_paths_rejects_stale_root_when_exact_year_missing(

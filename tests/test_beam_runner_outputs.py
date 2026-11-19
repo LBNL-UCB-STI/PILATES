@@ -8,14 +8,15 @@ from pilates.beam.outputs import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
 )
-from pilates.beam.runner import BeamRunner
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.beam.launch_config import BeamLaunchConfig
+from pilates.beam.runner import BeamRunner, rename_beam_output_directory
 from pilates.workflows.outputs_base import ValidationContext
 
 
 class _Workspace:
     def __init__(self, tmp_path: Path) -> None:
         self._tmp_path = tmp_path
+        self.full_path = tmp_path
 
     def get_beam_output_dir(self) -> str:
         return str(self._tmp_path / "beam-output")
@@ -35,6 +36,26 @@ class _StubState:
 def _touch(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("stub")
+
+
+def test_rename_beam_output_directory_creates_declared_region_parent(
+    tmp_path: Path,
+) -> None:
+    beam_output_dir = tmp_path / "beam-output"
+    beam_run_dir = beam_output_dir / "beam-generated-run"
+    _touch(beam_run_dir / "ITERS" / "it.0" / "events.csv.gz")
+
+    _, renamed_output_dir = rename_beam_output_directory(
+        str(beam_output_dir),
+        SimpleNamespace(run=SimpleNamespace(region="seattle")),
+        year=2030,
+        replanning_iteration_number=2,
+    )
+
+    renamed_root = beam_output_dir / "seattle" / "year-2030-iteration-2"
+    assert Path(renamed_output_dir) == renamed_root
+    assert (renamed_root / "ITERS" / "it.0" / "events.csv.gz").exists()
+    assert not beam_run_dir.exists()
 
 
 def test_gather_outputs_logs_phys_sim_linkstats_parquet_files(tmp_path):
@@ -113,21 +134,63 @@ def test_gather_outputs_includes_both_emissions_skims_csv_and_parquet(tmp_path):
     assert parquet_record.file_path == str(parquet_path)
 
 
+def test_gather_outputs_discovers_activitysim_omx_basename(tmp_path):
+    beam_output_dir = tmp_path / "beam-output"
+    skim_path = (
+        beam_output_dir
+        / "seattle"
+        / "run"
+        / "ITERS"
+        / "it.2"
+        / "2.activitySimODSkims_current.omx"
+    )
+    _touch(skim_path)
+
+    runner = BeamRunner("beam_runner", _StubState())
+    outputs = runner.gather_outputs(str(beam_output_dir))
+
+    by_name = {record.short_name: record for record in outputs}
+    assert by_name["raw_od_skims_2030_2"].file_path == str(skim_path)
+
+
+def test_gather_outputs_prefers_configured_activitysim_zarr_basename(tmp_path):
+    beam_output_dir = tmp_path / "beam-output"
+    iteration_dir = beam_output_dir / "seattle" / "run" / "ITERS" / "it.2"
+    legacy_path = iteration_dir / "2.skimsActivitySimOD_current.zarr"
+    configured_path = iteration_dir / "2.regionalActivitySimOD_current.zarr"
+    _touch(legacy_path)
+    _touch(configured_path)
+
+    runner = BeamRunner("beam_runner", _StubState())
+    outputs = runner.gather_outputs(
+        str(beam_output_dir),
+        activitysim_skims_file_base_name="regionalActivitySimOD",
+    )
+
+    by_name = {record.short_name: record for record in outputs}
+    assert by_name["raw_od_skims_zarr_2030_2"].file_path == str(configured_path)
+
+
 def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     state = _StubState()
     runner = BeamRunner("beam_runner", state)
     workspace = _Workspace(tmp_path)
     captured = {}
 
-    def _fake_run(store: RecordStore, _workspace) -> RecordStore:
-        captured["store"] = store
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(tmp_path / "beam-output" / "plans.csv.gz"),
-                    short_name="beam_plans_out_2030_2",
-                )
-            ]
+    def _fake_run(
+        inputs: BeamPreprocessOutputs,
+        _workspace,
+        _launch_config,
+        *,
+        extra_inputs=None,
+    ) -> BeamRunOutputs:
+        captured["inputs"] = inputs
+        captured["extra_inputs"] = extra_inputs
+        return BeamRunOutputs(
+            beam_output_dir=tmp_path / "beam-output",
+            raw_outputs={
+                "beam_plans_out_2030_2": tmp_path / "beam-output" / "plans.csv.gz"
+            },
         )
 
     monkeypatch.setattr(runner, "_run", _fake_run)
@@ -139,16 +202,18 @@ def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     outputs = runner.run(
         preprocess_outputs,
         workspace,
+        launch_config=BeamLaunchConfig(
+            root=tmp_path / "beam-launch",
+            primary_config=tmp_path / "beam-launch" / "beam.conf",
+        ),
         extra_inputs={"zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr"},
     )
 
     assert isinstance(outputs, BeamRunOutputs)
-    assert captured["store"].to_mapping()["beam_plans"] == str(
-        tmp_path / "beam-input" / "plans.csv.gz"
-    )
-    assert captured["store"].to_mapping()["zarr_skims"] == str(
-        tmp_path / "asim-output" / "cache" / "skims.zarr"
-    )
+    assert captured["inputs"] is preprocess_outputs
+    assert captured["extra_inputs"] == {
+        "zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr"
+    }
     assert outputs.raw_outputs["beam_plans_out_2030_2"] == (
         tmp_path / "beam-output" / "plans.csv.gz"
     )
@@ -159,7 +224,166 @@ def test_beam_runner_run_rejects_non_typed_inputs(tmp_path) -> None:
     runner = BeamRunner("beam_runner", _StubState())
 
     with pytest.raises(TypeError, match="BeamPreprocessOutputs"):
-        runner.run(object(), _Workspace(tmp_path))
+        runner.run(
+            object(),
+            _Workspace(tmp_path),
+            launch_config=BeamLaunchConfig(
+                root=tmp_path / "beam-launch",
+                primary_config=tmp_path / "beam-launch" / "beam.conf",
+            ),
+        )
+
+
+def test_beam_runner_mounts_the_bound_launch_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _StubState()
+    state.current_year = 2030
+    state.current_inner_iter = 2
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            memory="4g",
+            activitysim_skims_file_base_name="skimsActivitySimOD",
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+    )
+    runner = BeamRunner("beam_runner", state)
+    workspace = _Workspace(tmp_path)
+    launch_root = tmp_path / "launch" / "seattle"
+    launch_primary = launch_root / "configs" / "beam.conf"
+    launch_primary.parent.mkdir(parents=True)
+    launch_primary.write_text("beam {}\n", encoding="utf-8")
+    launch_config = BeamLaunchConfig(root=launch_root, primary_config=launch_primary)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(runner, "get_model_and_image", lambda *_args: ("beam", "image"))
+    monkeypatch.setattr(
+        runner,
+        "run_container",
+        lambda **kwargs: captured.update(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        "pilates.beam.runner.rename_beam_output_directory",
+        lambda *_args: ("old", str(tmp_path / "beam-output")),
+    )
+    monkeypatch.setattr(runner, "gather_outputs", lambda *_args: [])
+
+    runner._run(
+        BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path), workspace, launch_config
+    )
+
+    assert captured["command"] == "--config=/app/input/configs/beam.conf"
+    assert captured["volumes"] == {
+        str(launch_root): {"bind": "/app/input", "mode": "rw"},
+        str(launch_root.parent): {"bind": str(launch_root.parent), "mode": "rw"},
+        str(tmp_path / "beam-output"): {"bind": "/app/output", "mode": "rw"},
+        str(tmp_path / "beam-output" / "tmp"): {"bind": "/tmp", "mode": "rw"},
+    }
+
+
+def test_beam_runner_rejects_missing_launch_config_before_workspace_fallback(
+    tmp_path: Path,
+) -> None:
+    state = _StubState()
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(config="beam.conf", memory="4g"),
+    )
+    runner = BeamRunner("beam_runner", state)
+
+    class WorkspaceWithoutBeamInput:
+        def get_beam_output_dir(self) -> str:
+            return str(tmp_path / "beam-output")
+
+        def get_beam_mutable_data_dir(self) -> str:
+            raise AssertionError("runner must not derive BEAM input from Workspace")
+
+    with pytest.raises(RuntimeError, match="launch configuration"):
+        runner._run(
+            BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path),
+            WorkspaceWithoutBeamInput(),
+            None,
+        )
+
+
+def test_full_skim_runner_rejects_missing_launch_config_before_workspace_fallback(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.runner import BeamFullSkimRunner
+
+    state = _StubState()
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            memory="4g",
+            full_skim=SimpleNamespace(run_schedule="standalone"),
+        ),
+    )
+    runner = BeamFullSkimRunner("beam_full_skim", state)
+
+    class WorkspaceWithoutBeamInput:
+        def get_beam_output_dir(self) -> str:
+            return str(tmp_path / "beam-output")
+
+        def get_beam_mutable_data_dir(self) -> str:
+            raise AssertionError(
+                "full-skim runner must not derive BEAM input from Workspace"
+            )
+
+    with pytest.raises(RuntimeError, match="launch configuration"):
+        runner._run(
+            BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path),
+            WorkspaceWithoutBeamInput(),
+            None,
+        )
+
+
+def test_beam_runner_fails_closed_when_output_tree_cannot_be_renamed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _StubState()
+    state.current_year = 2030
+    state.current_inner_iter = 2
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            memory="4g",
+            activitysim_skims_file_base_name="skimsActivitySimOD",
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+    )
+    runner = BeamRunner("beam_runner", state)
+    workspace = _Workspace(tmp_path)
+    launch_root = tmp_path / "launch" / "seattle"
+    launch_primary = launch_root / "configs" / "beam.conf"
+    launch_primary.parent.mkdir(parents=True)
+    launch_primary.write_text("beam {}\n", encoding="utf-8")
+    launch_config = BeamLaunchConfig(root=launch_root, primary_config=launch_primary)
+
+    monkeypatch.setattr(runner, "get_model_and_image", lambda *_args: ("beam", "image"))
+    monkeypatch.setattr(runner, "run_container", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        "pilates.beam.runner.rename_beam_output_directory",
+        lambda *_args: (_ for _ in ()).throw(OSError("rename failed")),
+    )
+    monkeypatch.setattr(
+        runner,
+        "gather_outputs",
+        lambda *_args: pytest.fail("must not gather from the broad output root"),
+    )
+
+    with pytest.raises(RuntimeError, match="rename BEAM output directory"):
+        runner._run(
+            BeamPreprocessOutputs(beam_mutable_data_dir=tmp_path),
+            workspace,
+            launch_config,
+        )
 
 
 def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
@@ -177,7 +401,9 @@ def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
         split_event_links={"path_traversal_links_2030_2": split_links},
     )
 
-    mapping = outputs.to_record_store().to_mapping()
+    mapping = {
+        short_name: str(path) for short_name, path, _ in outputs._iter_record_items()
+    }
 
     assert mapping["final_skims_omx"] == str(final_skims_omx)
     assert mapping["zarr_skims"] == str(zarr_skims)
@@ -236,6 +462,37 @@ def test_beam_postprocess_outputs_validate_requires_zarr_when_activitysim_enable
                         models=SimpleNamespace(
                             activity_demand="activitysim",
                             land_use=None,
+                        )
+                    ),
+                    write_skims_to_omx=False,
+                ),
+                step_name="beam_postprocess",
+            )
+        )
+
+
+def test_beam_postprocess_outputs_validate_requires_omx_when_atlas_enabled(
+    tmp_path: Path,
+) -> None:
+    split_event = tmp_path / "events.parquet"
+    zarr_skims = tmp_path / "skims.zarr"
+    _touch(split_event)
+    zarr_skims.mkdir()
+
+    outputs = BeamPostprocessOutputs(
+        zarr_skims=zarr_skims,
+        split_events={"events_parquet_2030_2_type_PathTraversal": split_event},
+    )
+
+    with pytest.raises(AssertionError, match="final_skims_omx is required"):
+        outputs.validate(
+            context=ValidationContext(
+                settings=SimpleNamespace(
+                    run=SimpleNamespace(
+                        models=SimpleNamespace(
+                            activity_demand="activitysim",
+                            land_use=None,
+                            vehicle_ownership="atlas",
                         )
                     ),
                     write_skims_to_omx=False,

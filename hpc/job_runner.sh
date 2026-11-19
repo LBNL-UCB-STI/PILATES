@@ -122,26 +122,43 @@ partition_arg="lr7"
 account_arg=""
 high_mem=false
 beam_profile=false
-archive_mode="scratch"
+archive_mode=""
 hours_arg=""
 watch_flag=false
+editable_consist=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
     -c)
-        settings_file="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -c requires a settings file path." >&2
+            exit 2
+        fi
+        settings_file="$2"
         shift 2
         ;;
     -s)
-        stage_file="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -s requires a stage file path." >&2
+            exit 2
+        fi
+        stage_file="$2"
         shift 2
         ;;
     -p)
-        partition_arg="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -p requires a partition name." >&2
+            exit 2
+        fi
+        partition_arg="$2"
         shift 2
         ;;
     -a|--account)
-        account_arg="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -a/--account requires an account name." >&2
+            exit 2
+        fi
+        account_arg="$2"
         shift 2
         ;;
     --high-mem|-H)
@@ -153,10 +170,18 @@ while [ $# -gt 0 ]; do
         shift
         ;;
     --archive)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --archive requires shared or scratch." >&2
+            exit 2
+        fi
         archive_mode="${2:-}"
         shift 2
         ;;
     -t|--hours)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -t/--hours requires a number of hours." >&2
+            exit 2
+        fi
         hours_arg="${2:-}"
         shift 2
         ;;
@@ -164,28 +189,39 @@ while [ $# -gt 0 ]; do
         watch_flag=true
         shift
         ;;
+    --editable-consist)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --editable-consist requires an absolute Consist checkout path." >&2
+            exit 2
+        fi
+        editable_consist="$2"
+        shift 2
+        ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours] [-w|--watch]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours] [-w|--watch] [--editable-consist /absolute/consist]"
         echo "  -a, --account: Slurm account name (required)"
-        echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
+        echo "  --high-mem: for lr6 or lr7, request high memory."
         echo "  --beam-profile: enable BEAM Java Flight Recorder output in /app/output."
         echo "  --archive: set live archive target to shared or scratch."
         echo "  -t, --hours: job time limit in hours (e.g. -t 12); default is 72 (3 days)."
         echo "  -w, --watch: stream the job log after submission; Ctrl+C detaches (job keeps running)."
+        echo "  --editable-consist: explicit absolute Consist checkout path exported as CONSIST_SRC_DIR."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours] [-w|--watch]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [-H] [--beam-profile] [--archive shared|scratch] [-t hours] [-w|--watch] [--editable-consist /absolute/consist]\n" "$0"
         exit 2
         ;;
     esac
 done
 
 case "$archive_mode" in
+    "")
+        ;;
     shared|scratch)
         ;;
     *)
-        echo "ERROR: unsupported --archive mode '$archive_mode' (expected shared or scratch)"
+        echo "ERROR: unsupported --archive mode '$archive_mode' (expected shared or scratch)" >&2
         exit 2
         ;;
 esac
@@ -202,7 +238,7 @@ case "$partition_arg" in
         MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-700}"
         BEAM_MEMORY="${BEAM_MEMORY:-600g}"
         if [ "$high_mem" = true ]; then
-            echo "NOTE: --high-mem is only applied for lr7; ignoring for lr8."
+            echo "NOTE: --high-mem is only applied for lr6 and lr7; ignoring for lr8."
         fi
         ;;
     lr7)
@@ -211,14 +247,26 @@ case "$partition_arg" in
         NUM_CPUS=56
         if [ "$high_mem" = true ]; then
             MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-480}"
-            BEAM_MEMORY="${BEAM_MEMORY:-300g}"
+            BEAM_MEMORY="${BEAM_MEMORY:-400g}"
         else
             MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-240}"
             BEAM_MEMORY="${BEAM_MEMORY:-180g}"
         fi
         ;;
+    lr6|lr6_m192)
+        PARTITION="lr6"
+        QOS="lr_normal"
+        NUM_CPUS="${NUM_CPUS:-32}"
+        if [ "$high_mem" = true ] || [ "$partition_arg" = "lr6_m192" ]; then
+            MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-180}"
+            BEAM_MEMORY="${BEAM_MEMORY:-150g}"
+        else
+            MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-90}"
+            BEAM_MEMORY="${BEAM_MEMORY:-70g}"
+        fi
+        ;;
     *)
-        echo "ERROR: unsupported partition '$partition_arg' (expected lr7 or lr8)"
+        echo "ERROR: unsupported partition '$partition_arg' (expected lr6, lr7, or lr8)"
         exit 2
         ;;
 esac
@@ -301,6 +349,11 @@ if [ ! -f "$settings_template_path" ]; then
     echo "ERROR: settings file not found: $settings_template_path"
     exit 1
 fi
+if [ -n "$editable_consist" ] \
+    && { [ "${editable_consist#/}" = "$editable_consist" ] || [ ! -d "$editable_consist" ]; }; then
+    echo "ERROR: --editable-consist must name an existing absolute Consist checkout." >&2
+    exit 2
+fi
 
 mkdir -p "/global/scratch/users/$USER/pilates_logs"
 
@@ -356,9 +409,14 @@ with config_path.open("w", encoding="utf-8") as fh:
 PY
 }
 
-apply_archive_mode_override "$generated_settings_path" "$archive_mode"
+if [ -n "$archive_mode" ]; then
+    apply_archive_mode_override "$generated_settings_path" "$archive_mode"
+fi
 
 export BEAM_MEMORY
+if [ -n "$editable_consist" ]; then
+    export CONSIST_SRC_DIR="$editable_consist"
+fi
 
 sbatch_args=(
     --partition="$PARTITION"
@@ -370,6 +428,7 @@ sbatch_args=(
     --job-name="$JOB_NAME"
     --output="$JOB_LOG_FILE_PATH"
     --time="$EXPECTED_EXECUTION_DURATION"
+    --signal="${PILATES_SLURM_SIGNAL:-B:SIGTERM@120}"
     --export="ALL,JOB_LOG_FILE_PATH=$JOB_LOG_FILE_PATH"
     "$PILATES_DIR/hpc/job.sh"
     "$generated_settings_path"
@@ -390,7 +449,7 @@ _print_submission_summary \
     "$MEMORY_LIMIT_GB" \
     "$BEAM_MEMORY" \
     "$EXPECTED_EXECUTION_DURATION" \
-    "$archive_mode" \
+    "${archive_mode:-configured}" \
     "$stage_path"
 
 if [ "$watch_flag" = true ]; then

@@ -8,11 +8,14 @@ from pilates.workflows.lineage_render import (
     render_plan_mermaid,
 )
 from pilates.workflows.planning import (
+    PlannedStepRun,
+    _PlanBuilder,
     _atlas_sub_years,
     build_static_execution_plan,
     build_static_execution_plan_from_file,
 )
 from pilates.workflows.surface import build_enabled_workflow_surface
+from pilates.workflows.state import WorkflowState
 
 
 SEATTLE_ACTIVITYSIM_BEAM = "scenarios/seattle/settings-new-asim-seattle-null.yaml"
@@ -30,9 +33,8 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     assert plan.metadata["years"] == [{"year": 2018, "forecast_year": 2018}]
-    assert [step.step_name for step in plan.step_runs[:7]] == [
+    assert [step.step_name for step in plan.step_runs[:6]] == [
         "activitysim_preprocess",
-        "activitysim_compile",
         "activitysim_run",
         "activitysim_postprocess",
         "beam_preprocess",
@@ -41,20 +43,81 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     ]
     assert plan.step_runs[-1].step_name == "postprocessing"
 
-    compile_artifacts = [
+    activitysim_run = plan.step_runs[1]
+    zarr_artifact = next(
         artifact
         for artifact in plan.artifacts
-        if artifact.producer_step_run_id == plan.step_runs[1].id
-    ]
-    assert any(artifact.artifact_key == "zarr_skims" for artifact in compile_artifacts)
-    assert any(
-        artifact.instance_key == "activitysim_compile:y2018:i0:zarr_skims"
-        for artifact in compile_artifacts
+        if artifact.instance_key == "external:y2018:i0:zarr_skims"
     )
+    assert zarr_artifact.external is True
+    assert any(
+        edge.source == zarr_artifact.id
+        and edge.target == activitysim_run.id
+        and edge.kind == "consumes"
+        for edge in plan.edges
+    )
+    produced_zarr = [
+        artifact
+        for artifact in plan.artifacts
+        if artifact.producer_step_run_id == activitysim_run.id
+        and artifact.artifact_key == "zarr_skims"
+    ]
+    assert [artifact.instance_key for artifact in produced_zarr] == [
+        "activitysim_run:y2018:i0:zarr_skims"
+    ]
 
     json_payload = render_plan_json(plan)
     assert '"step_name": "activitysim_run"' in json_payload
     assert '"kind": "depends_on"' in json_payload
+    removed_alias = "_".join(("upstream", "step", "inputs"))
+    assert removed_alias not in json_payload
+
+    html_payload = render_plan_html(plan)
+    assert removed_alias not in html_payload
+
+
+def test_postprocessing_is_untracked_and_only_reports_its_input_contract_gap():
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
+
+    postprocessing_step = next(
+        step for step in plan.step_runs if step.step_name == "postprocessing"
+    )
+    postprocessing_gaps = [
+        gap for gap in plan.contract_gaps if gap.step_run_id == postprocessing_step.id
+    ]
+
+    assert [gap.kind for gap in postprocessing_gaps] == ["underdeclared_inputs"]
+
+
+def test_tracked_step_with_no_outputs_still_reports_underdeclared_output_gap():
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
+    builder = _PlanBuilder(
+        settings=settings,
+        surface=build_enabled_workflow_surface(settings),
+        config_path=None,
+        include_postprocessing=False,
+    )
+    step_run = PlannedStepRun(
+        id="step_test",
+        sequence=1,
+        step_name="activitysim_run",
+        stage_name="activity_demand",
+        phase="run",
+        label="activitysim_run",
+    )
+    empty_contract = {
+        "input_keys": [],
+        "optional_input_keys": [],
+        "dynamic_input_families": [],
+        "output_keys": [],
+        "optional_output_keys": [],
+        "dynamic_output_families": [],
+        "depends_on": [],
+    }
+
+    builder._add_contract_gaps(step_run, empty_contract)
+
+    assert [gap.kind for gap in builder.plan.contract_gaps] == ["underdeclared_outputs"]
 
 
 def test_static_execution_plan_activitysim_beam_run_excludes_land_use_and_atlas_steps():
@@ -83,11 +146,11 @@ def test_static_execution_plan_expands_land_use_and_atlas_subyears():
     plan = _build_plan(settings, include_postprocessing=False)
 
     first_year_steps = [step for step in plan.step_runs if step.year == 2017]
-    assert [step.step_name for step in first_year_steps[:3]] == [
-        "urbansim_preprocess",
+    assert [step.step_name for step in first_year_steps[:2]] == [
         "urbansim_run",
         "urbansim_postprocess",
     ]
+    assert "urbansim_preprocess" not in [step.step_name for step in plan.step_runs]
 
     atlas_preprocess_runs = [
         step for step in first_year_steps if step.step_name == "atlas_preprocess"
@@ -96,6 +159,23 @@ def test_static_execution_plan_expands_land_use_and_atlas_subyears():
         2017,
         plan.metadata["years"][0]["forecast_year"],
     )
+
+
+def test_static_execution_plan_limits_configured_year_intervals():
+    """A representative canary must end after its first planned interval."""
+
+    settings = load_config(
+        "scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml"
+    )
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+
+    plan = _build_plan(settings, include_postprocessing=False)
+
+    assert plan.metadata["years"] == [{"year": 2017, "forecast_year": 2019}]
+    assert {step.year for step in plan.step_runs} == {2017}
 
 
 def test_static_execution_plan_uses_settings_aware_atlas_scenario_contracts():
@@ -229,10 +309,11 @@ def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
         next(step.step_name for step in plan.step_runs if step.id == edge.target)
         for edge in consuming_edges
     }
-    assert "urbansim_preprocess" in consuming_step_names
+    assert "urbansim_run" in consuming_step_names
+    assert "urbansim_preprocess" not in consuming_step_names
 
 
-def test_static_execution_plan_exposes_default_omx_skims_fallback_artifact():
+def test_static_execution_plan_uses_final_skims_omx_not_generic_omx_fallback():
     settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
     settings.land_use_enabled = True
     settings.vehicle_ownership_model_enabled = True
@@ -241,27 +322,30 @@ def test_static_execution_plan_exposes_default_omx_skims_fallback_artifact():
 
     plan = _build_plan(settings, include_postprocessing=False)
 
-    omx_artifacts = [
+    generic_omx_artifacts = [
         artifact
         for artifact in plan.artifacts
         if artifact.canonical_key == OMX_SKIMS and artifact.external
     ]
+    assert generic_omx_artifacts == []
 
-    assert len(omx_artifacts) == 1
-    artifact = omx_artifacts[0]
-    assert artifact.instance_key.endswith(f":{OMX_SKIMS}")
-    assert artifact.external is True
+    final_skims_artifact = next(
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == FINAL_SKIMS_OMX and artifact.external
+    )
+    assert final_skims_artifact.instance_key == f"external:{FINAL_SKIMS_OMX}"
 
     consuming_edges = [
         edge
         for edge in plan.edges
-        if edge.source == artifact.id and edge.kind == "consumes"
+        if edge.source == final_skims_artifact.id and edge.kind == "consumes"
     ]
     consuming_step_names = {
         next(step.step_name for step in plan.step_runs if step.id == edge.target)
         for edge in consuming_edges
     }
-    assert "urbansim_preprocess" in consuming_step_names
+    assert "activitysim_preprocess" in consuming_step_names
 
 
 def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints():
@@ -325,7 +409,7 @@ def test_static_execution_plan_renders_mermaid_without_contract_gaps():
 
     mermaid = render_plan_mermaid(plan)
     assert mermaid.startswith("flowchart TD")
-    assert "urbansim_preprocess" in mermaid
+    assert "urbansim_preprocess" not in mermaid
     assert "atlas_run" in mermaid
 
 
@@ -387,7 +471,7 @@ def test_planned_artifacts_render_as_distinct_instances_for_reused_canonical_key
         if artifact.canonical_key == "zarr_skims"
     }
 
-    assert "activitysim_compile:y2018:i0:zarr_skims" in zarr_instances
+    assert "external:y2018:i0:zarr_skims" in zarr_instances
     assert "beam_postprocess:y2018:i0:zarr_skims" in zarr_instances
 
 
@@ -427,3 +511,75 @@ def test_static_execution_plan_supports_beam_only_run():
     assert all(not name.startswith("activitysim_") for name in step_names)
     assert all(not name.startswith("urbansim_") for name in step_names)
     assert all(not name.startswith("atlas_") for name in step_names)
+
+
+def test_static_execution_plan_projects_schedule_and_iterations_from_workflow_state(
+    tmp_path,
+    caplog,
+):
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.run.start_year = 2010
+    settings.run.end_year = 2021
+    settings.run.travel_model_freq = 4
+    settings.run.supply_demand_iters = 3
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    settings.land_use_enabled = True
+    settings.traffic_assignment_enabled = True
+    state_file = tmp_path / "persisted_state.yaml"
+    state_file.write_text("year: 2019\nstage: traffic_assignment\n", encoding="utf-8")
+    settings.runtime.options.state_file_loc = str(state_file)
+
+    surface = build_enabled_workflow_surface(settings)
+    with caplog.at_level("INFO"):
+        planning_state = WorkflowState.for_planning(settings, surface=surface)
+        plan = build_static_execution_plan(
+            settings,
+            include_postprocessing=False,
+            surface=surface,
+        )
+
+    assert "Starting workflow with stage:" not in caplog.text
+    assert planning_state.planned_year_intervals() == [
+        {"year": 2010, "forecast_year": 2017},
+        {"year": 2017, "forecast_year": 2021},
+        {"year": 2021, "forecast_year": 2021},
+    ]
+    assert planning_state.effective_supply_demand_iterations() == 1
+    assert plan.metadata["years"] == planning_state.planned_year_intervals()
+    assert (
+        plan.metadata["supply_demand_iters"]
+        == planning_state.effective_supply_demand_iterations()
+    )
+
+
+def test_after_final_iteration_full_skim_runs_under_beam_only_clamping():
+    from pilates.workflows.stages.supply_demand_beam import (
+        _should_run_full_skim as runtime_should_run_full_skim,
+    )
+
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
+    settings.run.supply_demand_iters = 3
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    settings.run.models.land_use = None
+    settings.land_use_enabled = False
+    settings.run.models.vehicle_ownership = None
+    settings.vehicle_ownership_model_enabled = False
+    settings.run.models.travel = "beam"
+    settings.traffic_assignment_enabled = True
+    settings.beam.full_skim = FullSkimsCreatorConfig(
+        run_schedule="after_final_iteration"
+    )
+
+    plan = _build_plan(settings, include_postprocessing=False)
+    step_names = [step.step_name for step in plan.step_runs]
+
+    assert step_names == [
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+        "beam_full_skim",
+    ]
+    state = WorkflowState.for_planning(settings)
+    assert runtime_should_run_full_skim(settings, 0, state=state) is True

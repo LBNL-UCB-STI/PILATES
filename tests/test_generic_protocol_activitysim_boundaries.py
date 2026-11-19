@@ -1,29 +1,26 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
+from pilates.activitysim.runner import ActivitysimNumbaWarmup
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ZARR_SKIMS,
 )
-from pilates.workflows.step_exec import warm_start_activities
-from pilates.workflows.steps import activitysim as activitysim_steps
 
 
 class _StageTrackingState:
@@ -58,9 +55,6 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
     captured = {}
 
     class _Preprocessor(GenericPreprocessor):
-        def copy_data_to_mutable_location(self, settings, output_dir):
-            raise AssertionError("not used by this contract test")
-
         def _preprocess(self, workspace_arg, previous_records_arg):
             captured["preprocess"] = (workspace_arg, previous_records_arg)
             return previous_records_arg
@@ -71,11 +65,10 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
             return store_arg
 
     class _Postprocessor(GenericPostprocessor):
-        def _postprocess(self, raw_outputs_arg, workspace_arg, model_run_hash=None):
+        def _postprocess(self, raw_outputs_arg, workspace_arg):
             captured["postprocess"] = (
                 raw_outputs_arg,
                 workspace_arg,
-                model_run_hash,
             )
             return raw_outputs_arg
 
@@ -85,9 +78,7 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
 
     preprocessed = preprocessor.preprocess(workspace, previous_records)
     raw_outputs = runner.run(preprocessed, workspace)
-    postprocessed = postprocessor.postprocess(
-        raw_outputs, workspace, model_run_hash="run-hash"
-    )
+    postprocessed = postprocessor.postprocess(raw_outputs, workspace)
 
     assert preprocessed is previous_records
     assert raw_outputs is previous_records
@@ -95,20 +86,12 @@ def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
     assert captured == {
         "preprocess": (workspace, previous_records),
         "run": (previous_records, workspace),
-        "postprocess": (previous_records, workspace, "run-hash"),
+        "postprocess": (previous_records, workspace),
     }
     assert state.sub_stages == ["preprocessor", "runner", "postprocessor"]
 
 
-def test_warm_start_activities_is_deprecated() -> None:
-    with pytest.raises(
-        RuntimeError,
-        match="ActivitySim warm-start is deprecated and no longer supported",
-    ):
-        warm_start_activities(SimpleNamespace(), SimpleNamespace(), object())
-
-
-def test_activitysim_preprocess_public_method_constructs_expected_outputs(
+def test_activitysim_preprocess_public_method_forwards_typed_outputs(
     tmp_path: Path,
 ) -> None:
     state = _StageTrackingState()
@@ -116,32 +99,24 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
         full_path=str(tmp_path),
         get_asim_mutable_data_dir=lambda: str(tmp_path / "asim-data"),
     )
-    previous_records = RecordStore()
 
     land_use = tmp_path / "asim-data" / "land_use.csv"
     households = tmp_path / "asim-data" / "households.csv"
     persons = tmp_path / "asim-data" / "persons.csv"
+    skims_omx = tmp_path / "beam-output" / "skims.omx"
     land_use.parent.mkdir(parents=True)
     for path in (land_use, households, persons):
         path.write_text("csv", encoding="utf-8")
 
-    record_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=os.path.relpath(land_use, tmp_path),
-                short_name="land_use_asim_in",
-                content_hash="land-use-hash",
-            ),
-            FileRecord(
-                file_path=os.path.relpath(households, tmp_path),
-                short_name="households_asim_in",
-                content_hash="households-hash",
-            ),
-            FileRecord(
-                file_path=os.path.relpath(persons, tmp_path),
-                short_name="persons_asim_in",
-            ),
-        ]
+    expected_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=land_use.parent,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
+        input_hashes={
+            "land_use_asim_in": "land-use-hash",
+            "households_asim_in": "households-hash",
+        },
     )
 
     class _Preprocessor:
@@ -154,133 +129,38 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
         def _preprocess(
             self,
             workspace_arg,
-            previous_records_arg,
             *,
             final_skims_omx=None,
         ):
             assert workspace_arg is workspace
-            assert previous_records_arg is previous_records
-            assert final_skims_omx is None
-            return record_store
+            assert final_skims_omx == skims_omx
+            return expected_outputs
 
     outputs = _Preprocessor("activitysim_preprocess", state).preprocess(
-        workspace, previous_records
+        workspace, final_skims_omx=skims_omx
     )
 
-    assert outputs == ActivitySimPreprocessOutputs(
-        mutable_data_dir=land_use.parent,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-        input_hashes={
-            "land_use_asim_in": "land-use-hash",
-            "households_asim_in": "households-hash",
-        },
-    )
+    assert outputs is expected_outputs
     assert state.sub_stages == ["preprocessor"]
 
 
-def test_activitysim_compile_step_does_not_fallback_to_workspace_cache_path(
-    monkeypatch, tmp_path: Path
-) -> None:
-    workspace_output_dir = tmp_path / "workspace-output"
-    workspace_cache_zarr = workspace_output_dir / "cache" / "skims.zarr"
-    workspace_cache_zarr.parent.mkdir(parents=True)
-    workspace_cache_zarr.write_text("workspace-cache", encoding="utf-8")
-
-    omx_skims = tmp_path / "asim-data" / "skims.omx"
-    omx_skims.parent.mkdir(parents=True)
-    omx_skims.write_text("omx", encoding="utf-8")
-
-    expected_zarr_path = tmp_path / "expected-output" / "cache" / "skims.zarr"
-    workspace = _DummyWorkspace(tmp_path, workspace_output_dir)
-    outputs_holder = SimpleNamespace(
-        activitysim_preprocess=ActivitySimPreprocessOutputs(
-            mutable_data_dir=omx_skims.parent,
-            land_use_table=omx_skims.parent / "land_use.csv",
-            households_table=omx_skims.parent / "households.csv",
-            persons_table=omx_skims.parent / "persons.csv",
-            omx_skims=omx_skims,
-        )
-    )
-    for path in (
-        outputs_holder.activitysim_preprocess.land_use_table,
-        outputs_holder.activitysim_preprocess.households_table,
-        outputs_holder.activitysim_preprocess.persons_table,
-    ):
-        path.write_text("csv", encoding="utf-8")
-    settings = SimpleNamespace(
-        activitysim=SimpleNamespace(
-            file_format="parquet",
-            persist_sharrow_cache=False,
-        )
-    )
-    state = SimpleNamespace(forecast_year=2020, iteration=0)
-    published = []
-    captured = {}
-
-    class _CompileRunner:
-        def run(self, inputs, workspace_arg):
-            captured["runner_workspace"] = workspace_arg
-            captured["runner_inputs"] = inputs
-            return ActivitySimCompileOutputs()
-
-    monkeypatch.setattr(
-        activitysim_steps.ModelFactory,
-        "get_runner",
-        lambda self, model_name, workflow_state: _CompileRunner(),
-    )
-    monkeypatch.setattr(activitysim_steps.cr, "log_input", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        activitysim_steps,
-        "log_and_set_output",
-        lambda **kwargs: published.append(kwargs),
+def test_activitysim_numba_warmup_has_no_workflow_output_contract() -> None:
+    warmup = ActivitysimNumbaWarmup(
+        "activitysim_numba_warmup", SimpleNamespace(full_settings=SimpleNamespace())
     )
 
-    step_fn = activitysim_steps.make_activitysim_compile_step(
-        coupler=_DummyCoupler(),
-        outputs_holder=outputs_holder,
+    assert warmup.model_name == "activitysim_numba_warmup"
+
+
+def test_activitysim_numba_warmup_rejects_wrong_upstream_type(tmp_path: Path) -> None:
+    warmup = ActivitysimNumbaWarmup(
+        "activitysim_numba_warmup", SimpleNamespace(full_settings=SimpleNamespace())
     )
-    step_fn(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        expected_outputs={ZARR_SKIMS: str(expected_zarr_path)},
-    )
-
-    assert captured["runner_workspace"] is workspace
-    assert captured["runner_inputs"] is outputs_holder.activitysim_preprocess
-    assert captured["runner_inputs"].omx_skims == omx_skims
-    assert published == []
-
-
-def test_activitysim_compile_step_rejects_wrong_upstream_type(tmp_path: Path) -> None:
-    workspace_output_dir = tmp_path / "workspace-output"
-    workspace_output_dir.mkdir(parents=True)
-
-    step_fn = activitysim_steps.make_activitysim_compile_step(
-        coupler=_DummyCoupler(),
-        outputs_holder=SimpleNamespace(activitysim_preprocess=RecordStore()),
-    )
-
     with pytest.raises(
         TypeError,
-        match=(
-            "activitysim_compile requires ActivitySimPreprocessOutputs "
-            "from activitysim_preprocess"
-        ),
+        match="ActivitysimNumbaWarmup.run expects ActivitySimPreprocessOutputs",
     ):
-        step_fn(
-            settings=SimpleNamespace(
-                activitysim=SimpleNamespace(
-                    file_format="parquet",
-                    persist_sharrow_cache=False,
-                )
-            ),
-            state=SimpleNamespace(forecast_year=2020, iteration=0),
-            workspace=_DummyWorkspace(tmp_path, workspace_output_dir),
-            expected_outputs={ZARR_SKIMS: str(tmp_path / "expected" / "skims.zarr")},
-        )
+        warmup.run(RecordStore(), _DummyWorkspace(tmp_path, tmp_path / "output"))
 
 
 def test_activitysim_postprocess_forwards_typed_run_outputs(
@@ -316,10 +196,9 @@ def test_activitysim_postprocess_forwards_typed_run_outputs(
     captured = {}
 
     class _InspectingPostprocessor(ActivitysimPostprocessor):
-        def _postprocess(self, raw_outputs, workspace_arg, model_run_hash=None):
+        def _postprocess(self, raw_outputs, workspace_arg):
             captured["raw_outputs"] = raw_outputs
             captured["workspace"] = workspace_arg
-            captured["model_run_hash"] = model_run_hash
             return ActivitySimPostprocessOutputs(
                 usim_datastore_h5=None,
                 asim_output_dir=tmp_path / "output",
@@ -329,11 +208,9 @@ def test_activitysim_postprocess_forwards_typed_run_outputs(
     outputs = postprocessor.postprocess(
         run_outputs,
         workspace,
-        model_run_hash="run-hash",
     )
 
     assert captured["workspace"] is workspace
-    assert captured["model_run_hash"] == "run-hash"
     assert captured["raw_outputs"] is run_outputs
     assert captured["raw_outputs"].raw_output_hashes == {
         "households_asim_out_temp": "raw-hash",

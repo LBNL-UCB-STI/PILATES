@@ -1,9 +1,12 @@
+import pandas as pd
+
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 
 
 class _FakeHDFStore:
     def __init__(self, keys):
         self._keys = tuple(keys)
+        self._path = "data.h5"
 
     def __contains__(self, key):
         normalized = key if str(key).startswith("/") else f"/{key}"

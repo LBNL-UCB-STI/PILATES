@@ -1,12 +1,22 @@
-import pytest
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from pilates.utils import coupler_helpers
+from pilates.workflows.coupler_namespace import set_coupler_from_artifact
 
 
-class NoopArtifact:
-    def __init__(self) -> None:
-        self.id = "noop"
+def test_artifact_to_path_ignores_uri(tmp_path) -> None:
+    workspace = SimpleNamespace(full_path=str(tmp_path))
+    uri = "s3://bucket/data/file"
+    assert coupler_helpers.artifact_to_path(uri, workspace) == uri
+
+
+def test_artifact_to_path_joins_relative(tmp_path) -> None:
+    workspace = SimpleNamespace(full_path=str(tmp_path))
+    rel_path = os.path.join("data", "file.txt")
+    expected = os.path.join(str(tmp_path), rel_path)
+    assert coupler_helpers.artifact_to_path(rel_path, workspace) == expected
 
 
 class CouplerWithSetFromArtifact:
@@ -41,9 +51,21 @@ class CouplerWithNamespaceView(CouplerWithSetFromArtifact):
         return self._View(self, namespace)
 
 
+class HistoricalArtifact:
+    def __init__(self, *, container_uri: str, path: Path) -> None:
+        self.id = "artifact-1"
+        self.key = "households_asim_out"
+        self.container_uri = container_uri
+        self._path = path
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+
 def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
     coupler = CouplerWithSetFromArtifact()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler, "usim_datastore_h5", "artifact", fallback="fallback"
     )
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", "artifact")]
@@ -51,23 +73,26 @@ def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
 
 def test_set_coupler_from_artifact_falls_back_to_set() -> None:
     coupler = CouplerWithSetOnly()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler, "usim_datastore_h5", None, fallback="/tmp/path.h5"
     )
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
-def test_set_coupler_from_artifact_resolves_alias_key() -> None:
+def test_set_coupler_from_artifact_canonicalizes_namespaced_key() -> None:
     coupler = CouplerWithSetOnly()
-    coupler_helpers.set_coupler_from_artifact(
-        coupler, "asim_households_in", None, fallback="/tmp/households.csv"
+    set_coupler_from_artifact(
+        coupler,
+        "activitysim/households_asim_in",
+        None,
+        fallback="/tmp/households.csv",
     )
     assert coupler.calls == [("set", "households_asim_in", "/tmp/households.csv")]
 
 
 def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> None:
     coupler = CouplerWithNamespaceView()
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler,
         "linkstats_warmstart",
         None,
@@ -89,9 +114,9 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
     coupler = CouplerWithNamespaceView()
     artifact = SimpleNamespace(id="artifact-1")
 
-    coupler_helpers.set_coupler_from_artifact(
+    set_coupler_from_artifact(
         coupler,
-        "usim_h5_updated",
+        "usim_datastore_h5",
         artifact,
         fallback="/tmp/path.h5",
     )
@@ -99,480 +124,117 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
 
 
-def test_log_and_set_output_publishes_plain_path_without_active_run(
-    monkeypatch,
-) -> None:
-    coupler = CouplerWithSetOnly()
-    logged_meta = {}
-    archived = []
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **kwargs: logged_meta.update(kwargs) or NoopArtifact(),
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    coupler_helpers.log_and_set_output(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert logged_meta["meta"]["enabled"] is False
-    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
-    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
-
-
-def test_log_and_set_output_publishes_logged_artifact_with_active_run(
-    monkeypatch,
-) -> None:
-    coupler = CouplerWithSetFromArtifact()
-    archived = []
-    artifact = object()
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: artifact,
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    coupler_helpers.log_and_set_output(
-        key="linkstats_warmstart",
-        path="/tmp/linkstats.parquet",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert archived == [("linkstats_warmstart", "/tmp/linkstats.parquet")]
-    assert ("set_from_artifact", "linkstats_warmstart", artifact) in coupler.calls
-
-
-def test_log_and_set_output_reuses_matching_current_run_artifact(monkeypatch) -> None:
-    coupler = CouplerWithSetFromArtifact()
-    artifact = SimpleNamespace(key="usim_datastore_h5", container_uri="/tmp/path.h5")
-    tracker = SimpleNamespace(current_consist=SimpleNamespace(outputs=[artifact]))
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: tracker)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: pytest.fail("should not log duplicate output"),
-    )
-
-    coupler_helpers.log_and_set_output(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
-
-
-def test_artifact_to_existing_path_materializes_historical_workspace_archive(
+def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
     monkeypatch,
     tmp_path,
 ) -> None:
-    current_local = tmp_path / "local" / "current-run"
-    current_archive = tmp_path / "archive" / "current-run"
-    cached_archive = tmp_path / "archive" / "cached-run"
+    current_local = tmp_path / "current-run"
     rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
-    source = cached_archive / rel_path
-    source.parent.mkdir(parents=True)
-    source.write_text("households", encoding="utf-8")
+    expected_local = current_local / rel_path
+    artifact = HistoricalArtifact(
+        container_uri=f"workspace://{rel_path}",
+        path=tmp_path / "historical-run" / rel_path,
+    )
+    materialized_calls = []
 
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(current_local))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(current_archive))
+    def _materialize_artifact(
+        requested_artifact,
+        *,
+        target_root,
+        source_root,
+        preserve_existing,
+        on_missing,
+        validate_content_hash,
+    ):
+        materialized_calls.append(
+            {
+                "artifact": requested_artifact,
+                "target_root": Path(target_root),
+                "source_root": source_root,
+                "preserve_existing": preserve_existing,
+                "on_missing": on_missing,
+                "validate_content_hash": validate_content_hash,
+            }
+        )
+        expected_local.parent.mkdir(parents=True)
+        expected_local.write_text("households", encoding="utf-8")
+        return SimpleNamespace(path=expected_local, resolvable=True)
+
     monkeypatch.setattr(
         coupler_helpers.cr,
         "current_tracker",
-        lambda: SimpleNamespace(
-            get_run=lambda run_id: SimpleNamespace(
-                id=run_id,
-                parent_run_id="cached-run",
-                meta={
-                    "_physical_run_dir": str(tmp_path / "local" / "cached-run"),
-                },
-            )
-        ),
-    )
-
-    artifact = SimpleNamespace(
-        key="households_asim_out",
-        container_uri=f"workspace://{rel_path}",
-        run_id="cached-step-run",
-        meta={},
+        lambda: SimpleNamespace(materialize_artifact=_materialize_artifact),
     )
 
     resolved = coupler_helpers.artifact_to_existing_path(
         artifact,
         workspace=SimpleNamespace(full_path=current_local),
-        materialize_from_archive=True,
     )
 
-    expected_local = current_local / rel_path
     assert resolved == str(expected_local)
     assert expected_local.read_text(encoding="utf-8") == "households"
-
-
-def test_log_and_set_output_publishes_h5_container_artifact_not_tuple(
-    monkeypatch,
-) -> None:
-    coupler = CouplerWithSetFromArtifact()
-    container_artifact = object()
-    table_artifact = object()
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: (container_artifact, [table_artifact]),
-    )
-
-    coupler_helpers.log_and_set_output(
-        key="usim_h5_updated",
-        path="/tmp/path.h5",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert coupler.calls == [
-        ("set_from_artifact", "usim_datastore_h5", container_artifact)
+    assert materialized_calls == [
+        {
+            "artifact": artifact,
+            "target_root": current_local,
+            "source_root": None,
+            "preserve_existing": True,
+            "on_missing": "warn",
+            "validate_content_hash": "if-present",
+        }
     ]
 
 
-def test_log_and_set_input_publishes_plain_path_without_active_run(monkeypatch) -> None:
-    coupler = CouplerWithSetOnly()
-    logged_meta = {}
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **kwargs: logged_meta.update(kwargs) or NoopArtifact(),
-    )
-
-    coupler_helpers.log_and_set_input(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert logged_meta["meta"]["enabled"] is False
-    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
-
-
-def test_log_and_set_input_publishes_logged_artifact_with_active_run(
-    monkeypatch,
+def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tracker_inactive(
+    tmp_path: Path, monkeypatch
 ) -> None:
-    coupler = CouplerWithSetFromArtifact()
-    artifact = object()
+    from consist import Artifact
+    from consist.models.artifact import set_tracker_ref
 
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: artifact,
+    current_local = tmp_path / "run-current"
+    current_local.mkdir()
+    expected_local = current_local / "beam" / "output" / "0.events.parquet"
+
+    class _TrackerStub:
+        def resolve_uri(self, uri: str) -> str:
+            rel_path = uri.removeprefix("workspace://")
+            return str(tmp_path / "missing-run" / rel_path)
+
+        def materialize_artifact(
+            self,
+            requested_artifact: object,
+            *,
+            target_root: str | Path,
+            source_root: str | Path | None = None,
+            preserve_existing: bool = True,
+            on_missing: str = "warn",
+            allow_external_paths: bool | None = None,
+            validate_content_hash: str = "if-present",
+        ) -> object:
+            expected_local.parent.mkdir(parents=True, exist_ok=True)
+            expected_local.write_text("events", encoding="utf-8")
+            return SimpleNamespace(
+                path=expected_local,
+                status="materialized_from_recovery_root",
+                resolvable=True,
+            )
+
+    tracker_stub = _TrackerStub()
+    artifact = Artifact(
+        key="events_parquet_2015_0",
+        container_uri="workspace://beam/output/0.events.parquet",
+        driver="parquet",
+        run_id="beam_run_1",
+        meta={},
+    )
+    set_tracker_ref(artifact, tracker_stub)
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: None)
+
+    resolved = coupler_helpers.artifact_to_existing_path(
+        artifact,
+        workspace=SimpleNamespace(full_path=current_local),
     )
 
-    coupler_helpers.log_and_set_input(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
-
-
-def test_log_output_only_logs_and_enqueues_archive_with_active_run(monkeypatch) -> None:
-    logged = {"called": False}
-    archived = []
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: logged.__setitem__("called", True),
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    coupler_helpers.log_output_only(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-    )
-
-    assert logged["called"] is True
-    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
-
-
-def test_log_output_only_handles_artifact_facet_event_type(monkeypatch) -> None:
-    """BEAM split-event facets use ``event_type``; lifecycle audit records do too."""
-    logged = {"called": False}
-    archived = []
-
-    monkeypatch.delenv(coupler_helpers._ARCHIVE_LOCAL_ENV, raising=False)
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: logged.__setitem__("called", True) or NoopArtifact(),
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    facet_fields = coupler_helpers._artifact_lifecycle_fields_from_meta(
-        {
-            "facet": {
-                "artifact_family": "beam_event_parquet",
-                "event_type": "actstart",
-            }
-        }
-    )
-
-    assert facet_fields["artifact_event_type"] == "actstart"
-    assert "event_type" not in facet_fields
-
-    coupler_helpers.log_output_only(
-        key="events_parquet_2019_0_type_actstart",
-        path="/tmp/1.events.actstart.parquet",
-        description="test",
-        facet={
-            "artifact_family": "beam_event_parquet",
-            "event_type": "actstart",
-        },
-    )
-
-    assert logged["called"] is True
-    assert archived == [
-        ("events_parquet_2019_0_type_actstart", "/tmp/1.events.actstart.parquet")
-    ]
-
-
-def test_artifact_lifecycle_fields_sanitize_reserved_facet_fields() -> None:
-    facet_fields = coupler_helpers._artifact_lifecycle_fields_from_meta(
-        {
-            "facet": {
-                "artifact_family": "beam_input_archived",
-                "key": "facet-key",
-                "path": "facet-path",
-                "src": "facet-src",
-                "dest": "facet-dest",
-                "year": 2035,
-                "iteration": 2,
-                "direction": "facet-direction",
-                "description": "facet-description",
-                "artifact_id": "facet-artifact-id",
-                "producing_run_id": "facet-run-id",
-                "recorded_at": "facet-recorded-at",
-            }
-        }
-    )
-
-    assert facet_fields["artifact_family"] == "beam_input_archived"
-    assert facet_fields["artifact_key"] == "facet-key"
-    assert facet_fields["artifact_path"] == "facet-path"
-    assert facet_fields["artifact_src"] == "facet-src"
-    assert facet_fields["artifact_dest"] == "facet-dest"
-    assert facet_fields["artifact_year"] == 2035
-    assert facet_fields["artifact_iteration"] == 2
-    assert facet_fields["artifact_direction"] == "facet-direction"
-    assert facet_fields["artifact_description"] == "facet-description"
-    assert facet_fields["artifact_artifact_id"] == "facet-artifact-id"
-    assert facet_fields["artifact_producing_run_id"] == "facet-run-id"
-    assert facet_fields["artifact_recorded_at"] == "facet-recorded-at"
-    for reserved_field in (
-        "key",
-        "path",
-        "src",
-        "dest",
-        "year",
-        "iteration",
-        "direction",
-        "description",
-        "artifact_id",
-        "producing_run_id",
-        "recorded_at",
-    ):
-        assert reserved_field not in facet_fields
-    assert facet_fields["sanitized_lifecycle_fields"] == {
-        "artifact_id": "artifact_artifact_id",
-        "dest": "artifact_dest",
-        "description": "artifact_description",
-        "direction": "artifact_direction",
-        "iteration": "artifact_iteration",
-        "key": "artifact_key",
-        "path": "artifact_path",
-        "producing_run_id": "artifact_producing_run_id",
-        "recorded_at": "artifact_recorded_at",
-        "src": "artifact_src",
-        "year": "artifact_year",
-    }
-
-
-def test_log_output_only_sanitizes_facet_lifecycle_collisions(monkeypatch) -> None:
-    emitted = []
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: SimpleNamespace(id="logged-artifact-id"),
-    )
-    monkeypatch.setattr(coupler_helpers, "_enqueue_archive_copy", lambda *_args: None)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_emit_artifact_lifecycle_event",
-        lambda event_type, **fields: emitted.append((event_type, fields)),
-    )
-
-    coupler_helpers.log_output_only(
-        key="beam_input_2035_2_archived",
-        path="/tmp/beam-inputs",
-        description="logged description",
-        facet={
-            "artifact_family": "beam_input_archived",
-            "event_type": "facet-event",
-            "key": "facet-key",
-            "path": "facet-path",
-            "direction": "facet-direction",
-            "description": "facet-description",
-            "artifact_id": "facet-artifact-id",
-            "producing_run_id": "facet-run-id",
-            "recorded_at": "facet-recorded-at",
-        },
-    )
-
-    assert len(emitted) == 1
-    event_type, fields = emitted[0]
-    assert event_type == "artifact_logged"
-    assert fields["key"] == "beam_input_2035_2_archived"
-    assert fields["path"] == "/tmp/beam-inputs"
-    assert fields["direction"] == "output"
-    assert fields["description"] == "logged description"
-    assert fields["artifact_id"] == "logged-artifact-id"
-    assert fields["artifact_event_type"] == "facet-event"
-    assert fields["artifact_key"] == "facet-key"
-    assert fields["artifact_path"] == "facet-path"
-    assert fields["artifact_direction"] == "facet-direction"
-    assert fields["artifact_description"] == "facet-description"
-    assert fields["artifact_artifact_id"] == "facet-artifact-id"
-    assert fields["artifact_producing_run_id"] == "facet-run-id"
-    assert fields["artifact_recorded_at"] == "facet-recorded-at"
-    assert fields["sanitized_lifecycle_fields"] == {
-        "artifact_id": "artifact_artifact_id",
-        "description": "artifact_description",
-        "direction": "artifact_direction",
-        "event_type": "artifact_event_type",
-        "key": "artifact_key",
-        "path": "artifact_path",
-        "producing_run_id": "artifact_producing_run_id",
-        "recorded_at": "artifact_recorded_at",
-    }
-
-
-def test_log_output_only_logs_and_enqueues_archive_without_active_run(
-    monkeypatch,
-) -> None:
-    logged = {"called": False}
-    archived = []
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: logged.__setitem__("called", True),
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    coupler_helpers.log_output_only(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-    )
-
-    assert logged["called"] is True
-    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
-
-
-def test_log_input_only_logs_without_active_run_and_does_not_enqueue_archive(
-    monkeypatch,
-) -> None:
-    logged = {"called": False}
-    archived = []
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: logged.__setitem__("called", True),
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    coupler_helpers.log_input_only(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-    )
-
-    assert logged["called"] is True
-    assert archived == []
-
-
-def test_log_input_only_logs_with_active_run_and_does_not_enqueue_archive(
-    monkeypatch,
-) -> None:
-    logged = {"called": False}
-    archived = []
-
-    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: logged.__setitem__("called", True),
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    coupler_helpers.log_input_only(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-    )
-
-    assert logged["called"] is True
-    assert archived == []
+    assert resolved == str(expected_local)
+    assert expected_local.read_text(encoding="utf-8") == "events"

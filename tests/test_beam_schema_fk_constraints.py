@@ -30,12 +30,12 @@ def _column_fk_targets(model_cls, field_name: str):
 
 
 def test_households_beam_in_bridges_to_households_asim_out() -> None:
-    targets = _table_arg_fk_targets(HouseholdsBeamIn)
+    targets = _column_fk_targets(HouseholdsBeamIn, "household_id")
     assert "HouseholdsAsimOut.household_id" in targets
 
 
 def test_persons_beam_in_bridges_to_persons_asim_out() -> None:
-    targets = _table_arg_fk_targets(PersonsBeamIn)
+    targets = _column_fk_targets(PersonsBeamIn, "person_id")
     assert "PersonsAsimOut.person_id" in targets
 
 

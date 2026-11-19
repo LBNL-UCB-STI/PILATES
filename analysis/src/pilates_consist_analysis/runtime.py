@@ -568,23 +568,21 @@ def assert_run_tagging(
 
 def _collect_runs_for_tag_validation(tracker: Any) -> list[Any]:
     collected: list[Any] = []
-    if hasattr(tracker, "run_set"):
+    run_set = getattr(tracker, "run_set", None)
+    if callable(run_set):
         try:
-            collected.extend(
-                list(tracker.run_set(label="tag-validation", limit=200000))
-            )
+            collected.extend(list(run_set(label="tag-validation", limit=200000)))
         except Exception:
             pass
 
-    if (
-        not collected
-        and hasattr(tracker, "queries")
-        and hasattr(tracker.queries, "find_runs")
-    ):
-        try:
-            collected.extend(list(tracker.queries.find_runs(limit=200000)))
-        except Exception:
-            pass
+    if not collected:
+        queries = getattr(tracker, "queries", None)
+        find_runs = getattr(queries, "find_runs", None)
+        if callable(find_runs):
+            try:
+                collected.extend(list(find_runs(limit=200000)))
+            except Exception:
+                pass
 
     deduped: Dict[str, Any] = {}
     for run in collected:

@@ -217,13 +217,13 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    activitysim: docker://zaneedell/activitysim:0.2.5
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260418
+    activitysim: docker://zaneedell/activitysim:0.2.18
+    beam: docker://haitamlaarabi/beam:1.1-beta-v260615
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-    beam: haitamlaarabi/beam:1.1-beta-v260418
-    activitysim: zaneedell/activitysim:0.1.4
+    beam: haitamlaarabi/beam:1.1-beta-v260615
+    activitysim: zaneedell/activitysim:0.2.18
     polaris: tbd
   docker_config:
     stdout: false
@@ -245,7 +245,7 @@ urbansim:
       seattle: '53199100'
 activitysim:
   household_sample_size: 250000
-  chunk_size: 12000000000
+  chunk_size: 0
   num_processes: 25
   file_format: parquet
   local_input_folder: pilates/activitysim/data/
@@ -303,7 +303,6 @@ activitysim:
     enabled: true
     use_processed_data: true
     year: 2018
-  warm_start_activities: false
   replan_iters: 0
   replan_hh_samp_size: 0
   replan_after: non_mandatory_tour_scheduling

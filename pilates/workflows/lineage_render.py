@@ -346,7 +346,6 @@ def render_plan_html(
                 "atlas_year": step.atlas_year,
                 "optional": step.optional,
                 "depends_on": step.depends_on,
-                "upstream_step_inputs": step.upstream_step_inputs,
             },
         }
         for step in plan.step_runs

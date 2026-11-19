@@ -1,31 +1,30 @@
----
-title: Glossary
-summary: Shared vocabulary for runs, stages, steps, artifacts, replay, runsets, and analysis terms.
----
-
 # Glossary
 
-## Terms
+## Workflow and Provenance Terms
 
-| Term | Meaning |
+| Term | Definition |
 | --- | --- |
-| Scenario | The Consist scenario that PILATES opens for one run. It carries the run metadata, step contexts, and workflow state that the launcher assembles. |
-| Run | One execution instance with an archive run directory, a mutable workspace, and a Consist-backed provenance record. |
-| Stage | One major slice of the workflow loop, such as land use, vehicle ownership, supply and demand, or postprocessing. |
-| Step | One typed execution boundary inside a stage. A step has a catalog entry, a model component, and typed outputs. |
-| Artifact | A workflow-facing value or file path that PILATES publishes, stores, or reuses through the coupler, archive, or analysis tracker. |
-| Facet | Queryable metadata attached to a run or step record. PILATES uses facets to keep cache identity and analysis filters explicit. |
-| Replay | Consist-driven reuse of a previously published output when the current identity matches an archived or cached result. |
-| Workspace | The mutable run directory where PILATES stages model inputs, writes model outputs, and keeps the run-local Consist DB when local DB tracking is enabled. |
-| Archive root / archive run directory | The durable run directory that PILATES uses for archived outputs, restart recovery, and post-run analysis. |
-| Recovery root | A synonym for the archive run directory when the docs are talking about restart and replay from the durable run archive. |
-| Runset | A filtered or grouped view of discovered runs in the analysis package. |
-| Epoch | An analysis grouping of runs by year, outer iteration, scenario, and model. |
-| AnalysisSession | The analysis entrypoint that opens an archive or run and exposes tracker-backed analysis helpers. |
-| Archive | The analysis wrapper around a completed run archive. |
+| **Scenario** | A complete multi-year or single-year simulation run managed by a Consist `ScenarioContext`, combining configuration, step execution history, and the artifact coupler. |
+| **Stage** | A major phase of the simulation year loop (`land_use`, `vehicle_ownership_model`, `supply_demand_loop`, `postprocessing`) implemented in `pilates/workflows/stages/`. |
+| **Step** | A single tracked unit of execution inside a stage (such as `urbansim_run`, `atlas_preprocess`, `activitysim_run`, or `beam_postprocess`), defined by a `StepDefinition` in `pilates/workflows/steps/`. |
+| **Coupler** | The typed key-value registry (`scenario.coupler`) that passes validated `Artifact` references from upstream steps to downstream steps. See [Artifact Flow](../workflow/artifact_flow.md). |
+| **Artifact** | A versioned file, directory, HDF5 store, Zarr group, or DuckDB table logged with Consist and addressed by a semantic coupler key and portable container URI. |
+| **Facet** | A structured dictionary of configuration parameters or artifact metadata indexed in `provenance.duckdb` (`facet_index=True`) for cross-run queries. |
+| **Execution Workspace** | The mutable scratch directory (`run.local_workspace_root`) where steps stage mutable configs and containers mount input and output folders during execution. See [Workspace Layout](workspace_layout.md). |
+| **Archive Root** | The durable output directory (`run.output_directory`) containing per-year/iteration outputs and optional `consist-recovery/` step mirrors (`RunCompletionArchivePolicy`). |
+| **Recovery Root** | A read-only historical archive directory listed in `run.recovery_archive_roots` that supplies cached outputs for Consist hydration (`cache_hydration="outputs-requested"`). |
+| **Epoch** | A `(year, iteration)` coordinate within a simulation archive representing either a forecast year's land-use step or a demand-supply replanning pass. |
+| **AnalysisSession** | The multi-root discovery interface in `pilates_consist_analysis` that scans directories for `provenance.duckdb` files and filters runs into a `RunSet`. See [Analysis Overview](../analysis/overview.md). |
+| **RunSet** | A filtered collection of comparable runs supporting aligned epoch panels, configuration diffs, and baseline delta calculations. |
 
-## Adjacent Pages
+## Transportation Co-Simulation Terms
 
-- Use [FAQ](faq.md) for short repeated answers.
-- Pair this with [Run Discovery and Runsets](../analysis/run_discovery_and_runsets.md).
-- Pair this with [Step Contracts](../workflow/step_contracts.md).
+| Term | Definition |
+| --- | --- |
+| **TAZ / MAZ** | Traffic Analysis Zone / Micro Analysis Zone. Geographic polygons used to aggregate land-use attributes and index origin-destination skim matrices. See [Zone and Skim Alignment](zone_and_skim_alignment.md). |
+| **Skims** | Origin-destination matrices of network impedance (travel time, distance, toll cost, transit wait time, and accessibility) segmented by mode and time of day. |
+| **OMX** | OpenMatrix, an HDF5-based file format (`*.omx`) used to store 2D origin-destination skim matrices. |
+| **Zarr Skims** | Multi-dimensional chunked array representation (`*.zarr`) of origin-destination skims with 0-based canonical zone coordinates used for fast slicing in ActivitySim and UrbanSim. |
+| **Linkstats** | Per-hour network link volume, speed, capacity, and travel time summaries (`beam_linkstats`) emitted by BEAM at the end of each supply iteration. |
+| **Replanning Iteration** | A demand-supply feedback cycle within a single forecast year where ActivitySim re-runs travel demand using updated BEAM skims and BEAM re-simulates network supply. |
+| **Warm Start** | Initializing a simulation year or stage from pre-computed skims, linkstats, or population stores hydrated from a prior run or recovery archive. See [Step Contracts](../workflow/step_contracts.md). |

@@ -4,16 +4,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
+    LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.surface import (
     EnabledWorkflowSurface,
     StepRuntimeSurface,
-    RestartFrontierContract,
     RunMode,
     _validate_surface_invariants,
     build_enabled_workflow_surface,
@@ -31,6 +32,8 @@ def _settings(
     replan_iters: int = 0,
     main_configs_dir: str = "configs",
     atlas_scenario: str = "baseline",
+    activitysim_output_tables: tuple[str, ...] = (),
+    write_skims_to_omx: bool = False,
 ):
     return SimpleNamespace(
         run=SimpleNamespace(
@@ -47,8 +50,14 @@ def _settings(
         activitysim=SimpleNamespace(
             replan_iters=replan_iters,
             main_configs_dir=main_configs_dir,
+            output_tables={"tables": list(activitysim_output_tables)},
         ),
-        atlas=SimpleNamespace(scenario=atlas_scenario, adscen=atlas_scenario),
+        atlas=SimpleNamespace(
+            scenario=atlas_scenario,
+            adscen=atlas_scenario,
+            beamac=0,
+        ),
+        write_skims_to_omx=write_skims_to_omx,
     )
 
 
@@ -84,7 +93,6 @@ def test_surface_construction_for_beam_only_shape():
     )
     assert "beam_preprocess" in surface.enabled_step_names
     assert "activitysim_preprocess" not in surface.enabled_step_names
-    assert surface.restart_frontier_contract is None
 
 
 def test_surface_construction_for_activitysim_beam_shape():
@@ -102,16 +110,6 @@ def test_surface_construction_for_activitysim_beam_shape():
     assert surface.enabled_model_names == frozenset({"activitysim", "beam"})
     assert "activitysim_preprocess" in surface.enabled_step_names
     assert "beam_preprocess" in surface.enabled_step_names
-    assert surface.restart_frontier_contract == RestartFrontierContract(
-        frontier_stage="traffic_assignment",
-        frontier_step="beam_preprocess",
-        required_keys=(
-            "beam_plans_asim_out",
-            "households_asim_out",
-            "persons_asim_out",
-            ZARR_SKIMS,
-        ),
-    )
 
 
 def test_surface_construction_for_full_shape():
@@ -135,53 +133,75 @@ def test_surface_construction_for_full_shape():
         "supply_demand_loop",
     }.issubset(surface.enabled_stage_names)
     assert {
-        "urbansim_preprocess",
         "atlas_preprocess",
         "activitysim_preprocess",
         "beam_preprocess",
     }.issubset(surface.enabled_step_names)
+    assert surface.step_surface("atlas_run").required_output_keys == ()
 
 
-def test_surface_bootstrap_owned_and_deferred_keys_follow_run_shape():
+def test_surface_requires_only_configured_optional_outputs():
     surface = build_enabled_workflow_surface(
         _settings(
             land_use=None,
             vehicle_ownership=None,
             activity_demand="activitysim",
             traffic_assignment="beam",
+            activitysim_output_tables=("accessibility",),
         )
     )
 
-    assert "beam_mutable_data_dir" in surface.bootstrap_owned_artifact_keys
+    activitysim_run = surface.step_surface("activitysim_run")
+    activitysim_postprocess = surface.step_surface("activitysim_postprocess")
+    beam_preprocess = surface.step_surface("beam_preprocess")
+    beam_postprocess = surface.step_surface("beam_postprocess")
+
+    assert activitysim_run is not None
+    assert activitysim_postprocess is not None
+    assert beam_preprocess is not None
+    assert beam_postprocess is not None
+
+    assert "accessibility_asim_out" in activitysim_run.required_output_keys
+    assert "accessibility_asim_out" in activitysim_postprocess.required_output_keys
+    for key in ASIM_OPTIONAL_RUN_OUTPUT_KEYS:
+        if key == "accessibility_asim_out":
+            continue
+        assert key not in activitysim_run.required_output_keys
+        assert key not in activitysim_postprocess.required_output_keys
+
+    assert LINKSTATS_WARMSTART not in beam_preprocess.required_output_keys
+    assert "vehicles_beam_in" not in beam_preprocess.required_output_keys
+    assert FINAL_SKIMS_OMX not in beam_postprocess.required_output_keys
+
+
+def test_surface_requires_omx_for_downstream_models_or_explicit_export():
+    full_surface = build_enabled_workflow_surface(_settings())
     assert (
-        "beam_region_input_dir" in surface.restart_prebootstrap_deferred_artifact_keys
-    )
-    assert USIM_DATASTORE_BASE_H5 in surface.bootstrap_owned_artifact_keys
-    assert USIM_DATASTORE_BASE_H5 in surface.restart_prebootstrap_deferred_artifact_keys
-    assert any(
-        key.startswith("activitysim_config_settings_yaml_")
-        for key in surface.bootstrap_owned_artifact_keys
+        FINAL_SKIMS_OMX
+        in full_surface.step_surface("beam_postprocess").required_output_keys
     )
 
-
-def test_surface_projects_activitysim_restart_role_policy():
-    surface = build_enabled_workflow_surface(
+    beam_only_surface = build_enabled_workflow_surface(
         _settings(
-            land_use="urbansim",
+            land_use=None,
             vehicle_ownership=None,
-            activity_demand="activitysim",
+            activity_demand=None,
             traffic_assignment="beam",
-        ),
-        state=_restart_state(),
+            write_skims_to_omx=True,
+        )
     )
-
-    preprocess = surface.step_surface("activitysim_preprocess")
-    assert preprocess is not None
-    for key in (USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5):
-        policy = preprocess.input_role_policies[key]
-        assert policy.restart_requires_explicit_before_execution is True
-        assert policy.workspace_archive_fallback_allowed is False
-        assert policy.restart_may_restore_synthetically is False
+    assert (
+        FINAL_SKIMS_OMX
+        in beam_only_surface.step_surface("beam_postprocess").required_output_keys
+    )
+    assert (
+        "zarr_skims"
+        not in beam_only_surface.step_surface("beam_postprocess").required_output_keys
+    )
+    assert (
+        "zarr_skims"
+        in beam_only_surface.step_surface("beam_postprocess").optional_output_keys
+    )
 
 
 def test_surface_projects_activitysim_postprocess_required_keys_when_land_use_enabled():
@@ -313,3 +333,79 @@ def test_surface_invariant_rejects_enabled_step_with_disabled_dependency():
                 )
             ).profile,
         )
+
+
+def test_surface_standalone_full_skim_requires_only_beam_full_skims():
+    from pilates.runtime.scenario_runtime import _required_output_keys_for_surface
+    from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
+
+    settings = _settings(
+        land_use=None,
+        vehicle_ownership=None,
+        activity_demand=None,
+        traffic_assignment="beam",
+    )
+    settings.beam = SimpleNamespace(
+        full_skim=SimpleNamespace(run_schedule="standalone")
+    )
+
+    surface = build_enabled_workflow_surface(settings)
+
+    assert surface.step_enabled("beam_full_skim", include_optional=False) is True
+    assert surface.step_enabled("beam_run", include_optional=True) is False
+    assert surface.step_enabled("beam_postprocess", include_optional=True) is False
+    assert surface.step_enabled("beam_preprocess", include_optional=False) is False
+    assert _required_output_keys_for_surface(surface=surface) == [BEAM_FULL_SKIMS]
+
+
+def test_polaris_travel_model_does_not_enable_or_schedule_beam_steps():
+    from pilates.workflows.catalog import enabled_schema_step_models
+    from pilates.workflows.input_authority import (
+        requires_prior_beam_linkstats_handoff,
+        requires_prior_beam_skim_handoff,
+    )
+    from pilates.workflows.planning import build_static_execution_plan
+
+    settings = _settings(
+        land_use="urbansim",
+        vehicle_ownership=None,
+        activity_demand="activitysim",
+        traffic_assignment="polaris",
+    )
+    settings.beam = None
+    settings.run.start_year = 2020
+    settings.run.end_year = 2020
+    settings.run.travel_model_freq = 1
+    settings.run.land_use_freq = 1
+    settings.run.vehicle_ownership_freq = 1
+    settings.run.supply_demand_iters = 1
+
+    surface = build_enabled_workflow_surface(settings)
+
+    for beam_step in (
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+        "beam_full_skim",
+    ):
+        assert surface.step_enabled(beam_step, include_optional=True) is False
+        assert beam_step not in enabled_schema_step_models(
+            settings,
+            is_model_enabled=lambda *_args, **_kwargs: True,
+        )
+
+    plan = build_static_execution_plan(
+        settings,
+        include_postprocessing=False,
+        surface=surface,
+    )
+    planned_steps = {step.step_name for step in plan.step_runs}
+    assert not (
+        planned_steps
+        & {"beam_preprocess", "beam_run", "beam_postprocess", "beam_full_skim"}
+    )
+    state = SimpleNamespace(current_year=2025, iteration=2)
+    assert requires_prior_beam_skim_handoff(settings=settings, state=state) is False
+    assert (
+        requires_prior_beam_linkstats_handoff(settings=settings, state=state) is False
+    )

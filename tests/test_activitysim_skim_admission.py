@@ -1,0 +1,708 @@
+"""Unit tests for ActivitySim bootstrap skim admission and cross-context provenance."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import consist
+import h5py
+import numpy as np
+import pytest
+
+from pilates.activitysim.admission import (
+    ActivitySimInputAdmissionError,
+    has_initial_skims_admission_policy,
+    preflight_activitysim_initial_skims_admission,
+)
+from pilates.beam.skim_provenance import (
+    compute_omx_logical_matrices_sha256,
+    write_skim_provenance_sidecar,
+)
+from pilates.config.models import (
+    ActivitySimAdmissionConfig,
+    AdmissionPolicyConfig,
+    DeclaredDigestExpectation,
+    FullSkimsCreatorConfig,
+    PriorRunExpectation,
+    admission_policy_fingerprint,
+)
+from pilates.workflows.consist_metadata import build_activitysim_identity_config
+
+
+def _write_omx_file(
+    path: Path,
+    *,
+    with_provenance_attrs: bool = True,
+    matrix_value: float = 1.0,
+) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as h5:
+        if with_provenance_attrs:
+            h5.attrs["OMX_VERSION"] = np.bytes_("0.2")
+            h5.attrs["SHAPE"] = np.array([2, 2], dtype=np.int32)
+            h5.attrs["data_model_version"] = "beam_omx_v1"
+            h5.attrs["skim_matrix_version"] = "asim_omx_v1"
+            h5.attrs["beam_run_id"] = "abc1234"
+            h5.attrs["created_at"] = "2026-10-14T12:00:00Z"
+        data_grp = h5.create_group("data")
+        data_grp.create_dataset(
+            "SOV_TIME__AM", data=np.full((2, 2), matrix_value, dtype=np.float64)
+        )
+        lookup_grp = h5.create_group("lookup")
+        lookup_grp.create_dataset(
+            "zone_number", data=np.array([101, 102], dtype=np.int32)
+        )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return f"sha256:file:{digest}"
+
+
+def _make_settings(
+    *,
+    initial_skims_policy: AdmissionPolicyConfig | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        run=SimpleNamespace(region="test_region"),
+        shared=SimpleNamespace(skims={"fname": "skims.omx"}),
+        beam=SimpleNamespace(
+            local_mutable_data_folder="beam/mutable",
+            full_skim=FullSkimsCreatorConfig(skims_kind="activitySimOmx"),
+        ),
+        activitysim=SimpleNamespace(
+            household_sample_size=0,
+            chunk_size=1000,
+            num_processes=4,
+            file_format="parquet",
+            replan_iters=0,
+            replan_hh_samp_size=0,
+            replan_after="non_mandatory_tour_scheduling",
+            random_seed=42,
+            database=SimpleNamespace(enabled=False, use_processed_data=True, year=None),
+            local_mutable_data_folder="activitysim/data",
+            admission=(
+                ActivitySimAdmissionConfig(initial_skims=initial_skims_policy)
+                if initial_skims_policy is not None
+                else None
+            ),
+        ),
+    )
+
+
+def test_unconfigured_initial_skims_admission_is_noop(tmp_path: Path) -> None:
+    """Scenario 1: Unconfigured initial_skims policy returns None without side effects."""
+    settings = _make_settings(initial_skims_policy=None)
+    assert has_initial_skims_admission_policy(settings) is False
+
+    logger = MagicMock()
+    report = preflight_activitysim_initial_skims_admission(
+        settings=settings,
+        metadata_logger=logger,
+        workspace_path=tmp_path / "workspace",
+        report_dir=tmp_path / "archive",
+    )
+    assert report is None
+    assert not (tmp_path / "archive" / "admission" / "asim-omx-skims.json").exists()
+    logger.log_meta.assert_not_called()
+
+
+def test_declared_digest_admission_with_sidecar_and_legacy_omx(tmp_path: Path) -> None:
+    """Scenario 2: DeclaredDigestExpectation verifies raw OMX bytes, sidecar, and legacy OMX."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+
+    # Legacy OMX without custom root attributes
+    identity = _write_omx_file(skims_path, with_provenance_attrs=False)
+    sidecar_path, _ = write_skim_provenance_sidecar(
+        skims_path,
+        producer_step="beam_full_skim",
+        region="test_region",
+        year=2020,
+        iteration=0,
+    )
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=identity,
+            source_label="standalone full_skim baseline",
+            provenance_sidecar_path=str(sidecar_path),
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+    logger = MagicMock()
+
+    report = preflight_activitysim_initial_skims_admission(
+        settings=settings,
+        metadata_logger=logger,
+        workspace_path=workspace_path,
+        report_dir=report_dir,
+    )
+    assert report is not None
+    assert report.outcome == "verified"
+
+    persisted_path = report_dir / "admission" / "asim-omx-skims.json"
+    assert persisted_path.is_file()
+    persisted = json.loads(persisted_path.read_text(encoding="utf-8"))
+    assert persisted["outcome"] == "verified"
+    assert persisted["skim_inspection"]["skim_format"] == "omx"
+    assert persisted["skim_inspection"]["has_embedded_provenance"] is False
+    assert persisted["sidecar_provenance"]["identity"] == identity
+
+
+def test_declared_digest_sidecar_mismatch_rejects_in_strict_mode(
+    tmp_path: Path,
+) -> None:
+    """Scenario 2b: DeclaredDigestExpectation rejects when sidecar identity disagrees."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+    identity = _write_omx_file(skims_path, with_provenance_attrs=True)
+
+    bad_sidecar = tmp_path / "bad_skims.omx.provenance.json"
+    bad_sidecar.write_text(
+        json.dumps(
+            {
+                "schema_version": "pilates.skim_provenance.v1",
+                "identity": "sha256:file:" + ("0" * 64),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=identity,
+            provenance_sidecar_path=str(bad_sidecar),
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+
+    with pytest.raises(
+        ActivitySimInputAdmissionError, match="sidecar_identity_mismatched"
+    ):
+        preflight_activitysim_initial_skims_admission(
+            settings=settings,
+            metadata_logger=MagicMock(),
+            workspace_path=workspace_path,
+            report_dir=report_dir,
+        )
+
+
+def test_declared_logical_matrices_digest_verifies_despite_container_header_differences(
+    tmp_path: Path,
+) -> None:
+    """DeclaredDigestExpectation with sha256:logical_matrices:<hex> succeeds when array content is identical, even if container header bytes change."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+    _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=3.14)
+
+    logical_hex = compute_omx_logical_matrices_sha256(skims_path)
+    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+
+    # Stamp logical_matrices_sha256 into OMX attrs (like full_skim_converter step 10)
+    with h5py.File(skims_path, "a") as h5:
+        h5.attrs["logical_matrices_sha256"] = logical_identity
+
+    # Write provenance sidecar capturing the stamped logical matrices identity
+    sidecar_path, _ = write_skim_provenance_sidecar(
+        skims_path,
+        producer_step="beam_full_skim_converter",
+        run_id="test_producer",
+        region="sfbay",
+        year=2019,
+        iteration=0,
+    )
+
+    # Mutate ONLY HDF5 root attribute metadata without altering matrix data
+    with h5py.File(skims_path, "a") as h5:
+        h5.attrs["user_comment"] = "container_header_modified"
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=logical_identity,
+            provenance_sidecar_path=str(sidecar_path),
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+
+    report = preflight_activitysim_initial_skims_admission(
+        settings=settings,
+        metadata_logger=MagicMock(),
+        workspace_path=workspace_path,
+        report_dir=report_dir,
+    )
+
+    assert report is not None
+    assert report.outcome == "verified"
+    assert report.expected_artifact_id == logical_identity
+    assert report.observed_artifact_id == logical_identity
+    assert "declared_digest_verified" in report.observations
+
+
+def test_declared_logical_matrices_digest_rejects_on_data_matrix_change(
+    tmp_path: Path,
+) -> None:
+    """DeclaredDigestExpectation with sha256:logical_matrices:<hex> rejects in strict mode when matrix array values differ."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+    _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=1.0)
+
+    logical_hex = compute_omx_logical_matrices_sha256(skims_path)
+    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+
+    # Mutate data matrix value
+    with h5py.File(skims_path, "a") as h5:
+        data_grp = h5["data"]
+        ds = data_grp["SOV_TIME__AM"]
+        ds[0, 0] = 999.0
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=logical_identity,
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+
+    with pytest.raises(
+        ActivitySimInputAdmissionError, match="declared_digest_mismatched"
+    ):
+        preflight_activitysim_initial_skims_admission(
+            settings=settings,
+            metadata_logger=MagicMock(),
+            workspace_path=workspace_path,
+            report_dir=report_dir,
+        )
+
+
+def test_declared_logical_matrices_sidecar_mismatch_rejects_in_strict_mode(
+    tmp_path: Path,
+) -> None:
+    """DeclaredDigestExpectation with sha256:logical_matrices:<hex> rejects when sidecar logical matrices digest disagrees."""
+    workspace_path = tmp_path / "workspace"
+    report_dir = tmp_path / "archive"
+    skims_path = workspace_path / "activitysim" / "data" / "skims.omx"
+    _write_omx_file(skims_path, with_provenance_attrs=True, matrix_value=1.0)
+
+    logical_hex = compute_omx_logical_matrices_sha256(skims_path)
+    logical_identity = f"sha256:logical_matrices:{logical_hex}"
+
+    bad_sidecar = tmp_path / "bad_skims.omx.provenance.json"
+    bad_sidecar.write_text(
+        json.dumps(
+            {
+                "schema_version": "pilates.skim_provenance.v1",
+                "identity": "sha256:file:" + ("0" * 64),
+                "skim_metadata": {
+                    "logical_matrices_sha256": "sha256:logical_matrices:" + ("1" * 64),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=DeclaredDigestExpectation(
+            identity=logical_identity,
+            provenance_sidecar_path=str(bad_sidecar),
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+
+    with pytest.raises(
+        ActivitySimInputAdmissionError, match="sidecar_identity_mismatched"
+    ):
+        preflight_activitysim_initial_skims_admission(
+            settings=settings,
+            metadata_logger=MagicMock(),
+            workspace_path=workspace_path,
+            report_dir=report_dir,
+        )
+
+
+def test_prior_run_same_db_output_direction_admission(tmp_path: Path) -> None:
+    """Scenario 3: PriorRunExpectation in the same provenance.duckdb with direction='output'."""
+    db_path = tmp_path / "shared_provenance.duckdb"
+    run_dir = tmp_path / "tracker_runs"
+    tracker = consist.Tracker(run_dir=run_dir, db_path=db_path)
+
+    producer_skim = tmp_path / "producer" / "skims.omx"
+    _write_omx_file(producer_skim, with_provenance_attrs=True, matrix_value=2.5)
+
+    with tracker.start_run(
+        "beam_full_skim_producer_run",
+        model="beam_full_skim",
+    ):
+        tracker.log_artifact(
+            producer_skim,
+            key="final_skims_omx",
+            direction="output",
+        )
+
+    workspace_path = tmp_path / "consumer_workspace"
+    staged_skim = workspace_path / "activitysim" / "data" / "skims.omx"
+    staged_skim.parent.mkdir(parents=True, exist_ok=True)
+    staged_skim.write_bytes(producer_skim.read_bytes())
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=PriorRunExpectation(
+            expected_run_id="beam_full_skim_producer_run",
+            artifact_key="final_skims_omx",
+            direction="output",
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+    report_dir = tmp_path / "consumer_archive"
+    logger = MagicMock()
+
+    report = preflight_activitysim_initial_skims_admission(
+        settings=settings,
+        metadata_logger=logger,
+        tracker=tracker,
+        workspace_path=workspace_path,
+        report_dir=report_dir,
+    )
+    assert report is not None
+    assert report.outcome == "verified"
+    assert report.expected_run_id == "beam_full_skim_producer_run"
+    assert report.artifact_key == "final_skims_omx"
+
+    persisted = json.loads(
+        (report_dir / "admission" / "asim-omx-skims.json").read_text(encoding="utf-8")
+    )
+    assert persisted["skim_inspection"]["has_embedded_provenance"] is True
+    assert persisted["skim_inspection"]["beam_run_id"] == "abc1234"
+
+
+def test_prior_run_cross_db_admission(tmp_path: Path) -> None:
+    """Scenario 4: PriorRunExpectation across different provenance.duckdb files via source_tracker_db."""
+    producer_db_path = tmp_path / "producer_db" / "provenance.duckdb"
+    producer_db_path.parent.mkdir(parents=True, exist_ok=True)
+    producer_tracker = consist.Tracker(
+        run_dir=tmp_path / "producer_runs",
+        db_path=producer_db_path,
+    )
+
+    producer_skim = tmp_path / "producer_out" / "skims.omx"
+    _write_omx_file(producer_skim, with_provenance_attrs=True, matrix_value=3.5)
+
+    with producer_tracker.start_run(
+        "external_beam_full_skim_run",
+        model="beam_full_skim",
+    ):
+        producer_tracker.log_artifact(
+            producer_skim,
+            key="beam_full_skims",
+            direction="output",
+        )
+
+    consumer_db_path = tmp_path / "consumer_db" / "provenance.duckdb"
+    consumer_db_path.parent.mkdir(parents=True, exist_ok=True)
+    consumer_tracker = consist.Tracker(
+        run_dir=tmp_path / "consumer_runs",
+        db_path=consumer_db_path,
+    )
+
+    workspace_path = tmp_path / "consumer_workspace"
+    staged_skim = workspace_path / "activitysim" / "data" / "skims.omx"
+    staged_skim.parent.mkdir(parents=True, exist_ok=True)
+    staged_skim.write_bytes(producer_skim.read_bytes())
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=PriorRunExpectation(
+            expected_run_id="external_beam_full_skim_run",
+            artifact_key="beam_full_skims",
+            direction="output",
+            source_tracker_db=str(producer_db_path),
+        ),
+    )
+    settings = _make_settings(initial_skims_policy=policy)
+    report_dir = tmp_path / "consumer_archive"
+
+    report = preflight_activitysim_initial_skims_admission(
+        settings=settings,
+        metadata_logger=MagicMock(),
+        tracker=consumer_tracker,
+        workspace_path=workspace_path,
+        report_dir=report_dir,
+    )
+    assert report is not None
+    assert report.outcome == "verified"
+
+    # Mutate staged bytes and verify strict rejection
+    _write_omx_file(staged_skim, with_provenance_attrs=True, matrix_value=99.0)
+    with pytest.raises(ActivitySimInputAdmissionError, match="mismatched"):
+        preflight_activitysim_initial_skims_admission(
+            settings=settings,
+            metadata_logger=MagicMock(),
+            tracker=consumer_tracker,
+            workspace_path=workspace_path,
+            report_dir=report_dir,
+        )
+
+
+def test_activitysim_admission_fingerprint_excludes_host_paths() -> None:
+    """admission_policy_fingerprint includes direction when non-default and omits host paths."""
+    policy_a = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=PriorRunExpectation(
+            expected_run_id="skim-run-1",
+            artifact_key="final_skims_omx",
+            direction="output",
+            source_tracker_db="/cluster/a/provenance.duckdb",
+        ),
+    )
+    policy_b = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=PriorRunExpectation(
+            expected_run_id="skim-run-1",
+            artifact_key="final_skims_omx",
+            direction="output",
+            source_tracker_db="/cluster/b/provenance.duckdb",
+        ),
+    )
+    assert admission_policy_fingerprint(policy_a) == {
+        "mode": "strict",
+        "kind": "prior_run",
+        "expected_run_id": "skim-run-1",
+        "artifact_key": "final_skims_omx",
+        "direction": "output",
+    }
+    assert admission_policy_fingerprint(policy_a) == admission_policy_fingerprint(
+        policy_b
+    )
+
+    settings = _make_settings(initial_skims_policy=policy_a)
+    id_cfg = build_activitysim_identity_config(settings)
+    assert id_cfg["admission"]["initial_skims"] == admission_policy_fingerprint(
+        policy_a
+    )
+
+
+def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identity(
+    tmp_path: Path,
+) -> None:
+    """Scenario 5: Fast-hashing producer persists admission_file_identity via _emit_skim_provenance_sidecars for cross-tracker verification."""
+    from types import SimpleNamespace
+    from pilates.utils import consist_runtime as cr
+    from pilates.workflows.steps.beam import _emit_skim_provenance_sidecars
+
+    producer_db_path = tmp_path / "producer_db" / "provenance.duckdb"
+    producer_db_path.parent.mkdir(parents=True, exist_ok=True)
+    producer_tracker = consist.Tracker(
+        run_dir=tmp_path / "producer_runs",
+        db_path=producer_db_path,
+        hashing_strategy="fast",
+    )
+
+    producer_skim = tmp_path / "producer_out" / "skims.omx"
+    _write_omx_file(producer_skim, with_provenance_attrs=True, matrix_value=5.25)
+
+    producer_settings = SimpleNamespace(
+        run=SimpleNamespace(scenario="baseline", region="sfbay")
+    )
+    producer_state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+
+    def _emit() -> None:
+        _emit_skim_provenance_sidecars(
+            step_name="beam_full_skim",
+            declared_outputs={"beam_full_skims": producer_skim},
+            source_paths={"beam_full_skims": producer_skim},
+            settings=producer_settings,
+            state=producer_state,
+            context=None,
+            skim_keys=("beam_full_skims",),
+        )
+
+    with cr.use_tracker(producer_tracker):
+        producer_tracker.run(
+            fn=_emit,
+            run_id="fast_beam_full_skim_run",
+            name="fast_beam_full_skim_run",
+            model="beam_full_skim",
+            output_paths={"beam_full_skims": producer_skim},
+        )
+
+    cached_after = producer_tracker.get_run_outputs("fast_beam_full_skim_run")
+    assert str(
+        cached_after["beam_full_skims"].meta.get("admission_file_identity", "")
+    ).startswith("sha256:file:")
+
+    consumer_db_path = tmp_path / "consumer_db" / "provenance.duckdb"
+    consumer_db_path.parent.mkdir(parents=True, exist_ok=True)
+    consumer_tracker = consist.Tracker(
+        run_dir=tmp_path / "consumer_runs",
+        db_path=consumer_db_path,
+    )
+
+    workspace_path = tmp_path / "consumer_workspace"
+    staged_skim = workspace_path / "activitysim" / "data" / "skims.omx"
+    staged_skim.parent.mkdir(parents=True, exist_ok=True)
+    staged_skim.write_bytes(producer_skim.read_bytes())
+
+    # Test with expected_direction and run_id aliases and default direction="any"
+    policy_alias = AdmissionPolicyConfig.model_validate(
+        {
+            "mode": "strict",
+            "expectation": {
+                "kind": "prior_run",
+                "run_id": "fast_beam_full_skim_run",
+                "artifact_key": "beam_full_skims",
+                "expected_direction": "output",
+                "source_tracker_db": str(producer_db_path),
+            },
+        }
+    )
+    assert isinstance(policy_alias.expectation, PriorRunExpectation)
+    assert policy_alias.expectation.expected_run_id == "fast_beam_full_skim_run"
+    assert policy_alias.expectation.run_id == "fast_beam_full_skim_run"
+    assert policy_alias.expectation.direction == "output"
+    assert policy_alias.expectation.expected_direction == "output"
+
+    with pytest.raises(ValueError, match="Conflicting 'run_id' and 'expected_run_id'"):
+        PriorRunExpectation.model_validate(
+            {
+                "run_id": "run_a",
+                "expected_run_id": "run_b",
+                "artifact_key": "beam_full_skims",
+            }
+        )
+
+    with pytest.raises(
+        ValueError, match="Conflicting 'direction' and 'expected_direction'"
+    ):
+        PriorRunExpectation.model_validate(
+            {
+                "expected_run_id": "run_a",
+                "artifact_key": "beam_full_skims",
+                "direction": "input",
+                "expected_direction": "output",
+            }
+        )
+
+    policy_default = AdmissionPolicyConfig.model_validate(
+        {
+            "mode": "strict",
+            "expectation": {
+                "kind": "prior_run",
+                "expected_run_id": "fast_beam_full_skim_run",
+                "artifact_key": "beam_full_skims",
+                "source_tracker_db": str(producer_db_path),
+            },
+        }
+    )
+    assert isinstance(policy_default.expectation, PriorRunExpectation)
+    assert policy_default.expectation.direction == "any"
+    assert admission_policy_fingerprint(policy_default) == {
+        "mode": "strict",
+        "kind": "prior_run",
+        "expected_run_id": "fast_beam_full_skim_run",
+        "artifact_key": "beam_full_skims",
+    }
+
+    settings = _make_settings(initial_skims_policy=policy_alias)
+    report = preflight_activitysim_initial_skims_admission(
+        settings=settings,
+        metadata_logger=MagicMock(),
+        tracker=consumer_tracker,
+        workspace_path=workspace_path,
+        report_dir=tmp_path / "consumer_archive",
+    )
+    assert report is not None
+    assert report.outcome == "verified"
+
+
+def test_emit_skim_provenance_sidecars_records_dir_manifest_for_zarr_directory(
+    tmp_path: Path,
+) -> None:
+    """Directory/Zarr sidecars record sha256:dir_manifest:... in the provenance sidecar."""
+    from types import SimpleNamespace
+    from pilates.beam.skim_provenance import (
+        read_skim_provenance_sidecar,
+        skim_provenance_sidecar_path,
+    )
+    from pilates.workflows.steps.beam import (
+        _emit_skim_provenance_sidecars,
+    )
+
+    zarr_dir = tmp_path / "skims.zarr"
+    zarr_dir.mkdir(parents=True, exist_ok=True)
+    (zarr_dir / ".zgroup").write_text('{"zarr_format": 2}', encoding="utf-8")
+
+    settings = SimpleNamespace(run=SimpleNamespace(scenario="baseline", region="sfbay"))
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    _emit_skim_provenance_sidecars(
+        step_name="beam_postprocess",
+        declared_outputs={"zarr_skims": zarr_dir},
+        source_paths={"zarr_skims": zarr_dir},
+        settings=settings,
+        state=state,
+        context=None,
+        skim_keys=("zarr_skims",),
+    )
+
+    payload = read_skim_provenance_sidecar(skim_provenance_sidecar_path(zarr_dir))
+    assert payload is not None
+    assert str(payload["identity"]).startswith("sha256:dir_manifest:")
+
+
+def test_prior_run_expectation_rejects_blank_identifiers_and_facet_excludes_host_paths() -> (
+    None
+):
+    """PriorRunExpectation rejects whitespace identifiers at config load and ActivitySimConfig.to_consist_facet excludes host paths."""
+    from pilates.config.models import ActivitySimAdmissionConfig, ActivitySimConfig
+
+    with pytest.raises(
+        ValueError,
+        match="PriorRunExpectation requires non-empty 'expected_run_id' and 'artifact_key'",
+    ):
+        PriorRunExpectation(expected_run_id="   ", artifact_key="beam_full_skims")
+
+    with pytest.raises(
+        ValueError,
+        match="PriorRunExpectation requires non-empty 'expected_run_id' and 'artifact_key'",
+    ):
+        PriorRunExpectation(expected_run_id="run_1", artifact_key="   ")
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=PriorRunExpectation(
+            expected_run_id="run_123",
+            artifact_key="beam_full_skims",
+            direction="output",
+            source_tracker_db="/host/specific/provenance.duckdb",
+            expected_bytes_path="/host/specific/skims.omx",
+        ),
+    )
+    asim_cfg = ActivitySimConfig(
+        local_input_folder="in",
+        local_mutable_data_folder="mut",
+        local_output_folder="out",
+        local_configs_folder="cfg",
+        local_mutable_configs_folder="mcfg",
+        validation_folder="val",
+        command_template="echo ok",
+        final_plans_folder="plans",
+        admission=ActivitySimAdmissionConfig(initial_skims=policy),
+    )
+    facet = asim_cfg.to_consist_facet()
+    assert facet["admission"] == {
+        "initial_skims": {
+            "mode": "strict",
+            "kind": "prior_run",
+            "expected_run_id": "run_123",
+            "artifact_key": "beam_full_skims",
+            "direction": "output",
+        }
+    }

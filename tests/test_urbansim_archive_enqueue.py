@@ -73,12 +73,6 @@ def test_create_next_iter_usim_data_returns_restart_h5s_without_archive_side_eff
         lambda *_args, **_kwargs: (_FakeOutputStore(output_path), "2023"),
     )
     monkeypatch.setattr(usim_postprocessor.pd, "HDFStore", _patched_hdf_store)
-    calls = []
-    monkeypatch.setattr(
-        usim_postprocessor,
-        "enqueue_archive_copy",
-        lambda **kwargs: calls.append(kwargs),
-    )
     records = usim_postprocessor.create_next_iter_usim_data(
         settings=settings,
         forecast_year=forecast_year,

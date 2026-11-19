@@ -14,23 +14,22 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import geopandas as gpd
 import pandas as pd
+from shapely.geometry import Polygon
 
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
-    ActivitySimPostprocessOutputs,
-    ActivitySimPreprocessOutputs,
-    ActivitySimRunOutputs,
     normalize_asim_output_key,
 )
-from pilates.beam.outputs import (
-    BeamPostprocessOutputs,
-    BeamPreprocessOutputs,
-    BeamRunOutputs,
-)
+from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.runner import BeamRunner
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.atlas.outputs import AtlasRunOutputs
+from pilates.atlas.runner import AtlasRunner
+from pilates.config.models import ZonesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.urbansim.outputs import UrbanSimRunOutputs
+from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -38,6 +37,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     LINKSTATS,
+    USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
@@ -47,51 +47,11 @@ from pilates.workflows.stages.supply_demand import (
 from pilates.workflows.stages.vehicle_ownership import (
     run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
 )
-from pilates.workflows.steps import StepOutputsHolder
-from tests.test_golden_stub_workflow import (
-    DummyPostprocessor,
-    DummyPreprocessor,
-    DummyRunner,
-    _write_file,
-    _write_parquet,
+from tests.workflow_contract_harness import (
+    write_file as _write_file,
+    write_parquet as _write_parquet,
 )
-from workflow_state import WorkflowState
-
-
-def run_land_use_stage(
-    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
-):
-    context = context or WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    return _run_land_use_stage(context=context, **kwargs)
-
-
-def run_vehicle_ownership_stage(
-    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
-):
-    context = context or WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    return _run_vehicle_ownership_stage(context=context, **kwargs)
-
-
-def run_supply_demand_stage(
-    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
-):
-    context = context or WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    return _run_supply_demand_stage(context=context, **kwargs)
+from pilates.workflows.state import WorkflowState
 
 
 def _reconfigure_models(
@@ -131,7 +91,13 @@ def _reconfigure_models(
     return WorkflowState.from_settings(settings)
 
 
-def _mark_initialized(env: dict, state: WorkflowState, *, marker_name: str) -> None:
+def _mark_initialized(
+    env: dict,
+    state: WorkflowState,
+    *,
+    marker_name: str,
+    publish_initial_usim_datastore: bool = False,
+) -> None:
     workspace = env["workspace"]
     scenario = env["scenario"]
     source_path = Path(env["usim_input_path"])
@@ -147,16 +113,33 @@ def _mark_initialized(env: dict, state: WorkflowState, *, marker_name: str) -> N
         cr.log_input(source_path, key=f"{marker_key}_source")
         _write_file(marker, "initialized")
         cr.log_output(marker, key=f"{marker_key}_marker")
-        state.set_data_initialized(True)
+        if publish_initial_usim_datastore:
+            base_datastore_artifact = cr.log_input(
+                source_path, key=USIM_DATASTORE_BASE_H5
+            )
+            scenario.coupler.set_from_artifact(
+                USIM_DATASTORE_BASE_H5, base_datastore_artifact
+            )
+            current_datastore_artifact = cr.log_input(
+                source_path, key=USIM_DATASTORE_H5
+            )
+            scenario.coupler.set_from_artifact(
+                USIM_DATASTORE_H5, current_datastore_artifact
+            )
 
 
-def _manifest_builder(root: Path, prefix: str):
-    def _build(_workspace, year: int, iteration: int) -> Path:
-        manifest_dir = root / prefix
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        return manifest_dir / f"{year}_{iteration}.yaml"
-
-    return _build
+def _publish_input_roles(
+    scenario, state: WorkflowState, roles: dict[str, Path]
+) -> None:
+    with scenario.trace(
+        "stub_input_publication",
+        model="initialization",
+        year=state.current_year,
+        iteration=0,
+        tags=["init", "stub-matrix"],
+    ):
+        for key, path in roles.items():
+            scenario.coupler.set_from_artifact(key, cr.log_input(path, key=key))
 
 
 def _scenario_run(env: dict):
@@ -202,6 +185,11 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         activity_demand=False,
         traffic_assignment=True,
     )
+    env["context"] = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
     _mark_initialized(env, state, marker_name=".beam_only_initialized.txt")
 
     zarr_path = Path(env["zarr_path"])
@@ -215,89 +203,79 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
     beam_scenario_dir = (
         beam_input_dir / settings.run.region / settings.beam.scenario_folder
     )
+    beam_config_path = beam_input_dir / settings.run.region / settings.beam.config
     beam_output_dir = Path(workspace.get_beam_output_dir())
-    beam_plans = beam_input_dir / "plans.csv"
-    beam_households = beam_input_dir / "households.csv"
-    beam_persons = beam_input_dir / "persons.csv"
-    for path in (beam_plans, beam_households, beam_persons):
-        _write_file(path, "stub")
-    for path in (
-        beam_scenario_dir / "plans.csv",
-        beam_scenario_dir / "households.csv",
-        beam_scenario_dir / "persons.csv",
-    ):
-        _write_file(path, "stub")
-
-    def _record_builder(model_name, phase, *, workspace=None, **_kwargs):
-        if phase == "preprocess" and model_name == "beam":
-            return BeamPreprocessOutputs(
-                beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
-                prepared_inputs={
-                    BEAM_PLANS_IN: beam_plans,
-                    BEAM_HOUSEHOLDS_IN: beam_households,
-                    BEAM_PERSONS_IN: beam_persons,
-                },
+    beam_plans = beam_input_dir / "plans.parquet"
+    beam_households = beam_input_dir / "households.parquet"
+    beam_persons = beam_input_dir / "persons.parquet"
+    beam_input_tables = {
+        beam_plans: pd.DataFrame({"trip_id": [1], "person_id": [1]}),
+        beam_households: pd.DataFrame({"household_id": [1], "cars": [0]}),
+        beam_persons: pd.DataFrame({"person_id": [1], "household_id": [1]}),
+    }
+    for path, table in beam_input_tables.items():
+        _write_parquet(path, table)
+        _write_parquet(beam_scenario_dir / path.name, table)
+    r5_dir = beam_input_dir / settings.run.region / "r5"
+    _write_file(r5_dir / "network.osm.pbf", "osm source")
+    _write_file(
+        beam_config_path,
+        "\n".join(
+            (
+                f'beam.inputDirectory = "{beam_input_dir / settings.run.region}"',
+                'beam.routing.r5.directory = ${beam.inputDirectory}"/r5"',
+                'beam.outputs.baseOutputDirectory = "/app/output"',
+                'beam.agentsim.taz.filePath = ""',
+                'beam.agentsim.taz.tazIdFieldName = "TAZ"',
+                'matsim.modules.network.inputNetworkFile = ""',
+                'beam.physsim.inputNetworkFilePath = ""',
             )
-        if phase == "postprocess" and model_name == "beam":
-            split_event = beam_output_dir / "split.PathTraversal.parquet"
-            split_links = beam_output_dir / "split.PathTraversal.links.parquet"
-            _write_file(split_event, "events")
-            _write_file(split_links, "links")
-            return BeamPostprocessOutputs(
-                split_events={
-                    f"events_parquet_{state.forecast_year}_{state.iteration}_type_PathTraversal": split_event
-                },
-                split_event_links={
-                    f"path_traversal_links_{state.forecast_year}_{state.iteration}": split_links
-                },
-            )
-        return RecordStore()
+        )
+        + "\n",
+    )
+    _publish_input_roles(
+        scenario,
+        state,
+        {
+            BEAM_PLANS_IN: beam_plans,
+            BEAM_HOUSEHOLDS_IN: beam_households,
+            BEAM_PERSONS_IN: beam_persons,
+        },
+    )
 
-    def _get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
-        return DummyPreprocessor(model_name, _record_builder, state=state)
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name != "beam":
-            raise AssertionError(f"Unexpected runner request: {model_name}")
-        return BeamRunner(model_name, state)
-
-    def _get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
-        return DummyPostprocessor(model_name, _record_builder, state=state)
-
-    def _fake_beam_run(self, input_store, _workspace):
-        assert "zarr_skims" not in input_store.to_mapping()
+    def _fake_beam_run(self, inputs, _workspace, _launch_config, *, extra_inputs=None):
+        del extra_inputs
+        assert "zarr_skims" not in inputs.prepared_inputs
         events = beam_output_dir / "events.parquet"
         linkstats = beam_output_dir / "linkstats.csv.gz"
         plans_out = beam_output_dir / "plans.parquet"
-        for path in (events, linkstats, plans_out):
+        _write_parquet(
+            events,
+            pd.DataFrame(
+                {
+                    "type": ["PathTraversal"],
+                    "links": ["1"],
+                    "linkTravelTime": ["60.0"],
+                }
+            ),
+        )
+        for path in (linkstats, plans_out):
             _write_file(path, "stub")
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(events),
-                    short_name=f"events_parquet_{state.forecast_year}_{state.iteration}_sub0",
-                ),
-                FileRecord(file_path=str(linkstats), short_name=LINKSTATS),
-                FileRecord(file_path=str(plans_out), short_name=BEAM_PLANS_OUT),
-            ]
+        return BeamRunOutputs(
+            beam_output_dir=beam_output_dir,
+            raw_outputs={
+                f"events_parquet_{state.forecast_year}_{state.iteration}": events,
+                LINKSTATS: linkstats,
+                BEAM_PLANS_OUT: plans_out,
+            },
         )
 
-    from pilates.generic.model_factory import ModelFactory
-
-    monkeypatch.setattr(ModelFactory, "get_preprocessor", _get_preprocessor)
-    monkeypatch.setattr(ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(ModelFactory, "get_postprocessor", _get_postprocessor)
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
 
-    run_supply_demand_stage(
+    _run_supply_demand_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
         year=state.forecast_year,
-        usim_inputs={},
-        build_manifest_path=_manifest_builder(tmp_path, "beam_only_manifests"),
+        context=env["context"],
     )
 
     steps = _steps_by_model(env)
@@ -335,6 +313,11 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
         activity_demand=True,
         traffic_assignment=True,
     )
+    env["context"] = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
     _mark_initialized(env, state, marker_name=".asim_beam_initialized.txt")
 
     asim_input_dir = Path(workspace.get_asim_mutable_data_dir())
@@ -343,6 +326,15 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     beam_output_dir = Path(workspace.get_beam_output_dir())
     sharrow_cache_dir = Path(env["sharrow_cache_dir"])
     zarr_path = Path(env["zarr_path"])
+    raw_beam_zarr_path = beam_output_dir / "raw-od-skims.zarr"
+    mutable_configs_root = Path(workspace.get_asim_mutable_configs_dir())
+    for config_root in required_activitysim_config_roots(
+        settings.activitysim.main_configs_dir
+    ):
+        _write_file(
+            config_root.path_under(mutable_configs_root) / "settings.yaml",
+            "models: []\n",
+        )
 
     temp_names = (
         "accessibility",
@@ -358,11 +350,16 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     )
     raw_outputs = {}
     processed_outputs = {}
+    iteration_dir = (
+        asim_output_dir / f"year-{state.current_year}-iteration-{state.iteration}"
+    )
     for name in temp_names:
         temp_path = asim_output_dir / "final_pipeline" / name / "final.parquet"
         _write_parquet(temp_path, pd.DataFrame({"id": [1]}))
         raw_outputs[f"{name}_asim_out_temp"] = temp_path
-        processed_outputs[normalize_asim_output_key(name)] = temp_path
+        processed_path = iteration_dir / f"{name}.parquet"
+        _write_parquet(processed_path, pd.DataFrame({"id": [1]}))
+        processed_outputs[normalize_asim_output_key(name)] = processed_path
 
     processed_outputs["asim_input_households_csv_archived"] = (
         asim_input_dir / "households.csv"
@@ -373,107 +370,127 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     processed_outputs["asim_input_land_use_csv_archived"] = (
         asim_input_dir / "land_use.csv"
     )
-    processed_outputs["asim_input_skims_zarr_archived"] = zarr_path
+    beam_plans = beam_input_dir / "plans.parquet"
+    beam_households = beam_input_dir / "households.parquet"
+    beam_persons = beam_input_dir / "persons.parquet"
+    _write_parquet(beam_plans, pd.DataFrame({"trip_id": [1], "person_id": [1]}))
+    _write_parquet(beam_households, pd.DataFrame({"household_id": [1], "cars": [0]}))
+    _write_parquet(beam_persons, pd.DataFrame({"person_id": [1], "household_id": [1]}))
+    fixture_zarr = Path(__file__).parent / "fixtures" / "skims" / "mini_skims.zarr"
+    shutil.copytree(fixture_zarr, zarr_path, dirs_exist_ok=True)
+    shutil.copytree(fixture_zarr, raw_beam_zarr_path)
+    import zarr
 
-    beam_plans = beam_input_dir / "plans.csv"
-    beam_households = beam_input_dir / "households.csv"
-    beam_persons = beam_input_dir / "persons.csv"
-    for path in (beam_plans, beam_households, beam_persons):
-        _write_file(path, "stub")
+    for skim_path in (zarr_path, raw_beam_zarr_path):
+        skim_store = zarr.open_group(skim_path, mode="a")
+        skim_store["otaz"][:] = range(5)
+        skim_store["dtaz"][:] = range(5)
+        skim_store.attrs["original_zone_ids"] = [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+        ]
+        zarr.consolidate_metadata(skim_path)
+    zones_path = tmp_path / "canonical_zones.geojson"
+    zones = gpd.GeoDataFrame(
+        {"zone_id": ["1", "2", "3", "4", "5"]},
+        geometry=[
+            Polygon([(index, 0), (index + 1, 0), (index + 1, 1), (index, 1)])
+            for index in range(5)
+        ],
+        crs="EPSG:4326",
+    )
+    zones.to_file(zones_path, driver="GeoJSON")
+    settings.shared.geography.zones = ZonesConfig(
+        zone_type="taz",
+        source_file=str(zones_path),
+        canonical_id_col="zone_id",
+        activitysim_index_col="TAZ",
+        source_crs="EPSG:4326",
+    )
+    _publish_input_roles(
+        scenario,
+        state,
+        {
+            BEAM_PLANS_IN: beam_plans,
+            BEAM_HOUSEHOLDS_IN: beam_households,
+            BEAM_PERSONS_IN: beam_persons,
+        },
+    )
+    r5_dir = beam_input_dir / settings.run.region / "r5"
+    _write_file(r5_dir / "network.osm.pbf", "osm source")
+    _write_file(
+        beam_input_dir / settings.run.region / settings.beam.config,
+        "\n".join(
+            (
+                f'beam.inputDirectory = "{beam_input_dir / settings.run.region}"',
+                'beam.routing.r5.directory = ${beam.inputDirectory}"/r5"',
+                'beam.outputs.baseOutputDirectory = "/app/output"',
+                'matsim.modules.network.inputNetworkFile = ""',
+                'beam.physsim.inputNetworkFilePath = ""',
+                'beam.agentsim.taz.filePath = ""',
+                'beam.agentsim.taz.tazIdFieldName = ""',
+            )
+        )
+        + "\n",
+    )
 
-    def _record_builder(model_name, phase, *, workspace=None, **_kwargs):
-        if phase == "preprocess":
-            if model_name == "activitysim":
-                return ActivitySimPreprocessOutputs(
-                    mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
-                    land_use_table=asim_input_dir / "land_use.csv",
-                    households_table=asim_input_dir / "households.csv",
-                    persons_table=asim_input_dir / "persons.csv",
-                    omx_skims=asim_input_dir / "skims.omx",
-                )
-            if model_name == "beam":
-                return BeamPreprocessOutputs(
-                    beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
-                    prepared_inputs={
-                        BEAM_PLANS_IN: beam_plans,
-                        BEAM_HOUSEHOLDS_IN: beam_households,
-                        BEAM_PERSONS_IN: beam_persons,
-                    },
-                )
-        if phase == "run":
-            if model_name == "activitysim_compile":
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=sharrow_cache_dir,
-                )
-            if model_name == "activitysim":
-                return ActivitySimRunOutputs(
-                    output_dir=Path(workspace.get_asim_output_dir()),
-                    raw_outputs=raw_outputs,
-                )
-            if model_name == "beam":
-                linkstats = beam_output_dir / "linkstats.csv.gz"
-                plans_out = beam_output_dir / "plans.parquet"
-                _write_file(linkstats, "stub")
-                _write_file(plans_out, "stub")
-                return BeamRunOutputs(
-                    beam_output_dir=Path(workspace.get_beam_output_dir()),
-                    raw_outputs={
-                        LINKSTATS: linkstats,
-                        BEAM_PLANS_OUT: plans_out,
-                    },
-                )
-        if phase == "postprocess":
-            if model_name == "activitysim":
-                return ActivitySimPostprocessOutputs(
-                    usim_datastore_h5=None,
-                    asim_output_dir=Path(workspace.get_asim_output_dir()),
-                    processed_outputs=processed_outputs,
-                )
-            if model_name == "beam":
-                return BeamPostprocessOutputs(
-                    zarr_skims=zarr_path,
-                )
-        return RecordStore()
+    def _fake_beam_run(self, _inputs, _workspace, _launch_config, *, extra_inputs=None):
+        del extra_inputs
+        linkstats = beam_output_dir / "linkstats.csv.gz"
+        plans_out = beam_output_dir / "plans.parquet"
+        _write_file(linkstats, "stub")
+        _write_file(plans_out, "stub")
+        raw_zarr_key = f"raw_od_skims_zarr_{state.forecast_year}_{state.iteration}"
+        return BeamRunOutputs(
+            beam_output_dir=beam_output_dir,
+            raw_outputs={
+                LINKSTATS: linkstats,
+                BEAM_PLANS_OUT: plans_out,
+                raw_zarr_key: raw_beam_zarr_path,
+            },
+        )
 
-    def _get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
-        return DummyPreprocessor(model_name, _record_builder, state=state)
+    monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
 
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        return DummyRunner(model_name, _record_builder, state=state)
+    # The shared golden fixture's dummy runner predates typed launch contexts:
+    # BEAM still passes its workspace positionally, while ActivitySim passes a
+    # launch context positionally and the Workspace by keyword.
+    from tests.test_golden_stub_workflow import DummyRunner
 
-    def _get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
-        return DummyPostprocessor(model_name, _record_builder, state=state)
+    def _run_dummy_runner(
+        self, input_store, launch_context_or_workspace, *, workspace=None, **kwargs
+    ):
+        del kwargs
+        runner_workspace = (
+            workspace if workspace is not None else launch_context_or_workspace
+        )
+        return self._record_builder(
+            self.model_name,
+            "run",
+            state=self._state,
+            workspace=runner_workspace,
+            input_store=input_store,
+        )
 
-    from pilates.generic.model_factory import ModelFactory
+    monkeypatch.setattr(DummyRunner, "run", _run_dummy_runner)
 
-    monkeypatch.setattr(ModelFactory, "get_preprocessor", _get_preprocessor)
-    monkeypatch.setattr(ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(ModelFactory, "get_postprocessor", _get_postprocessor)
-
-    run_supply_demand_stage(
+    _run_supply_demand_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
         year=state.forecast_year,
-        usim_inputs={},
-        build_manifest_path=_manifest_builder(tmp_path, "asim_beam_manifests"),
+        context=env["context"],
     )
 
     steps = _steps_by_model(env)
-    assert "activitysim_postprocess" in steps
+    assert "activitysim" in steps
     assert "beam_run" in steps
-    postprocess_outputs = set(
-        (steps["activitysim_postprocess"].get("outputs") or {}).values()
-    )
-    assert "asim_input_skims_zarr_archived" in postprocess_outputs
-    assert "asim_input_skims_omx_archived" not in postprocess_outputs
 
 
 def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outputs(
     golden_stub_env,
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     env = golden_stub_env
@@ -491,34 +508,108 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
         activity_demand=False,
         traffic_assignment=False,
     )
-    _mark_initialized(env, state, marker_name=".atlas_stage_initialized.txt")
-
-    outputs_holder_year = StepOutputsHolder()
-    usim_inputs = run_land_use_stage(
-        scenario=scenario,
-        state=state,
+    env["context"] = WorkflowRuntimeContext.from_parts(
         settings=settings,
+        state=state,
         workspace=workspace,
-        coupler=coupler,
-        year=state.forecast_year,
-        outputs_holder_year=outputs_holder_year,
+    )
+    _mark_initialized(
+        env,
+        state,
+        marker_name=".atlas_stage_initialized.txt",
+        publish_initial_usim_datastore=True,
     )
 
-    run_vehicle_ownership_stage(
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        year=state.forecast_year,
-        build_atlas_static_inputs_fallback=lambda _workspace: {},
+    zones_path = tmp_path / "canonical_zones.geojson"
+    zones = gpd.GeoDataFrame(
+        {"zone_id": ["10", "11"]},
+        geometry=[
+            Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+        ],
+        crs="EPSG:4326",
+    )
+    zones.to_file(zones_path, driver="GeoJSON")
+    settings.shared.geography.zones = ZonesConfig(
+        zone_type="taz",
+        source_file=str(zones_path),
+        canonical_id_col="zone_id",
+        activitysim_index_col="TAZ",
+        source_crs="EPSG:4326",
+    )
+    blocks = gpd.GeoDataFrame(
+        {"GEOID": ["0001", "0002"]},
+        geometry=[
+            Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+        ],
+        crs="EPSG:4326",
+    )
+    monkeypatch.setattr(
+        "pilates.utils.geog.get_block_geoms",
+        lambda *_args, **_kwargs: blocks.copy(),
     )
 
-    assert USIM_DATASTORE_H5 in usim_inputs
+    usim_output_path = Path(
+        workspace.get_usim_mutable_data_dir()
+    ) / settings.urbansim.output_file_template.format(year=state.forecast_year)
+
+    def _fake_urbansim_run(self, _inputs, _workspace):
+        return UrbanSimRunOutputs(usim_datastore_h5=usim_output_path)
+
+    def _fake_atlas_run(self, _inputs, _workspace):
+        atlas_output_dir = _workspace.output_root
+        output_year = self.state.forecast_year
+        continuation_dir = _workspace.input_root / f"year{output_year}"
+        households_path = atlas_output_dir / f"householdv_{output_year}.csv"
+        vehicles_path = atlas_output_dir / f"vehicles_{output_year}.csv"
+        pd.DataFrame(
+            {
+                "household_id": [1, 2],
+                "nvehicles": [1, 2],
+                "year": [output_year, output_year],
+            }
+        ).to_csv(households_path, index=False)
+        pd.DataFrame(
+            {
+                "household_id": [1, 2, 2],
+                "vehicle_id": [1, 1, 2],
+                "year": [output_year, output_year, output_year],
+                "bodytype": ["sedan", "suv", "suv"],
+                "pred_power": ["gasoline", "electricity", "electricity"],
+                "modelyear": [2018, 2020, 2020],
+            }
+        ).to_csv(vehicles_path, index=False)
+        _write_file(continuation_dir / "households_output.RData", "stub")
+        _write_file(continuation_dir / "vehicles_output.RData", "stub")
+        return AtlasRunOutputs(
+            atlas_output_dir=atlas_output_dir,
+            raw_outputs={
+                f"householdv_{output_year}": households_path,
+                f"vehicles_{output_year}": vehicles_path,
+            },
+        )
+
+    monkeypatch.setattr(UrbansimRunner, "_run", _fake_urbansim_run)
+    monkeypatch.setattr(AtlasRunner, "_run", _fake_atlas_run)
+
+    _run_land_use_stage(
+        scenario=scenario,
+        year=state.forecast_year,
+        context=env["context"],
+    )
+
+    _run_vehicle_ownership_stage(
+        scenario=scenario,
+        coupler=coupler,
+        year=state.forecast_year,
+        context=env["context"],
+    )
+
     assert coupler.get(USIM_DATASTORE_H5) is not None
 
     steps = _steps_by_model(env)
     assert "atlas_run" in steps
     atlas_run_outputs = set((steps["atlas_run"].get("outputs") or {}).values())
-    assert "atlas_output_dir" in atlas_run_outputs
+    assert "atlas_continuation_2017" in atlas_run_outputs
     assert USIM_DATASTORE_H5 not in atlas_run_outputs

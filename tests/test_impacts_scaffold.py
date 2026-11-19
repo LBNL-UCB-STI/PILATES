@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -15,8 +16,8 @@ from pilates.impacts.settings_bridge import (
     resolve_population_override,
 )
 from pilates.workflows.stages.impacts_presim import run_impacts_presim_stage
+from pilates.workflows.state import WorkflowState
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
 
 
 class AttrDict(dict):
@@ -319,18 +320,18 @@ def test_run_impacts_presim_stage_returns_early_when_disabled(
     tmp_path: Path, monkeypatch
 ) -> None:
     settings = _make_settings()
-    settings["impacts_enabled"] = False
+    settings["run"]["models"]["impacts"] = None
     workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings, forecast_year=2025)
 
-    def _fail_run_workflow(*_args, **_kwargs):
-        raise AssertionError("run_workflow should not be called when impacts is disabled")
+    def _fail_execute_step(*_args, **_kwargs):
+        raise AssertionError("execute_step should not run when IMPACTS is disabled")
 
     monkeypatch.setattr(
-        "pilates.workflows.stages.impacts_presim.run_workflow", _fail_run_workflow
+        "pilates.workflows.stages.impacts_presim.execute_step", _fail_execute_step
     )
 
-    context = AttrDict({"settings": settings, "state": state, "workspace": workspace})
+    context = SimpleNamespace(settings=settings, state=state, workspace=workspace)
 
     run_impacts_presim_stage(
         scenario=None,
@@ -338,6 +339,27 @@ def test_run_impacts_presim_stage_returns_early_when_disabled(
         year=2025,
         context=context,
     )
+
+
+def test_run_impacts_presim_stage_uses_native_step(monkeypatch, tmp_path: Path) -> None:
+    settings = _make_settings()
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+    captured = {}
+    monkeypatch.setattr(
+        "pilates.workflows.stages.impacts_presim.execute_step",
+        lambda **kwargs: (None, captured.update(kwargs)),
+    )
+
+    run_impacts_presim_stage(
+        scenario="scenario",
+        coupler=None,
+        year=2025,
+        context=SimpleNamespace(settings=settings, state=state, workspace=workspace),
+    )
+
+    assert captured["definition"].name == "impacts_presim"
+    assert captured["stage"] == "impacts_presim"
 
 
 def test_workflow_state_enables_terminal_postprocessing_for_impacts() -> None:
@@ -349,13 +371,12 @@ def test_workflow_state_enables_terminal_postprocessing_for_impacts() -> None:
         vehicle_ownership_model_enabled=False,
         activity_demand_enabled=False,
         traffic_assignment_enabled=False,
-        impacts_enabled=True,
         year=2020,
         major_stage=None,
         inner_iter=0,
         sub_stage=None,
         file_loc=None,
         asim_compiled=False,
-        full_settings=AttrDict({"postprocessing": None}),
+        full_settings=_make_settings(),
     )
     assert WorkflowState.Stage.postprocessing in state.enabled_stages

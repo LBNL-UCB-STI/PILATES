@@ -100,9 +100,7 @@ def load_resolved_beam_config_tree(
     *,
     env_overrides: Mapping[str, str],
 ) -> dict[str, Any]:
-    config_factory, hocon_converter, config_parser, non_existent_key = (
-        _require_pyhocon()
-    )
+    config_factory, hocon_converter, config_parser, _ = _require_pyhocon()
 
     try:
         config = config_factory.parse_file(str(config_path), resolve=False)
@@ -112,6 +110,7 @@ def load_resolved_beam_config_tree(
         ) from exc
 
     injected_keys = _inject_resolution_overrides(config, env_overrides)
+    _rebind_config_values_parents(config)
     try:
         config_parser.resolve_substitutions(config, accept_unresolved=False)
     except Exception as exc:
@@ -145,12 +144,20 @@ def update_staged_beam_config_value(
 ) -> bool:
     _require_pyhocon()
 
+    resolution_context = load_resolved_beam_config_tree(
+        config_path,
+        env_overrides=env_overrides,
+    )
     current_value = resolve_beam_config_value(
         config_path,
         key=key,
         env_overrides=env_overrides,
     )
-    target_value = _resolve_value_semantics(value, env_overrides=env_overrides)
+    target_value = _resolve_value_semantics(
+        value,
+        env_overrides=env_overrides,
+        resolution_context=resolution_context,
+    )
     if current_value == target_value:
         return False
 
@@ -175,6 +182,32 @@ def _require_pyhocon():
             "pyhocon is required for staged BEAM config mutation and resolution."
         ) from exc
     return ConfigFactory, HOCONConverter, ConfigParser, NonExistentKey
+
+
+def _rebind_config_values_parents(node: Any) -> None:
+    """Repair ``ConfigValues.parent`` pointers after ``pyhocon`` tree merges."""
+
+    from pyhocon.config_parser import ConfigValues
+
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, ConfigValues):
+                value.parent = node
+                value.key = key
+                overridden = value.overridden_value
+                while isinstance(overridden, ConfigValues):
+                    overridden.parent = node
+                    overridden.key = key
+                    overridden = overridden.overridden_value
+            elif isinstance(value, (dict, list)):
+                _rebind_config_values_parents(value)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            if isinstance(item, ConfigValues):
+                item.parent = node
+                item.key = index
+            elif isinstance(item, (dict, list)):
+                _rebind_config_values_parents(item)
 
 
 def _lookup_dotted_key(mapping: Mapping[str, Any], key: str) -> Any:
@@ -211,15 +244,28 @@ def _remove_dotted_key(config: Any, key: str) -> None:
             break
 
 
-def _resolve_value_semantics(value: Any, *, env_overrides: Mapping[str, str]) -> Any:
+def _resolve_value_semantics(
+    value: Any,
+    *,
+    env_overrides: Mapping[str, str],
+    resolution_context: Optional[Mapping[str, Any]] = None,
+) -> Any:
     if not isinstance(value, str) or "${" not in value:
         return value
     config_factory, hocon_converter, config_parser, non_existent_key = (
         _require_pyhocon()
     )
     try:
+        context_lines: list[str] = []
+        if resolution_context is not None:
+            flattened_context: dict[str, Any] = {}
+            _flatten_mapping(resolution_context, flattened_context)
+            context_lines = [
+                f"{key} = {_render_hocon_scalar(context_value)}"
+                for key, context_value in sorted(flattened_context.items())
+            ]
         expression_config = config_factory.parse_string(
-            f"pilates_override = {value}\n",
+            "\n".join([*context_lines, f"pilates_override = {value}"]) + "\n",
             resolve=False,
         )
     except Exception as exc:

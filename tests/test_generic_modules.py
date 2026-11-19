@@ -1,34 +1,9 @@
 import pytest
 from types import SimpleNamespace
-from pilates.generic.model_factory import ModelFactory
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
-from pilates.workflows import step_exec
-
-
-# ----------------------------------------------------------------------
-# ModelFactory tests
-# ----------------------------------------------------------------------
-def test_model_factory_returns_correct_classes():
-    mf = ModelFactory()
-    # Verify that known model keys return the proper classes
-    runner = mf.get_runner("activitysim", None)
-    assert runner.__class__.__name__ == "ActivitysimRunner"
-
-    mock_state = SimpleNamespace(full_settings=SimpleNamespace())
-    pre = mf.get_preprocessor("beam", mock_state)
-    assert pre.__class__.__name__ == "BeamPreprocessor"
-
-    post = mf.get_postprocessor("urbansim", None)
-    assert post.__class__.__name__ == "UrbansimPostprocessor"
-
-
-def test_model_factory_unknown_model_raises():
-    mf = ModelFactory()
-    with pytest.raises(KeyError):
-        mf.get_runner("nonexistent_model", None)
 
 
 # ----------------------------------------------------------------------
@@ -127,38 +102,27 @@ def test_preprocessor_protocol_shape_forwards_previous_payload():
     assert result is previous_records
 
 
-def test_postprocessor_protocol_shape_forwards_model_run_hash():
+def test_postprocessor_protocol_shape_forwards_raw_outputs_and_workspace():
     raw_outputs = RecordStore()
     workspace = object()
     captured = {}
 
     class _Postprocessor:
-        def postprocess(self, raw_outputs_arg, workspace_arg, model_run_hash):
+        def postprocess(self, raw_outputs_arg, workspace_arg):
             captured["raw_outputs"] = raw_outputs_arg
             captured["workspace"] = workspace_arg
-            captured["model_run_hash"] = model_run_hash
             return raw_outputs_arg
 
     result = _Postprocessor().postprocess(
         raw_outputs,
         workspace,
-        model_run_hash="run-hash-123",
     )
 
     assert captured == {
         "raw_outputs": raw_outputs,
         "workspace": workspace,
-        "model_run_hash": "run-hash-123",
     }
     assert result is raw_outputs
-
-
-def test_warm_start_activities_is_deprecated():
-    with pytest.raises(
-        RuntimeError,
-        match="ActivitySim warm-start is deprecated and no longer supported",
-    ):
-        step_exec.warm_start_activities(SimpleNamespace(), SimpleNamespace(), object())
 
 
 class _StageTrackingState:
@@ -176,9 +140,6 @@ def test_generic_preprocessor_sets_stage_and_forwards_payload():
     captured = {}
 
     class _GenericPreprocessor(GenericPreprocessor):
-        def copy_data_to_mutable_location(self, settings, output_dir):
-            return RecordStore(), RecordStore()
-
         def _preprocess(self, workspace_arg, previous_records_arg):
             captured["workspace"] = workspace_arg
             captured["previous_records"] = previous_records_arg
@@ -201,9 +162,6 @@ def test_generic_preprocessor_defaults_previous_records_to_none():
     captured = {"previous_records": []}
 
     class _GenericPreprocessor(GenericPreprocessor):
-        def copy_data_to_mutable_location(self, settings, output_dir):
-            return RecordStore(), RecordStore()
-
         def _preprocess(self, workspace_arg, previous_records_arg):
             captured["workspace"] = workspace_arg
             captured["previous_records"].append(previous_records_arg)
@@ -220,30 +178,27 @@ def test_generic_preprocessor_defaults_previous_records_to_none():
     assert second is None
 
 
-def test_generic_postprocessor_sets_stage_and_forwards_model_run_hash():
+def test_generic_postprocessor_sets_stage_and_forwards_inputs():
     state = _StageTrackingState()
     raw_outputs = RecordStore()
     workspace = object()
     captured = {}
 
     class _GenericPostprocessor(GenericPostprocessor):
-        def _postprocess(self, raw_outputs_arg, workspace_arg, model_run_hash=None):
+        def _postprocess(self, raw_outputs_arg, workspace_arg):
             captured["raw_outputs"] = raw_outputs_arg
             captured["workspace"] = workspace_arg
-            captured["model_run_hash"] = model_run_hash
             return raw_outputs_arg
 
     postprocessor = _GenericPostprocessor("dummy", state)
     result = postprocessor.postprocess(
         raw_outputs,
         workspace,
-        model_run_hash="run-hash-456",
     )
 
     assert state.sub_stages == ["postprocessor"]
     assert captured == {
         "raw_outputs": raw_outputs,
         "workspace": workspace,
-        "model_run_hash": "run-hash-456",
     }
     assert result is raw_outputs

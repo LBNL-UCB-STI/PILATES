@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from typing import Dict, Mapping, Optional
+import re
+import shutil
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional
 
+import h5py
 import pandas as pd
 
-from pilates.workflows.artifact_keys import (
-    USIM_POPULATION_BLOCKS_TABLE,
-    USIM_POPULATION_HOUSEHOLDS_TABLE,
-    USIM_POPULATION_JOBS_TABLE,
-    USIM_POPULATION_PERSONS_TABLE,
-)
+USIM_POPULATION_HOUSEHOLDS_TABLE = "usim_population_households_table"
+USIM_POPULATION_PERSONS_TABLE = "usim_population_persons_table"
+USIM_POPULATION_JOBS_TABLE = "usim_population_jobs_table"
+USIM_POPULATION_BLOCKS_TABLE = "usim_population_blocks_table"
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,115 @@ POPULATION_TABLE_BY_KEY: Dict[str, str] = {
     USIM_POPULATION_JOBS_TABLE: "jobs",
     USIM_POPULATION_BLOCKS_TABLE: "blocks",
 }
+
+
+def create_usim_population_source_snapshot(
+    *, source_h5: Path, destination_h5: Path, year: int
+) -> Path:
+    """Copy and validate one exact-year population-source HDF5 output."""
+    source = Path(source_h5)
+    destination = Path(destination_h5)
+    if not source.is_file():
+        raise FileNotFoundError(f"Population-source H5 input does not exist: {source}")
+    if source.resolve() == destination.resolve() or (
+        destination.exists() and source.samefile(destination)
+    ):
+        raise ValueError("Population-source H5 destination must differ from source")
+    with h5py.File(source, "r") as handle:
+        year_group = handle.get(str(year))
+        missing = [
+            name
+            for name in POPULATION_TABLE_BY_KEY.values()
+            if name not in handle
+            and not (isinstance(year_group, h5py.Group) and name in year_group)
+        ]
+    if missing:
+        raise RuntimeError(
+            "UrbanSim population-source snapshot is missing population tables: "
+            f"h5_path={source} year={year} "
+            f"missing={['/' + name for name in missing]}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    alias_result = ensure_usim_population_year_table_aliases(
+        h5_path=str(destination), year=year
+    )
+    if alias_result["missing_root"]:
+        raise RuntimeError("Population-source snapshot aliases are incomplete")
+    resolve_usim_population_table_paths(
+        h5_path=str(destination), year=year, require_exact_year=True
+    )
+    return destination
+
+
+def ensure_usim_population_year_table_aliases(
+    *,
+    h5_path: str,
+    year: int,
+) -> Dict[str, list[str]]:
+    """
+    Ensure UrbanSim population tables exist at both root and year-scoped paths.
+
+    UrbanSim forecast outputs may expose tables under ``/<year>/<table_name>``
+    (the native simulation output format) or at root keys such as
+    ``/<table_name>`` (the base-year datastore format). Downstream consumers
+    may require exact-year paths (e.g. ActivitySim) or root paths (e.g.
+    acceptance checkers and legacy tools).
+
+    HDF5 hard links bidirectionalize these aliases so that both namespaces
+    reference the same underlying datasets without duplicating table data.
+    """
+    created: list[str] = []
+    existing: list[str] = []
+    missing_root: list[str] = []
+    with h5py.File(h5_path, "r+") as handle:
+        year_group = handle.require_group(str(year))
+        for table_name in POPULATION_TABLE_BY_KEY.values():
+            year_key = f"/{year}/{table_name}"
+            root_key = f"/{table_name}"
+            in_year = table_name in year_group
+            in_root = table_name in handle
+
+            if not in_year and not in_root:
+                missing_root.append(root_key)
+                continue
+
+            if in_root and not in_year:
+                year_group[table_name] = handle[table_name]
+                created.append(year_key)
+            elif in_year and not in_root:
+                handle[table_name] = year_group[table_name]
+                created.append(root_key)
+                existing.append(year_key)
+            else:
+                existing.append(year_key)
+    return {
+        "created": created,
+        "existing": existing,
+        "missing_root": missing_root,
+    }
+
+
+def _year_from_usim_model_data_filename(h5_path: str) -> Optional[int]:
+    match = re.fullmatch(
+        r"model_data_(\d{4})(?:_population_source)?\.h5", Path(h5_path).name
+    )
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _validate_usim_h5_filename_year(*, h5_path: str, year: Optional[int]) -> None:
+    filename_year = _year_from_usim_model_data_filename(h5_path)
+    if filename_year is None or year is None or filename_year == year:
+        return
+    raise ValueError(
+        "UrbanSim population source H5 filename/year mismatch. "
+        f"h5_path={h5_path} filename_year={filename_year} requested_year={year}. "
+        f"A year-named model_data_<year>.h5 file must be resolved with its "
+        f"matching population year; this usually means the binding layer selected "
+        f"the wrong UrbanSim datastore."
+    )
 
 
 def resolve_usim_h5_table_key(
@@ -75,6 +188,62 @@ def resolve_usim_h5_table_key(
     return year_key
 
 
+def fingerprint_usim_h5_table(
+    *,
+    h5_path: str,
+    year: Optional[int],
+    table: str,
+    allow_root_fallback: bool = True,
+    nearest_year_fallback: bool = True,
+) -> Dict[str, Any]:
+    """
+    Return a stable semantic fingerprint for one UrbanSim H5 table.
+
+    The fingerprint is deliberately table-scoped instead of whole-file scoped:
+    ATLAS cache identity depends on the selected population table, not on
+    unrelated H5 metadata or tables that ATLAS does not consume for that
+    decision point.
+    """
+    with pd.HDFStore(h5_path, mode="r") as store:
+        table_path = resolve_usim_h5_table_key(
+            store,
+            year=year,
+            table=table,
+            allow_root_fallback=allow_root_fallback,
+            nearest_year_fallback=nearest_year_fallback,
+        )
+        if table_path not in store:
+            available = sorted(store.keys())
+            raise KeyError(
+                "UrbanSim H5 table fingerprint target is missing. "
+                f"h5_path={h5_path} year={year} table={table} "
+                f"resolved_table_path={table_path} available={available}"
+            )
+        frame = store[table_path]
+
+    metadata = {
+        "fingerprint_version": "usim_h5_table_v1",
+        "requested_year": year,
+        "table": table,
+        "resolved_table_path": table_path,
+        "row_count": int(len(frame)),
+        "column_count": int(len(frame.columns)),
+        "index_name": None if frame.index.name is None else str(frame.index.name),
+        "columns": [str(column) for column in frame.columns],
+        "dtypes": {str(column): str(dtype) for column, dtype in frame.dtypes.items()},
+    }
+    digest = hashlib.sha256()
+    digest.update(json.dumps(metadata, sort_keys=True).encode("utf-8"))
+    digest.update(b"\0")
+    row_hashes = pd.util.hash_pandas_object(frame, index=True).to_numpy(
+        dtype="uint64",
+        copy=False,
+    )
+    digest.update(row_hashes.tobytes())
+    metadata["sha256"] = digest.hexdigest()
+    return metadata
+
+
 def resolve_usim_population_table_paths(
     *,
     h5_path: str,
@@ -88,6 +257,7 @@ def resolve_usim_population_table_paths(
         raise ValueError(
             "Exact-year UrbanSim population table resolution requires a year."
         )
+    _validate_usim_h5_filename_year(h5_path=h5_path, year=year)
     with pd.HDFStore(h5_path, mode="r") as store:
         resolved = {
             semantic_key: resolve_usim_h5_table_key(
@@ -129,6 +299,7 @@ def reconcile_usim_population_table_paths(
         raise ValueError(
             "Exact-year UrbanSim population table reconciliation requires a year."
         )
+    _validate_usim_h5_filename_year(h5_path=h5_path, year=year)
     normalized_provided = {
         semantic_key: (
             table_path

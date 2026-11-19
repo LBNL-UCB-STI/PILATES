@@ -63,7 +63,7 @@ def test_resolve_canonical_zone_source_prefers_staged_copy_without_warning_when_
     )
 
 
-def test_activitysim_copy_data_to_mutable_location_skips_duplicate_zone_records_when_staged(
+def test_ensure_activitysim_mutable_configs_skips_duplicate_zone_copy_when_staged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     asim_dir = tmp_path / "activitysim" / "data"
@@ -72,6 +72,8 @@ def test_activitysim_copy_data_to_mutable_location_skips_duplicate_zone_records_
     staged_zone.write_text(
         '{"type":"FeatureCollection","features":[]}', encoding="utf-8"
     )
+    source_configs = tmp_path / "asim-configs" / "test" / "configs"
+    source_configs.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(
         activitysim_preprocessor,
@@ -136,16 +138,12 @@ def test_activitysim_copy_data_to_mutable_location_skips_duplicate_zone_records_
     workspace = SimpleNamespace(get_asim_mutable_data_dir=lambda: str(asim_dir))
 
     with caplog.at_level("INFO"):
-        input_records, output_records = (
-            activitysim_preprocessor._copy_data_to_mutable_location(
-                settings,
-                str(asim_dir),
-                workspace,
-            )
+        activitysim_preprocessor.ensure_activitysim_mutable_configs(
+            settings,
+            workspace,
+            folder_path=str(asim_dir),
         )
 
-    assert input_records.all_records() == []
-    assert output_records.all_records() == []
     assert any(
         "Canonical zones already at destination" in record.message
         for record in caplog.records

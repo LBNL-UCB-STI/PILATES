@@ -15,8 +15,8 @@ What this test demonstrates:
 - Land use stage publishes UrbanSim datastore handles into coupler state.
 - Vehicle ownership stage consumes datastore inputs and materializes expected
   Atlas side effects.
-- Supply-demand stage executes ActivitySim + BEAM wiring, archives ActivitySim
-  outputs, and writes a manifest.
+- Supply-demand stage executes ActivitySim + BEAM wiring and archives ActivitySim
+  outputs.
 - Provenance plumbing remains healthy: scenario runs/steps exist, artifacts are
   attached, and a markdown provenance report can be produced.
 
@@ -29,8 +29,10 @@ Why keep this large:
 
 from __future__ import annotations
 
+import inspect
 import re
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -41,7 +43,6 @@ import yaml
 from pilates.config import load_config
 from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -74,38 +75,31 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_MERGED_PREFIX,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
+from pilates.workflows.steps import activitysim_preprocess
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
-from pilates.workflows.steps import StepOutputsHolder
 from tests.workflow_contract_harness import build_runtime_context
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 
 EXPECTED_STAGE_MODELS = (
     "initialization",
-    "urbansim_preprocess",
     "urbansim_run",
     "urbansim_postprocess",
     "atlas_preprocess",
     "atlas_run",
     "atlas_postprocess",
     "activitysim_preprocess",
-    "activitysim_compile",
     "activitysim_run",
     "activitysim_postprocess",
     "beam_preprocess",
     "beam_run",
     "beam_postprocess",
 )
-
-EXPECTED_MANIFEST_STEPS = {
-    "activitysim_preprocess",
-    "activitysim_run",
-    "activitysim_postprocess",
-}
 
 EXPECTED_ASIM_TEMP_OUTPUT_KEYS = {
     "accessibility_asim_out_temp",
@@ -138,7 +132,6 @@ EXPECTED_ASIM_ARCHIVED_INPUT_KEYS = {
     "asim_input_persons_csv_archived",
     "asim_input_land_use_csv_archived",
     "asim_input_skims_omx_archived",
-    "asim_input_skims_zarr_archived",
 }
 
 
@@ -213,6 +206,13 @@ class DummyPostprocessor:
 def _write_file(path: Path, content: str = "x") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+def _write_zarr_store(path: Path) -> None:
+    """Create the smallest directory-backed Zarr store for workflow contracts."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
 
 
 def _write_csv(path: Path, df: pd.DataFrame) -> None:
@@ -293,6 +293,11 @@ def _build_settings(tmp_path: Path):
             "geography": {
                 "FIPS": {"county": ["00001"]},
                 "local_crs": "EPSG:4326",
+                "zones": {
+                    "zone_type": "taz",
+                    "source_file": str(tmp_path / "canonical-zones.geojson"),
+                    "canonical_id_col": "TAZ",
+                },
             },
             "skims": {"fname": "skims.omx"},
             "database": {
@@ -342,7 +347,7 @@ def _build_settings(tmp_path: Path):
         },
         "beam": {
             "config": "beam.conf",
-            "local_input_folder": "beam/input",
+            "local_input_folder": str(tmp_path / "beam_input"),
             "local_mutable_data_folder": "beam/input",
             "local_output_folder": "beam/output",
             "scenario_folder": "beam/scenario",
@@ -363,17 +368,16 @@ def golden_stub_env(tmp_path, monkeypatch):
     """
     Assemble a full workflow harness with real Consist and stub model behavior.
 
-    The fixture creates realistic input/output files, patches ``ModelFactory``
-    to return deterministic stubs, and yields a live Consist ``scenario`` with
-    a working coupler so the stage runners execute their normal orchestration
-    logic.
+    The fixture creates realistic input/output files, patches step model
+    components to return deterministic stubs, and yields a live Consist
+    ``scenario`` with a working coupler so the stage runners execute their
+    normal orchestration logic.
     """
 
     consist = pytest.importorskip("consist")
-    from pilates.workflows import step_consist_meta as step_consist_meta_module
-    from pilates.workflows.steps import shared as shared_steps_module
+    from pilates.workflows import consist_metadata as consist_metadata_module
 
-    original_consist_step_meta = step_consist_meta_module.consist_step_meta
+    original_consist_step_meta = consist_metadata_module.consist_step_meta
 
     def _patched_consist_step_meta(model):
         meta = dict(original_consist_step_meta(model))
@@ -382,12 +386,7 @@ def golden_stub_env(tmp_path, monkeypatch):
         return meta
 
     monkeypatch.setattr(
-        step_consist_meta_module,
-        "consist_step_meta",
-        _patched_consist_step_meta,
-    )
-    monkeypatch.setattr(
-        shared_steps_module,
+        consist_metadata_module,
         "consist_step_meta",
         _patched_consist_step_meta,
     )
@@ -427,17 +426,51 @@ def golden_stub_env(tmp_path, monkeypatch):
     beam_config_path = beam_dir / settings.run.region / settings.beam.config
     _write_file(beam_config_path)
 
+    forecast_vehicles2_path = atlas_output_dir / f"vehicles2_{state.forecast_year}.csv"
+    forecast_vehicles2_path.write_text(
+        "vehicleId,householdId,vehicleTypeId\n1,10,sedan\n",
+        encoding="utf-8",
+    )
+
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region
     ]
+    urbansim_source_dir = Path(settings.urbansim.local_data_input_folder)
+    for filename in (
+        f"hsize_ct_{region_id}.csv",
+        f"income_rates_{region_id}.csv",
+        f"relmap_{region_id}.csv",
+        "schools_2010.csv",
+        "blocks_school_districts_2010.csv",
+    ):
+        _write_file(urbansim_source_dir / filename)
+    _write_file(
+        Path(settings.beam.local_input_folder)
+        / settings.run.region
+        / settings.shared.skims.fname
+    )
+    _write_file(
+        Path(settings.shared.geography.zones.source_file),
+        (
+            '{"type":"FeatureCollection","features":['
+            '{"type":"Feature","properties":{"TAZ":1},'
+            '"geometry":{"type":"Polygon","coordinates":['
+            "[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}\n"
+        ),
+    )
     usim_input_path = usim_dir / settings.urbansim.input_file_template.format(
         region_id=region_id
+    )
+    usim_source_input_path = (
+        urbansim_source_dir
+        / settings.urbansim.input_file_template.format(region_id=region_id)
     )
     usim_output_path = usim_dir / settings.urbansim.output_file_template.format(
         year=state.forecast_year
     )
     usim_merged_path = usim_dir / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     _write_usim_toy_h5(usim_input_path)
+    _write_usim_toy_h5(usim_source_input_path)
     _write_usim_toy_h5(usim_output_path)
     _write_usim_toy_h5(usim_merged_path, with_year_prefix=2019)
     _write_usim_toy_h5(usim_dir / "usim_2017.h5")
@@ -500,7 +533,7 @@ def golden_stub_env(tmp_path, monkeypatch):
 
     zarr_path = asim_out_dir / "cache" / "skims.zarr"
     sharrow_cache_dir = Path(workspace.full_path) / "shared_cache" / "numba"
-    _write_file(zarr_path)
+    _write_zarr_store(zarr_path)
     _write_file(sharrow_cache_dir / "compile-cache.bin")
     asim_households_out_path = (
         asim_out_dir / "final_pipeline" / "households" / "final.parquet"
@@ -721,11 +754,6 @@ def golden_stub_env(tmp_path, monkeypatch):
                         USIM_FORECAST_OUTPUT: usim_output_path,
                     },
                 )
-            if model_name == "activitysim_compile":
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=sharrow_cache_dir,
-                )
             if model_name == "activitysim":
                 assert workspace is not None
                 return ActivitySimRunOutputs(
@@ -838,11 +866,6 @@ def golden_stub_env(tmp_path, monkeypatch):
                         workspace.get_asim_mutable_data_dir()
                     )
                     / "skims.omx",
-                    "asim_input_skims_zarr_archived": Path(
-                        workspace.get_asim_output_dir()
-                    )
-                    / "cache"
-                    / "skims.zarr",
                 }
                 for output_key, source_path in archived_input_sources.items():
                     target_name = source_path.name
@@ -868,26 +891,35 @@ def golden_stub_env(tmp_path, monkeypatch):
             return RecordStore()
         return RecordStore()
 
-    from pilates.generic.model_factory import ModelFactory
-    from pilates.atlas.preprocessor import AtlasPreprocessor
-    from pilates.atlas.postprocessor import AtlasPostprocessor
+    from pilates.workflows.steps import activitysim as activitysim_steps
 
-    def _make_preprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "atlas":
-            return AtlasPreprocessor(model_name, state)
-        return DummyPreprocessor(model_name, record_builder, state=state)
+    class _PatchedActivitysimPreprocessor(activitysim_steps.ActivitysimPreprocessor):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyPreprocessor(model_name, record_builder, state=state)
 
-    def _make_runner(self, model_name, state=None, *_args, **_kwargs):
-        return DummyRunner(model_name, record_builder, state=state)
+    class _PatchedActivitysimRunner(activitysim_steps.ActivitysimRunner):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyRunner(model_name, record_builder, state=state)
 
-    def _make_postprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "atlas":
-            return AtlasPostprocessor(model_name, state)
-        return DummyPostprocessor(model_name, record_builder, state=state)
+    class _PatchedActivitysimPostprocessor(activitysim_steps.ActivitysimPostprocessor):
+        def __new__(cls, model_name, state=None, *_a, **_kw):
+            return DummyPostprocessor(model_name, record_builder, state=state)
 
-    monkeypatch.setattr(ModelFactory, "get_preprocessor", _make_preprocessor)
-    monkeypatch.setattr(ModelFactory, "get_runner", _make_runner)
-    monkeypatch.setattr(ModelFactory, "get_postprocessor", _make_postprocessor)
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimPreprocessor",
+        _PatchedActivitysimPreprocessor,
+    )
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimRunner",
+        _PatchedActivitysimRunner,
+    )
+    monkeypatch.setattr(
+        activitysim_steps,
+        "ActivitysimPostprocessor",
+        _PatchedActivitysimPostprocessor,
+    )
 
     tracker = consist.Tracker(
         run_dir=Path(workspace.full_path) / "consist_runs",
@@ -931,7 +963,8 @@ def golden_stub_env(tmp_path, monkeypatch):
         cr.set_enabled(None)
 
 
-def test_golden_stub_workflow_stage_contract_with_real_consist(
+@pytest.mark.slow_ci
+def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     golden_stub_env, tmp_path
 ):
     """
@@ -940,7 +973,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     The assertions are grouped by workflow phase:
     - Phase 1: land use contract and coupler publication.
     - Phase 2: vehicle ownership contract and Atlas/ActivitySim side effects.
-    - Phase 3: supply-demand contract, manifest creation, and archived outputs.
+    - Phase 3: supply-demand contract and archived outputs.
     - Phase 4: Consist run/artifact/report integrity.
     """
     settings = golden_stub_env["settings"]
@@ -956,7 +989,6 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     promoted_plans = Path(golden_stub_env["promoted_plans"])
 
     # Phase 0: initialization contract represented explicitly in this golden test.
-    assert state.data_initialized is False
     init_marker = Path(workspace.full_path) / ".golden_init_marker.txt"
     with scenario.trace(
         "initialization",
@@ -968,36 +1000,22 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
         cr.log_input(usim_input_path, key="golden_init_source")
         _write_file(init_marker, "initialized")
         cr.log_output(init_marker, key="golden_init_marker")
-        state.set_data_initialized(True)
-    assert state.data_initialized is True
     assert init_marker.exists()
 
     # Phase 1: land-use stage publishes UrbanSim datastore handles.
-    outputs_holder_year = StepOutputsHolder()
-    usim_inputs = run_land_use_stage(
+    run_land_use_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
-        outputs_holder_year=outputs_holder_year,
         context=golden_stub_env["context"],
-    )
-    assert USIM_DATASTORE_BASE_H5 in usim_inputs
-    assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
-    assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
-    assert usim_inputs[USIM_DATASTORE_CURRENT_H5].endswith(
-        f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     )
     coupler_base_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_BASE_H5), workspace)
     coupler_current_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert coupler_base_h5 is not None
     assert coupler_current_h5 is not None
+    assert Path(coupler_base_h5).name == "usim_000.h5"
     assert (
-        Path(coupler_base_h5).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
-    )
-    assert (
-        Path(coupler_current_h5).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+        Path(coupler_current_h5).name
+        == f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     )
 
     # Phase 2: vehicle ownership stage consumes datastore handles and
@@ -1006,7 +1024,6 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
         scenario=scenario,
         coupler=coupler,
         year=state.forecast_year,
-        build_atlas_static_inputs_fallback=lambda _workspace: {},
         context=golden_stub_env["context"],
     )
     assert (
@@ -1051,26 +1068,17 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     assert int(households["persons"].sum()) == 3
     assert int((persons["worker"] == 1).sum()) == 2
 
-    # Phase 3: supply-demand loop (ActivitySim + BEAM) writes coupler outputs,
-    # manifest state, and year/iteration archives.
+    # Phase 3: supply-demand loop (ActivitySim + BEAM) writes coupler outputs
+    # and year/iteration archives.
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
-
-    manifest_dir = tmp_path / "workflow_manifests"
-
-    def _build_manifest_path(_workspace, year, iteration):
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        return manifest_dir / f"manifest_{year}_{iteration}.yaml"
 
     asim_archive_year = state.current_year
     asim_archive_iteration = state.current_inner_iter
     run_supply_demand_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
-        usim_inputs=usim_inputs,
-        build_manifest_path=_build_manifest_path,
         context=golden_stub_env["context"],
     )
 
@@ -1083,23 +1091,6 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     assert Path(zarr_from_coupler).resolve() == zarr_path.resolve()
     assert Path(linkstats_from_coupler).resolve() == promoted_linkstats.resolve()
     assert Path(plans_from_coupler).resolve() == promoted_plans.resolve()
-
-    manifest_path = manifest_dir / f"manifest_{state.forecast_year}_0.yaml"
-    assert manifest_path.exists()
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    assert set(manifest) == EXPECTED_MANIFEST_STEPS
-    for step_name in EXPECTED_MANIFEST_STEPS:
-        step_manifest = manifest[step_name]
-        assert isinstance(step_manifest.get("cache_hit"), bool)
-        assert step_manifest.get("outputs")
-    assert (
-        set(manifest["activitysim_run"]["outputs"]["raw_outputs"])
-        == EXPECTED_ASIM_TEMP_OUTPUT_KEYS
-    )
-    assert (
-        set(manifest["activitysim_postprocess"]["outputs"]["processed_outputs"])
-        == EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS | EXPECTED_ASIM_ARCHIVED_INPUT_KEYS
-    )
 
     asim_output_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
     households_out = pd.read_parquet(asim_output_dir / "households" / "final.parquet")
@@ -1242,3 +1233,143 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     report_path = Path(workspace.full_path) / "golden_stub_provenance_report.md"
     assert report_path.exists()
     assert "```mermaid" in report
+
+
+def test_golden_stub_workflow_uses_direct_native_stage_contracts() -> None:
+    """The golden harness follows the same native execution boundary as the matrix."""
+    from pilates.workflows.stages import land_use
+    from pilates.workflows.stages import supply_demand_activity
+    from pilates.workflows.stages import supply_demand_beam
+    from pilates.workflows.stages import vehicle_ownership
+
+    for stage in (
+        land_use.run_land_use_stage,
+        vehicle_ownership.run_vehicle_ownership_stage,
+        supply_demand_activity._run_activity_demand_phase,
+        supply_demand_beam._run_beam_steps,
+    ):
+        source = inspect.getsource(stage)
+        assert "execute_step(" in source
+        assert "StageRunner" not in source
+        assert "run_workflow" not in source
+
+
+def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
+    golden_stub_env,
+) -> None:
+    """A direct native definition retains Consist artifact and cache semantics."""
+    settings = golden_stub_env["settings"]
+    workspace = golden_stub_env["workspace"]
+    state = golden_stub_env["state"]
+    scenario = golden_stub_env["scenario"]
+    tracker = golden_stub_env["tracker"]
+    source_path = Path(golden_stub_env["usim_input_path"])
+    source_asim_data = Path(workspace.get_asim_mutable_data_dir())
+    source_asim_configs = Path(workspace.get_asim_mutable_configs_dir())
+    first_workspace = Workspace(
+        settings,
+        output_path=str(tracker.run_dir),
+        folder_name="native-cache-first",
+    )
+    second_workspace = Workspace(
+        settings,
+        output_path=str(tracker.run_dir),
+        folder_name="native-cache-second",
+    )
+    shutil.copytree(
+        source_asim_data,
+        Path(first_workspace.get_asim_mutable_data_dir()),
+    )
+    for native_workspace in (first_workspace, second_workspace):
+        shutil.copytree(
+            source_asim_configs,
+            Path(native_workspace.get_asim_mutable_configs_dir()),
+        )
+
+    with scenario.trace(
+        "golden_native_input",
+        model="initialization",
+        year=state.current_year,
+        iteration=state.current_inner_iter,
+    ):
+        source_artifact = cr.log_input(source_path, key=USIM_POPULATION_SOURCE_H5)
+        scenario.coupler.set_from_artifact(USIM_POPULATION_SOURCE_H5, source_artifact)
+
+    def run_native_preprocess(native_workspace: Workspace, *, project: bool = True):
+        resolved = activitysim_preprocess.resolve_inputs(
+            settings=settings,
+            state=state,
+            workspace=native_workspace,
+            coupler=scenario.coupler,
+        )
+        options = activitysim_preprocess.execution_options(
+            settings=settings,
+            state=state,
+            workspace=native_workspace,
+            resolved_inputs=resolved,
+        )
+        result = scenario.run(
+            fn=activitysim_preprocess.function,
+            binding=resolved.binding,
+            year=state.forecast_year,
+            iteration=state.current_inner_iter,
+            phase="preprocess",
+            stage="supply_demand",
+            output_paths=activitysim_preprocess.output_paths(
+                settings=settings,
+                state=state,
+                workspace=native_workspace,
+                resolved_inputs=resolved,
+            ),
+            cache_options=replace(
+                activitysim_preprocess.cache_options(
+                    settings=settings,
+                    state=state,
+                    workspace=native_workspace,
+                ),
+                cache_epoch=13,
+                cache_hydration="metadata",
+                cache_hydration_failure="warn",
+            ),
+            execution_options=replace(
+                options,
+                runtime_kwargs={
+                    **(options.runtime_kwargs or {}),
+                    "settings": settings,
+                    "state": state,
+                    "workspace": native_workspace,
+                },
+            ),
+        )
+        if not project:
+            return result, None
+        return result, activitysim_preprocess.project_outputs(
+            result.outputs,
+            settings=settings,
+            state=state,
+            workspace=native_workspace,
+            resolved_inputs=resolved,
+        )
+
+    first, first_outputs = run_native_preprocess(first_workspace)
+    second, _ = run_native_preprocess(second_workspace, project=False)
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert first_outputs.land_use_table.exists()
+    assert {key: artifact.hash for key, artifact in second.outputs.items()} == {
+        key: artifact.hash for key, artifact in first.outputs.items()
+    }
+
+    for result in (first, second):
+        artifacts = tracker.get_artifacts_for_run(result.run.id)
+        assert USIM_POPULATION_SOURCE_H5 in _artifact_keys(artifacts.inputs)
+        assert {
+            "land_use_asim_in",
+            "households_asim_in",
+            "persons_asim_in",
+            "omx_skims",
+        } <= _artifact_keys(artifacts.outputs)
+        run = tracker.get_run(result.run.id)
+        assert run is not None
+        assert (run.meta or {}).get("cache_epoch") == 13

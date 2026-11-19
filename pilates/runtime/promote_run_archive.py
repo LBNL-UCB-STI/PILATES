@@ -6,15 +6,23 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+import time
+import uuid
 from pathlib import Path
 import shutil
 import tempfile
 from typing import Any, Iterable, Optional, Sequence
 
+from consist.digest import file_sha256
+
 from pilates.config import PilatesConfig, load_config
-from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
+from pilates.runtime.failure_hints import log_consist_cli_instructions
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_db_snapshot import resolve_consist_db_paths
+from pilates.utils.consist_db_snapshot import (
+    resolve_consist_db_paths,
+    snapshot_latest_dir,
+)
+from sqlalchemy.exc import OperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +43,7 @@ class PromotionResult:
     source_run_dir: str
     dry_run: bool
     verify_only: bool
+    merge_db_only: bool
     db_path: Optional[str]
     marker_path: Optional[str]
     root_run_id: Optional[str] = None
@@ -52,7 +61,14 @@ class PromotionResult:
 
     @property
     def success(self) -> bool:
-        return bool(self.roots) and not self.failed_roots
+        if self.failed_roots:
+            return False
+        if self.merge_db_only:
+            return bool(
+                self.merge_result is not None
+                and not self.merge_result.get("skipped", False)
+            )
+        return bool(self.roots)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -127,9 +143,84 @@ def _recovery_roots(
     return resolved
 
 
+def _promotion_copy_ignore(
+    dirpath: str, names: list[str], *, source_run_dir: Path
+) -> set[str]:
+    try:
+        rel = Path(dirpath).relative_to(source_run_dir)
+    except ValueError:
+        return set()
+    if rel == Path("activitysim") / "output":
+        ignored: set[str] = set()
+        if "final_pipeline" in names:
+            ignored.add("final_pipeline")
+        if "cache" in names:
+            ignored.add("cache")
+        return ignored
+    if rel == Path("shared_cache"):
+        return {"numba"} if "numba" in names else set()
+    if rel == Path(".consist") / "snapshots":
+        return {"history"} if "history" in names else set()
+    return set()
+
+
 def _copy_run_tree(source_run_dir: Path, destination_run_dir: Path) -> None:
+    source_run_dir = source_run_dir.resolve()
     destination_run_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_run_dir, destination_run_dir, dirs_exist_ok=True)
+    if (source_run_dir / "activitysim" / "output" / "final_pipeline").exists():
+        logger.info("Skipping ActivitySim final_pipeline tree during promotion copy")
+    if (source_run_dir / "activitysim" / "output" / "cache").exists():
+        logger.info("Skipping ActivitySim runtime cache tree during promotion copy")
+    if (source_run_dir / "shared_cache" / "numba").exists():
+        logger.info("Skipping shared numba cache during promotion copy")
+    if (source_run_dir / ".consist" / "snapshots" / "history").exists():
+        logger.info("Skipping Consist snapshot history tree during promotion copy")
+    shutil.copytree(
+        source_run_dir,
+        destination_run_dir,
+        dirs_exist_ok=True,
+        ignore=lambda dirpath, names: _promotion_copy_ignore(
+            dirpath, names, source_run_dir=source_run_dir
+        ),
+    )
+    excluded_paths = [
+        destination_run_dir / "activitysim" / "output" / "final_pipeline",
+        destination_run_dir / "activitysim" / "output" / "cache",
+        destination_run_dir / "shared_cache" / "numba",
+        destination_run_dir / ".consist" / "snapshots" / "history",
+    ]
+    for excluded_path in excluded_paths:
+        if excluded_path.exists():
+            logger.info("Pruning excluded promotion tree: %s", excluded_path)
+            shutil.rmtree(excluded_path, ignore_errors=True)
+
+
+def _tree_inventory(root: Path) -> tuple[int, int, int]:
+    root = root.resolve()
+    file_count = 0
+    dir_count = 0
+    byte_count = 0
+    for current_root, dirs, files in os.walk(root):
+        try:
+            rel = Path(current_root).relative_to(root)
+        except ValueError:
+            rel = None
+        if rel == Path("activitysim") / "output" and "final_pipeline" in dirs:
+            dirs.remove("final_pipeline")
+        if rel == Path("activitysim") / "output" and "cache" in dirs:
+            dirs.remove("cache")
+        if rel == Path("shared_cache") and "numba" in dirs:
+            dirs.remove("numba")
+        if rel == Path(".consist") / "snapshots" and "history" in dirs:
+            dirs.remove("history")
+        dir_count += len(dirs)
+        file_count += len(files)
+        for name in files:
+            try:
+                byte_count += (Path(current_root) / name).stat().st_size
+            except OSError:
+                continue
+    return file_count, dir_count, byte_count
 
 
 def _verify_promoted_run_dir(
@@ -183,6 +274,9 @@ def _archive_db_path(
     resolved = Path(archive_db_path)
     if resolved.exists():
         return resolved
+    latest_snapshot = snapshot_latest_dir(str(archive_run_dir)) / resolved.name
+    if latest_snapshot.exists():
+        return latest_snapshot
     return None
 
 
@@ -221,8 +315,26 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _retry_merge_shard_path(source_run_dir: Path, root_run_id: str) -> Path:
+    safe_root_run_id = root_run_id.replace(os.sep, "_")
+    return (
+        source_run_dir
+        / ".consist"
+        / "retry-shards"
+        / f"promotion-shard-{safe_root_run_id}-{uuid.uuid4().hex}.duckdb"
+    )
+
+
 def _all_runs(tracker: Any) -> list[Any]:
     return list(tracker.find_runs(limit=100_000))
+
+
+def _run_id_text(run: Any) -> str:
+    try:
+        raw_id = run.id
+    except AttributeError:
+        return ""
+    return str(raw_id).strip() if raw_id is not None else ""
 
 
 def _run_tags(run: Any) -> list[str]:
@@ -236,7 +348,7 @@ def _run_sort_key(run: Any) -> tuple[str, str]:
     created_at = getattr(run, "created_at", None)
     return (
         str(created_at) if created_at is not None else "",
-        str(getattr(run, "id", "")),
+        _run_id_text(run),
     )
 
 
@@ -261,9 +373,7 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
 
     resolved_main_db_path = _resolve_db_file_path(main_db_path)
     if not resolved_main_db_path.exists():
-        raise FileNotFoundError(
-            f"Main Consist DB does not exist: {resolved_main_db_path}"
-        )
+        return set()
 
     db = DatabaseManager(str(resolved_main_db_path))
     try:
@@ -274,13 +384,27 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
         db.engine.dispose()
 
 
+def _copy_db_file_with_wal(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    source_wal = Path(f"{source}.wal")
+    if source_wal.exists():
+        shutil.copy2(source_wal, Path(f"{destination}.wal"))
+
+
+def _remove_db_file_with_wal(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    wal_path = Path(f"{path}.wal")
+    wal_path.unlink(missing_ok=True)
+
+
 def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
     children_by_parent: dict[str, list[str]] = {}
-    available_ids = {str(getattr(run, "id")) for run in runs}
+    available_ids = {_run_id_text(run) for run in runs if _run_id_text(run)}
     if root_run_id not in available_ids:
         raise ValueError(f"root run ID not found in archive DB: {root_run_id}")
     for run in runs:
-        run_id = str(getattr(run, "id"))
+        run_id = _run_id_text(run)
         parent_id = getattr(run, "parent_run_id", None)
         if parent_id is None:
             continue
@@ -321,7 +445,7 @@ def _resolve_root_run_id(
         run
         for run in runs
         if getattr(run, "parent_run_id", None) is None
-        and str(getattr(run, "id")) not in inherited_run_ids
+        and _run_id_text(run) not in inherited_run_ids
     ]
     pilates_candidates = [
         run for run in root_candidates if "pilates_simulation" in set(_run_tags(run))
@@ -341,7 +465,7 @@ def _resolve_root_run_id(
     if len(root_candidates) != 1:
         rendered = [
             {
-                "id": str(getattr(run, "id", "")),
+                "id": _run_id_text(run),
                 "model": str(getattr(run, "model_name", "")),
                 "status": str(getattr(run, "status", "")),
                 "tags": _run_tags(run),
@@ -355,50 +479,93 @@ def _resolve_root_run_id(
             + json.dumps(rendered, sort_keys=True)
         )
 
-    resolved = str(getattr(root_candidates[0], "id"))
+    resolved = _run_id_text(root_candidates[0])
     return resolved, _expand_run_subtree(resolved, runs)
 
 
-def _all_output_artifacts(
+def _artifact_relative_path(tracker: Any, artifact: Any) -> Optional[Path]:
+    container_uri = getattr(artifact, "container_uri", None)
+    if not container_uri:
+        return None
+    fs = getattr(tracker, "fs", None)
+    get_relative = getattr(fs, "get_remappable_relative_path", None)
+    if not callable(get_relative):
+        return None
+    relative = get_relative(container_uri)
+    if relative is None:
+        return None
+    return Path(relative)
+
+
+def _run_output_content_hashes(
     tracker: Any,
     *,
+    source_run_dir: Path,
+    run_id: str,
+) -> dict[str, str]:
+    content_hashes: dict[str, str] = {}
+    outputs = tracker.get_run_outputs(str(run_id))
+    for key, artifact in outputs.items():
+        relative_path = _artifact_relative_path(tracker, artifact)
+        if relative_path is None:
+            continue
+        source_path = source_run_dir / relative_path
+        if not source_path.is_file():
+            continue
+        content_hashes[str(key)] = file_sha256(source_path)
+    return content_hashes
+
+
+def _register_verified_run_output_recovery_copies(
+    tracker: Any,
+    *,
+    source_run_dir: Path,
+    recovery_run_dir: Path,
     run_ids: Optional[Iterable[str]] = None,
-) -> list[Any]:
-    artifacts: list[Any] = []
-    seen_artifact_ids: set[str] = set()
+    verify: bool = True,
+) -> int:
+    register_copies = getattr(tracker, "register_run_output_recovery_copies", None)
+    if not callable(register_copies):
+        logger.warning(
+            "Consist tracker does not expose register_run_output_recovery_copies; "
+            "skipping recovery-copy metadata registration."
+        )
+        return 0
+
     selected_run_ids = (
         list(run_ids)
         if run_ids is not None
-        else [str(run.id) for run in _all_runs(tracker)]
+        else [_run_id_text(run) for run in _all_runs(tracker) if _run_id_text(run)]
     )
+    registered = 0
     for run_id in selected_run_ids:
-        run_artifacts = tracker.get_artifacts_for_run(str(run_id))
-        run_outputs = run_artifacts.outputs if run_artifacts.outputs is not None else {}
-        for artifact in list(run_outputs.values()):
-            artifact_id = str(getattr(artifact, "id", ""))
-            if artifact_id and artifact_id in seen_artifact_ids:
-                continue
-            if artifact_id:
-                seen_artifact_ids.add(artifact_id)
-            artifacts.append(artifact)
-    return artifacts
-
-
-def _update_artifact_recovery_roots(
-    tracker: Any,
-    recovery_run_dir: Path,
-    *,
-    run_ids: Optional[Iterable[str]] = None,
-) -> int:
-    updated = 0
-    for artifact in _all_output_artifacts(tracker, run_ids=run_ids):
-        tracker.set_artifact_recovery_roots(
-            artifact,
-            [str(recovery_run_dir)],
-            append=True,
+        content_hashes = (
+            _run_output_content_hashes(
+                tracker,
+                source_run_dir=source_run_dir,
+                run_id=str(run_id),
+            )
+            if verify
+            else {}
         )
-        updated += 1
-    return updated
+        result = register_copies(
+            str(run_id),
+            str(recovery_run_dir),
+            verify=verify,
+            append=True,
+            content_hashes=content_hashes or None,
+        )
+        registered_for_run = getattr(result, "registered", {})
+        registered += len(registered_for_run)
+        blocked = getattr(result, "blocked", {})
+        if blocked:
+            logger.info(
+                "Recovery-copy registration blocked %d output(s) for run %s: %s",
+                len(blocked),
+                run_id,
+                getattr(result, "summary", blocked),
+            )
+    return registered
 
 
 def _sync_consist_state(source_run_dir: Path, destination_run_dir: Path) -> None:
@@ -408,6 +575,12 @@ def _sync_consist_state(source_run_dir: Path, destination_run_dir: Path) -> None
     destination_consist_dir = destination_run_dir / ".consist"
     destination_consist_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_consist_dir, destination_consist_dir, dirs_exist_ok=True)
+    history_dir = destination_consist_dir / "snapshots" / "history"
+    if history_dir.exists():
+        logger.info(
+            "Pruning excluded Consist snapshot history during sync: %s", history_dir
+        )
+        shutil.rmtree(history_dir, ignore_errors=True)
 
 
 def _marker_path(source_run_dir: Path) -> Path:
@@ -464,10 +637,7 @@ def _merge_scoped_run_db(
 ) -> dict[str, Any]:
     conflict = _validate_merge_conflict(conflict)
     resolved_main_db_path = _resolve_db_file_path(main_db_path)
-    if not resolved_main_db_path.exists():
-        raise FileNotFoundError(
-            f"Main Consist DB does not exist: {resolved_main_db_path}"
-        )
+    main_db_preexisting = resolved_main_db_path.exists()
 
     try:
         from consist.core.maintenance import DatabaseMaintenance
@@ -508,11 +678,16 @@ def _merge_scoped_run_db(
                 include_children=True,
                 dry_run=False,
             )
-            target_db = DatabaseManager(str(resolved_main_db_path))
+            preview_target_db_path = (
+                resolved_main_db_path
+                if main_db_preexisting
+                else Path(tmpdir) / resolved_main_db_path.name
+            )
+            target_db = DatabaseManager(str(preview_target_db_path))
             try:
                 target_maintenance = DatabaseMaintenance(
                     db=target_db,
-                    run_dir=resolved_main_db_path.parent,
+                    run_dir=preview_target_db_path.parent,
                 )
                 merge_result = target_maintenance.merge(
                     preview_shard,
@@ -522,35 +697,36 @@ def _merge_scoped_run_db(
                 )
             finally:
                 target_db.engine.dispose()
-            payload = {
-                "dry_run": True,
-                "main_db_path": str(resolved_main_db_path),
-                "root_run_id": root_run_id,
-                "shard_path": None,
-                "temporary_shard_path": str(preview_shard),
-                "temporary_shard_removed": True,
-                "export_result": asdict(export_result),
-                "merge_result": asdict(merge_result),
-            }
+                payload = {
+                    "dry_run": True,
+                    "main_db_path": str(resolved_main_db_path),
+                    "main_db_seeded": not main_db_preexisting,
+                    "root_run_id": root_run_id,
+                    "shard_path": None,
+                    "temporary_shard_path": str(preview_shard),
+                    "temporary_shard_removed": True,
+                    "export_result": asdict(export_result),
+                    "merge_result": asdict(merge_result),
+                }
             return _json_safe(payload)
 
-    target_db = DatabaseManager(str(resolved_main_db_path))
-    try:
-        target_maintenance = DatabaseMaintenance(
-            db=target_db,
-            run_dir=resolved_main_db_path.parent,
-        )
-        merge_result = target_maintenance.merge(
-            shard_output,
-            conflict=conflict,
-            include_snapshots=False,
-            dry_run=False,
-        )
-    finally:
-        target_db.engine.dispose()
-
-    return _json_safe(
-        {
+    if main_db_preexisting:
+        target_db = DatabaseManager(str(resolved_main_db_path))
+        try:
+            target_maintenance = DatabaseMaintenance(
+                db=target_db,
+                run_dir=resolved_main_db_path.parent,
+            )
+            merge_result = target_maintenance.merge(
+                shard_output,
+                conflict=conflict,
+                include_snapshots=False,
+                dry_run=False,
+            )
+        finally:
+            target_db.engine.dispose()
+        _remove_db_file_with_wal(shard_output)
+        payload = {
             "dry_run": False,
             "main_db_path": str(resolved_main_db_path),
             "root_run_id": root_run_id,
@@ -558,7 +734,108 @@ def _merge_scoped_run_db(
             "export_result": asdict(export_result),
             "merge_result": asdict(merge_result),
         }
-    )
+        return _json_safe(payload)
+
+    with tempfile.TemporaryDirectory(prefix="pilates-promotion-main-db-") as tmpdir:
+        temp_main_db_path = Path(tmpdir) / resolved_main_db_path.name
+        target_db = DatabaseManager(str(temp_main_db_path))
+        try:
+            target_maintenance = DatabaseMaintenance(
+                db=target_db,
+                run_dir=temp_main_db_path.parent,
+            )
+            merge_result = target_maintenance.merge(
+                shard_output,
+                conflict=conflict,
+                include_snapshots=False,
+                dry_run=False,
+            )
+        finally:
+            target_db.engine.dispose()
+
+        _copy_db_file_with_wal(temp_main_db_path, resolved_main_db_path)
+        _remove_db_file_with_wal(shard_output)
+        payload = {
+            "dry_run": False,
+            "main_db_path": str(resolved_main_db_path),
+            "main_db_seeded": True,
+            "root_run_id": root_run_id,
+            "shard_path": str(shard_output),
+            "export_result": asdict(export_result),
+            "merge_result": asdict(merge_result),
+        }
+        return _json_safe(payload)
+
+
+def _merge_scoped_run_db_with_retry(
+    *,
+    settings: PilatesConfig,
+    source_tracker: Any,
+    source_run_dir: Path,
+    root_run_id: str,
+    main_db_path: str | os.PathLike[str],
+    conflict: str,
+    include_data: bool,
+    dry_run: bool,
+    shard_path: Optional[str | os.PathLike[str]] = None,
+) -> dict[str, Any]:
+    try:
+        return _merge_scoped_run_db(
+            source_tracker=source_tracker,
+            source_run_dir=source_run_dir,
+            root_run_id=root_run_id,
+            main_db_path=main_db_path,
+            conflict=conflict,
+            include_data=include_data,
+            dry_run=dry_run,
+            shard_path=shard_path,
+        )
+    except OperationalError as exc:
+        logger.warning(
+            "Consist DB merge failed once; retrying with a fresh archive tracker "
+            "after a short pause: %s",
+            exc,
+            exc_info=True,
+        )
+        time.sleep(0.25)
+        retry_tracker = _open_archive_tracker(settings, archive_run_dir=source_run_dir)
+        if retry_tracker is None:
+            raise
+        try:
+            retry_shard_path = _retry_merge_shard_path(
+                source_run_dir,
+                root_run_id,
+            )
+            if shard_path is not None:
+                original_shard_path = _resolve_db_file_path(shard_path)
+                if original_shard_path.exists():
+                    try:
+                        original_shard_path.unlink()
+                    except OSError:
+                        logger.debug(
+                            "Failed to remove partial Consist shard before retry",
+                            exc_info=True,
+                        )
+            return _merge_scoped_run_db(
+                source_tracker=retry_tracker,
+                source_run_dir=source_run_dir,
+                root_run_id=root_run_id,
+                main_db_path=main_db_path,
+                conflict=conflict,
+                include_data=include_data,
+                dry_run=dry_run,
+                shard_path=retry_shard_path,
+            )
+        finally:
+            retry_db = getattr(retry_tracker, "db", None)
+            retry_engine = getattr(retry_db, "engine", None)
+            if retry_engine is not None:
+                try:
+                    retry_engine.dispose()
+                except Exception:
+                    logger.debug(
+                        "Failed to dispose retry tracker engine", exc_info=True
+                    )
 
 
 def promote_run_to_recovery_roots(
@@ -573,27 +850,88 @@ def promote_run_to_recovery_roots(
     merge_include_data: bool = True,
     merge_dry_run: bool = False,
     merge_shard_path: Optional[str | os.PathLike[str]] = None,
+    merge_only: bool = False,
+    merge_db_only: bool = False,
+    recovery_copy_verify: bool = True,
     *,
     dry_run: bool = False,
     verify_only: bool = False,
 ) -> PromotionResult:
+    overall_started = time.perf_counter()
     source_run_dir = _source_archive_run_dir(settings, archive_run_dir)
-    recovery_roots = _recovery_roots(settings, roots=roots)
     db_path = _archive_db_path(settings, archive_run_dir=source_run_dir)
     require_consist_state = db_path is not None
     if merge_main_db is not None:
         merge_conflict = _validate_merge_conflict(merge_conflict)
+    if merge_only and merge_main_db is None:
+        raise ValueError("--merge-only requires --merge-main-db")
+    if merge_db_only and merge_main_db is None:
+        raise ValueError("--merge-db-only requires --merge-main-db")
+    if merge_db_only and merge_only:
+        raise ValueError("--merge-db-only cannot be combined with --merge-only")
+
+    recovery_roots = [] if merge_db_only else _recovery_roots(settings, roots=roots)
+
+    logger.info(
+        "Starting archive promotion: source=%s recovery_roots=%d db_path=%s "
+        "dry_run=%s verify_only=%s merge_main_db=%s merge_only=%s "
+        "merge_db_only=%s "
+        "recovery_copy_verify=%s",
+        source_run_dir,
+        0 if merge_db_only else len(recovery_roots),
+        db_path if db_path is not None else "none",
+        dry_run,
+        verify_only,
+        merge_main_db if merge_main_db is not None else "none",
+        merge_only,
+        merge_db_only,
+        recovery_copy_verify,
+    )
 
     result = PromotionResult(
         source_run_dir=str(source_run_dir),
         dry_run=dry_run,
         verify_only=verify_only,
+        merge_db_only=merge_db_only,
         db_path=str(db_path) if db_path is not None else None,
         marker_path=None,
     )
 
     opened_tracker = None
     working_tracker = tracker or cr.current_tracker()
+    if (
+        working_tracker is not None
+        and db_path is not None
+        and not dry_run
+        and not verify_only
+    ):
+        tracker_db_path = getattr(working_tracker, "db_path", None)
+        if tracker_db_path:
+            try:
+                resolved_tracker_db_path = (
+                    Path(os.path.expandvars(os.fspath(tracker_db_path)))
+                    .expanduser()
+                    .resolve()
+                )
+            except OSError:
+                resolved_tracker_db_path = None
+            if (
+                resolved_tracker_db_path is not None
+                and resolved_tracker_db_path != db_path
+            ):
+                refreshed_tracker = _open_archive_tracker(
+                    settings,
+                    archive_run_dir=source_run_dir,
+                )
+                if refreshed_tracker is not None:
+                    logger.info(
+                        "Refreshing archive tracker from resolved DB path %s "
+                        "instead of stale tracker path %s",
+                        db_path,
+                        tracker_db_path,
+                    )
+                    working_tracker = refreshed_tracker
+                    opened_tracker = refreshed_tracker
     needs_tracker = (
         not dry_run
         and not verify_only
@@ -648,15 +986,48 @@ def promote_run_to_recovery_roots(
                 continue
 
             try:
+                root_started = time.perf_counter()
+                source_file_count, source_dir_count, source_byte_count = (
+                    _tree_inventory(source_run_dir)
+                )
+                logger.info(
+                    "Promoting archive to recovery root %s -> %s "
+                    "(files=%d dirs=%d size=%.2f GiB)",
+                    recovery_root,
+                    destination_run_dir,
+                    source_file_count,
+                    source_dir_count,
+                    source_byte_count / (1024**3),
+                )
                 if dry_run:
                     entry.status = "dry_run"
                     continue
 
-                if not verify_only:
+                if merge_only:
+                    if not destination_run_dir.exists():
+                        raise FileNotFoundError(
+                            "Cannot merge-only promote because the promoted archive "
+                            f"copy does not exist: {destination_run_dir}"
+                        )
+                    logger.info(
+                        "Reusing existing promoted archive copy at %s",
+                        destination_run_dir,
+                    )
+                elif not verify_only:
+                    logger.info(
+                        "Copying archive tree to %s with shutil.copytree(...)",
+                        destination_run_dir,
+                    )
                     _copy_run_tree(source_run_dir, destination_run_dir)
                     entry.copy_performed = True
+                    logger.info(
+                        "Finished copying archive tree to %s in %.2fs",
+                        destination_run_dir,
+                        time.perf_counter() - root_started,
+                    )
 
                 if verify:
+                    logger.info("Verifying promoted archive at %s", destination_run_dir)
                     _verify_promoted_run_dir(
                         source_run_dir=source_run_dir,
                         destination_run_dir=destination_run_dir,
@@ -665,20 +1036,36 @@ def promote_run_to_recovery_roots(
                     entry.verified = True
 
                 if not verify_only and working_tracker is not None:
-                    _update_artifact_recovery_roots(
-                        working_tracker,
+                    logger.info(
+                        "Registering recovery copies for %s (%sbyte verification)",
                         destination_run_dir,
-                        run_ids=scoped_run_ids or None,
+                        "with " if recovery_copy_verify else "without ",
                     )
-                    entry.artifact_metadata_updated = True
+                    metadata_updates = _register_verified_run_output_recovery_copies(
+                        working_tracker,
+                        source_run_dir=source_run_dir,
+                        recovery_run_dir=destination_run_dir,
+                        run_ids=scoped_run_ids or None,
+                        verify=recovery_copy_verify,
+                    )
+                    entry.artifact_metadata_updated = metadata_updates > 0
 
                 if not verify_only:
                     successful_destinations.append(destination_run_dir)
                     if working_tracker is not None:
+                        logger.info(
+                            "Syncing Consist state into %s",
+                            destination_run_dir,
+                        )
                         for successful_destination in successful_destinations:
                             _sync_consist_state(source_run_dir, successful_destination)
 
                 entry.status = "promoted"
+                logger.info(
+                    "Finished promotion for %s in %.2fs",
+                    destination_run_dir,
+                    time.perf_counter() - root_started,
+                )
             except Exception as exc:
                 entry.status = "failed"
                 entry.error = str(exc)
@@ -695,24 +1082,52 @@ def promote_run_to_recovery_roots(
             and working_tracker is not None
             and resolved_root_run_id is not None
         ):
-            if result.success:
-                result.merge_result = _merge_scoped_run_db(
-                    source_tracker=working_tracker,
-                    source_run_dir=source_run_dir,
-                    root_run_id=resolved_root_run_id,
-                    main_db_path=merge_main_db,
-                    conflict=merge_conflict,
-                    include_data=merge_include_data,
-                    dry_run=merge_dry_run,
-                    shard_path=merge_shard_path,
-                )
+            if merge_db_only or result.success:
+                try:
+                    merge_started = time.perf_counter()
+                    logger.info(
+                        "Exporting and merging root run subtree %s into %s",
+                        resolved_root_run_id,
+                        merge_main_db,
+                    )
+                    result.merge_result = _merge_scoped_run_db_with_retry(
+                        settings=settings,
+                        source_tracker=working_tracker,
+                        source_run_dir=source_run_dir,
+                        root_run_id=resolved_root_run_id,
+                        main_db_path=merge_main_db,
+                        conflict=merge_conflict,
+                        include_data=merge_include_data,
+                        dry_run=merge_dry_run,
+                        shard_path=merge_shard_path,
+                    )
+                    logger.info(
+                        "Finished Consist DB merge path in %.2fs",
+                        time.perf_counter() - merge_started,
+                    )
+                except OperationalError as exc:
+                    logger.warning(
+                        "Skipping Consist DB merge for archive promotion because "
+                        "the export/merge transaction failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    result.merge_result = {
+                        "skipped": True,
+                        "reason": "consist_db_merge_failed_after_retry",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "root_run_id": resolved_root_run_id,
+                        "main_db_path": str(merge_main_db),
+                        "retry_attempted": True,
+                    }
             else:
                 result.merge_result = {
                     "skipped": True,
                     "reason": "archive promotion did not complete for all roots",
                 }
 
-        if not dry_run and not verify_only:
+        if not dry_run and not verify_only and not merge_db_only:
             marker_path = _write_promotion_marker(
                 source_run_dir=source_run_dir,
                 result=result,
@@ -723,18 +1138,18 @@ def promote_run_to_recovery_roots(
                     source_run_dir=source_run_dir,
                     destinations=successful_destinations,
                 )
-        for entry in result.roots:
-            emit_artifact_lifecycle_audit_event(
-                run_dir=source_run_dir,
-                event_type="promotion_status",
-                recovery_root=entry.recovery_root,
-                destination_run_dir=entry.destination_run_dir,
-                status=entry.status,
-                copy_performed=entry.copy_performed,
-                verified=entry.verified,
-                artifact_metadata_updated=entry.artifact_metadata_updated,
-                db_path=str(db_path) if db_path is not None else None,
-            )
+        logger.info(
+            "Archive promotion complete in %.2fs (success=%s)",
+            time.perf_counter() - overall_started,
+            result.success,
+        )
+        log_consist_cli_instructions(
+            logger=logger,
+            archive_run_dir=str(source_run_dir),
+            run_db_path=str(db_path) if db_path is not None else None,
+            main_db_path=str(merge_main_db) if merge_main_db is not None else None,
+            success=result.success,
+        )
     finally:
         if opened_tracker is not None:
             _dispose_tracker(opened_tracker)
@@ -807,6 +1222,32 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-recovery-copy-verify",
+        action="store_false",
+        dest="recovery_copy_verify",
+        default=True,
+        help=(
+            "Skip byte-level verification when registering promoted recovery copies "
+            "for this archive promotion."
+        ),
+    )
+    parser.add_argument(
+        "--merge-only",
+        action="store_true",
+        help=(
+            "Reuse an already-copied promoted archive and run only the Consist DB "
+            "export/merge path."
+        ),
+    )
+    parser.add_argument(
+        "--merge-db-only",
+        action="store_true",
+        help=(
+            "Run only the Consist DB export/merge path and skip archive promotion "
+            "to recovery roots."
+        ),
+    )
+    parser.add_argument(
         "--merge-shard-path",
         help=(
             "Optional path for the filtered export shard used for a real merge. "
@@ -845,13 +1286,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         merge_conflict=args.merge_conflict,
         merge_include_data=bool(args.merge_include_data),
         merge_dry_run=bool(args.merge_dry_run),
+        merge_only=bool(args.merge_only),
+        merge_db_only=bool(args.merge_db_only),
+        recovery_copy_verify=bool(args.recovery_copy_verify),
         merge_shard_path=args.merge_shard_path,
         dry_run=bool(args.dry_run),
         verify_only=bool(args.verify_only),
     )
 
     print(json.dumps(_json_safe(result.to_dict()), indent=2, sort_keys=True))
-    return 0 if not result.failed_roots else 1
+    return 0 if result.success else 1
 
 
 if __name__ == "__main__":

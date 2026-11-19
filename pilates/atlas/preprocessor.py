@@ -8,62 +8,25 @@ from pathlib import Path
 from typing import Tuple, Optional, TYPE_CHECKING, List, Dict, Any
 
 if TYPE_CHECKING:
-    from workflow_state import WorkflowState
+    from pilates.workflows.state import WorkflowState
     from pilates.workspace import Workspace
 
 import numpy as np
 import pandas as pd
 
-from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
-from pilates.runtime.archive_paths import first_existing_path
-from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
+from pilates.generic.records import sanitize_artifact_key
+from pilates.atlas.static_inputs import (
+    atlas_selected_scenario,
+    atlas_static_input_relpaths,
+)
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
-from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import resolve_usim_h5_table_key
 
 logger = logging.getLogger(__name__)
-
-_ATLAS_RESTART_START_YEAR_CSVS: Tuple[str, ...] = (
-    "households.csv",
-    "blocks.csv",
-    "persons.csv",
-    "residential.csv",
-    "jobs.csv",
-)
-_ATLAS_RESTART_PRIOR_SUBYEAR_CSVS: Tuple[str, ...] = (
-    "households.csv",
-    "blocks.csv",
-    "persons.csv",
-    "grave.csv",
-    "residential.csv",
-    "jobs.csv",
-)
-_ATLAS_RESTART_PRIOR_SUBYEAR_RDATA: Tuple[str, ...] = (
-    "vehicles_output.RData",
-    "households_output.RData",
-)
-
-
-def _get_usim_datastore_fname(settings, io, year=None):
-    # reference: asim postprocessor
-    if io == "output":
-        datastore_name = get_setting(settings, "urbansim.output_file_template").format(
-            year=year
-        )
-    elif io == "input":
-        region = get_setting(settings, "run.region")
-        region_id = get_setting(
-            settings, "urbansim.region_mappings.region_to_region_id"
-        )[region]
-        usim_base_fname = get_setting(settings, "urbansim.input_file_template")
-        datastore_name = usim_base_fname.format(region_id=region_id)
-
-    return datastore_name
 
 
 def _prepare_atlas_table_for_export(
@@ -121,237 +84,18 @@ def _export_atlas_table_to_csv(
     )
 
 
-def _resolve_existing_artifact_path(
-    value: Any, *, workspace: "Workspace"
-) -> Optional[str]:
-    return artifact_to_existing_path(value, workspace=workspace)
-
-
-def _restart_required_atlas_input_years(
-    *,
-    start_year: int,
-    atlas_year: int,
-) -> List[int]:
-    """
-    Return the minimal ATLAS year-input directories required on restart.
-
-    Dynamic ATLAS subyear runs rely on the workflow start-year seed inputs and,
-    for later subyears, the immediately preceding ATLAS evolution-year inputs.
-    """
-    required_years = [start_year]
-    if atlas_year > start_year:
-        prior_subyear = atlas_year - 2
-        if prior_subyear >= start_year and prior_subyear not in required_years:
-            required_years.append(prior_subyear)
-    return required_years
-
-
-def restart_required_atlas_input_paths(
-    *,
-    atlas_input_root: str,
-    start_year: int,
-    atlas_year: int,
-) -> Dict[str, str]:
-    """
-    Return the restart-critical ATLAS files that should exist locally.
-
-    Native restart recovery should hydrate concrete files rather than treating
-    whole year directories as first-class artifacts.
-    """
-    atlas_input_root = os.path.realpath(atlas_input_root)
-    required: Dict[str, str] = {}
-
-    start_year_dir = os.path.join(atlas_input_root, f"year{start_year}")
-    for filename in _ATLAS_RESTART_START_YEAR_CSVS:
-        artifact_name = filename.rsplit(".", 1)[0]
-        required[f"atlas_restart_seed::{start_year}::{artifact_name}"] = os.path.join(
-            start_year_dir,
-            filename,
-        )
-
-    if atlas_year > start_year:
-        prior_subyear = atlas_year - 2
-        if prior_subyear >= start_year:
-            prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
-            for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_CSVS:
-                artifact_name = filename.rsplit(".", 1)[0]
-                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
-                    os.path.join(prior_year_dir, filename)
-                )
-            for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
-                artifact_name = filename.replace(".", "_")
-                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
-                    os.path.join(prior_year_dir, filename)
-                )
-
-    return required
-
-
-def _restore_restart_atlas_year_inputs(
-    *,
-    previous_run_dir: str,
-    workspace: "Workspace",
-    start_year: int,
-    atlas_year: int,
-) -> None:
-    """
-    Rehydrate restart-critical ATLAS year directories from the previous run.
-
-    For reruns of later ATLAS subyears, restoring only the workflow start year
-    is insufficient. The dynamic container also expects the immediately
-    preceding ATLAS subyear input directory to exist.
-    """
-    required_paths = restart_required_atlas_input_paths(
-        atlas_input_root=workspace.get_atlas_mutable_input_dir(),
-        start_year=start_year,
-        atlas_year=atlas_year,
-    )
-    missing_paths = [
-        path for path in required_paths.values() if not os.path.exists(path)
-    ]
-    if not missing_paths:
-        return
-
-    for required_year in _restart_required_atlas_input_years(
-        start_year=start_year,
-        atlas_year=atlas_year,
-    ):
-        old_year_input_path = os.path.join(
-            previous_run_dir, "atlas", "atlas_input", f"year{required_year}"
-        )
-        new_year_input_path = os.path.join(
-            workspace.get_atlas_mutable_input_dir(), f"year{required_year}"
-        )
-        year_missing_paths = [
-            path
-            for key, path in required_paths.items()
-            if f"::{required_year}::" in key and not os.path.exists(path)
-        ]
-        if not year_missing_paths:
-            continue
-        if not os.path.exists(old_year_input_path):
-            logger.warning(
-                "[AtlasPreprocessor] Restart requires prior ATLAS input directory "
-                "year%s, but it was missing from previous run: %s",
-                required_year,
-                old_year_input_path,
-            )
-            continue
-        logger.info(
-            "[AtlasPreprocessor] Copying restart-required ATLAS inputs from previous run: %s",
-            old_year_input_path,
-        )
-        shutil.copytree(
-            old_year_input_path,
-            new_year_input_path,
-            dirs_exist_ok=True,
-            symlinks=True,
-        )
-
-
-def _record_restart_chained_rdata_inputs(
-    *,
-    prepared_inputs: Dict[str, Path],
-    atlas_input_root: str,
-    start_year: int,
-    atlas_year: int,
-) -> None:
-    if atlas_year <= start_year:
-        return
-
-    prior_subyear = atlas_year - 2
-    if prior_subyear < start_year:
-        return
-
-    prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
-    for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
-        path = os.path.join(prior_year_dir, filename)
-        if not os.path.exists(path):
-            continue
-        artifact_name = filename.replace(".", "_")
-        prepared_inputs[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
-            Path(path)
-        )
-
-
-def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
-    """
-    Discover top-level static ATLAS global inputs that must be present in mutable input.
-
-    Returns tuples of (absolute_source_path, label_for_logging).
-    """
-    patterns = (
-        ("*.csv", "CSV"),
-        ("*.RData", "RData"),
-        ("*.Rdat", "Rdat"),
-        ("*.rdata", "RData"),
-        ("*.rdat", "Rdat"),
-    )
-    discovered: List[Tuple[str, str]] = []
-    seen: set[str] = set()
-    for pattern, label in patterns:
-        for path in glob.glob(os.path.join(global_source_dir, pattern)):
-            real = os.path.realpath(path)
-            if real in seen:
-                continue
-            seen.add(real)
-            discovered.append((real, label))
-    return discovered
-
-
-def _atlas_static_input_metadata(
-    *,
-    relpath: str,
-    settings,
-    source_origin: str,
-    source_path: str,
-) -> Dict[str, object]:
-    normalized_relpath = relpath.replace("\\", "/")
-    filename = os.path.basename(normalized_relpath)
-    input_group = "global"
-    selected_scenario = atlas_selected_scenario(settings)
-    input_year = None
-    compact_key = normalized_relpath.replace("/", "_")
-    compact_stem = os.path.splitext(compact_key)[0]
-
-    if normalized_relpath.startswith("adopt/"):
-        input_group = "adopt"
-        parts = normalized_relpath.split("/")
-        if len(parts) >= 2:
-            selected_scenario = parts[1]
-    elif compact_key.startswith("vehicle_type_mapping_"):
-        input_group = "vehicle_type_mapping"
-        if "baseline" in compact_key:
-            selected_scenario = "baseline"
-        elif "evMandForced2" in compact_key:
-            selected_scenario = "zev_mandate"
-        elif "ESS_const_220_price" in compact_key:
-            selected_scenario = "ess_cons"
-
-    tail = compact_stem.rsplit("_", 1)
-    if len(tail) == 2 and len(tail[1]) == 4 and tail[1].isdigit():
-        input_year = int(tail[1])
-
-    metadata: Dict[str, object] = {
-        "atlas_static_input": True,
-        "atlas_relpath": normalized_relpath,
-        "atlas_source_origin": source_origin,
-        "atlas_source_path": os.path.realpath(source_path),
-        "atlas_input_group": input_group,
-    }
-    if selected_scenario:
-        metadata["atlas_scenario"] = selected_scenario
-    if input_year is not None:
-        metadata["atlas_input_year"] = input_year
-    if filename.lower().endswith(".csv"):
-        metadata["profile_file_schema"] = True
-    return metadata
-
-
 def _resolve_atlas_h5_table_key(
     store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
 ) -> str:
-    _ = is_start_year
+    available_keys = set(store.keys())
+    store_name = Path(str(store._path)).name
+    if not is_start_year and store_name.startswith("model_data_"):
+        prefixed_key = f"/{year}/{table}"
+        if prefixed_key in available_keys:
+            return prefixed_key
+        raise KeyError(
+            f"Required forecast-year table '{prefixed_key}' not found in HDF5 store '{store_name}'."
+        )
     return resolve_usim_h5_table_key(store, year=year, table=table)
 
 
@@ -380,11 +124,8 @@ def _resolve_atlas_static_sources(
     return source_dir, default_source_dir
 
 
-def _stage_atlas_static_inputs(
-    *,
-    settings,
-    output_dir: str,
-) -> Tuple[Dict[str, Path], Dict[str, Dict[str, object]]]:
+def selected_atlas_static_input_sources(settings) -> Tuple[Tuple[str, Path], ...]:
+    """Resolve the exact static ATLAS source files selected by ``settings``."""
     source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
     source_dirs = [source_dir]
     if default_source_dir not in source_dirs:
@@ -408,17 +149,8 @@ def _stage_atlas_static_inputs(
         )
 
     required_relpaths = atlas_static_input_relpaths(settings)
-    logger.info(
-        "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
-        "(primary=%s fallback=%s)",
-        source_dir,
-        default_source_dir,
-    )
-
-    staged_paths: Dict[str, Path] = {}
-    metadata_by_key: Dict[str, Dict[str, object]] = {}
     missing_required_relpaths: List[str] = []
-    fallback_copy_count = 0
+    selected_sources: List[Tuple[str, Path]] = []
 
     for relpath in required_relpaths:
         normalized_relpath = relpath.replace("\\", "/")
@@ -435,32 +167,13 @@ def _stage_atlas_static_inputs(
             missing_required_relpaths.append(normalized_relpath)
             continue
 
-        if source_base is not None and source_base != source_dir:
-            fallback_copy_count += 1
+        if source_base != source_dir:
             logger.warning(
                 "[AtlasPreprocessor] Required file missing in primary source, "
                 "using fallback: %s",
                 normalized_relpath,
             )
-
-        dest_path = os.path.realpath(os.path.join(output_dir, normalized_relpath))
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        shutil.copy2(source_path, dest_path)
-
-        rel_no_ext = os.path.splitext(normalized_relpath)[0]
-        rel_key = rel_no_ext
-        short_name = sanitize_artifact_key(rel_key) or rel_key
-        staged_paths[short_name] = Path(dest_path)
-        metadata_by_key[short_name] = _atlas_static_input_metadata(
-            relpath=normalized_relpath,
-            settings=settings,
-            source_origin=(
-                "fallback"
-                if source_base is not None and source_base != source_dir
-                else "primary"
-            ),
-            source_path=source_path,
-        )
+        selected_sources.append((normalized_relpath, Path(source_path)))
 
     if missing_required_relpaths:
         preview = ", ".join(sorted(missing_required_relpaths)[:8])
@@ -469,6 +182,45 @@ def _stage_atlas_static_inputs(
             f"(count={len(missing_required_relpaths)}). "
             f"Preview: {preview}"
         )
+
+    return tuple(selected_sources)
+
+
+def stage_selected_atlas_static_inputs(
+    *,
+    settings,
+    output_dir: str,
+    selected_sources: Optional[Tuple[Tuple[str, Path], ...]] = None,
+) -> Dict[str, Path]:
+    """Copy an already selected static ATLAS source set into the run workspace."""
+    resolved_sources = (
+        selected_sources
+        if selected_sources is not None
+        else selected_atlas_static_input_sources(settings)
+    )
+    source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
+    logger.info(
+        "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
+        "(primary=%s fallback=%s)",
+        source_dir,
+        default_source_dir,
+    )
+
+    staged_paths: Dict[str, Path] = {}
+    fallback_copy_count = 0
+    for relpath, source_path in resolved_sources:
+        dest_path = os.path.realpath(os.path.join(output_dir, relpath))
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        if not os.path.exists(dest_path):
+            shutil.copy2(source_path, dest_path)
+
+        source_origin = (
+            "primary" if source_path.is_relative_to(source_dir) else "fallback"
+        )
+        if source_origin == "fallback":
+            fallback_copy_count += 1
+        short_name = sanitize_artifact_key(os.path.splitext(relpath)[0]) or relpath
+        staged_paths[short_name] = Path(dest_path)
 
     if fallback_copy_count:
         logger.warning(
@@ -480,7 +232,7 @@ def _stage_atlas_static_inputs(
         "[AtlasPreprocessor] Finished copying %s static ATLAS inputs.",
         len(staged_paths),
     )
-    return staged_paths, metadata_by_key
+    return staged_paths
 
 
 class AtlasPreprocessor(GenericPreprocessor):
@@ -490,123 +242,19 @@ class AtlasPreprocessor(GenericPreprocessor):
     using BEAM skims.
     """
 
-    @staticmethod
-    def declared_expected_inputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this preprocessor expects without disk checks.
-        """
-        usim_input_fname = _get_usim_datastore_fname(
-            settings,
-            io="input" if state.is_start_year() else "output",
-            year=state.forecast_year,
-        )
-        return {
-            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
-            "usim_datastore_h5": os.path.join(
-                workspace.get_usim_mutable_data_dir(), usim_input_fname
-            ),
-        }
-
-    @staticmethod
-    def runtime_expected_inputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        usim_input_fname = _get_usim_datastore_fname(
-            settings,
-            io="input" if state.is_start_year() else "output",
-            year=state.forecast_year,
-        )
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        return {
-            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
-            "usim_datastore_h5": (
-                usim_input_path if os.path.exists(usim_input_path) else None
-            ),
-        }
-
-    @staticmethod
-    def expected_inputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        return AtlasPreprocessor.runtime_expected_inputs(settings, state, workspace)
-
-    @staticmethod
-    def expected_outputs(
-        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this preprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``atlas_mutable_input_dir``: ATLAS mutable input directory with
-              prepared configs and data.
-        Related docs
-            - See `pilates/atlas/inputs.py` for the corresponding input
-              descriptions used by ATLAS and downstream models.
-        """
-        return {
-            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
-        }
-
     def __init__(
         self,
         model_name: str,
         state: "WorkflowState",
     ):
         super().__init__(model_name, state)
-        self.required_input_data = ["usim_datastore_h5"]
-
-    def copy_data_to_mutable_location(
-        self,
-        settings,
-        output_dir,
-        workspace: Optional["Workspace"] = None,
-    ) -> Tuple[RecordStore, RecordStore]:
-        """
-        Copy ATLAS input files from the production directory to the run's mutable input directory.
-        """
-        staged_paths, metadata_by_key = _stage_atlas_static_inputs(
-            settings=settings,
-            output_dir=output_dir,
-        )
-        input_records = []
-        output_records = []
-        for short_name, dest_path in staged_paths.items():
-            source_path = metadata_by_key[short_name]["atlas_source_path"]
-            filename = os.path.basename(str(dest_path))
-            input_records.append(
-                FileRecord(
-                    file_path=str(source_path),
-                    description=f"ATLAS input file: {filename}",
-                    short_name=short_name,
-                    metadata=metadata_by_key[short_name],
-                )
-            )
-            output_records.append(
-                FileRecord(
-                    file_path=str(dest_path),
-                    description=f"Mutable ATLAS input file: {filename}",
-                    short_name=short_name,
-                )
-            )
-        return RecordStore(recordList=input_records), RecordStore(
-            recordList=output_records
-        )
 
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
+        usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> AtlasPreprocessOutputs:
         """
         Prepares all data needed to run ATLAS, including extracting UrbanSim outputs
@@ -619,117 +267,35 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
-        prepared_inputs, prepared_input_meta = _stage_atlas_static_inputs(
-            settings=settings,
-            output_dir=workspace.get_atlas_mutable_input_dir(),
+        prepared_inputs: Dict[str, Path] = {}
+        prepared_input_meta: Dict[str, Dict[str, object]] = {}
+
+        if usim_datastore_h5 is None:
+            raise TypeError("AtlasPreprocessor._preprocess requires usim_datastore_h5")
+        urbansim_output = Path(usim_datastore_h5)
+
+        target_year = (
+            self.state.forecast_year
+            if self.state.forecast_year is not None
+            else self.state.year
         )
-
-        # --- Ensure global ATLAS input files are present for every year ---
-        # Source for global files (e.g., cpi.csv, RData/Rdat files)
-        global_source_dir = "pilates/atlas/atlas_input"
-        if not os.path.isabs(global_source_dir):
-            project_root = find_project_root(start_path=os.path.dirname(__file__))
-            if not project_root:
-                project_root = os.path.realpath(os.getcwd())
-                logger.warning(
-                    "[NOT IDEAL] Could not locate PILATES project root via markers; "
-                    "falling back to cwd='%s'.",
-                    project_root,
-                )
-            global_source_dir = os.path.join(project_root, global_source_dir)
-
-        # Destination for global files in the current run's mutable directory
-        current_atlas_mutable_input_root = workspace.get_atlas_mutable_input_dir()
-
-        # Copy global top-level ATLAS files, including legacy *.Rdat.
-        for f, label in _discover_global_atlas_input_files(global_source_dir):
-            dest_path = os.path.realpath(
-                os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
-            )
-            if not os.path.exists(dest_path):
-                shutil.copy2(f, dest_path)
-                logger.info(
-                    f"[AtlasPreprocessor] Copied global {label} file: {f} to {dest_path}"
-                )
-            else:
-                logger.debug(
-                    f"[AtlasPreprocessor] Global {label} file already exists: {dest_path}"
-                )
-
-        # --- End Global File Handling ---
-
-        # --- Restart Logic for year-specific data ---
-        is_restart_run = getattr(self.state, "is_restart_run", None)
-        if is_restart_run is None:
-            is_restart_run = bool(self.state.run_info_path)
-        if (
-            is_restart_run
-            and self.state.run_info_path
-            and os.path.exists(self.state.run_info_path)
-        ):
-            # This is a restarted run
-            previous_run_dir = os.path.dirname(self.state.run_info_path)
-            logger.info(
-                f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}"
-            )
-
-            # 1. Copy restart-critical ATLAS year inputs from previous run.
-            _restore_restart_atlas_year_inputs(
-                previous_run_dir=previous_run_dir,
-                workspace=workspace,
-                start_year=self.state.start_year,
-                atlas_year=self.state.year,
-            )
-
-            # 2. Set path for UrbanSim output
-            urbansim_output_path = os.path.join(previous_run_dir, "urbansim", "data")
-        else:
-            # This is a fresh run
-            urbansim_output_path = workspace.get_usim_mutable_data_dir()
-
-        artifact_current_h5 = getattr(self.state, "atlas_usim_datastore_h5", None)
-        artifact_base_h5 = getattr(self.state, "atlas_usim_datastore_base_h5", None)
-        current_h5_path = _resolve_existing_artifact_path(
-            artifact_current_h5,
-            workspace=workspace,
-        )
-        base_h5_path = _resolve_existing_artifact_path(
-            artifact_base_h5,
-            workspace=workspace,
-        )
-        preferred_h5 = first_existing_path(
-            base_h5_path if self.state.is_start_year() else current_h5_path,
-            current_h5_path if self.state.is_start_year() else base_h5_path,
-        )
-
-        if preferred_h5 is not None:
-            urbansim_output = preferred_h5
-        else:
-            if self.state.is_start_year():
-                urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
-            else:
-                urbansim_output_fname = _get_usim_datastore_fname(
-                    settings, io="output", year=self.state.forecast_year
-                )
-            urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
-            logger.warning(
-                "[AtlasPreprocessor] Falling back to template-resolved UrbanSim H5. "
-                "Preferred artifacts were unavailable: current=%s base=%s fallback=%s",
-                artifact_current_h5,
-                artifact_base_h5,
-                urbansim_output,
-            )
-
         atlas_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(),
-            "year{}".format(self.state.year),
+            "year{}".format(target_year),
         )
-        _record_restart_chained_rdata_inputs(
-            prepared_inputs=prepared_inputs,
-            atlas_input_root=workspace.get_atlas_mutable_input_dir(),
-            start_year=self.state.start_year,
-            atlas_year=self.state.year,
-        )
+        if get_setting(settings, "atlas.host_input_folder") is not None:
+            stage_selected_atlas_static_inputs(
+                settings=settings,
+                output_dir=workspace.get_atlas_mutable_input_dir(),
+            )
+        else:
+            try:
+                stage_selected_atlas_static_inputs(
+                    settings=settings,
+                    output_dir=workspace.get_atlas_mutable_input_dir(),
+                )
+            except RuntimeError:
+                pass
 
         # Record BEAM skims as input if needed
         beamac = settings.atlas.beamac
@@ -741,6 +307,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                     expected_beam_skims_path,
                 )
             else:
+                if not allow_workspace_skim_fallback:
+                    raise FileNotFoundError(
+                        "ATLAS preprocess requires the resolved final_skims_omx "
+                        "handoff after BEAM has run."
+                    )
                 if final_skims_omx is not None:
                     logger.warning(
                         "[AtlasPreprocessor] Explicit final_skims_omx artifact did not "
@@ -781,7 +352,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.error("[AtlasPreprocessor] UrbanSim input H5 was not found.")
             raise RuntimeError(
                 "ATLAS preprocess cannot continue: UrbanSim input H5 was not found "
-                f"for year {self.state.year} (resolved path: {urbansim_output})"
+                f"for year {target_year} (resolved path: {urbansim_output})"
             )
 
         with pd.HDFStore(urbansim_output, mode="r") as data:
@@ -798,7 +369,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             ):
                 resolved_table_name = _resolve_atlas_h5_table_key(
                     data,
-                    year=self.state.year,
+                    year=target_year,
                     table=table_name_root,
                     is_start_year=self.state.is_start_year(),
                 )
@@ -842,9 +413,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                         f"[AtlasPreprocessor] Error processing table {table_name_in_h5}: {e}"
                     )
 
-            year_prefix = (
-                f"/{self.state.year}" if not self.state.is_start_year() else ""
-            )
+            year_prefix = f"/{target_year}" if not self.state.is_start_year() else ""
 
             process_table(
                 f"{year_prefix}/households",
@@ -876,7 +445,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             # Dynamic ATLAS evolution years need grave.csv whenever the subyear
             # is beyond the global simulation start year, including the first
             # subyear in a later forecast interval (e.g. 2023 in a 2017->2029 run).
-            if int(self.state.year) > int(self.state.start_year):
+            if int(target_year) > int(self.state.start_year):
                 process_table(
                     f"{year_prefix}/graveyard",
                     "grave",
@@ -909,12 +478,12 @@ class AtlasPreprocessor(GenericPreprocessor):
                 missing_msg = ", ".join(sorted(set(missing_required_tables)))
                 raise RuntimeError(
                     "ATLAS preprocess missing required UrbanSim tables for "
-                    f"year {self.state.year}: {missing_msg} "
+                    f"year {target_year}: {missing_msg} "
                     f"(source H5: {urbansim_output})"
                 )
 
             logger.info(
-                f"[AtlasPreprocessor] Prepared ATLAS Year {self.state.year} input from UrbanSim output."
+                f"[AtlasPreprocessor] Prepared ATLAS Year {target_year} input from UrbanSim output."
             )
 
         # --- Accessibility calculation (BEAM skims) ---
@@ -935,14 +504,15 @@ class AtlasPreprocessor(GenericPreprocessor):
                 path_list,
                 measure_list,
                 settings,
-                self.state.forecast_year,
+                target_year,
                 workspace,
+                skims_path=expected_beam_skims_path,
             )
             logger.info("[AtlasPreprocessor] Accessibility calculation complete.")
 
             # Record accessibility output file
             accessibility_csv = "{}/accessibility_{}_tract.csv".format(
-                atlas_input_path, self.state.forecast_year
+                atlas_input_path, target_year
             )
             if os.path.exists(accessibility_csv):
                 prepared_inputs["atlas_accessibility_csv"] = Path(accessibility_csv)
@@ -957,15 +527,30 @@ class AtlasPreprocessor(GenericPreprocessor):
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
+        usim_datastore_h5: Optional[Path] = None,
+        final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> AtlasPreprocessOutputs:
         """Prepare ATLAS inputs and return typed outputs."""
+        if usim_datastore_h5 is None:
+            raise TypeError("AtlasPreprocessor.preprocess requires usim_datastore_h5")
         self.state.set_sub_stage_progress("preprocessor")
-        return self._preprocess(workspace, previous_records)
+        return self._preprocess(
+            workspace,
+            usim_datastore_h5=usim_datastore_h5,
+            final_skims_omx=final_skims_omx,
+            allow_workspace_skim_fallback=allow_workspace_skim_fallback,
+        )
 
 
 def compute_accessibility(
-    path_list, measure_list, settings, year, workspace, threshold=500
+    path_list,
+    measure_list,
+    settings,
+    year,
+    workspace,
+    threshold=500,
+    skims_path: Optional[str | os.PathLike[str]] = None,
 ):
     # set where to put atlas csv inputs (processed from urbansim outputs)
     atlas_input_path = os.path.join(
@@ -985,7 +570,13 @@ def compute_accessibility(
     # for each OD, compute minimum time taken by public transit
     # inf means no public transit available; unit = minute
     ODmatrix_df = _get_time_ODmatrix(
-        settings, path_list, measure_list, threshold, workspace, canonical_order
+        settings,
+        path_list,
+        measure_list,
+        threshold,
+        workspace,
+        canonical_order,
+        skims_path=skims_path,
     )
 
     # assign values = 1 if time taken by public transit <= 30min; 0 if not
@@ -1031,10 +622,24 @@ def compute_accessibility(
     # accessibility.to_csv('{}/accessibility_{}_taz.csv'.format(atlas_input_path, year))
 
     # read in taz_to_tract conversion matrix (1454*1588)
-    taz_to_tract = pd.read_csv(
-        "{}/taz_to_tract_{}.csv".format(
-            settings.atlas.host_input_folder, settings.run.region
+    taz_to_tract_fname = f"taz_to_tract_{settings.run.region}.csv"
+    source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
+    taz_to_tract_candidates = [
+        os.path.join(workspace.get_atlas_mutable_input_dir(), taz_to_tract_fname),
+        os.path.join(source_dir, taz_to_tract_fname),
+        os.path.join(default_source_dir, taz_to_tract_fname),
+        f"{settings.atlas.host_input_folder}/{taz_to_tract_fname}",
+    ]
+    resolved_taz_to_tract_path = next(
+        (
+            candidate
+            for candidate in taz_to_tract_candidates
+            if os.path.exists(candidate)
         ),
+        taz_to_tract_candidates[-1],
+    )
+    taz_to_tract = pd.read_csv(
+        resolved_taz_to_tract_path,
         index_col=0,
     )
 
@@ -1046,9 +651,13 @@ def compute_accessibility(
     accessibility_tract = accessibility_tract.transpose()
 
     # calculate tract-level zscore
-    accessibility_tract["access_zscore"] = (
-        accessibility_tract["access_sum"] - accessibility_tract["access_sum"].mean()
-    ) / accessibility_tract["access_sum"].std()
+    access_std = accessibility_tract["access_sum"].std()
+    if pd.isna(access_std) or access_std == 0:
+        accessibility_tract["access_zscore"] = 0.0
+    else:
+        accessibility_tract["access_zscore"] = (
+            accessibility_tract["access_sum"] - accessibility_tract["access_sum"].mean()
+        ) / access_std
 
     # format before writing
     accessibility_tract.index.name = "tract"
@@ -1061,13 +670,23 @@ def compute_accessibility(
 
 
 def _get_time_ODmatrix(
-    settings, path_list, measure_list, threshold, workspace, canonical_order
+    settings,
+    path_list,
+    measure_list,
+    threshold,
+    workspace,
+    canonical_order,
+    skims_path: Optional[str | os.PathLike[str]] = None,
 ):
     # open skims file
     import openmatrix as omx
 
-    skims_dir = workspace.get_asim_mutable_data_dir()
-    skims = omx.open_file(os.path.join(skims_dir, "skims.omx"), mode="r")
+    if skims_path is not None:
+        resolved_skims_path = os.fspath(skims_path)
+    else:
+        skims_dir = workspace.get_asim_mutable_data_dir()
+        resolved_skims_path = os.path.join(skims_dir, "skims.omx")
+    skims = omx.open_file(resolved_skims_path, mode="r")
 
     # find the path with minimum time for each o-d
     ODmatrix = np.ones(skims.shape()) * np.inf

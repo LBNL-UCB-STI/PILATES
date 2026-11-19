@@ -1,298 +1,135 @@
+# Model Boundaries and Stack Reference
+
+PILATES couples four domain simulators across forecast years and replanning iterations. Each simulator runs inside its own step boundary, reads declared upstream inputs through `ResolvedStepInputs`, and publishes canonical outputs onto the [Artifact Coupler](../workflow/artifact_flow.md).
+
+## Model Stack Overview
+
+| Model | Domain Role | Workflow Stage | Primary Inputs | Primary Outputs |
+| --- | --- | --- | --- | --- |
+| **UrbanSim** | Land use and demographic forecasting | `land_use` | Base/prior-year HDF5 model store (`usim_datastore_h5`), accessibility skims (`final_skims_omx` / `omx_skims`) | Forecasted households, persons, jobs, buildings, blocks, and land-use tables (`usim_forecast_output`, `usim_population_source_h5`) |
+| **ATLAS** | Household vehicle fleet synthesis | `vehicle_ownership_model` | UrbanSim demographic tables (`usim_datastore_h5`, `usim_datastore_base_h5`) | Updated HDF5 vehicle counts (`usim_h5_updated`, `usim_population_source_h5`) and fleet table (`atlas_vehicles2_output`) |
+| **ActivitySim** | Activity-based travel demand | `supply_demand_loop` (`activity_demand`) | Land use, households, persons (`land_use_asim_in`, `households_asim_in`, `persons_asim_in`), and network skims (`zarr_skims` or `omx_skims`) | Disaggregate `households_asim_out`, `persons_asim_out`, `tours_asim_out`, `trips_asim_out`, `beam_plans_asim_out` |
+| **BEAM** | Multi-modal agent-based network supply | `supply_demand_loop` (`traffic_assignment`) | ActivitySim plans (`plans_beam_in`, `households_beam_in`, `persons_beam_in`), optional ATLAS vehicles (`vehicles_beam_in`), road and transit networks | Origin-destination skims (`final_skims_omx`, `zarr_skims`, `omx_skims`), `linkstats`, `beam_plans_out`, `beam_experienced_plans_xml` |
+
+```mermaid
+flowchart LR
+    Skims["Network Skims\nZARR_SKIMS / OMX_SKIMS"] --> US["UrbanSim\nLand Use & Demographics"]
+    US --> ATLAS["ATLAS\nVehicle Ownership"]
+    US --> ASIM["ActivitySim\nTravel Demand"]
+    ATLAS --> ASIM
+    Skims --> ASIM
+    ASIM --> BEAM["BEAM\nMulti-Modal Supply"]
+    BEAM --> Skims
+```
+
 ---
-title: Model Boundaries
-summary: Canonical public reference for what each model family requires, publishes, and hands off next.
+
+## UrbanSim Boundary
+
+### Code Entry Points
+
+- Step definition: `pilates/workflows/steps/urbansim.py` (`urbansim_run`, `urbansim_postprocess`)
+- Adapter modules: `pilates/urbansim/{preprocessor,runner,postprocessor,outputs}.py`
+- Stage caller: `pilates/workflows/stages/land_use.py`
+
+### Upstream Inputs and Coupler Keys
+
+| Input | Coupler Key / Source | Format |
+| --- | --- | --- |
+| Base-year or prior-year model store | `usim_datastore_h5` / `usim_datastore_base_h5` (`custom_mpo_<region>_model_data.h5`) | HDF5 |
+| Travel time and cost skims | `final_skims_omx` or `omx_skims` | OMX |
+| Static UrbanSim inputs | Staged idempotently by `stage_urbansim_run_workspace` and tracked via `selected_urbansim_static_input_sources` | CSV / YAML |
+
+### Container Mounts and Working Directories
+
+- Host data directory mounts into `/data` inside the UrbanSim container.
+- `stage_urbansim_run_workspace` and `urbansim_run` materialize the current HDF5 datastore, travel skims (`final_skims.omx`), and static input files into the UrbanSim mutable data directory before container startup.
+
+### Published Outputs
+
+- Year-tagged demographic and land-use tables (`households`, `persons`, `jobs`, `buildings`, `blocks`) stored in the output HDF5 store and extracted for downstream consumers.
+- Coupler keys: `usim_datastore_h5`, `usim_forecast_output`, `usim_population_source_h5`, `usim_input_merged_{year}`, `usim_input_archive_{year}`, while `run_land_use_stage` preserves `usim_datastore_base_h5` and `usim_population_source_h5`.
+
 ---
 
-# Model Boundaries
+## ATLAS Boundary
 
-## How To Read This Page
+### Code Entry Points
 
-This is the main public answer to:
+- Step definition: `pilates/workflows/steps/atlas.py` (`atlas_preprocess`, `atlas_run`, `atlas_postprocess`)
+- Adapter modules: `pilates/atlas/{preprocessor,runner,postprocessor,outputs}.py`
+- Stage caller: `pilates/workflows/stages/vehicle_ownership.py`
 
-- what each model family requires
-- what it publishes across the workflow boundary
-- what consumes those outputs next
-- where it runs in the stage loop
-- what changes when adjacent models are disabled
+### Upstream Inputs and Coupler Keys
 
-Use this page when you want the model-I/O picture without reading adapter code first.
+| Input | Coupler Key / Source | Format |
+| --- | --- | --- |
+| Forecasted households, persons, blocks, residential, jobs | `usim_datastore_h5` and `usim_datastore_base_h5` | HDF5 / CSV |
+| Travel skims (optional) | `final_skims_omx` / `omx_skims` | OMX |
+| Static ATLAS inputs | Staged idempotently by `stage_selected_atlas_static_inputs` and tracked via `selected_atlas_static_input_sources` | CSV / RData |
 
-For adjacent views:
+### Container Mounts and Working Directories
 
-- use [Simulation Logic by Stage](../workflow/simulation_logic_by_stage.md) for why the stages are ordered the way they are
-- use [Artifact Flow](../workflow/artifact_flow.md) for the workflow-key and coupler view
-- use [Model Integration Guide](../extend/model_integration_guide.md) when you are changing the implementation
+- Host input directory (`pilates/atlas/atlas_input/year<year>/`) and output directory (`pilates/atlas/atlas_output/`) mount into the ATLAS container.
+- Execution runs for each scheduled sub-year when `atlas` is configured and enabled (`state.atlas_enabled`).
 
-## UrbanSim
+### Published Outputs
 
-### Role in the workflow
+- `householdv_{year}`, `vehicles_{year}`, `usim_h5_updated`, `usim_population_source_h5` (HDF5 datastore with updated `cars` and `vehicl` columns), and `atlas_vehicles2_output` (`vehicles_{year}.csv` with body type, vintage, and powertrain attributes).
 
-UrbanSim establishes the land-use-side regional state for the current forecast year. It is the first major scientific boundary in the yearly run and the source of the mutable datastore that later stages read.
+---
 
-### Stage and step placement
+## ActivitySim Boundary
 
-- Major stage: `land_use`
-- Step family: `urbansim_preprocess`, `urbansim_run`, `urbansim_postprocess`
+### Code Entry Points
 
-### Required inputs
+- Step definition: `pilates/workflows/steps/activitysim.py` (`activitysim_preprocess`, `activitysim_run`, `activitysim_postprocess`)
+- Adapter modules: `pilates/activitysim/{preprocessor,runner,postprocessor,outputs}.py`
+- Stage caller: `pilates/workflows/stages/supply_demand_activity.py`
 
-- `USIM_DATASTORE_BASE_H5`
+### Upstream Inputs and Coupler Keys
 
-### Optional inputs
+| Input | Coupler Key / Source | Format |
+| --- | --- | --- |
+| Land use and demographics | `usim_population_source_h5` (or fallback `usim_h5_updated` / `usim_datastore_h5`) | HDF5 / CSV |
+| Preprocessed ActivitySim CSVs | `land_use_asim_in`, `households_asim_in`, `persons_asim_in` | CSV |
+| Network skims | `zarr_skims` (preferred when cached) or `omx_skims` / `final_skims_omx` | Zarr or OMX |
+| Model configuration | Mutable ActivitySim config directory prepared idempotently by `ensure_activitysim_mutable_configs` | YAML / CSV |
 
-- `USIM_DATASTORE_CURRENT_H5`
-- `OMX_SKIMS` for the default/bootstrap OMX skims fallback
-- `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX skim handoff
-- other carried-forward travel artifacts when the land-use path uses them
+### Container Mounts and Working Directories
 
-### Main published outputs
+- ActivitySim mounts three directories: `configs` (`/configs`), `data` (`/data`), and `output` (`/output`).
+- `activitysim_preprocess` builds `households.csv`, `persons.csv`, `land_use.csv`, and aligned 0-based skims (`skims.omx`) in `/data` before launching ActivitySim. See [Zone and Skim Alignment](zone_and_skim_alignment.md) for zone indexing details.
 
-- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5`
-- `USIM_FORECAST_OUTPUT`
-- `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`)
-- `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`)
+### Published Outputs
 
-### Downstream consumers
+- Coupler keys: `households_asim_out`, `persons_asim_out`, `tours_asim_out`, `trips_asim_out`, `beam_plans_asim_out`, `zarr_skims`, and `usim_input_merged_{year}`.
+- Optional DuckDB ingestion tables registered in `pilates/database/schema/registry.py`. See [Database and Schemas](database_and_schemas.md).
 
-- ATLAS reads the current/base UrbanSim datastore in the vehicle-ownership stage
-- ActivitySim can read the current or population-source datastore directly when ATLAS is disabled
+---
 
-### Restart and archive-relevant artifacts
+## BEAM Boundary
 
-- current mutable datastore handle
-- forecast-year datastore handle
-- year-scoped archive and merged datastore families
+### Code Entry Points
 
-### If adjacent models are disabled
+- Step definition: `pilates/workflows/steps/beam.py` (`beam_preprocess`, `beam_run`, `beam_postprocess`, `beam_full_skim`)
+- Adapter modules: `pilates/beam/{preprocessor,runner,postprocessor,outputs}.py`
+- Stage caller: `pilates/workflows/stages/supply_demand_beam.py`
 
-- If ATLAS is disabled, the ActivitySim boundary falls back to UrbanSim-owned datastore handles.
-- If land use is disabled entirely, downstream stages must start from previously staged or configured datastore inputs instead of a fresh UrbanSim handoff.
-- Skim selection is semantic rather than stage-local:
-  - first use normally falls back to the default `OMX_SKIMS` source
-  - later iterations or later years can prefer `FINAL_SKIMS_OMX` from BEAM postprocess
+### Upstream Inputs and Coupler Keys
 
-### Boundary owners
+| Input | Coupler Key / Source | Format |
+| --- | --- | --- |
+| Disaggregate demand plans | `beam_plans_asim_out` / `plans_beam_in`, `households_asim_out` / `households_beam_in`, `persons_asim_out` / `persons_beam_in` | CSV / CSV.GZ |
+| Vehicle fleet (optional) | `atlas_vehicles2_output` -> `vehicles_beam_in` | CSV |
+| Prior iteration linkstats / plans | `linkstats_warmstart`, `beam_output_plans_xml`, `beam_output_experienced_plans_xml` | CSV.GZ / XML.GZ |
+| Scenario configuration and network | Mutable BEAM workspace prepared idempotently by `ensure_beam_mutable_workspace` (`.conf`, network XML, transit feeds) | HOCON / XML / ZIP |
 
-- Typed outputs: `UrbanSimPreprocessOutputs`, `UrbanSimRunOutputs`, `UrbanSimPostprocessOutputs`
-- Trace it in code:
-  - catalog: `pilates/workflows/catalog.py`
-  - steps: `pilates/workflows/steps/urbansim_atlas.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/urbansim/inputs.py`
-  - stage: `pilates/workflows/stages/land_use.py`
+### Container Mounts and Working Directories
 
-## ATLAS
+- BEAM mounts the regional scenario folder and writes simulation outputs under `beam_output/<region>/year-<year>-iteration-<iteration>/`.
+- `beam_postprocess` converts raw BEAM origin-destination skim CSVs (`*.csv.gz`) into consolidated OMX (`final_skims_omx`, `omx_skims`) and Zarr (`zarr_skims`) matrices for the next replanning iteration or forecast year.
 
-### Role in the workflow
+### Published Outputs
 
-ATLAS refines the current regional state with vehicle-ownership outputs and chooses the UrbanSim datastore that ActivitySim should treat as the population source.
-
-### Stage and step placement
-
-- Major stage: `vehicle_ownership_model`
-- Step family: `atlas_preprocess`, `atlas_run`, `atlas_postprocess`
-
-### Required inputs
-
-- `USIM_DATASTORE_BASE_H5`
-- `USIM_DATASTORE_CURRENT_H5`
-
-### Optional inputs
-
-- `OMX_SKIMS` for the default/bootstrap OMX skims fallback
-- `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX skim handoff
-- travel skims from earlier years when the scenario uses them
-
-### Main published outputs
-
-- `householdv_{year}`
-- `vehicles_{year}`
-- `USIM_POPULATION_SOURCE_H5`
-- `ATLAS_VEHICLES2_OUTPUT`
-
-### Downstream consumers
-
-- ActivitySim uses `USIM_POPULATION_SOURCE_H5` as its preferred population/datastore handoff
-- BEAM preprocess can use `ATLAS_VEHICLES2_OUTPUT` as the staged vehicle input
-
-### Restart and archive-relevant artifacts
-
-- the selected population-source datastore handle
-- ATLAS vehicle outputs that later travel steps can restage
-
-### If adjacent models are disabled
-
-- If land use is disabled, ATLAS must start from already available UrbanSim datastore handles.
-- If ActivitySim is disabled, the population-source handoff may not be consumed immediately, but it remains the public vehicle-ownership boundary for downstream inspection and replay.
-- The ATLAS skim boundary also has two sources:
-  - default `OMX_SKIMS` for the initial/bootstrap case
-  - `FINAL_SKIMS_OMX` when a later BEAM iteration has already produced an updated OMX skim file
-
-### Boundary owners
-
-- Typed outputs: `AtlasPreprocessOutputs`, `AtlasRunOutputs`, `AtlasPostprocessOutputs`
-- Trace it in code:
-  - catalog: `pilates/workflows/catalog.py`
-  - steps: `pilates/workflows/steps/urbansim_atlas.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/atlas/inputs.py`
-  - stage: `pilates/workflows/stages/vehicle_ownership.py`
-
-## ActivitySim
-
-### Role in the workflow
-
-ActivitySim converts the current regional state into staged demand-model inputs and then into demand outputs that BEAM can consume. It is the main population-and-travel-demand boundary in the supply-demand loop.
-
-### Stage and step placement
-
-- Major stage: `supply_demand_loop`
-- Substage: `activity_demand`
-- Step family: `activitysim_preprocess`, `activitysim_compile`, `activitysim_run`, `activitysim_postprocess`
-
-### Required inputs
-
-- `USIM_POPULATION_SOURCE_H5`
-
-### Optional inputs
-
-- `USIM_DATASTORE_CURRENT_H5` for postprocess/writeback-sensitive flows
-- `ASIM_OMX_SKIMS` when compile uses OMX skims
-- `ZARR_SKIMS` when compiled skims already exist
-
-### Main published outputs
-
-- staged inputs:
-  - `ASIM_LAND_USE_IN`
-  - `ASIM_HOUSEHOLDS_IN`
-  - `ASIM_PERSONS_IN`
-  - `ASIM_OMX_SKIMS`
-- shared compile/runtime artifacts:
-  - `ASIM_SHARROW_CACHE_DIR`
-  - `ZARR_SKIMS`
-- BEAM-facing demand outputs:
-  - `beam_plans_asim_out`
-  - `households_asim_out`
-  - `persons_asim_out`
-  - other standard ActivitySim outputs such as `tours_asim_out` and `trips_asim_out`
-- UrbanSim-facing writeback output:
-  - `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5` when land-use writeback is active
-
-### Downstream consumers
-
-- BEAM preprocess uses the plans/households/persons handoff
-- later land-use / ATLAS stages can consume the updated UrbanSim datastore when writeback is enabled
-- archive/replay logic uses the archived ActivitySim inputs and outputs
-
-### Restart and archive-relevant artifacts
-
-- archived staged inputs such as households/persons/land_use/skims
-- `ZARR_SKIMS`
-- the standard ActivitySim run outputs
-- any writeback datastore handed back to the workflow
-
-### If adjacent models are disabled
-
-- If ATLAS is disabled, ActivitySim falls back to UrbanSim-owned datastore handles for population-source selection.
-- If land use is disabled, ActivitySim can still run from staged datastore inputs, but it should not assume a fresh UrbanSim update happened earlier in the year.
-- If BEAM is disabled, ActivitySim still produces the standard demand-side outputs, but the plans/households/persons boundary is not consumed by traffic assignment in that run shape.
-
-### Operational step variant: `activitysim_compile`
-
-- Purpose: publish reusable compile products before the main run boundary
-- Main outputs:
-  - `ZARR_SKIMS`
-  - `ASIM_SHARROW_CACHE_DIR`
-- Why it matters operationally: compile artifacts affect restart, replay, and whether later ActivitySim/BEAM steps can reuse shared skim products instead of rebuilding them
-
-### Boundary owners
-
-- Typed outputs: `ActivitySimPreprocessOutputs`, `ActivitySimRunOutputs`, `ActivitySimPostprocessOutputs`
-- Trace it in code:
-  - catalog: `pilates/workflows/catalog.py`
-  - steps: `pilates/workflows/steps/activitysim.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/activitysim/inputs.py`
-  - stage: `pilates/workflows/stages/supply_demand_activity.py`
-
-## BEAM
-
-### Role in the workflow
-
-BEAM turns demand-side plans and traveler inputs into traffic-assignment outputs, network-performance artifacts, and shared skims. It closes the main supply-demand loop.
-
-### Stage and step placement
-
-- Major stage: `supply_demand_loop`
-- Substage: `traffic_assignment`
-- Step family: `beam_preprocess`, `beam_run`, `beam_postprocess`, `beam_full_skim`
-
-### Required inputs
-
-- `BEAM_CONFIG_FILE`
-- `BEAM_PLANS_IN`
-- `BEAM_HOUSEHOLDS_IN`
-- `BEAM_PERSONS_IN`
-
-### Optional inputs
-
-- `LINKSTATS_WARMSTART`
-- `ATLAS_VEHICLES2_OUTPUT`
-- shared skims handoff when BEAM merges or republishes them
-
-### Main published outputs
-
-- `LINKSTATS`
-- `LINKSTATS_WARMSTART`
-- `BEAM_PLANS_OUT`
-- `ZARR_SKIMS` when BEAM republishes the shared skims handoff
-- `FINAL_SKIMS_OMX`
-- BEAM plan/XML output families used for warm starts and archive inspection
-
-### Downstream consumers
-
-- later supply-demand iterations can reuse warm-start linkstats and plan outputs
-- later years can reuse BEAM-side restart artifacts
-- UrbanSim or downstream analysis can consume `FINAL_SKIMS_OMX`
-- archive/replay tooling can materialize BEAM input and warm-start families back into the workspace
-
-### Restart and archive-relevant artifacts
-
-- `LINKSTATS_WARMSTART`
-- archived BEAM input families
-- plan warm-start XML families
-- BEAM output plan/XML artifacts
-
-### If adjacent models are disabled
-
-- If ActivitySim is disabled, BEAM must start from already available plans/households/persons inputs instead of fresh demand outputs.
-- If ATLAS is disabled, the optional vehicle input is absent but the core BEAM plans/households/persons boundary is unchanged.
-
-### Operational step variant: `beam_full_skim`
-
-- Purpose: publish a dedicated full-skim output separate from the main BEAM run/postprocess pair
-- Required inputs:
-  - `BEAM_PLANS_IN`
-  - `BEAM_HOUSEHOLDS_IN`
-  - `BEAM_PERSONS_IN`
-  - `LINKSTATS_WARMSTART`
-- Main output:
-  - `BEAM_FULL_SKIMS`
-- Why it matters operationally: this step is separately scheduled and can be enabled for runs that need full skims without changing the main traffic-assignment boundary
-
-### Boundary owners
-
-- Typed outputs: `BeamPreprocessOutputs`, `BeamRunOutputs`, `BeamPostprocessOutputs`, `BeamFullSkimOutputs`
-- Trace it in code:
-  - catalog: `pilates/workflows/catalog.py`
-  - steps: `pilates/workflows/steps/beam.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/beam/preprocessor.py`
-  - stage: `pilates/workflows/stages/supply_demand_beam.py`
-
-## Recommended Reading Path
-
-If you are new to the repo and want the shortest useful path:
-
-1. [Workflow Primer](../workflow/workflow_primer.md)
-2. [Architecture](../workflow/architecture.md)
-3. this page
-4. [Simulation Logic by Stage](../workflow/simulation_logic_by_stage.md)
-5. [Artifact Flow](../workflow/artifact_flow.md)
-6. [Model Integration Guide](../extend/model_integration_guide.md)
+- Coupler keys: `final_skims_omx`, `omx_skims`, `zarr_skims`, `linkstats`, `linkstats_warmstart`, `beam_network_final`, `beam_plans_out`, `beam_output_plans_xml`, `beam_experienced_plans_xml`, and `beam_output_experienced_plans_xml`.

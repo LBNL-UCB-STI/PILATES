@@ -1,890 +1,489 @@
+"""Regression coverage for the private ActivitySim Numba warmup handshake.
+
+The filename is retained for test-discovery continuity.  The public workflow
+compile step it formerly covered no longer exists.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
 
+import numpy as np
 import pytest
+import xarray as xr
+from consist import BindingResult, ExecutionOptions, Tracker, define_step
 
-from pilates.activitysim.runner import ActivitysimCompileRunner
-from pilates.activitysim.runner import ActivitysimRunner
-from pilates.activitysim.runner import _cleanup_activitysim_compile_artifacts
+from pilates.activitysim import runner as activitysim_runner
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
-from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_PERSONS_IN,
-    ASIM_SHARROW_CACHE_DIR,
-    ArtifactKeys,
-    ZARR_SKIMS,
+from pilates.activitysim.runner import (
+    ActivitySimLaunchContext,
+    ActivitysimSkimMode,
+    ActivitysimNumbaWarmup,
+    ActivitysimRunner,
+    asim_compile_output_dir,
 )
-from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.steps import StepOutputsHolder
-from pilates.workflows.steps import activitysim as activitysim_steps
+from pilates.utils import consist_runtime as cr
+from pilates.workflows.contracts import InputContract, StepDefinition
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.step_execution import execute_step
 
 
-class _DummyCoupler:
-    def __init__(self) -> None:
-        self._data = {}
-
-    def get(self, key, default=None):
-        return self._data.get(key, default)
-
-    def set(self, key, value) -> None:
-        self._data[key] = value
-
-
-class _DummyWorkspace:
-    def __init__(self, root: Path, asim_output_dir: Path) -> None:
-        self.full_path = str(root)
-        self._asim_output_dir = asim_output_dir
-
-    def get_asim_output_dir(self) -> str:
-        return str(self._asim_output_dir)
+def _launch_context(root: Path) -> ActivitySimLaunchContext:
+    output_dir = root / "activitysim" / "output"
+    runtime_cache_dir = output_dir / "cache"
+    return ActivitySimLaunchContext(
+        workspace_root=root,
+        mutable_data_dir=root / "activitysim" / "data",
+        output_dir=output_dir,
+        compile_output_dir=root / "activitysim" / "compile-output",
+        mutable_configs_dir=root / "activitysim" / "configs",
+        runtime_cache_dir=runtime_cache_dir,
+        runtime_zarr_path=runtime_cache_dir / "skims.zarr",
+        shared_cache_dir=root / "shared_cache",
+        shared_tmp_dir=root / "tmp",
+    )
 
 
-class _CompileRunner:
-    def __init__(self, zarr_path: Path, cache_path: Optional[Path] = None) -> None:
-        self._zarr_path = zarr_path
-        self._cache_path = cache_path
-
-    def run(
-        self,
-        inputs: ActivitySimPreprocessOutputs,
-        workspace: _DummyWorkspace,
-    ) -> ActivitySimCompileOutputs:
-        assert isinstance(inputs, ActivitySimPreprocessOutputs)
-        return ActivitySimCompileOutputs(
-            zarr_skims=self._zarr_path,
-            sharrow_cache_dir=self._cache_path,
-        )
-
-
-def _settings(*, persist_sharrow_cache: bool) -> SimpleNamespace:
+def _matrix_settings(*, num_processes: int) -> SimpleNamespace:
     return SimpleNamespace(
+        run=SimpleNamespace(
+            region="seattle",
+            models=SimpleNamespace(
+                land_use="urbansim",
+                travel="beam",
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+            ),
+        ),
+        infrastructure=SimpleNamespace(
+            container_manager="docker",
+            docker_images={"activitysim": "activitysim-image"},
+        ),
         activitysim=SimpleNamespace(
+            region_mappings={"region_to_subdir": {"seattle": "example"}},
+            local_mutable_data_folder="activitysim/data",
+            local_output_folder="activitysim/output",
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs",
             file_format="parquet",
-            persist_sharrow_cache=persist_sharrow_cache,
-        )
+            persist_sharrow_cache=True,
+            command_template="activitysim",
+            household_sample_size=0,
+            num_processes=num_processes,
+            chunk_size=0,
+        ),
     )
 
 
-def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-    zarr_path = asim_output_dir / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True)
-    zarr_path.write_text("dummy-zarr")
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    for path in (land_use, households, persons):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
+def _matrix_inputs(tmp_path: Path) -> ActivitySimPreprocessOutputs:
+    return ActivitySimPreprocessOutputs(
+        mutable_data_dir=tmp_path / "mutable-data",
+        land_use_table=tmp_path / "land_use.csv",
+        households_table=tmp_path / "households.csv",
+        persons_table=tmp_path / "persons.csv",
     )
 
-    compile_runner = _CompileRunner(zarr_path)
-    captured: dict = {}
 
-    class _RunRunner:
-        def run(self, inputs, workspace, *, extra_inputs=None):
-            captured["inputs"] = inputs
-            captured["extra_inputs"] = extra_inputs
-            return ActivitySimRunOutputs(output_dir=asim_output_dir, raw_outputs={})
-
-    run_runner = _RunRunner()
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "activitysim_compile":
-            return compile_runner
-        if model_name == "activitysim":
-            return run_runner
-        raise AssertionError(f"Unexpected model_name: {model_name}")
-
-    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-
-    compile_step = activitysim_steps.make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    compile_step(settings=settings, state=state, workspace=workspace)
-
-    coupler_zarr_path = artifact_to_path(coupler.get(ZARR_SKIMS), workspace)
-    assert coupler_zarr_path == str(zarr_path)
-
-    run_step = activitysim_steps.make_activitysim_run_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    run_step(settings=settings, state=state, workspace=workspace)
-
-    assert captured["inputs"] is outputs_holder.activitysim_preprocess
-    extra_inputs = captured["extra_inputs"]
-    assert extra_inputs == {ZARR_SKIMS: str(zarr_path)}
-
-
-def test_activitysim_run_passes_sharrow_cache_from_coupler(
-    monkeypatch, tmp_path: Path
-) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-    zarr_path = asim_output_dir / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True)
-    zarr_path.write_text("dummy-zarr")
-
-    cache_dir = tmp_path / "shared_cache" / "numba"
-    (cache_dir / "nested").mkdir(parents=True)
-    (cache_dir / "nested" / "entry.bin").write_text("cache")
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    for path in (land_use, households, persons):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    coupler.set(ZARR_SKIMS, str(zarr_path))
-    coupler.set(ASIM_SHARROW_CACHE_DIR, str(cache_dir))
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-    )
-
-    captured: dict = {}
-
-    class _RunRunner:
-        def run(self, inputs, workspace, *, extra_inputs=None):
-            captured["inputs"] = inputs
-            captured["extra_inputs"] = dict(extra_inputs or {})
-            return ActivitySimRunOutputs(output_dir=asim_output_dir, raw_outputs={})
-
-    monkeypatch.setattr(
-        activitysim_steps.ModelFactory,
-        "get_runner",
-        lambda self, model_name, state=None, *_args, **_kwargs: _RunRunner(),
-    )
-
-    run_step = activitysim_steps.make_activitysim_run_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    run_step(settings=settings, state=state, workspace=workspace)
-
-    assert captured["inputs"] is outputs_holder.activitysim_preprocess
-    assert captured["extra_inputs"] == {
-        ZARR_SKIMS: str(zarr_path),
-        ASIM_SHARROW_CACHE_DIR: str(cache_dir),
-    }
-
-
-def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
-    monkeypatch, tmp_path: Path
-) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-    zarr_path = asim_output_dir / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True)
-    zarr_path.write_text("dummy-zarr")
-    cache_dir = tmp_path / "shared_cache" / "numba"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / "entry.bin").write_text("cache")
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    for path in (land_use, households, persons):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    coupler.set(
-        ZARR_SKIMS,
-        SimpleNamespace(path=str(zarr_path), hash="hash_zarr_compile"),
-    )
-    coupler.set(
-        ASIM_SHARROW_CACHE_DIR,
-        SimpleNamespace(path=str(cache_dir), hash="hash_numba_cache"),
-    )
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-        input_hashes={
-            ASIM_LAND_USE_IN: "hash_land_use",
-            ASIM_HOUSEHOLDS_IN: "hash_households",
-            ASIM_PERSONS_IN: "hash_persons",
-        },
-    )
-
-    class _RunRunner:
-        def run(self, inputs, workspace, *, extra_inputs=None):
-            output_path = workspace.get_asim_output_dir() + "/households.parquet"
-            Path(output_path).write_text("out")
-            return ActivitySimRunOutputs(
-                output_dir=Path(workspace.get_asim_output_dir()),
-                raw_outputs={
-                    "households_asim_out_temp": Path(output_path),
-                },
-            )
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name != "activitysim":
-            raise AssertionError(f"Unexpected model_name: {model_name}")
-        return _RunRunner()
-
-    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    logged = []
-
-    def _capture_log_and_set_output(**kwargs):
-        logged.append(kwargs["key"])
-        coupler.set(kwargs["key"], SimpleNamespace(path=kwargs["path"]))
-        return SimpleNamespace(hash="hash_households_out")
-
-    monkeypatch.setattr(
-        activitysim_steps,
-        "log_and_set_output",
-        _capture_log_and_set_output,
-    )
-
-    run_step = activitysim_steps.make_activitysim_run_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    run_step(settings=SimpleNamespace(), state=state, workspace=workspace)
-
-    run_outputs = outputs_holder.activitysim_run
-    assert isinstance(run_outputs, ActivitySimRunOutputs)
-    assert logged == ["households_asim_out"]
-    assert artifact_to_path(coupler.get("households_asim_out"), workspace) == str(
-        asim_output_dir / "households.parquet"
-    )
-    assert run_outputs.raw_output_hashes["households_asim_out"] == "hash_households_out"
-    assert run_outputs.source_input_paths[ASIM_LAND_USE_IN] == land_use
-    assert run_outputs.source_input_paths[ASIM_HOUSEHOLDS_IN] == households
-    assert run_outputs.source_input_paths[ASIM_PERSONS_IN] == persons
-    assert run_outputs.source_input_paths[ZARR_SKIMS] == zarr_path
-    assert run_outputs.source_input_paths[ASIM_SHARROW_CACHE_DIR] == cache_dir
-    assert run_outputs.source_input_hashes == {
-        ASIM_LAND_USE_IN: "hash_land_use",
-        ASIM_HOUSEHOLDS_IN: "hash_households",
-        ASIM_PERSONS_IN: "hash_persons",
-        ZARR_SKIMS: "hash_zarr_compile",
-        ASIM_SHARROW_CACHE_DIR: "hash_numba_cache",
-    }
-
-
-def test_activitysim_run_publishes_optional_outputs_to_coupler(
-    monkeypatch, tmp_path: Path
-) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    for path in (land_use, households, persons):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-    )
-
-    class _RunRunner:
-        def run(self, inputs, workspace, *, extra_inputs=None):
-            output_path = (
-                workspace.get_asim_output_dir() + "/school_destination_size.parquet"
-            )
-            Path(output_path).write_text("out")
-            return ActivitySimRunOutputs(
-                output_dir=Path(workspace.get_asim_output_dir()),
-                raw_outputs={
-                    "school_destination_size_asim_out_temp": Path(output_path),
-                },
-            )
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name != "activitysim":
-            raise AssertionError(f"Unexpected model_name: {model_name}")
-        return _RunRunner()
-
-    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-
-    logged = []
-
-    def _capture_log_and_set_output(**kwargs):
-        logged.append(kwargs["key"])
-        coupler.set(kwargs["key"], SimpleNamespace(path=kwargs["path"]))
-        return SimpleNamespace(hash="hash_school_destination")
-
-    monkeypatch.setattr(
-        activitysim_steps,
-        "log_and_set_output",
-        _capture_log_and_set_output,
-    )
-
-    run_step = activitysim_steps.make_activitysim_run_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    run_step(settings=settings, state=state, workspace=workspace)
-
-    assert logged == ["school_destination_size_asim_out"]
-    assert artifact_to_path(
-        coupler.get("school_destination_size_asim_out"), workspace
-    ) == str(asim_output_dir / "school_destination_size.parquet")
-
-
-def test_activitysim_compile_passes_typed_preprocess_outputs_to_runner(
-    monkeypatch, tmp_path: Path
-) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-    zarr_path = asim_output_dir / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True)
-    zarr_path.write_text("dummy-zarr")
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    omx_skims = asim_mutable_dir / "skims.omx"
-    for path in (land_use, households, persons, omx_skims):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    outputs_holder = StepOutputsHolder()
-    preprocess_outputs = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-        omx_skims=omx_skims,
-    )
-    outputs_holder.activitysim_preprocess = preprocess_outputs
-
-    captured: dict = {}
-
-    class _CaptureCompileRunner:
-        def run(
-            self,
-            inputs: ActivitySimPreprocessOutputs,
-            workspace: _DummyWorkspace,
-        ) -> ActivitySimCompileOutputs:
-            captured["inputs"] = inputs
-            return ActivitySimCompileOutputs(zarr_skims=zarr_path)
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name != "activitysim_compile":
-            raise AssertionError(f"Unexpected model_name: {model_name}")
-        return _CaptureCompileRunner()
-
-    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-
-    compile_step = activitysim_steps.make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    compile_step(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        expected_outputs={ZARR_SKIMS: str(zarr_path)},
-    )
-
-    assert captured["inputs"] is preprocess_outputs
-    assert captured["inputs"].omx_skims == omx_skims
-
-
-def test_activitysim_compile_publishes_expected_zarr_path_without_runner_record(
-    monkeypatch, tmp_path: Path
-) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-    zarr_path = asim_output_dir / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True)
-    zarr_path.write_text("dummy-zarr")
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    omx_skims = asim_mutable_dir / "skims.omx"
-    for path in (land_use, households, persons, omx_skims):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-        omx_skims=omx_skims,
-    )
-
-    class _NoRecordCompileRunner:
-        def run(
-            self,
-            inputs: ActivitySimPreprocessOutputs,
-            workspace: _DummyWorkspace,
-        ) -> ActivitySimCompileOutputs:
-            assert isinstance(inputs, ActivitySimPreprocessOutputs)
-            return ActivitySimCompileOutputs()
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name != "activitysim_compile":
-            raise AssertionError(f"Unexpected model_name: {model_name}")
-        return _NoRecordCompileRunner()
-
-    logged_outputs = {}
-
-    def _capture_log_and_set_output(**kwargs):
-        logged_outputs[kwargs["key"]] = kwargs["path"]
-
-    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(
-        activitysim_steps, "log_and_set_output", _capture_log_and_set_output
-    )
-
-    compile_step = activitysim_steps.make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    compile_step(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        expected_outputs={ZARR_SKIMS: str(zarr_path)},
-    )
-
-    assert logged_outputs[ZARR_SKIMS] == str(zarr_path)
-
-
-def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    state = SimpleNamespace()
-    expected_cache_dir = tmp_path / "shared_cache" / "numba"
-
-    settings_on = _settings(persist_sharrow_cache=True)
-    settings_off = _settings(persist_sharrow_cache=False)
-
-    outputs_on = ActivitysimCompileRunner.expected_outputs(
-        settings_on, state, workspace
-    )
-    outputs_off = ActivitysimCompileRunner.expected_outputs(
-        settings_off, state, workspace
-    )
-
-    assert ArtifactKeys.ASIM_SHARROW_CACHE_DIR == ASIM_SHARROW_CACHE_DIR
-    assert ASIM_SHARROW_CACHE_DIR in outputs_on
-    assert outputs_on[ASIM_SHARROW_CACHE_DIR] == str(expected_cache_dir)
-    assert ASIM_SHARROW_CACHE_DIR not in outputs_off
-
-    coupler = _DummyCoupler()
-    holder = StepOutputsHolder()
-    compile_step = activitysim_steps.make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=holder,
-    )
-    schema_on = build_coupler_schema(
-        [compile_step], settings=settings_on, include_extras=False
-    )
-    schema_off = build_coupler_schema(
-        [compile_step], settings=settings_off, include_extras=False
-    )
-    assert ASIM_SHARROW_CACHE_DIR in schema_on
-    assert ASIM_SHARROW_CACHE_DIR not in schema_off
-
-
-def test_activitysim_compile_cleanup_removes_stale_retry_artifacts(
+def _write_generated_zarr(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    xr.Dataset(
+        {"time": (("otaz", "dtaz"), np.array([[1.0, 2.0], [2.0, 1.0]]))},
+        coords={"otaz": [0, 1], "dtaz": [0, 1]},
+    ).to_zarr(path, mode="w", consolidated=True, zarr_format=2)
+
+
+@pytest.mark.parametrize(
+    ("selected_mode", "preparation_required"),
+    [
+        ("zarr", True),
+        ("zarr", False),
+        ("omx", True),
+        ("omx", False),
+    ],
+)
+def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    selected_mode: ActivitysimSkimMode,
+    preparation_required: bool,
 ) -> None:
-    asim_output_dir = tmp_path / "activitysim" / "output"
-    stale_zarr = asim_output_dir / "cache" / "skims.zarr"
-    stale_output_numba = asim_output_dir / "cache" / "numba"
-    stale_shared_numba = tmp_path / "shared_cache" / "numba"
+    """The body consumes selected Zarrs or a finalized warmup-generated Zarr."""
+    launch_context = _launch_context(tmp_path)
+    runtime_zarr = launch_context.runtime_zarr_path
+    selected_zarr = tmp_path / "selected" / "skims.zarr"
+    selected_zarr_bytes = b'{"zarr_format": 2}\n'
+    if selected_mode == "zarr":
+        selected_zarr.mkdir(parents=True)
+        (selected_zarr / ".zgroup").write_bytes(selected_zarr_bytes)
 
-    stale_zarr.mkdir(parents=True)
-    (stale_zarr / ".zgroup").write_text("{}")
-    stale_output_numba.mkdir(parents=True)
-    (stale_output_numba / "cache.bin").write_text("stale")
-    stale_shared_numba.mkdir(parents=True)
-    (stale_shared_numba / "entry.bin").write_text("stale")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-
-    _cleanup_activitysim_compile_artifacts(workspace)
-
-    assert not stale_zarr.exists()
-    assert not stale_output_numba.exists()
-    assert not stale_shared_numba.exists()
-
-
-def test_activitysim_compile_logs_cache_output_when_gate_on(
-    monkeypatch, tmp_path: Path
-) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-    zarr_path = asim_output_dir / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True)
-    zarr_path.write_text("dummy-zarr")
-    cache_dir = tmp_path / "shared_cache" / "numba"
-    (cache_dir / "sub").mkdir(parents=True)
-    (cache_dir / "sub" / "entry.bin").write_text("cache")
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    for path in (land_use, households, persons):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    settings = _settings(persist_sharrow_cache=True)
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-    )
-
-    compile_runner = _CompileRunner(zarr_path, cache_dir)
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name != "activitysim_compile":
-            raise AssertionError(f"Unexpected model_name: {model_name}")
-        return compile_runner
-
-    logged_outputs = {}
-
-    def _capture_log_and_set_output(**kwargs):
-        logged_outputs[kwargs["key"]] = kwargs["path"]
-
-    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(
-        activitysim_steps, "log_and_set_output", _capture_log_and_set_output
-    )
-
-    compile_step = activitysim_steps.make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    compile_step(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        expected_outputs={
-            ZARR_SKIMS: str(zarr_path),
-            ASIM_SHARROW_CACHE_DIR: str(cache_dir),
-        },
-    )
-
-    assert ZARR_SKIMS in logged_outputs
-    assert ASIM_SHARROW_CACHE_DIR in logged_outputs
-    assert logged_outputs[ASIM_SHARROW_CACHE_DIR] == str(cache_dir)
-
-
-def test_activitysim_compile_does_not_log_cache_output_when_gate_off(
-    monkeypatch, tmp_path: Path
-) -> None:
-    asim_output_dir = tmp_path / "asim_output"
-    asim_output_dir.mkdir(parents=True)
-    zarr_path = asim_output_dir / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True)
-    zarr_path.write_text("dummy-zarr")
-    cache_dir = tmp_path / "shared_cache" / "numba"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / "entry.bin").write_text("cache")
-
-    asim_mutable_dir = tmp_path / "asim_mutable"
-    asim_mutable_dir.mkdir(parents=True)
-    land_use = asim_mutable_dir / "land_use.csv"
-    households = asim_mutable_dir / "households.csv"
-    persons = asim_mutable_dir / "persons.csv"
-    for path in (land_use, households, persons):
-        path.write_text("dummy")
-
-    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
-    settings = _settings(persist_sharrow_cache=False)
-    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    coupler = _DummyCoupler()
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_mutable_dir,
-        land_use_table=land_use,
-        households_table=households,
-        persons_table=persons,
-    )
-
-    compile_runner = _CompileRunner(zarr_path, cache_dir)
-
-    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name != "activitysim_compile":
-            raise AssertionError(f"Unexpected model_name: {model_name}")
-        return compile_runner
-
-    logged_keys = []
-
-    def _capture_log_and_set_output(**kwargs):
-        logged_keys.append(kwargs["key"])
-
-    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(
-        activitysim_steps, "log_and_set_output", _capture_log_and_set_output
-    )
-
-    compile_step = activitysim_steps.make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-    compile_step(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        expected_outputs={
-            ZARR_SKIMS: str(zarr_path),
-            ASIM_SHARROW_CACHE_DIR: str(cache_dir),
-        },
-    )
-
-    assert ZARR_SKIMS in logged_keys
-    assert ASIM_SHARROW_CACHE_DIR not in logged_keys
-
-
-def test_activitysim_run_raises_when_container_execution_fails(
-    monkeypatch, tmp_path: Path
-) -> None:
-    root = tmp_path / "workspace"
-    asim_output_dir = root / "activitysim" / "output"
-    asim_output_dir.mkdir(parents=True)
-    asim_data_dir = root / "activitysim" / "data"
-    asim_data_dir.mkdir(parents=True)
-    for name in ("land_use.csv", "households.csv", "persons.csv"):
-        (asim_data_dir / name).write_text("dummy")
-    asim_configs_dir = root / "activitysim" / "configs" / "configs_extended"
-    asim_configs_dir.mkdir(parents=True)
-    (root / "activitysim" / "configs" / "configs_mp").mkdir(parents=True)
-    (root / "activitysim" / "configs" / "configs_sh_compile").mkdir(parents=True)
-    zarr_dir = asim_output_dir / "cache" / "skims.zarr"
-    zarr_dir.mkdir(parents=True)
-
-    workspace = SimpleNamespace(
-        full_path=str(root),
-        get_asim_output_dir=lambda: str(asim_output_dir),
-        get_asim_mutable_data_dir=lambda: str(asim_data_dir),
-        get_asim_mutable_configs_dir=lambda: str(root / "activitysim" / "configs"),
-    )
     state = SimpleNamespace(
-        current_year=2023,
+        full_settings=_matrix_settings(num_processes=2 if preparation_required else 1),
+        current_year=2018,
         current_inner_iter=0,
-        forecast_year=2029,
-        set_sub_stage_progress=lambda _value: None,
+        _activitysim_compile_epoch=None,
+        set_sub_stage_progress=lambda _progress: None,
+    )
+    runner = ActivitysimRunner("activitysim", state)
+    calls: list[str] = []
+
+    def run_container(*_args: object, **kwargs: object) -> bool:
+        model_name = kwargs["model_name"]
+        volumes = kwargs["volumes"]
+        assert isinstance(model_name, str)
+        assert isinstance(volumes, dict)
+        if model_name == "activitysim_numba_warmup":
+            calls.append("warmup")
+            cache_mount = next(
+                Path(local)
+                for local, mount in volumes.items()
+                if mount["bind"] == "/app/numba_cache"
+            )
+            (cache_mount / "numba").mkdir(parents=True, exist_ok=True)
+            (cache_mount / "numba" / "compiled.nbi").write_text(
+                "cache", encoding="utf-8"
+            )
+            assert str(launch_context.runtime_cache_dir) in volumes
+            assert volumes[str(launch_context.runtime_cache_dir)]["mode"] == "rw"
+            if selected_mode == "zarr":
+                assert (runtime_zarr / ".zgroup").read_bytes() == selected_zarr_bytes
+            else:
+                _write_generated_zarr(runtime_zarr)
+            return True
+
+        assert model_name == "activitysim"
+        calls.append("body")
+        assert str(launch_context.runtime_cache_dir) not in volumes
+        if selected_mode == "zarr" or preparation_required:
+            assert runtime_zarr.exists()
+        else:
+            assert not runtime_zarr.exists()
+            _write_generated_zarr(runtime_zarr)
+        return True
+
+    monkeypatch.setattr(
+        activitysim_runner.GenericRunner, "run_container", staticmethod(run_container)
+    )
+
+    outputs = runner.run(
+        _matrix_inputs(tmp_path),
+        launch_context,
+        skim_mode=selected_mode,
+        extra_inputs=(
+            {"zarr_skims": selected_zarr} if selected_mode == "zarr" else None
+        ),
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+    )
+
+    expected_calls = ["warmup", "body"] if preparation_required else ["body"]
+    assert calls == expected_calls
+    if selected_mode == "zarr":
+        assert (runtime_zarr / ".zgroup").read_bytes() == selected_zarr_bytes
+        assert outputs.zarr_skims is None
+    else:
+        assert outputs.zarr_skims == runtime_zarr
+        with xr.open_zarr(runtime_zarr) as skims:
+            assert skims["otaz"].attrs["preprocessed"] == "zero-based-contiguous"
+
+
+def test_numba_warmup_is_private_and_never_publishes_its_local_zarr(
+    monkeypatch, tmp_path: Path
+) -> None:
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
     )
     settings = SimpleNamespace(
-        run=SimpleNamespace(region="test"),
+        run=SimpleNamespace(region="seattle"),
         activitysim=SimpleNamespace(
+            region_mappings={"region_to_subdir": {"seattle": "example"}},
             local_output_folder="activitysim/output",
-            local_mutable_data_folder="activitysim/data",
-            local_mutable_configs_folder="activitysim/configs",
-            main_configs_dir="configs_extended",
-            household_sample_size=0,
-            num_processes=1,
-            chunk_size=0,
-            sharrow=False,
-            file_format="parquet",
-            region_mappings={"region_to_subdir": {"test": "prototype"}},
         ),
-        infrastructure=SimpleNamespace(container_manager="singularity"),
     )
-    state.full_settings = settings
+    state = SimpleNamespace(full_settings=settings)
+    warmup = ActivitysimNumbaWarmup("activitysim_numba_warmup", state)
+    production_zarr_path = tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    compile_output = Path(asim_compile_output_dir(workspace))
 
-    runner = ActivitysimRunner("activitysim", state)
-
+    monkeypatch.setattr(warmup, "get_asim_docker_vols", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
-        runner,
+        warmup, "get_model_and_image", lambda *_args: ("activitysim", "image")
+    )
+    monkeypatch.setattr(
+        warmup, "get_base_asim_cmd", lambda *_args, **_kwargs: ["activitysim"]
+    )
+    monkeypatch.setattr(warmup, "get_asim_additional_args", lambda *_args: [])
+    monkeypatch.setattr(
+        "pilates.activitysim.runner._log_activitysim_launch_context",
+        lambda **_kwargs: None,
+    )
+
+    def _run_container(**kwargs):
+        assert kwargs["model_name"] == "activitysim_numba_warmup"
+        assert kwargs["lineage_mode"] == "none"
+        assert kwargs["output_paths"] == [str(compile_output)]
+        (compile_output / "cache" / "skims.zarr").mkdir(parents=True)
+        return True
+
+    monkeypatch.setattr(warmup, "run_container", _run_container)
+    result = warmup.run(
+        ActivitySimPreprocessOutputs(
+            mutable_data_dir=tmp_path,
+            land_use_table=tmp_path / "land_use.csv",
+            households_table=tmp_path / "households.csv",
+            persons_table=tmp_path / "persons.csv",
+        ),
+        _launch_context(tmp_path),
+    )
+
+    assert result is None
+    assert not production_zarr_path.exists()
+
+
+def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_container(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A native cache hit hydrates without entering the ActivitySim body."""
+    workspace = SimpleNamespace(full_path=str(tmp_path / "workspace"))
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(persist_sharrow_cache=True, num_processes=2)
+    )
+    state = SimpleNamespace(
+        full_settings=settings,
+        _activitysim_compile_epoch=None,
+        set_sub_stage_progress=lambda _progress: None,
+    )
+    runner = ActivitysimRunner("activitysim", state)
+    inputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=tmp_path,
+        land_use_table=tmp_path / "land_use.csv",
+        households_table=tmp_path / "households.csv",
+        persons_table=tmp_path / "persons.csv",
+    )
+    runner_body_calls: list[None] = []
+    warmup_calls: list[None] = []
+    warmup_contexts: list[ActivitySimLaunchContext] = []
+    runner_run_calls: list[None] = []
+    container_calls: list[None] = []
+
+    def warm_cache(
+        _warmup: object,
+        _inputs: ActivitySimPreprocessOutputs,
+        warmup_context: ActivitySimLaunchContext,
+        **_kwargs: object,
+    ) -> None:
+        warmup_calls.append(None)
+        warmup_contexts.append(warmup_context)
+        cache_dir = warmup_context.shared_cache_dir / "numba"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "numba.nbi").touch()
+        runtime_zarr = warmup_context.runtime_zarr_path
+        runtime_zarr.mkdir(parents=True, exist_ok=True)
+        (runtime_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+
+    def run_production(*_args, **_kwargs) -> ActivitySimRunOutputs:
+        runner_body_calls.append(None)
+        return ActivitySimRunOutputs(output_dir=tmp_path / "workspace" / "output")
+
+    def fail_if_container_runs(*_args: object, **_kwargs: object) -> bool:
+        container_calls.append(None)
+        raise AssertionError("the test runner body must not start a container")
+
+    monkeypatch.setattr(ActivitysimNumbaWarmup, "run", warm_cache)
+    monkeypatch.setattr(runner, "_run", run_production)
+    monkeypatch.setattr(runner, "run_container", fail_if_container_runs)
+    monkeypatch.setattr(
+        activitysim_runner,
+        "finalize_activitysim_zarr_skims",
+        lambda path, *_args: Path(path),
+    )
+
+    @define_step(
+        model="activitysim_cache_admission_probe",
+        inputs={"source": None},
+        output_paths={"result": "result.txt"},
+        input_binding="paths",
+    )
+    def native_activitysim_body(
+        source: Path,
+        ctx,
+        *,
+        settings: object,
+        state: object,
+        workspace: object,
+    ) -> None:
+        del source
+        assert settings is not None
+        assert state is not None
+        assert workspace is not None
+        runner_run_calls.append(None)
+        runner.run(
+            inputs,
+            _launch_context(tmp_path / "workspace"),
+            skim_mode="omx",
+            workspace=workspace,
+        )
+        ctx.run_dir.mkdir(parents=True, exist_ok=True)
+        (ctx.run_dir / "result.txt").write_text("complete\n", encoding="utf-8")
+
+    source = tmp_path / "source.txt"
+    source.write_text("source\n", encoding="utf-8")
+    definition = StepDefinition(
+        name="activitysim_cache_admission_probe",
+        function=native_activitysim_body,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="activitysim_cache_admission_probe",
+            binding=BindingResult(inputs={"source": source}),
+        ),
+        project_outputs=lambda outputs, **_: outputs,
+        execution_options=lambda **_: ExecutionOptions(
+            input_binding="paths", inject_context="ctx"
+        ),
+        input_contract=InputContract(
+            status="incomplete",
+            reason="test-only cache admission probe",
+        ),
+        archive_outputs=False,
+    )
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+    results = []
+    for name in ("activitysim-first", "activitysim-second"):
+        with tracker.scenario(name) as scenario:
+            result, _ = execute_step(
+                scenario=scenario,
+                definition=definition,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                stage="activitysim",
+                year=None,
+                iteration=None,
+                phase=None,
+            )
+            results.append(result)
+
+    assert results[0].cache_hit is False
+    assert results[1].cache_hit is True
+    assert runner_run_calls == [None]
+    assert runner_body_calls == [None]
+    assert warmup_calls == [None]
+    assert container_calls == []
+    epoch_path = warmup_contexts[0].shared_cache_dir
+    resolved_inputs = definition.resolve_inputs()
+    assert all(
+        str(epoch_path) not in str(value)
+        for value in (resolved_inputs.binding.inputs or {}).values()
+    )
+    assert str(epoch_path) not in str(results[0].outputs)
+    assert str(epoch_path) not in str(definition.execution_options())
+
+
+def test_numba_warmup_forwards_only_nondefault_mount_modes_to_consist(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The actual Consist call preserves only an explicit read-only mount."""
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path / "workspace"),
+        get_asim_output_dir=lambda: str(
+            tmp_path / "workspace" / "activitysim" / "output"
+        ),
+        get_asim_runtime_cache_dir=lambda: str(
+            tmp_path / "workspace" / "activitysim" / "output" / "cache"
+        ),
+        get_asim_mutable_data_dir=lambda: str(
+            tmp_path / "workspace" / "activitysim" / "data"
+        ),
+        get_asim_mutable_configs_dir=lambda: str(
+            tmp_path / "workspace" / "activitysim" / "configs"
+        ),
+    )
+    launch_context = _launch_context(tmp_path / "workspace")
+    selected_zarr = launch_context.runtime_zarr_path
+    selected_zarr.mkdir(parents=True)
+    (selected_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle", use_stubs=False),
+        infrastructure=SimpleNamespace(
+            container_manager="docker",
+            docker_config=SimpleNamespace(pull_latest=False, stdout=False),
+        ),
+        activitysim=SimpleNamespace(
+            region_mappings={"region_to_subdir": {"seattle": "example"}},
+            local_mutable_data_folder="activitysim/data",
+            local_output_folder="activitysim/output",
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs",
+            file_format="parquet",
+            persist_sharrow_cache=True,
+            command_template="activitysim",
+            household_sample_size=0,
+            num_processes=2,
+            chunk_size=0,
+        ),
+    )
+    warmup = ActivitysimNumbaWarmup(
+        "activitysim_numba_warmup", SimpleNamespace(full_settings=settings)
+    )
+    called: dict[str, object] = {}
+    monkeypatch.setattr(
+        warmup,
         "get_model_and_image",
-        lambda *_args, **_kwargs: ("activitysim", "docker://fake"),
-    )
-    monkeypatch.setattr(runner, "get_asim_docker_vols", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        runner, "get_base_asim_cmd", lambda *_args, **_kwargs: "asim run"
+        lambda *_args: ("activity_demand_model", "image"),
     )
     monkeypatch.setattr(
-        runner,
-        "get_asim_additional_args",
-        lambda *_args, **_kwargs: [],
+        "consist.integrations.containers.run_container",
+        lambda **kwargs: called.update(kwargs) or True,
     )
-    monkeypatch.setattr(runner, "run_container", lambda **_kwargs: False)
-
-    preprocess_outputs = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_data_dir,
-        land_use_table=asim_data_dir / "land_use.csv",
-        households_table=asim_data_dir / "households.csv",
-        persons_table=asim_data_dir / "persons.csv",
-    )
-    with pytest.raises(RuntimeError, match="ASIM run failed for year 2023 iteration 0"):
-        runner.run(preprocess_outputs, workspace)
-
-
-def test_activitysim_run_stages_external_zarr_input_into_runtime_cache(
-    monkeypatch, tmp_path: Path
-) -> None:
-    root = tmp_path / "run"
-    asim_output_dir = root / "activitysim" / "output"
-    asim_output_dir.mkdir(parents=True)
-    asim_data_dir = root / "activitysim" / "data"
-    asim_data_dir.mkdir(parents=True)
-    for name in ("land_use.csv", "households.csv", "persons.csv"):
-        (asim_data_dir / name).write_text("dummy")
-
-    external_zarr = tmp_path / "external" / "skims.zarr"
-    external_zarr.mkdir(parents=True)
-    (external_zarr / ".zarray").write_text("{}")
-
-    workspace = _DummyWorkspace(root, asim_output_dir)
-    state = SimpleNamespace(
-        current_year=2023,
-        current_inner_iter=0,
-        forecast_year=2029,
-        set_sub_stage_progress=lambda _value: None,
-    )
-    settings = SimpleNamespace()
-    state.full_settings = settings
-    runner = ActivitysimRunner("activitysim", state)
-
-    preprocess_outputs = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_data_dir,
-        land_use_table=asim_data_dir / "land_use.csv",
-        households_table=asim_data_dir / "households.csv",
-        persons_table=asim_data_dir / "persons.csv",
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
     )
 
-    captured = {}
+    with cr.use_tracker(tracker):
+        with tracker.start_run("warmup-container", model="activitysim"):
+            warmup.run(
+                ActivitySimPreprocessOutputs(
+                    mutable_data_dir=tmp_path,
+                    land_use_table=tmp_path / "land_use.csv",
+                    households_table=tmp_path / "households.csv",
+                    persons_table=tmp_path / "persons.csv",
+                ),
+                launch_context,
+                skim_mode="zarr",
+                zarr_input_path=str(selected_zarr),
+            )
 
-    def _fake_run(inputs, _workspace, *, extra_inputs=None):
-        captured["inputs"] = inputs
-        captured["extra_inputs"] = dict(extra_inputs or {})
-        return ActivitySimRunOutputs(output_dir=asim_output_dir)
+    volumes = called["volumes"]
+    volume_modes = called["volume_modes"]
+    assert volumes[str(selected_zarr.parent)].endswith("/output/cache")
+    assert volumes[str(asim_compile_output_dir(workspace))].endswith("/output")
+    assert str(selected_zarr.parent) not in volume_modes
+    assert all(mode == "ro" for mode in volume_modes.values())
+    assert str(asim_compile_output_dir(workspace)) not in volume_modes
+    command = called["command"]
+    assert command.count("-o") == 1
+    assert command[command.index("-o") + 1].endswith("/output")
 
-    monkeypatch.setattr(runner, "_run", _fake_run)
+    called.clear()
+    with cr.use_tracker(tracker):
+        with tracker.start_run("warmup-omx-container", model="activitysim"):
+            warmup.run(
+                ActivitySimPreprocessOutputs(
+                    mutable_data_dir=tmp_path,
+                    land_use_table=tmp_path / "land_use.csv",
+                    households_table=tmp_path / "households.csv",
+                    persons_table=tmp_path / "persons.csv",
+                ),
+                launch_context,
+                skim_mode="omx",
+            )
 
-    runner.run(
-        preprocess_outputs,
-        workspace,
-        extra_inputs={ZARR_SKIMS: str(external_zarr)},
-    )
-
-    staged_zarr = asim_output_dir / "cache" / "skims.zarr"
-    assert staged_zarr.is_dir()
-    assert (staged_zarr / ".zarray").read_text() == "{}"
-    assert captured["inputs"] is preprocess_outputs
-    assert captured["extra_inputs"][ZARR_SKIMS] == str(staged_zarr)
-
-
-def test_activitysim_run_stages_external_sharrow_cache_into_runtime_cache(
-    monkeypatch, tmp_path: Path
-) -> None:
-    root = tmp_path / "run"
-    asim_output_dir = root / "activitysim" / "output"
-    asim_output_dir.mkdir(parents=True)
-    asim_data_dir = root / "activitysim" / "data"
-    asim_data_dir.mkdir(parents=True)
-    for name in ("land_use.csv", "households.csv", "persons.csv"):
-        (asim_data_dir / name).write_text("dummy")
-
-    external_cache = tmp_path / "external" / "numba"
-    (external_cache / "sub").mkdir(parents=True)
-    (external_cache / "sub" / "entry.bin").write_text("cache")
-
-    workspace = _DummyWorkspace(root, asim_output_dir)
-    state = SimpleNamespace(
-        current_year=2023,
-        current_inner_iter=0,
-        forecast_year=2029,
-        set_sub_stage_progress=lambda _value: None,
-    )
-    settings = SimpleNamespace()
-    state.full_settings = settings
-    runner = ActivitysimRunner("activitysim", state)
-
-    preprocess_outputs = ActivitySimPreprocessOutputs(
-        mutable_data_dir=asim_data_dir,
-        land_use_table=asim_data_dir / "land_use.csv",
-        households_table=asim_data_dir / "households.csv",
-        persons_table=asim_data_dir / "persons.csv",
-    )
-
-    captured = {}
-
-    def _fake_run(inputs, _workspace, *, extra_inputs=None):
-        captured["inputs"] = inputs
-        captured["extra_inputs"] = dict(extra_inputs or {})
-        return ActivitySimRunOutputs(output_dir=asim_output_dir)
-
-    monkeypatch.setattr(runner, "_run", _fake_run)
-
-    runner.run(
-        preprocess_outputs,
-        workspace,
-        extra_inputs={ASIM_SHARROW_CACHE_DIR: str(external_cache)},
-    )
-
-    staged_cache = root / "shared_cache" / "numba"
-    assert staged_cache.is_dir()
-    assert (staged_cache / "sub" / "entry.bin").read_text() == "cache"
-    assert captured["inputs"] is preprocess_outputs
-    assert captured["extra_inputs"][ASIM_SHARROW_CACHE_DIR] == str(staged_cache)
+    omx_volume_modes = called["volume_modes"]
+    assert str(launch_context.runtime_cache_dir) not in omx_volume_modes
+    assert all(mode == "ro" for mode in omx_volume_modes.values())

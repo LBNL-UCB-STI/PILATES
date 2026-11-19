@@ -719,6 +719,11 @@ class HouseholdsAsimOut(SQLModel, table=True):
     auto_ownership: Optional[int] = Field(
         default=None, sa_column=Column("auto_ownership", BigInteger, nullable=True)
     )
+    cars: Optional[int] = Field(
+        default=None,
+        description="ATLAS-authoritative vehicle count when ATLAS owns vehicle ownership.",
+        sa_column=Column("cars", BigInteger, nullable=True),
+    )
     num_workers: Optional[float] = Field(
         default=None, sa_column=Column("num_workers", Float, nullable=True)
     )

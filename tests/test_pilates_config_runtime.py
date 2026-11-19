@@ -64,6 +64,10 @@ def _minimal_config() -> dict:
 def test_runtime_properties_forward_to_typed_runtime_container():
     settings = PilatesConfig(**_minimal_config())
 
+    assert settings.runtime.flags_initialized is True
+    assert settings.land_use_enabled is True
+    assert settings.activity_demand_enabled is False
+
     settings.land_use_enabled = True
     settings.activity_demand_enabled = False
     settings.state_file_loc = "/tmp/state.yaml"
@@ -75,6 +79,48 @@ def test_runtime_properties_forward_to_typed_runtime_container():
     assert settings.runtime.options.state_file_loc == "/tmp/state.yaml"
     assert settings.runtime.options.settings_file == "settings.yaml"
     assert settings.runtime.options.allow_rewind_resume is True
+
+
+def test_runtime_flags_derive_live_and_preserve_explicit_overrides():
+    settings = PilatesConfig(**_minimal_config())
+
+    assert settings.land_use_enabled is True
+    settings.run.models.land_use = None
+    assert settings.land_use_enabled is False
+
+    # Explicit override via property or runtime.flags pins the flag
+    settings.land_use_enabled = True
+    settings.run.models.land_use = None
+    assert settings.land_use_enabled is True
+    settings.runtime.flags.activity_demand_enabled = True
+    assert settings.activity_demand_enabled is True
+
+    # Partial test stubs without replan_iters fall back to 0 cleanly
+    from types import SimpleNamespace
+
+    object.__setattr__(settings, "activitysim", SimpleNamespace(file_format="parquet"))
+    assert settings.replanning_enabled is False
+
+
+def test_final_skim_export_setting_is_typed_and_defaults_off():
+    settings = PilatesConfig(**_minimal_config())
+
+    assert settings.write_skims_to_omx is False
+
+    settings.write_skims_to_omx = True
+    assert settings.write_skims_to_omx is True
+
+
+def test_max_year_intervals_is_part_of_initialization_identity():
+    config = _minimal_config()
+    config["run"]["max_year_intervals"] = 1
+
+    settings = PilatesConfig(**config)
+
+    assert (
+        settings.get_initialization_signature()["orchestration"]["max_year_intervals"]
+        == 1
+    )
 
 
 def test_runtime_values_are_excluded_from_model_dump():
@@ -89,14 +135,12 @@ def test_runtime_values_are_excluded_from_model_dump():
     assert "state_file_loc" not in dumped
 
 
-def test_deprecated_use_consist_warns_and_is_ignored():
+def test_workflow_rejects_retired_manifest_recovery_config():
     config = _minimal_config()
-    config["shared"]["database"]["use_consist"] = False
+    config["workflow"] = {"manifests": {"disabled_stages": ["supply_demand"]}}
 
-    with pytest.warns(DeprecationWarning, match="shared.database.use_consist"):
-        settings = PilatesConfig(**config)
-
-    assert settings.shared.database.use_consist is True
+    with pytest.raises(ValueError, match=r"workflow\.manifests"):
+        PilatesConfig(**config)
 
 
 def test_recovery_archive_roots_expand_environment_variables(monkeypatch):
@@ -113,3 +157,83 @@ def test_recovery_archive_roots_expand_environment_variables(monkeypatch):
         "/tmp/recovery-root",
         "/tmp/static-root",
     ]
+
+
+def test_model_copy_isolates_runtime_flags_and_options():
+    settings = PilatesConfig(**_minimal_config())
+    settings.land_use_enabled = False
+    settings.state_file_loc = "/tmp/original_state.yaml"
+
+    copied = settings.model_copy()
+    copied.land_use_enabled = True
+    copied.state_file_loc = "/tmp/copied_state.yaml"
+
+    assert settings.land_use_enabled is False
+    assert settings.state_file_loc == "/tmp/original_state.yaml"
+    assert copied.land_use_enabled is True
+    assert copied.state_file_loc == "/tmp/copied_state.yaml"
+    assert settings._runtime is not copied._runtime
+    assert settings._runtime.flags is not copied._runtime.flags
+    assert settings._runtime.options is not copied._runtime.options
+
+
+def test_traffic_assignment_flag_derivation_matches_compute_model_enabled_flags():
+    from pilates.utils.io import compute_model_enabled_flags
+
+    config = _minimal_config()
+    config["run"]["models"]["travel"] = None
+    config["traffic_assignment"] = "beam"
+
+    settings = PilatesConfig(**config)
+
+    assert settings.traffic_assignment_enabled is True
+    assert compute_model_enabled_flags(settings)["traffic_assignment_enabled"] is True
+
+
+def test_constructor_and_model_copy_flag_overrides_and_initialization_signature():
+    config = _minimal_config()
+    settings = PilatesConfig(**config, land_use_enabled=False)
+
+    assert settings.land_use_enabled is False
+    assert "land_use_enabled" not in (settings.__pydantic_extra__ or {})
+
+    base = PilatesConfig(**_minimal_config())
+    assert base.land_use_enabled is True
+
+    copied = base.model_copy(
+        update={
+            "land_use_enabled": False,
+            "activity_demand_enabled": True,
+        }
+    )
+    assert base.land_use_enabled is True
+    assert base.activity_demand_enabled is False
+    assert copied.land_use_enabled is False
+    assert copied.activity_demand_enabled is True
+    assert "land_use_enabled" not in (copied.__pydantic_extra__ or {})
+
+    base_sig = base.get_initialization_signature()
+    copied_sig = copied.get_initialization_signature()
+    assert base_sig["orchestration"]["runtime_flags"] == {
+        "land_use_enabled": True,
+        "vehicle_ownership_model_enabled": False,
+        "activity_demand_enabled": False,
+        "traffic_assignment_enabled": False,
+        "replanning_enabled": False,
+    }
+    assert copied_sig["orchestration"]["runtime_flags"]["land_use_enabled"] is False
+    assert (
+        copied_sig["orchestration"]["runtime_flags"]["activity_demand_enabled"] is True
+    )
+    assert base_sig != copied_sig
+
+
+def test_polaris_travel_model_validates_without_beam_config():
+    config = _minimal_config()
+    config["run"]["models"]["travel"] = "polaris"
+
+    settings = PilatesConfig(**config)
+
+    assert settings.run.models.travel == "polaris"
+    assert settings.beam is None
+    assert settings.traffic_assignment_enabled is True

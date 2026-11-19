@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import (
     Any,
-    ContextManager,
     Dict,
+    Iterable,
     Mapping,
     Optional,
     Protocol,
@@ -15,20 +15,12 @@ from consist.protocols import (
     ScenarioLike as ConsistScenarioLike,
     TrackerLike as ConsistTrackerLike,
 )
+from consist.core.identity import IdentityManager
 
 
 @runtime_checkable
 class ArtifactLike(ConsistArtifactLike, Protocol):
-    @property
-    def table_path(self) -> Optional[str]: ...
-
-    @property
-    def array_path(self) -> Optional[str]: ...
-
-
-@runtime_checkable
-class TrackerPersistenceLike(Protocol):
-    def batch_artifact_writes(self) -> ContextManager[Any]: ...
+    pass
 
 
 @runtime_checkable
@@ -43,7 +35,7 @@ class ScenarioLike(ConsistScenarioLike, Protocol):
 
 @runtime_checkable
 class TrackerLike(ConsistTrackerLike, Protocol):
-    persistence: TrackerPersistenceLike
+    identity: IdentityManager
 
     def log_h5_container(
         self,
@@ -68,6 +60,7 @@ class TrackerLike(ConsistTrackerLike, Protocol):
 @runtime_checkable
 class ScenarioWithCoupler(ScenarioLike, Protocol):
     coupler: "CouplerProtocol"
+    tracker: TrackerLike
 
     def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
 
@@ -83,6 +76,8 @@ class CouplerProtocol(Protocol):
     def set(self, key: str, value: Any) -> None: ...
 
     def get(self, key: str, default: Optional[Any] = None) -> Any: ...
+
+    def keys(self) -> Iterable[str]: ...
 
     def update(self, mapping: Mapping[str, Any]) -> None: ...
 

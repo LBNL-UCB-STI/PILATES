@@ -4,8 +4,8 @@ Scaffold a new PILATES model integration.
 
 This generator creates:
 - model package boilerplate (preprocessor/runner/postprocessor/outputs)
-- workflow step stub module (make_*_step factories)
-- central registrations (ModelFactory, step exports, step contracts)
+- native Consist step definitions (decorated callable, resolver, projector)
+- central registrations (native step exports, catalog policy)
 - a model-specific checklist in docs/checklists/
 
 By default this writes directly to the repository. Use --dry-run to preview.
@@ -67,10 +67,6 @@ class ScaffoldSpec:
     class_prefix: str
     step_module: str
     major_stage: str
-
-    @property
-    def holder_prefix(self) -> str:
-        return self.model
 
     @property
     def preprocess_step_name(self) -> str:
@@ -264,15 +260,6 @@ def _matching_delimiter_index(
     )
 
 
-def _matching_brace_index(text: str, open_brace_index: int) -> int:
-    return _matching_delimiter_index(
-        text,
-        open_brace_index,
-        open_char="{",
-        close_char="}",
-    )
-
-
 def _insert_once(text: str, *, anchor: str, snippet: str, dedupe_token: str) -> str:
     if dedupe_token in text:
         return text
@@ -280,75 +267,6 @@ def _insert_once(text: str, *, anchor: str, snippet: str, dedupe_token: str) -> 
     if idx == -1:
         raise ValueError(f"Anchor not found: {anchor!r}")
     return text[:idx] + snippet + text[idx:]
-
-
-def _append_import_after_pilates_imports(text: str, new_imports: List[str]) -> str:
-    for imp in new_imports:
-        if imp in text:
-            continue
-        lines = text.splitlines(keepends=True)
-        insertion_index = _find_pilates_import_insertion_index(lines)
-        lines.insert(insertion_index + 1, imp + "\n")
-        text = "".join(lines)
-    return text
-
-
-def _find_pilates_import_insertion_index(lines: Sequence[str]) -> int:
-    insertion_index = -1
-    line_index = 0
-    while line_index < len(lines):
-        line = lines[line_index]
-        if not line.startswith("from pilates."):
-            line_index += 1
-            continue
-
-        end_index = line_index
-        delimiter_depth = line.count("(") - line.count(")")
-        while delimiter_depth > 0:
-            end_index += 1
-            if end_index >= len(lines):
-                raise ValueError("Unbalanced multiline PILATES import block")
-            delimiter_depth += lines[end_index].count("(") - lines[end_index].count(")")
-
-        insertion_index = end_index
-        line_index = end_index + 1
-
-    if insertion_index < 0:
-        raise ValueError("Could not find PILATES import block")
-    return insertion_index
-
-
-def _insert_import_block_after_pilates_imports(
-    text: str,
-    *,
-    import_block: str,
-    dedupe_token: str,
-) -> str:
-    if dedupe_token in text:
-        return text
-    lines = text.splitlines(keepends=True)
-    insertion_index = _find_pilates_import_insertion_index(lines)
-    block = import_block if import_block.endswith("\n") else import_block + "\n"
-    lines.insert(insertion_index + 1, block)
-    return "".join(lines)
-
-
-def _insert_registry_entry(
-    text: str,
-    *,
-    registry_name: str,
-    key_token: str,
-    entry_block: str,
-) -> str:
-    if key_token in text:
-        return text
-    anchor = f"{registry_name} = {{"
-    start = text.find(anchor)
-    if start == -1:
-        raise ValueError(f"Could not find registry anchor {anchor!r}")
-    open_brace = text.find("{", start)
-    close_brace = _matching_brace_index(text, open_brace)
-    return text[:close_brace] + entry_block + text[close_brace:]
 
 
 def _insert_tuple_entry(
@@ -382,44 +300,6 @@ def _next_catalog_order(text: str) -> int:
     return max(matches) + 10
 
 
-def _upsert_model_factory(
-    repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool
-) -> Tuple[Path, bool]:
-    path = repo_root / "pilates/generic/model_factory.py"
-    text = _read_text(path)
-    original = text
-
-    text = _append_import_after_pilates_imports(
-        text,
-        [
-            f"from pilates.{spec.model}.preprocessor import {spec.preprocessor_class}",
-            f"from pilates.{spec.model}.runner import {spec.runner_class}",
-            f"from pilates.{spec.model}.postprocessor import {spec.postprocessor_class}",
-        ],
-    )
-
-    entry = dedent(
-        f"""
-                "{spec.model}": {{
-                    "preprocessor": {spec.preprocessor_class},
-                    "runner": {spec.runner_class},
-                    "postprocessor": {spec.postprocessor_class},
-                }},
-        """
-    )
-    text = _insert_registry_entry(
-        text,
-        registry_name="_registry",
-        key_token=f'        "{spec.model}": {{',
-        entry_block=entry,
-    )
-
-    changed = text != original
-    if changed:
-        _write_text(path, text, dry_run=dry_run)
-    return path, changed
-
-
 def _upsert_steps_init(
     repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool
 ) -> Tuple[Path, bool]:
@@ -429,101 +309,31 @@ def _upsert_steps_init(
 
     step_import_block = dedent(
         f"""
-        from .{spec.step_module} import (  # noqa: F401
-            make_{spec.model}_postprocess_step,
-            make_{spec.model}_preprocess_step,
-            make_{spec.model}_run_step,
+        from .{spec.step_module} import (
+            {spec.model}_postprocess,
+            {spec.model}_preprocess,
+            {spec.model}_run,
         )
         """
     )
     text = _insert_once(
         text,
-        anchor="from .postprocessing import make_postprocessing_step  # noqa: F401\n",
+        anchor="from .postprocessing import (\n",
         snippet=step_import_block,
-        dedupe_token=f"from .{spec.step_module} import (  # noqa: F401",
+        dedupe_token=f"from .{spec.step_module} import (",
     )
-
-    module_import_line = re.search(
-        r"^from \. import (.+)  # noqa: F401,E402$", text, flags=re.MULTILINE
-    )
-    if not module_import_line:
-        raise ValueError("Could not find steps module re-export line")
-    modules = [m.strip() for m in module_import_line.group(1).split(",")]
-    if spec.step_module not in modules:
-        modules.append(spec.step_module)
-        new_line = "from . import " + ", ".join(modules) + "  # noqa: F401,E402"
-        text = (
-            text[: module_import_line.start()]
-            + new_line
-            + text[module_import_line.end() :]
-        )
-
     registry_entry_block = dedent(
         f"""
-            "{spec.preprocess_step_name}": make_{spec.model}_preprocess_step,
-            "{spec.run_step_name}": make_{spec.model}_run_step,
-            "{spec.postprocess_step_name}": make_{spec.model}_postprocess_step,
+            {spec.model}_preprocess,
+            {spec.model}_run,
+            {spec.model}_postprocess,
         """
     )
     text = _insert_once(
         text,
-        anchor="}\n\n\ndef schema_step_builder_registry() -> Dict[str, Callable[..., Any]]:\n",
+        anchor="        postprocessing_definition,\n",
         snippet=registry_entry_block,
-        dedupe_token=f'    "{spec.preprocess_step_name}": make_{spec.model}_preprocess_step,',
-    )
-
-    changed = text != original
-    if changed:
-        _write_text(path, text, dry_run=dry_run)
-    return path, changed
-
-
-def _insert_block_before(
-    text: str, *, anchor: str, block: str, dedupe_token: str
-) -> str:
-    if dedupe_token in text:
-        return text
-    idx = text.find(anchor)
-    if idx == -1:
-        raise ValueError(f"Anchor not found: {anchor!r}")
-    return text[:idx] + block + text[idx:]
-
-
-def _upsert_steps_shared(
-    repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool
-) -> Tuple[Path, bool]:
-    path = repo_root / "pilates/workflows/steps/shared.py"
-    text = _read_text(path)
-    original = text
-
-    output_import_block = dedent(
-        f"""
-        from pilates.{spec.model}.outputs import (
-            {spec.postprocess_output_class},
-            {spec.preprocess_output_class},
-            {spec.run_output_class},
-        )
-        """
-    )
-    text = _insert_block_before(
-        text,
-        anchor="from pilates.workflows.step_consist_meta import consist_step_meta\n",
-        block=output_import_block,
-        dedupe_token=f"from pilates.{spec.model}.outputs import (",
-    )
-
-    holder_fields_block = dedent(
-        f"""
-            {spec.holder_prefix}_preprocess: Optional[{spec.preprocess_output_class}] = None
-            {spec.holder_prefix}_run: Optional[{spec.run_output_class}] = None
-            {spec.holder_prefix}_postprocess: Optional[{spec.postprocess_output_class}] = None
-        """
-    )
-    text = _insert_once(
-        text,
-        anchor="    def set_attribute(self, step_name: str, outputs: Any) -> None:\n",
-        snippet=holder_fields_block,
-        dedupe_token=f"{spec.holder_prefix}_preprocess: Optional[{spec.preprocess_output_class}]",
+        dedupe_token=f"        {spec.model}_preprocess,",
     )
 
     changed = text != original
@@ -573,21 +383,6 @@ def _upsert_workflow_catalog(
     text = _read_text(path)
     original = text
 
-    output_import_block = dedent(
-        f"""
-        from pilates.{spec.model}.outputs import (
-            {spec.postprocess_output_class},
-            {spec.preprocess_output_class},
-            {spec.run_output_class},
-        )
-        """
-    )
-    text = _insert_import_block_after_pilates_imports(
-        text,
-        import_block=output_import_block,
-        dedupe_token=f"from pilates.{spec.model}.outputs import (",
-    )
-
     provenance_ref: Optional[str] = None
     if catalog_options.provenance_builder_key is not None:
         provenance_ref = spec.provenance_constant_name
@@ -615,33 +410,24 @@ def _upsert_workflow_catalog(
         f"""
             WorkflowStepSpec(
                 step_name="{spec.preprocess_step_name}",
-                model_name="{spec.preprocess_step_name}",
                 phase="preprocess",
                 stage_name="{catalog_options.stage_name}",
                 order={order_start},
-                outputs_class={spec.preprocess_output_class},
                 depends_on=(),
-                holder_inputs=(),
 {optional_lines}    ),
             WorkflowStepSpec(
                 step_name="{spec.run_step_name}",
-                model_name="{spec.run_step_name}",
                 phase="run",
                 stage_name="{catalog_options.stage_name}",
                 order={order_start + 10},
-                outputs_class={spec.run_output_class},
                 depends_on={_tuple_literal((spec.preprocess_step_name,))},
-                holder_inputs={_tuple_literal((spec.preprocess_step_name,))},
 {optional_lines}    ),
             WorkflowStepSpec(
                 step_name="{spec.postprocess_step_name}",
-                model_name="{spec.postprocess_step_name}",
                 phase="postprocess",
                 stage_name="{catalog_options.stage_name}",
                 order={order_start + 20},
-                outputs_class={spec.postprocess_output_class},
                 depends_on={_tuple_literal((spec.run_step_name,))},
-                holder_inputs={_tuple_literal((spec.run_step_name,))},
 {optional_lines}    ),
         """
     )
@@ -664,10 +450,11 @@ def _render_preprocessor(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
-        from typing import TYPE_CHECKING, Tuple
+        from pathlib import Path
+        from typing import Optional, TYPE_CHECKING, Tuple
 
         from pilates.generic.preprocessor import GenericPreprocessor
-        from pilates.generic.records import RecordStore
+        from pilates.{spec.model}.outputs import {spec.preprocess_output_class}
 
         if TYPE_CHECKING:
             from pilates.config import PilatesConfig
@@ -681,17 +468,20 @@ def _render_preprocessor(spec: ScaffoldSpec) -> str:
                 self,
                 settings: "PilatesConfig",
                 output_dir: str,
-            ) -> Tuple[RecordStore, RecordStore]:
+                workspace: Optional["Workspace"] = None,
+            ) -> Tuple[Path, ...]:
                 """Copy immutable inputs into the mutable workspace location."""
-                return RecordStore(), RecordStore()
+                del settings, output_dir, workspace
+                return ()
 
             def _preprocess(
                 self,
                 workspace: "Workspace",
-                previous_records: RecordStore = RecordStore(),
-            ) -> RecordStore:
+            ) -> {spec.preprocess_output_class}:
                 """Build and return {spec.class_prefix} preprocess artifacts."""
-                return RecordStore()
+                return {spec.preprocess_output_class}(
+                    output_root=Path(workspace.full_path) / "{spec.model}" / "preprocess",
+                )
         '''
         ).strip()
         + "\n"
@@ -704,10 +494,14 @@ def _render_runner(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
+        from pathlib import Path
         from typing import TYPE_CHECKING
 
         from pilates.generic.runner import GenericRunner
-        from pilates.generic.records import RecordStore
+        from pilates.{spec.model}.outputs import (
+            {spec.preprocess_output_class},
+            {spec.run_output_class},
+        )
 
         if TYPE_CHECKING:
             from pilates.workspace import Workspace
@@ -718,11 +512,14 @@ def _render_runner(spec: ScaffoldSpec) -> str:
 
             def _run(
                 self,
-                store: RecordStore,
+                inputs: {spec.preprocess_output_class},
                 workspace: "Workspace",
-            ) -> RecordStore:
+            ) -> {spec.run_output_class}:
                 """Run {spec.class_prefix} and return raw output artifacts."""
-                return RecordStore()
+                del inputs
+                return {spec.run_output_class}(
+                    output_root=Path(workspace.full_path) / "{spec.model}" / "run",
+                )
         '''
         ).strip()
         + "\n"
@@ -735,10 +532,14 @@ def _render_postprocessor(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
-        from typing import Optional, TYPE_CHECKING
+        from pathlib import Path
+        from typing import TYPE_CHECKING
 
         from pilates.generic.postprocessor import GenericPostprocessor
-        from pilates.generic.records import RecordStore
+        from pilates.{spec.model}.outputs import (
+            {spec.postprocess_output_class},
+            {spec.run_output_class},
+        )
 
         if TYPE_CHECKING:
             from pilates.workspace import Workspace
@@ -749,12 +550,14 @@ def _render_postprocessor(spec: ScaffoldSpec) -> str:
 
             def _postprocess(
                 self,
-                raw_outputs: RecordStore,
+                raw_outputs: {spec.run_output_class},
                 workspace: "Workspace",
-                model_run_hash: Optional[str] = None,
-            ) -> RecordStore:
+            ) -> {spec.postprocess_output_class}:
                 """Transform raw outputs into publishable artifacts."""
-                return raw_outputs
+                del raw_outputs
+                return {spec.postprocess_output_class}(
+                    output_root=Path(workspace.full_path) / "{spec.model}" / "postprocess",
+                )
         '''
         ).strip()
         + "\n"
@@ -769,14 +572,9 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
 
         from dataclasses import dataclass, field
         from pathlib import Path
-        from typing import ClassVar, Dict, Iterable, Tuple, TYPE_CHECKING
+        from typing import ClassVar, Dict, Iterable, Tuple
 
-        from pilates.generic.records import RecordStore
-        from pilates.utils.coupler_helpers import artifact_to_path
         from pilates.workflows.outputs_base import StepOutputsBase
-
-        if TYPE_CHECKING:
-            from pilates.workspace import Workspace
 
 
         @dataclass
@@ -795,22 +593,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
                 for key, path in self.prepared_inputs.items():
                     yield key, path, f"{spec.class_prefix} prepared input: {{key}}"
 
-            @classmethod
-            def from_record_store(
-                cls, record_store: RecordStore, workspace: "Workspace"
-            ) -> "{spec.preprocess_output_class}":
-                mapping = record_store.to_mapping() if record_store is not None else {{}}
-                prepared_inputs: Dict[str, Path] = {{}}
-                for key, value in mapping.items():
-                    path = artifact_to_path(value, workspace)
-                    if path is None:
-                        continue
-                    prepared_inputs[key] = Path(path)
-                return cls(
-                    output_root=Path(workspace.full_path) / "{spec.model}" / "preprocess",
-                    prepared_inputs=prepared_inputs,
-                )
-
 
         @dataclass
         class {spec.run_output_class}(StepOutputsBase):
@@ -828,22 +610,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
                 for key, path in self.raw_outputs.items():
                     yield key, path, f"{spec.class_prefix} raw output: {{key}}"
 
-            @classmethod
-            def from_record_store(
-                cls, record_store: RecordStore, workspace: "Workspace"
-            ) -> "{spec.run_output_class}":
-                mapping = record_store.to_mapping() if record_store is not None else {{}}
-                raw_outputs: Dict[str, Path] = {{}}
-                for key, value in mapping.items():
-                    path = artifact_to_path(value, workspace)
-                    if path is None:
-                        continue
-                    raw_outputs[key] = Path(path)
-                return cls(
-                    output_root=Path(workspace.full_path) / "{spec.model}" / "run",
-                    raw_outputs=raw_outputs,
-                )
-
 
         @dataclass
         class {spec.postprocess_output_class}(StepOutputsBase):
@@ -860,22 +626,6 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
             def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
                 for key, path in self.processed_outputs.items():
                     yield key, path, f"{spec.class_prefix} postprocess output: {{key}}"
-
-            @classmethod
-            def from_record_store(
-                cls, record_store: RecordStore, workspace: "Workspace"
-            ) -> "{spec.postprocess_output_class}":
-                mapping = record_store.to_mapping() if record_store is not None else {{}}
-                processed_outputs: Dict[str, Path] = {{}}
-                for key, value in mapping.items():
-                    path = artifact_to_path(value, workspace)
-                    if path is None:
-                        continue
-                    processed_outputs[key] = Path(path)
-                return cls(
-                    output_root=Path(workspace.full_path) / "{spec.model}" / "postprocess",
-                    processed_outputs=processed_outputs,
-                )
         '''
         ).strip()
         + "\n"
@@ -888,180 +638,143 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
             f'''
         from __future__ import annotations
 
-        from typing import Any, Callable
+        from typing import Any, Mapping
+
+        from consist import BindingResult, define_step
 
         from pilates.{spec.model}.outputs import (
             {spec.postprocess_output_class},
             {spec.preprocess_output_class},
             {spec.run_output_class},
         )
-
-        from .shared import (
-            CouplerProtocol,
-            PilatesConfig,
-            StandardStepSpec,
-            StepOutputsHolder,
-            Workspace,
-            WorkflowState,
-            build_standard_step,
-            log_and_set_output,
+        from pilates.{spec.model}.preprocessor import {spec.preprocessor_class}
+        from pilates.utils.consist_runtime import require_runtime_kwargs
+        from pilates.workflows.resolved_inputs import ResolvedStepInputs
+        from pilates.workflows.consist_metadata import consist_step_meta
+        from pilates.workflows.contracts import (
+            ConfigContract,
+            InputContract,
+            StepDefinition,
         )
 
 
-        def _execute_{spec.model}_preprocess(
-            component: Any,
-            workspace: Workspace,
-            outputs_holder: StepOutputsHolder,
-            **kwargs: Any,
-        ) -> {spec.preprocess_output_class}:
-            """Adapt this scaffolded preprocess executor to the model component."""
-            raise NotImplementedError("Adapt preprocess execution for {spec.model}")
+        _{spec.model.upper()}_PREPROCESS_INPUT_CONTRACT = InputContract(
+            status="incomplete",
+            reason="model adapter inputs and workspace dependencies are not yet inventoried",
+            config_contract=ConfigContract.adapter("{spec.model}"),
+        )
+        _{spec.model.upper()}_RUN_INPUT_CONTRACT = InputContract(
+            status="incomplete",
+            reason="model adapter inputs and workspace dependencies are not yet inventoried",
+            config_contract=ConfigContract.adapter("{spec.model}"),
+        )
+        _{spec.model.upper()}_POSTPROCESS_INPUT_CONTRACT = InputContract(
+            status="incomplete",
+            reason="model adapter inputs and workspace dependencies are not yet inventoried",
+            config_contract=ConfigContract.adapter("{spec.model}"),
+        )
 
 
-        def _execute_{spec.model}_run(
-            component: Any,
-            workspace: Workspace,
-            outputs_holder: StepOutputsHolder,
-            **kwargs: Any,
-        ) -> {spec.run_output_class}:
-            """Adapt this scaffolded run executor to the model component."""
-            raise NotImplementedError("Adapt run execution for {spec.model}")
+        def _resolve_{spec.model}_inputs(**_: Any) -> ResolvedStepInputs:
+            """Resolve this model's semantic roles once before execution.
 
-
-        def _execute_{spec.model}_postprocess(
-            component: Any,
-            workspace: Workspace,
-            outputs_holder: StepOutputsHolder,
-            **kwargs: Any,
-        ) -> {spec.postprocess_output_class}:
-            """Adapt this scaffolded postprocess executor to the model component."""
-            raise NotImplementedError("Adapt postprocess execution for {spec.model}")
-
-
-        def make_{spec.model}_preprocess_step(
-            *,
-            coupler: CouplerProtocol,
-            outputs_holder: StepOutputsHolder,
-        ) -> Callable[..., None]:
-            """Build the {spec.class_prefix} preprocess workflow step."""
-
-            def _log_outputs(
-                outputs: {spec.preprocess_output_class},
-                settings: PilatesConfig,
-                state: WorkflowState,
-                workspace: Workspace,
-                holder: StepOutputsHolder,
-            ) -> None:
-                for short_name, path, description in outputs._iter_record_items():
-                    log_and_set_output(
-                        key=short_name,
-                        path=str(path),
-                        description=description,
-                        coupler=coupler,
-                    )
-
-            return build_standard_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-                spec=StandardStepSpec(
-                    step_name="{spec.preprocess_step_name}",
-                    model_name="{spec.model}",
-                    phase="preprocess",
-                    outputs_class={spec.preprocess_output_class},
-                    component_getter=lambda factory, state: factory.get_preprocessor(
-                        "{spec.model}", state
-                    ),
-                    component_executor=_execute_{spec.model}_preprocess,
-                    outputs_holder_key="{spec.holder_prefix}_preprocess",
-                    output_logger=_log_outputs,
-                    step_description="{spec.class_prefix} preprocess",
-                    tags=["{spec.model}", "preprocess"],
-                ),
+            Replace the empty role set with explicit required and optional roles,
+            concrete selected artifacts, and deterministic destinations.
+            """
+            return ResolvedStepInputs(
+                step_name="{spec.preprocess_step_name}",
+                binding=BindingResult(),
+                required_roles=(),
+                optional_roles=(),
             )
 
 
-        def make_{spec.model}_run_step(
+        def _project_{spec.model}_outputs(
+            outputs: Mapping[str, Any],
             *,
-            coupler: CouplerProtocol,
-            outputs_holder: StepOutputsHolder,
-        ) -> Callable[..., None]:
-            """Build the {spec.class_prefix} run workflow step."""
-
-            def _log_outputs(
-                outputs: {spec.run_output_class},
-                settings: PilatesConfig,
-                state: WorkflowState,
-                workspace: Workspace,
-                holder: StepOutputsHolder,
-            ) -> None:
-                for short_name, path, description in outputs._iter_record_items():
-                    log_and_set_output(
-                        key=short_name,
-                        path=str(path),
-                        description=description,
-                        coupler=coupler,
-                    )
-
-            return build_standard_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-                spec=StandardStepSpec(
-                    step_name="{spec.run_step_name}",
-                    model_name="{spec.model}",
-                    phase="run",
-                    outputs_class={spec.run_output_class},
-                    component_getter=lambda factory, state: factory.get_runner(
-                        "{spec.model}", state
-                    ),
-                    component_executor=_execute_{spec.model}_run,
-                    outputs_holder_key="{spec.holder_prefix}_run",
-                    output_logger=_log_outputs,
-                    step_description="{spec.class_prefix} run",
-                    tags=["{spec.model}", "run"],
-                ),
+            workspace: Any,
+            output_type: type[Any],
+            **_: Any,
+        ) -> Any:
+            """Project persisted Consist outputs into the typed PILATES boundary."""
+            del outputs, workspace, output_type
+            raise NotImplementedError(
+                "Map persisted Consist outputs to the model's typed output class"
             )
 
 
-        def make_{spec.model}_postprocess_step(
-            *,
-            coupler: CouplerProtocol,
-            outputs_holder: StepOutputsHolder,
-        ) -> Callable[..., None]:
-            """Build the {spec.class_prefix} postprocess workflow step."""
+        @define_step(
+            model="{spec.preprocess_step_name}",
+            schema_outputs=[],
+            input_binding="paths",
+            **consist_step_meta(
+                "{spec.preprocess_step_name}",
+                input_contract=_{spec.model.upper()}_PREPROCESS_INPUT_CONTRACT,
+            ),
+        )
+        @require_runtime_kwargs("settings", "state", "workspace")
+        def _{spec.model}_preprocess_callable(*, settings: Any, state: Any, workspace: Any) -> None:
+            """Run the model-local preprocess adapter after native input resolution."""
+            {spec.preprocessor_class}("{spec.model}", state).preprocess(workspace)
 
-            def _log_outputs(
-                outputs: {spec.postprocess_output_class},
-                settings: PilatesConfig,
-                state: WorkflowState,
-                workspace: Workspace,
-                holder: StepOutputsHolder,
-            ) -> None:
-                for short_name, path, description in outputs._iter_record_items():
-                    log_and_set_output(
-                        key=short_name,
-                        path=str(path),
-                        description=description,
-                        coupler=coupler,
-                    )
 
-            return build_standard_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-                spec=StandardStepSpec(
-                    step_name="{spec.postprocess_step_name}",
-                    model_name="{spec.model}",
-                    phase="postprocess",
-                    outputs_class={spec.postprocess_output_class},
-                    component_getter=lambda factory, state: factory.get_postprocessor(
-                        "{spec.model}", state
-                    ),
-                    component_executor=_execute_{spec.model}_postprocess,
-                    outputs_holder_key="{spec.holder_prefix}_postprocess",
-                    output_logger=_log_outputs,
-                    step_description="{spec.class_prefix} postprocess",
-                    tags=["{spec.model}", "postprocess"],
-                ),
-            )
+        @define_step(
+            model="{spec.run_step_name}",
+            schema_outputs=[],
+            input_binding="paths",
+            **consist_step_meta(
+                "{spec.run_step_name}",
+                input_contract=_{spec.model.upper()}_RUN_INPUT_CONTRACT,
+            ),
+        )
+        @require_runtime_kwargs("settings", "state", "workspace")
+        def _{spec.model}_run_callable(*, settings: Any, state: Any, workspace: Any) -> None:
+            """Run the model-local adapter after native input resolution."""
+            raise NotImplementedError("Adapt {spec.model} runner inputs and outputs")
+
+
+        @define_step(
+            model="{spec.postprocess_step_name}",
+            schema_outputs=[],
+            input_binding="paths",
+            **consist_step_meta(
+                "{spec.postprocess_step_name}",
+                input_contract=_{spec.model.upper()}_POSTPROCESS_INPUT_CONTRACT,
+            ),
+        )
+        @require_runtime_kwargs("settings", "state", "workspace")
+        def _{spec.model}_postprocess_callable(*, settings: Any, state: Any, workspace: Any) -> None:
+            """Run the model-local postprocess adapter after native input resolution."""
+            raise NotImplementedError("Adapt {spec.model} postprocess inputs and outputs")
+
+
+        {spec.model}_preprocess = StepDefinition(
+            name="{spec.preprocess_step_name}",
+            function=_{spec.model}_preprocess_callable,
+            resolve_inputs=_resolve_{spec.model}_inputs,
+            project_outputs=lambda outputs, **kwargs: _project_{spec.model}_outputs(
+                outputs, output_type={spec.preprocess_output_class}, **kwargs
+            ),
+            input_contract=_{spec.model.upper()}_PREPROCESS_INPUT_CONTRACT,
+        )
+        {spec.model}_run = StepDefinition(
+            name="{spec.run_step_name}",
+            function=_{spec.model}_run_callable,
+            resolve_inputs=_resolve_{spec.model}_inputs,
+            project_outputs=lambda outputs, **kwargs: _project_{spec.model}_outputs(
+                outputs, output_type={spec.run_output_class}, **kwargs
+            ),
+            input_contract=_{spec.model.upper()}_RUN_INPUT_CONTRACT,
+        )
+        {spec.model}_postprocess = StepDefinition(
+            name="{spec.postprocess_step_name}",
+            function=_{spec.model}_postprocess_callable,
+            resolve_inputs=_resolve_{spec.model}_inputs,
+            project_outputs=lambda outputs, **kwargs: _project_{spec.model}_outputs(
+                outputs, output_type={spec.postprocess_output_class}, **kwargs
+            ),
+            input_contract=_{spec.model.upper()}_POSTPROCESS_INPUT_CONTRACT,
+        )
         '''
         ).strip()
         + "\n"
@@ -1153,17 +866,17 @@ def _extract_top_level_function_block(
 def _render_stage_patch_import_block(spec: ScaffoldSpec) -> str:
     return dedent(
         f"""
-            from pilates.runtime.context import WorkflowRuntimeContext
-            from pilates.workflows.binding import build_binding_plan
-            from pilates.workflows.orchestration import StageRunner, StepRef, run_workflow
-            make_{spec.model}_postprocess_step,
-            make_{spec.model}_preprocess_step,
-            make_{spec.model}_run_step,
+            from pilates.workflows.step_execution import execute_step
+            from pilates.workflows.steps import (
+                {spec.model}_postprocess,
+                {spec.model}_preprocess,
+                {spec.model}_run,
+            )
         """
     ).strip()
 
 
-def _render_stage_patch_stepref_block(
+def _render_stage_patch_execution_block(
     spec: ScaffoldSpec,
     *,
     pattern: str,
@@ -1171,84 +884,93 @@ def _render_stage_patch_stepref_block(
     if pattern == STAGE_PATTERN_LINEAR:
         return dedent(
             f"""
-            runtime_context = WorkflowRuntimeContext.from_parts(
+            {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
+                settings=settings, state=state, workspace=workspace,
+                coupler=scenario.coupler,
+            )
+            _, {spec.model}_preprocess_outputs = execute_step(
+                scenario=scenario,
+                definition={spec.model}_preprocess,
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                surface=surface,
+                stage="<stage_name>",
+                year=year,
+                iteration=None,
+                phase="preprocess",
+                resolved_inputs={spec.model}_preprocess_inputs,
             )
-            stage_runner = StageRunner(
-                stage_name="<stage_name>",
+            {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
+                settings=settings, state=state, workspace=workspace,
+                coupler=scenario.coupler,
+            )
+            _, {spec.model}_run_outputs = execute_step(
                 scenario=scenario,
-                state=runtime_context.state,
-                settings=runtime_context.settings,
-                workspace=runtime_context.workspace,
-                coupler=coupler,
-                outputs_holder=outputs_holder_year,
-                name_suffix=str(year),
-                run_workflow_fn=run_workflow,
+                definition={spec.model}_run,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                stage="<stage_name>",
+                year=year,
+                iteration=None,
+                phase="run",
+                resolved_inputs={spec.model}_run_inputs,
             )
-            {spec.model}_preprocess_binding = build_binding_plan(
-                step_name="{spec.preprocess_step_name}",
-                coupler=coupler,
-                explicit_inputs={{...}},
-                fallback_inputs={{...}},
-                required_keys=[...],
-                surface=runtime_context.surface,
+            {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
+                settings=settings, state=state, workspace=workspace,
+                coupler=scenario.coupler,
             )
-            stage_runner.run_step(
-                step=StepRef(
-                    name="{spec.preprocess_step_name}",
-                    step_func=make_{spec.model}_preprocess_step(
-                        coupler=coupler,
-                        outputs_holder=outputs_holder_year,
-                    ),
-                    binding={spec.model}_preprocess_binding,
-                    year=year,
-                )
+            _, {spec.model}_postprocess_outputs = execute_step(
+                scenario=scenario,
+                definition={spec.model}_postprocess,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                stage="<stage_name>",
+                year=year,
+                iteration=None,
+                phase="postprocess",
+                resolved_inputs={spec.model}_postprocess_inputs,
             )
             """
         ).strip()
     if pattern == STAGE_PATTERN_ITERATIVE:
         return dedent(
             f"""
-            runtime_context = WorkflowRuntimeContext.from_parts(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                surface=surface,
-            )
-            stage_runner = StageRunner(
-                stage_name="<stage_name>",
-                scenario=scenario,
-                state=runtime_context.state,
-                settings=runtime_context.settings,
-                workspace=runtime_context.workspace,
-                coupler=coupler,
-                outputs_holder=outputs_holder_iteration,
-                name_suffix=f"{{year}}_iter{{i}}",
-                iteration=i,
-                run_workflow_fn=run_workflow,
-            )
-            {spec.model}_preprocess_binding = build_binding_plan(
-                step_name="{spec.preprocess_step_name}",
-                coupler=coupler,
-                explicit_inputs={{...}},
-                fallback_inputs={{...}},
-                required_keys=[...],
-                surface=runtime_context.surface,
-            )
-            stage_runner.run_step(
-                step=StepRef(
-                    name="{spec.preprocess_step_name}",
-                    step_func=make_{spec.model}_preprocess_step(
-                        coupler=coupler,
-                        outputs_holder=outputs_holder_iteration,
-                    ),
-                    binding={spec.model}_preprocess_binding,
-                    year=year,
+            for iteration in range(settings.run.supply_demand_iters):
+                {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
+                    settings=settings, state=state, workspace=workspace,
+                    coupler=scenario.coupler,
                 )
-            )
+                _, {spec.model}_preprocess_outputs = execute_step(
+                    scenario=scenario, definition={spec.model}_preprocess,
+                    settings=settings, state=state, workspace=workspace,
+                    stage="<stage_name>", year=year, iteration=iteration,
+                    phase="preprocess",
+                    resolved_inputs={spec.model}_preprocess_inputs,
+                )
+                {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
+                    settings=settings, state=state, workspace=workspace,
+                    coupler=scenario.coupler,
+                )
+                _, {spec.model}_run_outputs = execute_step(
+                    scenario=scenario, definition={spec.model}_run,
+                    settings=settings, state=state, workspace=workspace,
+                    stage="<stage_name>", year=year, iteration=iteration,
+                    phase="run",
+                    resolved_inputs={spec.model}_run_inputs,
+                )
+                {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
+                    settings=settings, state=state, workspace=workspace,
+                    coupler=scenario.coupler,
+                )
+                _, {spec.model}_postprocess_outputs = execute_step(
+                    scenario=scenario, definition={spec.model}_postprocess,
+                    settings=settings, state=state, workspace=workspace,
+                    stage="<stage_name>", year=year, iteration=iteration,
+                    phase="postprocess",
+                    resolved_inputs={spec.model}_postprocess_inputs,
+                )
             """
         ).strip()
     raise ValueError(f"Unsupported stage patch pattern: {pattern}")
@@ -1344,23 +1066,22 @@ def _render_stage_patch_plan(
             per_pattern_anchors[pattern] = _anchor_candidates_for_pattern(pattern)[0]
 
     pattern_sections = "\n\n".join(
-        dedent(
-            f"""
-            ### `{pattern}` `StepRef` block
-
-            Suggested insertion anchor in function body: `{per_pattern_anchors[pattern]}`
-
-            ```python
-            {_render_stage_patch_stepref_block(spec, pattern=pattern)}
-            ```
-            """
-        ).strip()
+        "\n".join(
+            [
+                f"### `{pattern}` native execution block",
+                "",
+                f"Suggested insertion anchor in function body: `{per_pattern_anchors[pattern]}`",
+                "",
+                "```python",
+                _render_stage_patch_execution_block(spec, pattern=pattern),
+                "```",
+            ]
+        )
         for pattern in stage_patterns
     )
 
-    return (
-        dedent(
-            f"""
+    header_and_anchors = dedent(
+        f"""
         # Stage Patch Plan: `{spec.model}`
 
         This patch plan was scaffolded by `scripts/new_model_scaffold.py`.
@@ -1384,22 +1105,32 @@ def _render_stage_patch_plan(
         ## Ready-to-Paste Snippets
 
         ### Import block for `from pilates.workflows.steps import (...)`
+        """
+    ).strip()
 
-        ```python
-        {_render_stage_patch_import_block(spec)}
-        ```
-
-        {pattern_sections}
-
+    checklist_footer = dedent(
+        f"""
         ## Required Variable Adaptation Checklist
 
         - [ ] Confirm the stage function has `coupler`, `scenario`, `state`, `settings`, `workspace`, `surface`, and `year`, or adapt the snippet to an existing `WorkflowRuntimeContext`.
-        - [ ] Replace `outputs_holder_year` and/or `outputs_holder_iteration` with the target function's holder variable names.
-        - [ ] Replace placeholder `<stage_name>` and adapt `StageRunner(...)` naming/iteration metadata to the target stage.
-        - [ ] Update `build_binding_plan(...)` explicit/fallback/required mappings for the new model's true dependencies.
+        - [ ] Replace placeholder `<stage_name>` and adapt the explicit `execute_step(...)` calls to the target stage.
+        - [ ] Complete each generated resolver with the model's semantic roles,
+              concrete selected artifacts, and deterministic destinations.
+        - [ ] Keep each typed `*_outputs` projection as the only stage-local
+              handoff to the following sequencing decision.
         - [ ] Keep `stage_name="{catalog_stage}"` aligned between stage wiring and catalog entries.
         """
-        ).strip()
+    ).strip()
+
+    return (
+        "\n\n".join(
+            [
+                header_and_anchors,
+                f"```python\n{_render_stage_patch_import_block(spec)}\n```",
+                pattern_sections,
+                checklist_footer,
+            ]
+        )
         + "\n"
     )
 
@@ -1413,51 +1144,42 @@ def _render_linear_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> 
         # Copy/adapt this snippet into the target stage module under
         # pilates/workflows/stages/.
 
-        from pilates.runtime.context import WorkflowRuntimeContext
-        from pilates.workflows.binding import build_binding_plan
-        from pilates.workflows.orchestration import StageRunner, StepRef, run_workflow
+        from pilates.workflows.step_execution import execute_step
         from pilates.workflows.steps import (
-            make_{spec.model}_postprocess_step,
-            make_{spec.model}_preprocess_step,
-            make_{spec.model}_run_step,
+            {spec.model}_postprocess,
+            {spec.model}_preprocess,
+            {spec.model}_run,
         )
 
-        runtime_context = WorkflowRuntimeContext.from_parts(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            surface=surface,
+        {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
+            settings=settings, state=state, workspace=workspace,
+            coupler=scenario.coupler,
         )
-        stage_runner = StageRunner(
-            stage_name="{catalog_stage}",
-            scenario=scenario,
-            state=runtime_context.state,
-            settings=runtime_context.settings,
-            workspace=runtime_context.workspace,
-            coupler=coupler,
-            outputs_holder=outputs_holder_year,
-            name_suffix=str(year),
-            run_workflow_fn=run_workflow,
+        _, {spec.model}_preprocess_outputs = execute_step(
+            scenario=scenario, definition={spec.model}_preprocess,
+            settings=settings, state=state, workspace=workspace,
+            stage="{catalog_stage}", year=year, iteration=None, phase="preprocess",
+            resolved_inputs={spec.model}_preprocess_inputs,
         )
-
-        preprocess_binding = build_binding_plan(
-            step_name="{spec.preprocess_step_name}",
-            coupler=coupler,
-            explicit_inputs={{...}},
-            fallback_inputs={{...}},
-            required_keys=[...],
-            surface=runtime_context.surface,
+        {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
+            settings=settings, state=state, workspace=workspace,
+            coupler=scenario.coupler,
         )
-        stage_runner.run_step(
-            step=StepRef(
-                name="{spec.preprocess_step_name}",
-                step_func=make_{spec.model}_preprocess_step(
-                    coupler=coupler,
-                    outputs_holder=outputs_holder_year,
-                ),
-                binding=preprocess_binding,
-                year=year,
-            )
+        _, {spec.model}_run_outputs = execute_step(
+            scenario=scenario, definition={spec.model}_run,
+            settings=settings, state=state, workspace=workspace,
+            stage="{catalog_stage}", year=year, iteration=None, phase="run",
+            resolved_inputs={spec.model}_run_inputs,
+        )
+        {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
+            settings=settings, state=state, workspace=workspace,
+            coupler=scenario.coupler,
+        )
+        _, {spec.model}_postprocess_outputs = execute_step(
+            scenario=scenario, definition={spec.model}_postprocess,
+            settings=settings, state=state, workspace=workspace,
+            stage="{catalog_stage}", year=year, iteration=None, phase="postprocess",
+            resolved_inputs={spec.model}_postprocess_inputs,
         )
         """
         ).strip()
@@ -1474,55 +1196,46 @@ def _render_iterative_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) 
         # Use this when the model should run per-iteration (for example within
         # supply-demand loops). Adjust input resolution to your stage.
 
-        from pilates.runtime.context import WorkflowRuntimeContext
-        from pilates.workflows.binding import build_binding_plan
-        from pilates.workflows.orchestration import StageRunner, StepRef, run_workflow
+        from pilates.workflows.step_execution import execute_step
         from pilates.workflows.steps import (
-            StepOutputsHolder,
-            make_{spec.model}_postprocess_step,
-            make_{spec.model}_preprocess_step,
-            make_{spec.model}_run_step,
+            {spec.model}_postprocess,
+            {spec.model}_preprocess,
+            {spec.model}_run,
         )
 
         for iteration in range(settings.run.supply_demand_iters):
-            outputs_holder_iteration = StepOutputsHolder()
-            runtime_context = WorkflowRuntimeContext.from_parts(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                surface=surface,
+            {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
+                settings=settings, state=state, workspace=workspace,
+                coupler=scenario.coupler,
             )
-            stage_runner = StageRunner(
-                stage_name="{catalog_stage}",
-                scenario=scenario,
-                state=runtime_context.state,
-                settings=runtime_context.settings,
-                workspace=runtime_context.workspace,
-                coupler=coupler,
-                outputs_holder=outputs_holder_iteration,
-                name_suffix=f"{{year}}_iter{{iteration}}",
-                iteration=iteration,
-                run_workflow_fn=run_workflow,
+            _, {spec.model}_preprocess_outputs = execute_step(
+                scenario=scenario, definition={spec.model}_preprocess,
+                settings=settings, state=state, workspace=workspace,
+                stage="{catalog_stage}", year=year, iteration=iteration,
+                phase="preprocess",
+                resolved_inputs={spec.model}_preprocess_inputs,
             )
-
-            preprocess_binding = build_binding_plan(
-                step_name="{spec.preprocess_step_name}",
-                coupler=coupler,
-                explicit_inputs={{...}},
-                fallback_inputs={{...}},
-                required_keys=[...],
-                surface=runtime_context.surface,
+            {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
+                settings=settings, state=state, workspace=workspace,
+                coupler=scenario.coupler,
             )
-            stage_runner.run_step(
-                step=StepRef(
-                    name="{spec.preprocess_step_name}",
-                    step_func=make_{spec.model}_preprocess_step(
-                        coupler=coupler,
-                        outputs_holder=outputs_holder_iteration,
-                    ),
-                    binding=preprocess_binding,
-                    year=year,
-                )
+            _, {spec.model}_run_outputs = execute_step(
+                scenario=scenario, definition={spec.model}_run,
+                settings=settings, state=state, workspace=workspace,
+                stage="{catalog_stage}", year=year, iteration=iteration,
+                phase="run",
+                resolved_inputs={spec.model}_run_inputs,
+            )
+            {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
+                settings=settings, state=state, workspace=workspace,
+                coupler=scenario.coupler,
+            )
+            _, {spec.model}_postprocess_outputs = execute_step(
+                scenario=scenario, definition={spec.model}_postprocess,
+                settings=settings, state=state, workspace=workspace,
+                stage="{catalog_stage}", year=year, iteration=iteration,
+                phase="postprocess",
+                resolved_inputs={spec.model}_postprocess_inputs,
             )
         """
         ).strip()
@@ -1577,21 +1290,20 @@ def _render_checklist(
 
         ## Registrations Applied
 
-        - [ ] `pilates/generic/model_factory.py`
         - [ ] `pilates/workflows/steps/__init__.py`
-        - [ ] `pilates/workflows/steps/__init__.py` (`SCHEMA_STEP_BUILDERS`)
-        - [ ] `pilates/workflows/steps/shared.py`
+        - [ ] `pilates/workflows/steps/__init__.py` (`STEP_DEFINITIONS`)
         - [ ] `pilates/workflows/catalog.py`
 
         ## Required Follow-up Wiring
 
         - [ ] Start from one of the generated stage template snippets and wire
               the new model into the target stage module under
-              `pilates/workflows/stages/*.py` using `WorkflowRuntimeContext`,
-              `StageRunner`, and `build_binding_plan(...)`.
+              `pilates/workflows/stages/*.py` using explicit `execute_step(...)`
+              calls for preprocess, run, and postprocess.
         - [ ] If generated, use the stage patch plan artifact in
-              `docs/checklists/stage_templates/` to apply import + stage-runner /
-              binding wiring with the recommended insertion anchors.
+              `docs/checklists/stage_templates/` to add native imports,
+              one resolver call per phase, and explicit `execute_step(...)`
+              sequencing at the recommended insertion anchors.
         - [ ] Confirm catalog stage metadata for `{spec.model}`:
               `stage_name="{catalog_options.stage_name}"`, `order={catalog_options.order_start or "auto"}`
               and enablement attrs (`enabled_flag_attr`, `enabled_model_attr`) are
@@ -1600,26 +1312,23 @@ def _render_checklist(
               from raw settings or `WorkflowProfile` inside the model module.
         - [ ] Keep runtime source precedence and fallback policy in binding, not
               in stage-local `coupler.get(...)` chains.
-        - [ ] Prefer declaring expected outputs on the step metadata path (for example
-              `@define_step(outputs=[...])`) and rely on orchestration's strict
-              inferred defaults (`output_missing=\"error\"`, `output_mismatch=\"error\"`).
-              Use explicit `outputs` (or `StepRef.required_outputs` alias) /
-              `StepRef.output_*` only as overrides.
+        - [ ] Define semantic input roles once in the resolver, declare output
+              schema on `@define_step`, and make the `StepDefinition` projector
+              validate and type the persisted Consist outputs.
         - [ ] Set `declared_outputs` on generated `StepOutputs` classes for stable output keys
               so decorator metadata and runtime fallback use one canonical contract.
-        - [ ] Use `StandardStepSpec` / `build_standard_step()` for the normal
-              typed-step shell unless the model truly needs custom execution wiring.
+        - [ ] Keep the decorated callable, resolver, projector, and
+              `StepDefinition` together in the step module; do not create a
+              second execution wrapper.
         - [ ] If this model needs provenance hashing/facets, confirm the generated
               catalog `provenance` metadata and add builder support in
-              `pilates/utils/consist_config.py` as needed.
+              `pilates/workflows/consist_metadata.py` as needed.
         - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`.
         - [ ] Add/extend coupler schema entries in `pilates/workflows/coupler_schema.py`.
-        - [ ] Add model-specific expected input/output declarations (component classes + stage wiring).
 
         ## Test Plan
 
         - [ ] Add step contract tests for `{spec.model}` in `tests/test_stage_contracts.py` or a model-specific test.
-        - [ ] Add expected input/output contract tests (`tests/test_expected_inputs_contracts.py`).
         - [ ] Add facet/coupler/manifest invariants if this model introduces new cross-step artifacts.
         - [ ] Add or update architecture guardrail tests if the integration adds a new allowed seam.
         - [ ] Run targeted tests and record commands/results in your PR.
@@ -1759,7 +1468,7 @@ def _parse_args() -> argparse.Namespace:
         "--provenance-builder-key",
         help=(
             "Optional catalog provenance builder key for generated steps "
-            "(for pilates/utils/consist_config.py dispatch)"
+            "(for pilates/workflows/consist_metadata.py dispatch)"
         ),
     )
     parser.add_argument(
@@ -1857,13 +1566,7 @@ def main() -> int:
         ):
             actions.append(("create", path, changed))
 
-        path, changed = _upsert_model_factory(repo_root, spec, dry_run=args.dry_run)
-        actions.append(("update", path, changed))
-
         path, changed = _upsert_steps_init(repo_root, spec, dry_run=args.dry_run)
-        actions.append(("update", path, changed))
-
-        path, changed = _upsert_steps_shared(repo_root, spec, dry_run=args.dry_run)
         actions.append(("update", path, changed))
 
         path, changed = _upsert_workflow_catalog(

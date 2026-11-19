@@ -9,15 +9,15 @@ selects the right runner artifacts and emits expected output records.
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.postprocessor import BeamPostprocessor
-from pilates.utils.settings_helper import get as real_get_setting
 from pilates.workspace import Workspace
-from tests.test_golden_stub_workflow import _build_settings
-from workflow_state import WorkflowState
+from tests.workflow_contract_harness import build_settings as _build_settings
+from pilates.workflows.state import WorkflowState
 
 
 def _write_file(path: Path, content: bytes = b"x") -> None:
@@ -35,7 +35,7 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     - chooses latest events parquet sub-iteration
     - accepts fallback skim short name (raw_od_skims_zarr_*)
     - calls merge helper with expected paths
-    - emits split events, links table, and zarr output records
+    - publishes updated Zarr plus OMX artifacts for their independent consumers
     """
     settings = _build_settings(tmp_path)
     settings.state_file_loc = str(tmp_path / "state.yaml")
@@ -91,23 +91,26 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         settings,
         workspace,
         override=None,
+        output_skims_path=None,
     ):
+        target = output_skims_path if output_skims_path is not None else all_skims_path
+        _write_file(Path(target), b"merged-zarr")
         merge_calls.append(
             {
                 "all_skims_path": all_skims_path,
                 "iteration_skims_path": iteration_skims_path,
                 "beam_output_dir": beam_output_dir,
                 "override": override,
+                "output_skims_path": output_skims_path,
             }
         )
-        return all_skims_path
+        return target
 
-    def _fake_get_setting(settings_obj, key, default=None):
-        if key == "write_skims_to_omx":
-            return False
-        if key == "run.models.land_use":
-            return "not_urbansim"
-        return real_get_setting(settings_obj, key, default)
+    final_omx = Path(workspace.get_beam_mutable_data_dir()) / "test" / "skims.omx"
+
+    def _fake_write_zarr_skim_as_omx_new(*_args, **_kwargs):
+        _write_file(final_omx)
+        return str(final_omx)
 
     monkeypatch.setattr(
         "pilates.beam.postprocessor.split_events_parquet_by_type",
@@ -118,8 +121,14 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         _fake_merge_beam_skims_to_zarr,
     )
     monkeypatch.setattr(
-        "pilates.beam.postprocessor.get_setting",
-        _fake_get_setting,
+        "pilates.beam.postprocessor.write_zarr_skim_as_omx_new",
+        _fake_write_zarr_skim_as_omx_new,
+    )
+    skims_dataset = MagicMock()
+    skims_dataset.__enter__.return_value.data_vars = []
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor.xr.open_zarr",
+        lambda *_args, **_kwargs: skims_dataset,
     )
 
     raw_outputs = BeamRunOutputs(
@@ -142,12 +151,20 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     if outputs.final_skims_omx is not None:
         output_keys.add("final_skims_omx")
 
+    expected_output_zarr = (
+        beam_output_dir
+        / ".pilates-consist-outputs"
+        / "beam_postprocess"
+        / f"year-{state.forecast_year}-iteration-{state.iteration}"
+        / "skims.zarr"
+    )
     assert split_calls == [(str(events_sub1), True)]
     assert len(merge_calls) == 1
     assert merge_calls[0]["all_skims_path"] == str(zarr_skims_target)
     assert merge_calls[0]["iteration_skims_path"] == str(raw_skims)
     assert merge_calls[0]["beam_output_dir"] == str(beam_output_dir)
     assert merge_calls[0]["override"] == str(raw_skims)
+    assert merge_calls[0]["output_skims_path"] == str(expected_output_zarr)
 
     assert (
         f"events_parquet_{state.forecast_year}_{state.iteration}_type_PathTraversal"
@@ -161,7 +178,9 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         f"path_traversal_links_{state.forecast_year}_{state.iteration}" in output_keys
     )
     assert "zarr_skims" in output_keys
-    assert "final_skims_omx" not in output_keys
+    assert "final_skims_omx" in output_keys
+    assert outputs.zarr_skims == expected_output_zarr
+    assert outputs.final_skims_omx == final_omx
     assert state.sub_stage_progress == "postprocessor"
 
 
@@ -175,10 +194,69 @@ def test_beam_postprocess_rejects_non_typed_run_outputs(tmp_path: Path) -> None:
         postprocessor.postprocess(object(), workspace)
 
 
+def test_beam_postprocess_activitysim_missing_raw_skims_has_specific_error(
+    monkeypatch, tmp_path: Path
+) -> None:
+    settings = _build_settings(tmp_path)
+    settings.state_file_loc = str(tmp_path / "state.yaml")
+    workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
+    state = WorkflowState.from_settings(settings)
+    state.current_inner_iter = 0
+
+    beam_output_dir = Path(workspace.get_beam_output_dir())
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    asim_cache_dir = Path(workspace.get_asim_output_dir()) / "cache"
+    asim_cache_dir.mkdir(parents=True, exist_ok=True)
+    _write_file(asim_cache_dir / "skims.zarr", b"main-zarr")
+
+    events_sub0 = beam_output_dir / "events_sub0.parquet"
+    _write_file(events_sub0)
+
+    def _fake_split_events_parquet_by_type(
+        events_path,
+        event_types=None,
+        output_dir=None,
+        output_prefix=None,
+        create_path_traversal_links=False,
+    ):
+        output_root = Path(output_dir) if output_dir else Path(events_path).parent
+        path_traversal = output_root / "split.PathTraversal.parquet"
+        links = output_root / "split.PathTraversal.links.parquet"
+        _write_file(path_traversal)
+        _write_file(links)
+        return ({"PathTraversal": str(path_traversal)}, str(links))
+
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor.split_events_parquet_by_type",
+        _fake_split_events_parquet_by_type,
+    )
+
+    raw_outputs = BeamRunOutputs(
+        beam_output_dir=beam_output_dir,
+        raw_outputs={
+            f"events_parquet_{state.forecast_year}_{state.iteration}_sub0": events_sub0,
+        },
+    )
+
+    postprocessor = BeamPostprocessor("beam", state)
+    with pytest.raises(RuntimeError) as exc_info:
+        postprocessor.postprocess(raw_outputs, workspace)
+
+    message = str(exc_info.value)
+    assert "BEAM postprocess cannot update ActivitySim skims" in message
+    assert "BEAM did not emit a raw OD skim artifact" in message
+    assert f"year={state.forecast_year}" in message
+    assert f"iteration={state.iteration}" in message
+    assert f"raw_od_skims_zarr_{state.forecast_year}_{state.iteration}" in message
+    assert "ActivitySim cannot evolve on stale skims" in message
+
+
 def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_missing(
     monkeypatch, tmp_path: Path
 ) -> None:
     settings = _build_settings(tmp_path)
+    settings.run.models.land_use = None
+    settings.run.models.vehicle_ownership = None
     settings.state_file_loc = str(tmp_path / "state.yaml")
     workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
     state = WorkflowState.from_settings(settings)
@@ -218,21 +296,18 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
         settings,
         workspace,
         override=None,
+        output_skims_path=None,
     ):
+        target = output_skims_path if output_skims_path is not None else all_skims_path
+        _write_file(Path(target), b"merged-zarr")
         merge_calls.append(
             {
                 "all_skims_path": all_skims_path,
                 "iteration_skims_path": iteration_skims_path,
+                "output_skims_path": output_skims_path,
             }
         )
-        return all_skims_path
-
-    def _fake_get_setting(settings_obj, key, default=None):
-        if key == "write_skims_to_omx":
-            return False
-        if key == "run.models.land_use":
-            return "not_urbansim"
-        return real_get_setting(settings_obj, key, default)
+        return target
 
     monkeypatch.setattr(
         "pilates.beam.postprocessor.split_events_parquet_by_type",
@@ -242,11 +317,6 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
         "pilates.beam.postprocessor._merge_beam_skims_to_zarr",
         _fake_merge_beam_skims_to_zarr,
     )
-    monkeypatch.setattr(
-        "pilates.beam.postprocessor.get_setting",
-        _fake_get_setting,
-    )
-
     raw_outputs = BeamRunOutputs(
         beam_output_dir=beam_output_dir,
         raw_outputs={
@@ -262,7 +332,15 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
         zarr_skims=str(restored_zarr),
     )
 
+    expected_output_zarr = (
+        beam_output_dir
+        / ".pilates-consist-outputs"
+        / "beam_postprocess"
+        / f"year-{state.year}-iteration-{state.iteration}"
+        / "skims.zarr"
+    )
     assert len(merge_calls) == 1
     assert merge_calls[0]["all_skims_path"] == str(restored_zarr)
     assert merge_calls[0]["iteration_skims_path"] == str(raw_skims)
-    assert outputs.zarr_skims == restored_zarr
+    assert merge_calls[0]["output_skims_path"] == str(expected_output_zarr)
+    assert outputs.zarr_skims == expected_output_zarr

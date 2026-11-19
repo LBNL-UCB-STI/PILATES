@@ -4,8 +4,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pilates.utils import consist_config as consist_config_module
-from pilates.utils.consist_config import _CONFIG_BUILDERS, build_step_consist_kwargs
+from pilates.config.models import (
+    BeamAdmissionConfig,
+    BeamLinkstatsAdmissionConfig,
+)
+from pilates.workflows import consist_metadata as consist_config_module
+from pilates.workflows.consist_metadata import (
+    _CONFIG_BUILDERS,
+    build_step_consist_kwargs,
+)
 from pilates.workflows import catalog
 
 
@@ -22,7 +29,6 @@ def _make_settings():
     activitysim.chunk_size = 100
     activitysim.num_processes = 2
     activitysim.file_format = "csv"
-    activitysim.warm_start_activities = False
     activitysim.replan_iters = 0
     activitysim.replan_hh_samp_size = 0
     activitysim.replan_after = 0
@@ -42,6 +48,7 @@ def _make_settings():
     beam.router_directory = "r5"
     beam.scenario_folder = "scenario"
     beam.local_mutable_data_folder = "beam/input"
+    beam.admission = None
     beam.to_consist_facet.return_value = {"sample": 1.0}
     settings.beam = beam
 
@@ -51,6 +58,7 @@ def _make_settings():
     urbansim.input_file_template_year = "input_{year}.h5"
     urbansim.output_file_template = "output_{year}.h5"
     urbansim.region_id = "test"
+    urbansim.admission = None
     urbansim.model_dump.return_value = {"region_id": "test"}
     settings.urbansim = urbansim
 
@@ -63,11 +71,7 @@ def _make_settings():
     settings.postprocessing = postprocessing
 
     impacts = MagicMock()
-    impacts.model_dump.return_value = {
-        "command_template": "python -m impacts",
-        "exposure_output_filename": "exposure.csv",
-    }
-    impacts.to_consist_facet.return_value = impacts.model_dump.return_value
+    impacts.model_dump.return_value = {"pipeline": {"presim": {"enabled": True}}}
     settings.impacts = impacts
 
     return settings
@@ -85,26 +89,28 @@ def test_all_models_registered():
     assert set(_CONFIG_BUILDERS.keys()) == expected
 
 
-def test_builders_expose_required_methods():
-    required = {
-        "build_identity_config",
-        "build_facet",
-        "build_identity_inputs",
-        "get_facet_schema_version",
-        "requires_workspace_path",
-    }
+def test_builders_expose_required_fields():
     for name, builder in _CONFIG_BUILDERS.items():
-        missing = [attr for attr in required if not hasattr(builder, attr)]
-        assert not missing, f"Builder {name} missing: {missing}"
+        assert callable(builder.identity_config_fn), name
+        assert callable(builder.facet_fn), name
+        assert isinstance(builder.default_schema_version, str), name
+        assert isinstance(builder.step_schema_versions, dict), name
 
 
 def test_workspace_path_requirement_flags():
-    assert _CONFIG_BUILDERS["activitysim"].requires_workspace_path is True
-    assert _CONFIG_BUILDERS["beam"].requires_workspace_path is True
-    assert _CONFIG_BUILDERS["urbansim"].requires_workspace_path is False
-    assert _CONFIG_BUILDERS["atlas"].requires_workspace_path is False
-    assert _CONFIG_BUILDERS["impacts"].requires_workspace_path is False
-    assert _CONFIG_BUILDERS["postprocessing"].requires_workspace_path is False
+    assert _CONFIG_BUILDERS["activitysim"].identity_inputs_fn is not None
+    assert _CONFIG_BUILDERS["beam"].identity_inputs_fn is not None
+    assert _CONFIG_BUILDERS["urbansim"].identity_inputs_fn is None
+    assert _CONFIG_BUILDERS["atlas"].identity_inputs_fn is None
+    assert _CONFIG_BUILDERS["postprocessing"].identity_inputs_fn is None
+    assert _CONFIG_BUILDERS["impacts"].identity_inputs_fn is None
+
+
+def test_impacts_uses_registered_config_builder():
+    result = build_step_consist_kwargs("impacts_presim", _make_settings())
+
+    assert result["config"] == {"pipeline": {"presim": {"enabled": True}}}
+    assert result["facet"] == result["config"]
 
 
 def test_activitysim_requires_workspace_path():
@@ -146,13 +152,6 @@ def test_no_identity_inputs_for_urbansim():
     assert "identity_inputs" not in result
 
 
-def test_initialization_model_special_case():
-    settings = _make_settings()
-    result = build_step_consist_kwargs("initialization", settings)
-    assert "config" in result
-    assert result["facet_schema_version"] == "initialization_v1"
-
-
 def test_facet_schema_version_routing(tmp_path):
     settings = _make_settings()
 
@@ -180,6 +179,43 @@ def test_facet_schema_version_routing(tmp_path):
     assert result["facet_schema_version"] == "urbansim_run_v1"
 
 
+def test_beam_linkstats_admission_affects_identity_and_expected_bytes_input(tmp_path):
+    settings = _make_settings()
+    expected_bytes = tmp_path / "archive" / "baseline-linkstats.csv.gz"
+    expected_bytes.parent.mkdir()
+    expected_bytes.write_bytes(b"baseline")
+    settings.beam.admission = BeamAdmissionConfig(
+        linkstats=BeamLinkstatsAdmissionConfig(
+            mode="strict",
+            expectation={
+                "kind": "prior_run",
+                "expected_run_id": "baseline-run",
+                "artifact_key": "linkstats_warmstart",
+                "expected_bytes_path": str(expected_bytes),
+            },
+        )
+    )
+    beam_root = tmp_path / "beam" / "input"
+    beam_root.mkdir(parents=True)
+    (beam_root / "main.conf").write_text("x=1")
+
+    result = build_step_consist_kwargs(
+        "beam_run",
+        settings,
+        workspace_path=str(tmp_path),
+    )
+
+    assert result["config"]["linkstats_admission"] == {
+        "mode": "strict",
+        "kind": "prior_run",
+        "expected_run_id": "baseline-run",
+        "artifact_key": "linkstats_warmstart",
+    }
+    assert ("beam_admission_linkstats_expected_bytes", expected_bytes) in result[
+        "identity_inputs"
+    ]
+
+
 def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):
     settings = _make_settings()
 
@@ -189,20 +225,21 @@ def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):
     beam_root.mkdir(parents=True)
     (beam_root / "main.conf").write_text("x=1")
 
-    models = [
-        spec.model_name
+    step_names = [
+        spec.step_name
         for spec in catalog.WORKFLOW_STEP_SPECS
-        if catalog.provenance_builder_key_for_model_name(spec.model_name) is not None
+        if catalog.provenance_builder_key_for_step_name(spec.step_name) is not None
     ]
-    for model_name in models:
+    for step_name in step_names:
         result = build_step_consist_kwargs(
-            model_name,
+            step_name,
             settings,
             workspace_path=str(tmp_path),
         )
-        legacy_key = model_name.split("_")[0]
-        expected_schema_version = _CONFIG_BUILDERS[legacy_key].get_facet_schema_version(
-            model_name
+        legacy_key = step_name.split("_")[0]
+        builder = _CONFIG_BUILDERS[legacy_key]
+        expected_schema_version = builder.step_schema_versions.get(
+            step_name, builder.default_schema_version
         )
         assert result["facet_schema_version"] == expected_schema_version
 
@@ -213,13 +250,13 @@ def test_catalog_dispatch_falls_back_when_provenance_metadata_is_missing(tmp_pat
     asim_dir = tmp_path / "activitysim" / "configs"
     asim_dir.mkdir(parents=True)
 
-    # activitysim_compile intentionally has no catalog provenance metadata.
+    # Non-catalog ActivitySim models use legacy prefix fallback dispatch.
     result = build_step_consist_kwargs(
-        "activitysim_compile",
+        "activitysim_legacy_step",
         settings,
         workspace_path=str(tmp_path),
     )
-    assert result["facet_schema_version"] == "activitysim_compile_v1"
+    assert result["facet_schema_version"] == "activitysim_v1"
 
     # Non-catalog models still use legacy prefix fallback dispatch.
     result = build_step_consist_kwargs(
@@ -245,14 +282,15 @@ def test_catalog_dispatch_uses_provenance_builder_key(monkeypatch):
     # Force a non-legacy builder selection for this model.
     monkeypatch.setattr(
         consist_config_module,
-        "provenance_builder_key_for_model_name",
-        lambda model_name: "atlas" if model_name == "urbansim_run" else None,
+        "provenance_builder_key_for_step_name",
+        lambda step_name: "atlas" if step_name == "urbansim_run" else None,
     )
 
     result = build_step_consist_kwargs("urbansim_run", settings)
-    assert result["facet_schema_version"] == _CONFIG_BUILDERS[
-        "atlas"
-    ].get_facet_schema_version("urbansim_run")
+    atlas_builder = _CONFIG_BUILDERS["atlas"]
+    assert result["facet_schema_version"] == atlas_builder.step_schema_versions.get(
+        "urbansim_run", atlas_builder.default_schema_version
+    )
 
 
 def test_invalid_catalog_provenance_builder_key_fails_fast(monkeypatch):
@@ -260,8 +298,8 @@ def test_invalid_catalog_provenance_builder_key_fails_fast(monkeypatch):
 
     monkeypatch.setattr(
         consist_config_module,
-        "provenance_builder_key_for_model_name",
-        lambda _model_name: "not_registered",
+        "provenance_builder_key_for_step_name",
+        lambda _step_name: "not_registered",
     )
 
     with pytest.raises(ValueError, match="Unknown provenance builder key"):

@@ -6,23 +6,23 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
-from pilates.atlas.inputs import (
+from pilates.atlas.static_inputs import (
     atlas_run_years,
     atlas_static_input_keys_for_interval,
 )
 from pilates.config.models import PilatesConfig, load_config
-from pilates.utils.io import apply_runtime_flags, compute_model_enabled_flags
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_FORECAST_OUTPUT,
-    USIM_H5_UPDATED,
 )
 from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
+from pilates.workflows.state import WorkflowState
 
 if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface
@@ -54,7 +54,6 @@ class PlannedStepRun:
     atlas_year: Optional[int] = None
     optional: bool = False
     depends_on: List[str] = field(default_factory=list)
-    upstream_step_inputs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -136,53 +135,8 @@ class StaticExecutionPlan:
         }
 
 
-def _attach_enabled_flags(settings: PilatesConfig) -> Dict[str, bool]:
-    enabled_flags = compute_model_enabled_flags(settings)
-    apply_runtime_flags(settings, enabled_flags)
-    return enabled_flags
-
-
 def load_settings_for_planning(config_path: str) -> PilatesConfig:
-    settings = load_config(config_path)
-    _attach_enabled_flags(settings)
-    return settings
-
-
-def _interval_step_for_year(settings: PilatesConfig, year: int) -> int:
-    return 7 if year == 2010 else int(settings.run.travel_model_freq)
-
-
-def _iter_planning_years(
-    settings: PilatesConfig,
-    *,
-    surface: "EnabledWorkflowSurface",
-) -> List[Dict[str, int]]:
-    years: List[Dict[str, int]] = []
-    land_use_enabled = surface.stage_enabled("land_use")
-    current_year = int(settings.run.start_year)
-    end_year = int(settings.run.end_year)
-
-    while current_year <= end_year:
-        if land_use_enabled:
-            forecast_year = min(
-                current_year + _interval_step_for_year(settings, current_year),
-                end_year,
-            )
-        else:
-            forecast_year = current_year
-        years.append(
-            {
-                "year": current_year,
-                "forecast_year": forecast_year,
-            }
-        )
-        if not land_use_enabled:
-            break
-        if forecast_year <= current_year:
-            break
-        current_year = forecast_year
-
-    return years
+    return load_config(config_path)
 
 
 def _atlas_sub_years(year: int, forecast_year: int) -> List[int]:
@@ -194,34 +148,32 @@ def _atlas_sub_years(year: int, forecast_year: int) -> List[int]:
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
-    beam_cfg = getattr(settings, "beam", None)
-    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg is not None else None
+    beam_cfg = settings.beam
+    skim_cfg = beam_cfg.full_skim if beam_cfg is not None else None
     if skim_cfg is None:
         return "disabled"
-    return str(getattr(skim_cfg, "run_schedule", "standalone"))
+    return str(skim_cfg.run_schedule or "standalone")
 
 
-def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
+def _should_run_full_skim(
+    settings: PilatesConfig,
+    iteration: int,
+    *,
+    total_iters: Optional[int] = None,
+) -> bool:
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
         return True
     if schedule == "after_each_iteration":
         return True
     if schedule == "after_final_iteration":
-        return iteration == int(settings.run.supply_demand_iters) - 1
+        effective_iters = (
+            int(settings.run.supply_demand_iters)
+            if total_iters is None
+            else int(total_iters)
+        )
+        return iteration == effective_iters - 1
     return False
-
-
-def _effective_supply_demand_iterations(
-    settings: PilatesConfig,
-    *,
-    surface: "EnabledWorkflowSurface",
-) -> int:
-    total_iters = int(settings.run.supply_demand_iters)
-    activity_enabled = surface.stage_enabled("activity_demand")
-    if not activity_enabled and total_iters > 1:
-        return 1
-    return total_iters
 
 
 def _format_dynamic_family(family: str, step_run: PlannedStepRun) -> str:
@@ -423,13 +375,6 @@ def _planned_artifact_path_metadata(
             "Forecast-year UrbanSim output datastore emitted by the runner before postprocessing merges it back into the mutable input slot.",
         )
 
-    if artifact_key == USIM_H5_UPDATED:
-        return (
-            "current_mutable_datastore",
-            input_path,
-            "Updated current UrbanSim datastore handle republished onto the mutable input slot for downstream steps.",
-        )
-
     if artifact_key != USIM_DATASTORE_CURRENT_H5:
         return None, None, None
 
@@ -452,13 +397,6 @@ def _planned_artifact_path_metadata(
             "Current mutable UrbanSim datastore handoff. This often reuses the same physical input-slot path as the base datastore handle.",
         )
 
-    if producer_step_name == "urbansim_preprocess":
-        return (
-            "current_input_seed",
-            input_path,
-            "Current UrbanSim datastore handle at preprocessing time. This is the seeded mutable input-slot file for the runner.",
-        )
-
     return (
         "current_datastore_handle",
         input_path,
@@ -477,6 +415,10 @@ class _PlanBuilder:
     ) -> None:
         self.settings = settings
         self.surface = surface
+        self.planning_state = WorkflowState.for_planning(
+            self.settings,
+            surface=self.surface,
+        )
         self.config_path = config_path
         self.include_postprocessing = include_postprocessing
         self.contracts = workflow_step_contracts_by_name(settings=self.settings)
@@ -499,31 +441,19 @@ class _PlanBuilder:
     def _stage_enabled(self, stage_name: str) -> bool:
         return self.surface.stage_enabled(stage_name)
 
-    def _iter_years(self) -> List[Dict[str, int]]:
-        return _iter_planning_years(
-            self.settings,
-            surface=self.surface,
-        )
-
-    def _effective_supply_demand_iterations(self) -> int:
-        return _effective_supply_demand_iterations(
-            self.settings,
-            surface=self.surface,
-        )
-
     def _scope_external_artifact(self, artifact_key: str, *, dynamic: bool) -> bool:
         if dynamic:
             return True
         return artifact_key not in _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS
 
     def _build_metadata(self) -> Dict[str, Any]:
-        years = self._iter_years()
+        years = self.planning_state.planned_year_intervals()
         enabled_flags = self.surface.profile.to_dict()
         return {
             "start_year": int(self.settings.run.start_year),
             "end_year": int(self.settings.run.end_year),
             "travel_model_freq": int(self.settings.run.travel_model_freq),
-            "supply_demand_iters": self._effective_supply_demand_iterations(),
+            "supply_demand_iters": self.planning_state.effective_supply_demand_iterations(),
             "enabled_flags": enabled_flags,
             "years": years,
             "full_skim_schedule": _full_skim_run_schedule(self.settings),
@@ -532,7 +462,7 @@ class _PlanBuilder:
 
     def _build_assumptions(self) -> List[str]:
         assumptions = [
-            "Artifact edges come from workflow_step_contracts_by_name(); step ordering is tracked separately via depends_on and upstream_step_inputs.",
+            "Artifact edges come from workflow_step_contracts_by_name(); step ordering is tracked separately via catalog depends_on policy.",
             "Missing or blank contracts are preserved as underdeclared gaps instead of being guessed from runtime code.",
         ]
         if self.include_postprocessing:
@@ -542,7 +472,7 @@ class _PlanBuilder:
         return assumptions
 
     def build(self) -> StaticExecutionPlan:
-        for year_info in self._iter_years():
+        for year_info in self.planning_state.planned_year_intervals():
             self._add_year_steps(
                 year=year_info["year"],
                 forecast_year=year_info["forecast_year"],
@@ -551,9 +481,6 @@ class _PlanBuilder:
 
     def _add_year_steps(self, *, year: int, forecast_year: int) -> None:
         if self._stage_enabled("land_use"):
-            self._add_step_run(
-                "urbansim_preprocess", year=year, forecast_year=forecast_year
-            )
             self._add_step_run("urbansim_run", year=year, forecast_year=forecast_year)
             self._add_step_run(
                 "urbansim_postprocess",
@@ -589,10 +516,12 @@ class _PlanBuilder:
             self._add_step_run("postprocessing", year=year, forecast_year=forecast_year)
 
     def _add_supply_demand_steps(self, *, year: int, forecast_year: int) -> None:
-        total_iters = self._effective_supply_demand_iterations()
+        total_iters = self.planning_state.effective_supply_demand_iterations()
         activity_enabled = self._stage_enabled("activity_demand")
         traffic_enabled = self._stage_enabled("traffic_assignment")
-        compile_added = False
+        beam_traffic_enabled = (
+            traffic_enabled and get_traffic_assignment_model(self.settings) == "beam"
+        )
         schedule = _full_skim_run_schedule(self.settings)
 
         for iteration in range(total_iters):
@@ -603,14 +532,6 @@ class _PlanBuilder:
                     forecast_year=forecast_year,
                     iteration=iteration,
                 )
-                if not compile_added:
-                    self._add_step_run(
-                        "activitysim_compile",
-                        year=year,
-                        forecast_year=forecast_year,
-                        iteration=iteration,
-                    )
-                    compile_added = True
                 self._add_step_run(
                     "activitysim_run",
                     year=year,
@@ -624,7 +545,7 @@ class _PlanBuilder:
                     iteration=iteration,
                 )
 
-            if not traffic_enabled:
+            if not beam_traffic_enabled:
                 continue
 
             self._add_step_run(
@@ -654,7 +575,11 @@ class _PlanBuilder:
                 forecast_year=forecast_year,
                 iteration=iteration,
             )
-            if _should_run_full_skim(self.settings, iteration):
+            if _should_run_full_skim(
+                self.settings,
+                iteration,
+                total_iters=total_iters,
+            ):
                 self._add_step_run(
                     "beam_full_skim",
                     year=year,
@@ -697,6 +622,9 @@ class _PlanBuilder:
             step_name=step_name,
             atlas_year=atlas_year,
         )
+        spec = workflow_step_spec_for_step_name(step_name)
+        if spec is None:
+            raise KeyError(f"Unknown workflow step: {step_name}")
         self._step_sequence += 1
         step_id = "step_%03d_%s" % (self._step_sequence, _slugify(step_name))
         step_run = PlannedStepRun(
@@ -717,12 +645,11 @@ class _PlanBuilder:
             iteration=iteration,
             atlas_year=atlas_year,
             optional=bool(contract["optional"]),
-            depends_on=list(contract["depends_on"]),
-            upstream_step_inputs=list(contract["upstream_step_inputs"]),
+            depends_on=list(spec.depends_on),
         )
         self.plan.step_runs.append(step_run)
         self._add_declared_input_edges(step_run, contract)
-        self._add_dependency_edges(step_run, contract)
+        self._add_dependency_edges(step_run)
         self._add_declared_output_edges(step_run, contract)
         self._add_contract_gaps(step_run, contract)
         self._latest_step_by_name[step_name] = step_id
@@ -966,11 +893,8 @@ class _PlanBuilder:
     def _add_dependency_edges(
         self,
         step_run: PlannedStepRun,
-        contract: Mapping[str, Any],
     ) -> None:
-        for upstream_name in list(contract["depends_on"]) + list(
-            contract["upstream_step_inputs"]
-        ):
+        for upstream_name in step_run.depends_on:
             upstream_step_id = self._latest_step_by_name.get(str(upstream_name))
             if upstream_step_id is None:
                 continue
@@ -1046,20 +970,14 @@ class _PlanBuilder:
         )
 
         if not has_declared_inputs and (
-            contract["depends_on"]
-            or contract["upstream_step_inputs"]
-            or step_run.step_name == "postprocessing"
+            step_run.depends_on or step_run.step_name == "postprocessing"
         ):
             message = "No declared input contract is available for this step."
             if step_run.step_name == "postprocessing":
                 message = "Postprocessing currently reads workspace outputs directly; inbound artifact contract is not declared."
             self._append_gap(step_run, "underdeclared_inputs", message)
 
-        if (
-            not has_declared_outputs
-            and spec is not None
-            and spec.outputs_class is not None
-        ):
+        if not has_declared_outputs and spec is not None and spec.tracked:
             self._append_gap(
                 step_run,
                 "underdeclared_outputs",
@@ -1075,7 +993,7 @@ def build_static_execution_plan(
     surface: "EnabledWorkflowSurface",
 ) -> StaticExecutionPlan:
     include_post = (
-        bool(getattr(settings, "postprocessing", None))
+        bool(settings.postprocessing)
         if include_postprocessing is None
         else bool(include_postprocessing)
     )

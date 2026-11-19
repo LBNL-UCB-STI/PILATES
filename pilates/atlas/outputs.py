@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
+import pandas as pd
+
+from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.usim_h5 import resolve_usim_h5_table_key
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
@@ -65,6 +69,59 @@ class AtlasPreprocessOutputs(StepOutputsBase):
             raise AssertionError(
                 "AtlasPreprocessOutputs must include atlas_grave_csv when atlas year exceeds the global start_year."
             )
+        _validate_atlas_households_match_selected_h5(self, context)
+
+
+def _validate_atlas_households_match_selected_h5(
+    outputs: AtlasPreprocessOutputs,
+    context: Optional[ValidationContext],
+) -> None:
+    if context is None:
+        return
+    state = context.state
+    workspace = context.workspace
+    if state is None or workspace is None:
+        return
+
+    households_csv = outputs.prepared_inputs.get("atlas_households_csv")
+    selected_h5 = getattr(state, "atlas_usim_datastore_h5", None)
+    if households_csv is None or selected_h5 is None:
+        return
+    h5_path = artifact_to_existing_path(selected_h5, workspace=workspace)
+    if h5_path is None:
+        return
+
+    year = getattr(state, "year", getattr(state, "current_year", None))
+    if year is None:
+        return
+
+    atlas_households = pd.read_csv(households_csv, usecols=["household_id"])
+    with pd.HDFStore(h5_path, mode="r") as store:
+        h5_table_path = resolve_usim_h5_table_key(
+            store,
+            year=int(year),
+            table="households",
+        )
+        h5_households = store[h5_table_path]
+
+    atlas_ids = pd.Index(
+        pd.to_numeric(atlas_households["household_id"], errors="raise").astype("int64")
+    )
+    h5_ids = pd.Index(h5_households.index.astype("int64"))
+    missing_in_h5 = atlas_ids.difference(h5_ids)
+    missing_in_atlas = h5_ids.difference(atlas_ids)
+    if len(missing_in_h5) or len(missing_in_atlas):
+        raise AssertionError(
+            "ATLAS preprocess households CSV does not match the selected UrbanSim "
+            "H5 household table. This usually means cached/restored ATLAS inputs "
+            "belong to a different population universe. "
+            f"year={year} h5_path={h5_path} h5_table={h5_table_path} "
+            f"atlas_households_csv={households_csv} "
+            f"missing_in_h5={len(missing_in_h5)} "
+            f"missing_in_atlas={len(missing_in_atlas)} "
+            f"sample_missing_in_h5={missing_in_h5.tolist()[:10]} "
+            f"sample_missing_in_atlas={missing_in_atlas.tolist()[:10]}"
+        )
 
 
 @dataclass

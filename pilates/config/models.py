@@ -2,14 +2,24 @@
 Pydantic models for PILATES configuration.
 
 This module defines the structure and validation for PILATES configuration files.
-Consist-specific identity and facet mapping lives in pilates.utils.consist_config.
+Consist-specific identity and facet mapping lives in pilates.workflows.consist_metadata.
 """
 
-import os
+import argparse
+import copy
 import logging
-import warnings
-from dataclasses import dataclass, field as dataclass_field
-from typing import Dict, List, Optional, Any, Literal
+import os
+from pathlib import Path
+import sys
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Union,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -20,37 +30,36 @@ from pydantic import (
 )
 import yaml
 
+from .activitysim import (
+    ActivitySimAdmissionConfig,
+    ActivitySimConfig,
+    ActivitySimConfigRoot,
+    ActivitySimDatabaseConfig,
+    required_activitysim_config_roots,
+)
+from .admission import (
+    AdmissionExpectation,
+    AdmissionPolicyConfig,
+    DeclaredDigestExpectation,
+    PriorRunExpectation,
+    admission_policy_fingerprint,
+)
+from .beam import (
+    BeamAdmissionConfig,
+    BeamArtifactFormatsConfig,
+    BeamConfig,
+    BeamLinkstatsAdmissionConfig,
+    FullSkimsCreatorConfig,
+)
+from .impacts import ImpactsConfig
+from .runtime import (
+    _FLAG_FIELD_NAMES,
+    PilatesRuntime,
+    RuntimeFlags,
+    RuntimeOptions,
+)
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RuntimeFlags:
-    """Derived runtime enablement flags attached after config load."""
-
-    land_use_enabled: bool = False
-    vehicle_ownership_model_enabled: bool = False
-    activity_demand_enabled: bool = False
-    traffic_assignment_enabled: bool = False
-    impacts_enabled: bool = False
-    replanning_enabled: bool = False
-
-
-@dataclass
-class RuntimeOptions:
-    """Ephemeral runtime options attached outside the persisted config schema."""
-
-    state_file_loc: Optional[str] = None
-    settings_file: Optional[str] = None
-    allow_rewind_resume: bool = False
-
-
-@dataclass
-class PilatesRuntime:
-    """Typed runtime state associated with a loaded ``PilatesConfig`` instance."""
-
-    flags: RuntimeFlags = dataclass_field(default_factory=RuntimeFlags)
-    options: RuntimeOptions = dataclass_field(default_factory=RuntimeOptions)
-    flags_initialized: bool = False
 
 
 # =============================================================================
@@ -102,6 +111,14 @@ class RunConfig(BaseModel):
     supply_demand_iters: int = Field(
         1, description="Supply-demand loop iterations", ge=1
     )
+    max_year_intervals: Optional[int] = Field(
+        None,
+        description=(
+            "Optional cap on planned land-use forecast intervals; useful for "
+            "bounded representative runs"
+        ),
+        ge=1,
+    )
 
     # Output configuration (METADATA scope)
     output_directory: str = Field(..., description="Where to write outputs")
@@ -121,19 +138,6 @@ class RunConfig(BaseModel):
     )
     enable_archive_copy: bool = Field(
         False, description="Copy logged outputs to archive root as they are produced"
-    )
-    bootstrap_cache_enabled: bool = Field(
-        True,
-        description=(
-            "Enable cache probing for the pre-scenario bootstrap initialization phase"
-        ),
-    )
-    restart_rehydrate_mode: Literal["bundle", "full", "off"] = Field(
-        "bundle",
-        description=(
-            "Restart artifact hydration mode: bundle copies only manifest-listed "
-            "artifacts, full mirrors archive->local, off disables hydration"
-        ),
     )
     restart_strict: bool = Field(
         False,
@@ -209,10 +213,10 @@ class RunConfig(BaseModel):
     consist_code_identity: Optional[
         Literal["repo_git", "callable_module", "callable_source"]
     ] = Field(
-        None,
+        "callable_module",
         description=(
             "Optional Consist cache code-identity mode override for step runs. "
-            "When omitted, Consist defaults to repo_git."
+            "Defaults to callable_module; when set to None, Consist falls back to repo_git."
         ),
     )
     consist_hashing_strategy: Literal["fast", "full"] = Field(
@@ -242,8 +246,9 @@ class RunConfig(BaseModel):
 
     @field_validator("recovery_archive_roots")
     @classmethod
-    def expand_recovery_archive_roots(cls, value: List[str]) -> List[str]:
-        return [os.path.expandvars(path) for path in value]
+    def expand_recovery_archive_roots(cls, v):
+        """Expand environment variables in recovery archive roots."""
+        return [os.path.expandvars(str(root)) for root in (v or [])]
 
     @field_validator("consist_db_filename")
     @classmethod
@@ -357,40 +362,10 @@ class DatabaseConfig(BaseModel):
     enabled: bool = Field(False, description="Enable database storage")
     type: str = Field("duckdb", description="Database type")
     path: str = Field(..., description="Database file path")
-    shapshot_path: Optional[str] = Field(
-        None, description="Matrix snapshot file path (legacy misspelling)."
-    )
     snapshot_path: Optional[str] = Field(
         None,
-        description="Alias for shapshot_path (preferred spelling).",
+        description="Matrix snapshot file path.",
     )
-    use_consist: bool = Field(
-        True,
-        description=(
-            "Deprecated toggle retained for config compatibility. "
-            "Consist is mandatory and this value is ignored."
-        ),
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _warn_deprecated_use_consist(cls, data):
-        if isinstance(data, dict) and "use_consist" in data:
-            warnings.warn(
-                "shared.database.use_consist is deprecated and ignored; "
-                "Consist is mandatory in PILATES. Use run.consist_hashing_strategy "
-                "or lineage/detail settings for performance tuning instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        return data
-
-    @model_validator(mode="after")
-    def _coalesce_snapshot_path(self):
-        if self.snapshot_path and not self.shapshot_path:
-            self.shapshot_path = self.snapshot_path
-        self.use_consist = True
-        return self
 
     @field_validator("path")
     @classmethod
@@ -441,6 +416,15 @@ class InfrastructureConfig(BaseModel):
 # =============================================================================
 
 
+class UrbanSimAdmissionConfig(BaseModel):
+    """Optional inbound-admission policy for the UrbanSim bootstrap datastore."""
+
+    initial_datastore: Optional[AdmissionPolicyConfig] = Field(
+        None,
+        description="Optional expectation for the bootstrap-staged UrbanSim datastore.",
+    )
+
+
 class UrbanSimConfig(BaseModel):
     """UrbanSim land use model configuration."""
 
@@ -459,6 +443,10 @@ class UrbanSimConfig(BaseModel):
     command_template: str = Field(..., description="Command template")
     region_mappings: Dict[str, Any] = Field(
         default_factory=dict, description="Region-specific mappings"
+    )
+    admission: Optional[UrbanSimAdmissionConfig] = Field(
+        None,
+        description="Optional inbound-admission policy; omitted means disabled.",
     )
 
 
@@ -488,252 +476,6 @@ class AtlasConfig(BaseModel):
     command_template: str = Field(..., description="Command template")
 
 
-class ActivitySimDatabaseConfig(BaseModel):
-    """ActivitySim database input mode configuration."""
-
-    enabled: bool = Field(False, description="Enable database input mode")
-    use_processed_data: bool = Field(
-        True, description="Use pre-processed data (fast path)"
-    )
-    year: Optional[int] = Field(None, description="Year for data retrieval")
-
-
-class ActivitySimConfig(BaseModel):
-    """ActivitySim activity-based demand model configuration."""
-
-    household_sample_size: int = Field(
-        0, description="Household sample size (0 = full population)"
-    )
-    chunk_size: int = Field(12_000_000_000, description="Memory chunk size")
-    num_processes: int = Field(25, description="Number of parallel processes")
-    file_format: Literal["parquet", "csv"] = Field(
-        "parquet", description="Output file format"
-    )
-    persist_sharrow_cache: Optional[bool] = Field(
-        None,
-        description=(
-            "Persist ActivitySim sharrow/numba compile cache directory. "
-            "When unset, defaults to enabled for parquet format."
-        ),
-    )
-    local_input_folder: str
-    local_mutable_data_folder: str
-    local_output_folder: str
-    local_configs_folder: str
-    local_mutable_configs_folder: str
-    validation_folder: str
-    clipped_geoms_path: Optional[str] = Field(
-        None,
-        description="Path to BEAM's clipped zone geometries for constraining activity locations.",
-    )
-    subdir: str = Field("configs", description="Config subdirectory")
-    main_configs_dir: str = Field(
-        "configs_extended", description="Main configs directory"
-    )
-    region_mappings: Dict[str, Any] = Field(
-        default_factory=dict, description="Region-specific mappings"
-    )
-    from_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(
-        default_factory=dict, description="UrbanSim → ActivitySim column mappings"
-    )
-    to_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(
-        default_factory=dict, description="ActivitySim → UrbanSim column mappings"
-    )
-    output_tables: Dict[str, Any] = Field(
-        default_factory=dict, description="Output table configuration"
-    )
-    command_template: str = Field(..., description="Command template")
-    database: ActivitySimDatabaseConfig = Field(
-        default_factory=ActivitySimDatabaseConfig,
-        description="Database input configuration",
-    )
-    warm_start_activities: bool = Field(False, description="Warm start activities")
-    replan_iters: int = Field(0, description="Replanning iterations")
-    replan_hh_samp_size: int = Field(0, description="Replanning household sample size")
-    replan_after: str = Field(
-        "non_mandatory_tour_scheduling", description="Replan after this step"
-    )
-    random_seed: Optional[int] = Field(
-        None, description="Base random number generator seed"
-    )
-    final_plans_folder: str = Field(..., description="Final plans output folder")
-
-    def to_consist_facet(self) -> Dict[str, Any]:
-        return {
-            "household_sample_size": self.household_sample_size,
-            "chunk_size": self.chunk_size,
-            "num_processes": self.num_processes,
-            "file_format": self.file_format,
-            "persist_sharrow_cache": self.persist_sharrow_cache,
-            "warm_start_activities": self.warm_start_activities,
-            "replan_iters": self.replan_iters,
-            "replan_hh_samp_size": self.replan_hh_samp_size,
-            "replan_after": self.replan_after,
-            "random_seed": self.random_seed,
-            "database": self.database.model_dump() if self.database else None,
-        }
-
-
-class FullSkimsCreatorConfig(BaseModel):
-    """Configuration for BEAM FullSkimsCreatorApp (full-skim mode)."""
-
-    run_schedule: Literal[
-        "standalone",
-        "after_each_iteration",
-        "after_final_iteration",
-        "disabled",
-    ] = Field(
-        "standalone",
-        description=(
-            "When to run full-skim. "
-            "'standalone' replaces normal BEAM runs, "
-            "'after_each_iteration' runs after each BEAM iteration, "
-            "'after_final_iteration' runs after the final BEAM iteration, "
-            "'disabled' never runs."
-        ),
-    )
-    router_type: str = Field("r5+gh", description="Router: r5, r5+gh, or gh")
-    skims_geo_type: str = Field("taz", description="Geography: taz or h3")
-    skims_kind: str = Field("od", description="Skim type: od")
-    peak_hours: List[float] = Field(
-        default_factory=lambda: [8.5], description="Peak hours (8.5 = 8:30 AM)"
-    )
-    modes_to_build: Dict[str, bool] = Field(
-        default_factory=lambda: {"drive": True, "walk": False, "transit": False},
-        description="Modes to generate skims for",
-    )
-    parallelism_thread_ratio: Optional[float] = Field(
-        None,
-        description=(
-            "Ratio of CPU cores to use (0.0-1.0). "
-            "Default behavior is auto-compute when unset."
-        ),
-        ge=0.0,
-        le=1.0,
-    )
-
-
-class BeamConfig(BaseModel):
-    """BEAM transportation network simulation configuration."""
-
-    config: str = Field(..., description="Main BEAM config file")
-    sample: float = Field(1.0, description="Population sample fraction", ge=0.0, le=1.0)
-    replanning_portion: float = Field(
-        0.4, description="Replanning portion", ge=0.0, le=1.0
-    )
-    memory: str = Field("180g", description="JVM memory allocation")
-    extra_jvm_args: Optional[str] = Field(
-        None,
-        description=(
-            "Optional extra JVM arguments appended to JAVA_OPTS for BEAM runs, "
-            "for example Java Flight Recorder flags."
-        ),
-    )
-    local_input_folder: str
-    local_mutable_data_folder: str
-    local_output_folder: str
-    scenario_folder: str
-    router_directory: str
-    warmstart_linkstats_path: Optional[str] = Field(
-        None,
-        description=(
-            "Optional path to the initial BEAM warm-start linkstats file. "
-            "If relative, it is resolved against the mutable BEAM region input root."
-        ),
-    )
-    skims_shapefile: str
-    skim_zone_source_id_col: str
-    skim_zone_geoid_col: str
-    discard_plans_every_year: bool = Field(
-        False, description="Discard plans every year"
-    )
-    max_plans_memory: int = Field(5, description="Max plans in memory")
-    simulated_hwy_paths: List[str] = Field(
-        default_factory=list, description="Simulated highway paths"
-    )
-    asim_hwy_measure_map: Dict[str, Optional[str]] = Field(
-        default_factory=dict, description="Highway measure mappings"
-    )
-    asim_transit_measure_map: Dict[str, Optional[str]] = Field(
-        default_factory=dict, description="Transit measure mappings"
-    )
-    asim_ridehail_measure_map: Dict[str, Optional[str]] = Field(
-        default_factory=dict, description="Ridehail measure mappings"
-    )
-    ridehail_path_map: Dict[str, str] = Field(
-        default_factory=dict, description="Ridehail path mappings"
-    )
-    skim_previous_weight: float = Field(
-        0.9,
-        description=(
-            "Weight on previous skims when blending trip counts. "
-            "New counts are always fully applied."
-        ),
-        ge=0.0,
-        le=1.0,
-    )
-    full_skim: Optional[FullSkimsCreatorConfig] = Field(
-        None,
-        description="Optional full-skim mode configuration.",
-    )
-
-
-class ImpactsPipelinePresimConfig(BaseModel):
-    """Which IMPACTS presim sub-steps to run."""
-
-    activities: bool = True
-    fleet: bool = True
-
-
-class ImpactsPipelinePostsimConfig(BaseModel):
-    """Which IMPACTS postsim sub-steps to run."""
-
-    emissions: bool = True
-    inmap: bool = True
-    aermod: bool = True
-    exposure: bool = True
-
-
-class ImpactsConfig(BaseModel):
-    """Downstream exposure/impacts model configuration."""
-
-    local_input_folder: str = Field(
-        ..., description="Workspace-relative impacts input folder"
-    )
-    local_output_folder: str = Field(
-        ..., description="Workspace-relative impacts output folder"
-    )
-    seed: int = Field(0, description="Random seed passed through to IMPACTS")
-    pipeline_presim: ImpactsPipelinePresimConfig = Field(
-        default_factory=ImpactsPipelinePresimConfig,
-        description="IMPACTS presim pipeline toggles",
-    )
-    pipeline_postsim: ImpactsPipelinePostsimConfig = Field(
-        default_factory=ImpactsPipelinePostsimConfig,
-        description="IMPACTS postsim pipeline toggles",
-    )
-    population_fallback_to_beam_inputs: bool = Field(
-        True,
-        description=(
-            "If true, prefer this run's PILATES-generated population "
-            "(households/persons fed to BEAM) over the static reference "
-            "population for the postsim population.passenger_folder override."
-        ),
-    )
-    overrides: Dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Passthrough overrides deep-merged into the derived IMPACTS "
-            "settings' `impacts:` block (population/activities/fleet/"
-            "emissions/dispersions/exposure/analysis), shaped like "
-            "examples/pilates/settings.yaml's `impacts:` section."
-        ),
-    )
-
-    def to_consist_facet(self) -> Dict[str, Any]:
-        return self.model_dump()
-
-
 # =============================================================================
 # POSTPROCESSING CONFIGURATION
 # =============================================================================
@@ -749,14 +491,26 @@ class PostprocessingConfig(BaseModel):
 
     def to_consist_facet(self) -> Dict[str, Any]:
         return {
-            "config": self.config,
-            "sample": self.sample,
-            "replanning_portion": self.replanning_portion,
-            "memory": self.memory,
-            "discard_plans_every_year": self.discard_plans_every_year,
-            "max_plans_memory": self.max_plans_memory,
-            "simulated_hwy_paths": list(self.simulated_hwy_paths),
+            "output_folder": self.output_folder,
+            "mep_output_folder": self.mep_output_folder,
+            "scenario_definitions": self.scenario_definitions,
+            "validation_metrics": self.validation_metrics,
         }
+
+
+class WorkflowConfig(BaseModel):
+    """Workflow orchestration configuration."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_manifest_recovery(cls, value: Any) -> Any:
+        """Reject the removed YAML workflow-recovery configuration explicitly."""
+        if isinstance(value, dict) and "manifests" in value:
+            raise ValueError(
+                "workflow.manifests has been removed; native Consist execution "
+                "does not support YAML manifest recovery."
+            )
+        return value
 
 
 # =============================================================================
@@ -774,7 +528,20 @@ class PilatesConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
     _runtime: PilatesRuntime = PrivateAttr(default_factory=PilatesRuntime)
 
+    base: Optional[str] = Field(
+        None,
+        exclude=True,
+        description="Optional path to a base YAML configuration file to inherit from.",
+    )
     run: RunConfig
+    write_skims_to_omx: bool = Field(
+        False,
+        description=(
+            "Write final BEAM Zarr skims to OMX during BEAM postprocess. "
+            "UrbanSim and ATLAS still enable OMX export automatically because "
+            "their preprocessors consume that handoff."
+        ),
+    )
     shared: SharedConfig
     infrastructure: InfrastructureConfig
     urbansim: Optional[UrbanSimConfig] = None
@@ -783,6 +550,40 @@ class PilatesConfig(BaseModel):
     beam: Optional[BeamConfig] = None
     impacts: Optional[ImpactsConfig] = None
     postprocessing: Optional[PostprocessingConfig] = None
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_inline_base_if_present(cls, value: Any) -> Any:
+        """Resolve top-level ``base``/``extends`` when validating a raw YAML dictionary."""
+        if not isinstance(value, dict):
+            return value
+        base_ref = value.get("base")
+        if base_ref is None and "extends" in value:
+            base_ref = value.get("extends")
+        if not isinstance(base_ref, (str, Path)) or not str(base_ref).strip():
+            return value
+
+        required_sections_present = all(
+            section in value for section in ("run", "shared", "infrastructure")
+        )
+        try:
+            resolved_base_path = _resolve_base_config_path(
+                base_ref,
+                referencing_path=None,
+                config_path="<inline dict>",
+                include_scenario_dirs=True,
+            )
+        except FileNotFoundError:
+            if required_sections_present:
+                return value
+            raise
+
+        base_dict = resolve_config_dict(resolved_base_path)
+        child_overrides = {
+            k: v for k, v in value.items() if k not in {"base", "extends"}
+        }
+        return _deep_merge_config_dicts(base_dict, child_overrides)
 
     @model_validator(mode="after")
     def validate_model_configs(self):
@@ -797,16 +598,86 @@ class PilatesConfig(BaseModel):
             raise ValueError(
                 "activity_demand model is enabled but activitysim config is missing"
             )
-        if self.run.models.travel and not self.beam:
+        if self.run.models.travel == "beam" and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
         if self.run.models.impacts and not self.impacts:
             raise ValueError("impacts model is enabled but impacts config is missing")
+        self._sync_runtime_flags()
         return self
+
+    def model_copy(
+        self,
+        *,
+        update: Optional[Dict[str, Any]] = None,
+        deep: bool = False,
+    ) -> "PilatesConfig":
+        """Return a copy with an isolated ``PilatesRuntime`` instance."""
+        flag_overrides: Dict[str, bool] = {}
+        remaining_update = update
+        if update is not None:
+            flag_overrides = {
+                key: bool(val)
+                for key, val in update.items()
+                if key in _FLAG_FIELD_NAMES
+            }
+            if flag_overrides:
+                remaining_update = {
+                    key: val
+                    for key, val in update.items()
+                    if key not in _FLAG_FIELD_NAMES
+                }
+        copied = super().model_copy(update=remaining_update, deep=deep)
+        copied._runtime = self._runtime.copy()
+        for flag_name, flag_val in flag_overrides.items():
+            copied._runtime.flags.set_override(flag_name, flag_val)
+        copied._sync_runtime_flags()
+        return copied
+
+    def _sync_runtime_flags(self) -> PilatesRuntime:
+        """Compute default runtime flags from current config state and sync non-overridden fields."""
+        extra = self.__pydantic_extra__ or {}
+        if self.__pydantic_extra__:
+            for flag_name in tuple(_FLAG_FIELD_NAMES):
+                if flag_name in self.__pydantic_extra__:
+                    flag_val = self.__pydantic_extra__.pop(flag_name)
+                    self._runtime.flags.set_override(flag_name, bool(flag_val))
+        warm_start_skims = bool(extra.get("warm_start_skims", False))
+        static_skims = bool(extra.get("static_skims", False))
+        try:
+            replan_iters = (
+                int(self.activitysim.replan_iters)
+                if self.activitysim is not None
+                else int(extra.get("replan_iters", 0) or 0)
+            )
+        except AttributeError:
+            replan_iters = int(extra.get("replan_iters", 0) or 0)
+        land_use_enabled = bool(self.run.models.land_use) and not warm_start_skims
+        vehicle_ownership_model_enabled = bool(self.run.models.vehicle_ownership)
+        activity_demand_model = self.run.models.activity_demand
+        activity_demand_enabled = bool(activity_demand_model)
+        travel_model = (
+            self.run.models.__dict__.get("traffic_assignment")
+            or extra.get("traffic_assignment")
+            or self.run.models.travel
+            or extra.get("travel_model")
+        )
+        traffic_assignment_enabled = bool(travel_model) and not static_skims
+        replanning_enabled = (replan_iters > 0) and not (
+            activity_demand_enabled and activity_demand_model == "polaris"
+        )
+        self._runtime.flags.sync_defaults(
+            land_use_enabled=land_use_enabled,
+            vehicle_ownership_model_enabled=vehicle_ownership_model_enabled,
+            activity_demand_enabled=activity_demand_enabled,
+            traffic_assignment_enabled=traffic_assignment_enabled,
+            replanning_enabled=replanning_enabled,
+        )
+        return self._runtime
 
     @property
     def runtime(self) -> PilatesRuntime:
-        """Typed runtime metadata derived after config load."""
-        return self._runtime
+        """Typed runtime metadata derived live from the configuration."""
+        return self._sync_runtime_flags()
 
     @property
     def land_use_enabled(self) -> bool:
@@ -814,8 +685,7 @@ class PilatesConfig(BaseModel):
 
     @land_use_enabled.setter
     def land_use_enabled(self, value: bool) -> None:
-        self.runtime.flags.land_use_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.land_use_enabled = value
 
     @property
     def vehicle_ownership_model_enabled(self) -> bool:
@@ -823,8 +693,7 @@ class PilatesConfig(BaseModel):
 
     @vehicle_ownership_model_enabled.setter
     def vehicle_ownership_model_enabled(self, value: bool) -> None:
-        self.runtime.flags.vehicle_ownership_model_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.vehicle_ownership_model_enabled = value
 
     @property
     def activity_demand_enabled(self) -> bool:
@@ -832,8 +701,7 @@ class PilatesConfig(BaseModel):
 
     @activity_demand_enabled.setter
     def activity_demand_enabled(self, value: bool) -> None:
-        self.runtime.flags.activity_demand_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.activity_demand_enabled = value
 
     @property
     def traffic_assignment_enabled(self) -> bool:
@@ -841,17 +709,7 @@ class PilatesConfig(BaseModel):
 
     @traffic_assignment_enabled.setter
     def traffic_assignment_enabled(self, value: bool) -> None:
-        self.runtime.flags.traffic_assignment_enabled = bool(value)
-        self.runtime.flags_initialized = True
-
-    @property
-    def impacts_enabled(self) -> bool:
-        return self.runtime.flags.impacts_enabled
-
-    @impacts_enabled.setter
-    def impacts_enabled(self, value: bool) -> None:
-        self.runtime.flags.impacts_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.traffic_assignment_enabled = value
 
     @property
     def replanning_enabled(self) -> bool:
@@ -859,32 +717,31 @@ class PilatesConfig(BaseModel):
 
     @replanning_enabled.setter
     def replanning_enabled(self, value: bool) -> None:
-        self.runtime.flags.replanning_enabled = bool(value)
-        self.runtime.flags_initialized = True
+        self._runtime.flags.replanning_enabled = value
 
     @property
     def state_file_loc(self) -> Optional[str]:
-        return self.runtime.options.state_file_loc
+        return self._runtime.options.state_file_loc
 
     @state_file_loc.setter
     def state_file_loc(self, value: Optional[str]) -> None:
-        self.runtime.options.state_file_loc = value
+        self._runtime.options.state_file_loc = value
 
     @property
     def settings_file(self) -> Optional[str]:
-        return self.runtime.options.settings_file
+        return self._runtime.options.settings_file
 
     @settings_file.setter
     def settings_file(self, value: Optional[str]) -> None:
-        self.runtime.options.settings_file = value
+        self._runtime.options.settings_file = value
 
     @property
     def allow_rewind_resume(self) -> bool:
-        return self.runtime.options.allow_rewind_resume
+        return self._runtime.options.allow_rewind_resume
 
     @allow_rewind_resume.setter
     def allow_rewind_resume(self, value: bool) -> None:
-        self.runtime.options.allow_rewind_resume = bool(value)
+        self._runtime.options.allow_rewind_resume = bool(value)
 
     def get_enabled_models(self) -> List[str]:
         """Get list of enabled model names."""
@@ -927,6 +784,7 @@ class PilatesConfig(BaseModel):
             "orchestration": {
                 "use_stubs": self.run.use_stubs,
                 "supply_demand_iters": self.run.supply_demand_iters,
+                "max_year_intervals": self.run.max_year_intervals,
                 "frequencies": {
                     "land_use": self.run.land_use_freq,
                     "travel": self.run.travel_model_freq,
@@ -934,7 +792,37 @@ class PilatesConfig(BaseModel):
                 },
                 # Determines which sub-models are active
                 "enabled_models": self.run.models,
+                "runtime_flags": {
+                    "land_use_enabled": bool(self.land_use_enabled),
+                    "vehicle_ownership_model_enabled": bool(
+                        self.vehicle_ownership_model_enabled
+                    ),
+                    "activity_demand_enabled": bool(self.activity_demand_enabled),
+                    "traffic_assignment_enabled": bool(self.traffic_assignment_enabled),
+                    "replanning_enabled": bool(self.replanning_enabled),
+                },
             },
+            "urbansim_admission": (
+                {
+                    "initial_datastore": admission_policy_fingerprint(
+                        self.urbansim.admission.initial_datastore
+                    )
+                }
+                if self.urbansim is not None and self.urbansim.admission is not None
+                else None
+            ),
+            **(
+                {
+                    "activitysim_admission": {
+                        "initial_skims": admission_policy_fingerprint(
+                            self.activitysim.admission.initial_skims
+                        )
+                    }
+                }
+                if self.activitysim is not None
+                and self.activitysim.admission is not None
+                else {}
+            ),
         }
 
 
@@ -943,7 +831,131 @@ class PilatesConfig(BaseModel):
 # =============================================================================
 
 
-def load_config(config_path: str) -> PilatesConfig:
+def _deep_merge_config_dicts(
+    base: Dict[str, Any],
+    override: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Recursively deep-merge ``override`` onto ``base``.
+
+    Semantics:
+    - Dictionaries are merged recursively.
+    - Lists in ``override`` replace lists in ``base``.
+    - Scalars and explicit ``None`` values in ``override`` overwrite ``base``.
+    """
+    merged: Dict[str, Any] = copy.deepcopy(base)
+    for key, override_value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(override_value, dict):
+            merged[key] = _deep_merge_config_dicts(base_value, override_value)
+        else:
+            merged[key] = copy.deepcopy(override_value)
+    return merged
+
+
+def _resolve_base_config_path(
+    base_path: Union[str, Path],
+    referencing_path: Optional[Path],
+    config_path: Union[str, Path],
+    include_scenario_dirs: bool = True,
+) -> Path:
+    """Resolve a base configuration path relative to the child file, cwd, or repo root."""
+    base_candidate = Path(str(base_path).strip())
+    if base_candidate.is_absolute():
+        if base_candidate.exists():
+            return base_candidate.resolve()
+        raise FileNotFoundError(
+            f"Base config not found: {base_path} (referenced by {config_path})"
+        )
+
+    repo_root = Path(__file__).resolve().parents[2]
+    search_roots: List[Path] = []
+    if referencing_path is not None:
+        search_roots.append(referencing_path.parent)
+    search_roots.extend([Path.cwd(), repo_root])
+    if include_scenario_dirs:
+        scenarios_dir = repo_root / "scenarios"
+        if scenarios_dir.is_dir():
+            search_roots.append(scenarios_dir)
+            search_roots.extend(
+                sorted(p for p in scenarios_dir.iterdir() if p.is_dir())
+            )
+
+    for root in search_roots:
+        candidate = root / base_candidate
+        if candidate.exists():
+            return candidate.resolve()
+
+    raise FileNotFoundError(
+        f"Base config not found: {base_path} (referenced by {config_path})"
+    )
+
+
+def resolve_config_dict(
+    config_path: Union[str, Path],
+    visited: Optional[set[Path]] = None,
+) -> Dict[str, Any]:
+    """
+    Load a YAML configuration file and recursively resolve ``base:`` inheritance.
+
+    Args:
+        config_path: Path to YAML configuration file.
+        visited: Canonical paths already visited in the current inheritance chain.
+
+    Returns:
+        Fully merged configuration dictionary with ``base``/``extends`` removed.
+
+    Raises:
+        FileNotFoundError: If ``config_path`` or any referenced ``base`` file does not exist.
+        ValueError: If circular configuration inheritance is detected or YAML is not a mapping.
+    """
+    path_obj = Path(config_path)
+    if not path_obj.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    canonical_path = path_obj.resolve()
+    active_visited: set[Path] = set() if visited is None else set(visited)
+    if canonical_path in active_visited:
+        raise ValueError(
+            f"Circular configuration inheritance detected: {canonical_path} already in {active_visited}"
+        )
+
+    with open(canonical_path, "r", encoding="utf-8") as f:
+        loaded = yaml.safe_load(f)
+
+    if loaded is None:
+        config_dict: Dict[str, Any] = {}
+    elif isinstance(loaded, dict):
+        config_dict = dict(loaded)
+    else:
+        raise ValueError(
+            f"Configuration file must deserialize to a mapping, got {type(loaded).__name__}: {config_path}"
+        )
+
+    has_base_key = "base" in config_dict or "extends" in config_dict
+    base_ref = config_dict.get("base")
+    if base_ref is None and "extends" in config_dict:
+        base_ref = config_dict.get("extends")
+
+    child_overrides = {
+        k: v for k, v in config_dict.items() if k not in {"base", "extends"}
+    }
+    if not has_base_key or base_ref is None or str(base_ref).strip() == "":
+        return child_overrides
+
+    resolved_base_path = _resolve_base_config_path(
+        base_ref,
+        referencing_path=canonical_path,
+        config_path=config_path,
+    )
+    base_dict = resolve_config_dict(
+        resolved_base_path,
+        visited={*active_visited, canonical_path},
+    )
+    return _deep_merge_config_dicts(base_dict, child_overrides)
+
+
+def load_config(config_path: Union[str, Path]) -> PilatesConfig:
     """
     Load and validate PILATES configuration from YAML file.
 
@@ -955,16 +967,11 @@ def load_config(config_path: str) -> PilatesConfig:
 
     Raises:
         ValidationError: If config is invalid
-        FileNotFoundError: If config file doesn't exist
+        FileNotFoundError: If config file or base config doesn't exist
+        ValueError: If circular configuration inheritance is detected
     """
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    with open(config_path, "r") as f:
-        config_dict = yaml.safe_load(f)
-
-    # Pydantic will validate on instantiation
-    return PilatesConfig(**config_dict)
+    merged_dict = resolve_config_dict(config_path)
+    return PilatesConfig(**merged_dict)
 
 
 def validate_config(config_dict: Dict[str, Any]) -> PilatesConfig:
@@ -981,3 +988,72 @@ def validate_config(config_dict: Dict[str, Any]) -> PilatesConfig:
         ValidationError: If config is invalid
     """
     return PilatesConfig(**config_dict)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """CLI entrypoint to dump a resolved PILATES configuration YAML to stdout."""
+    parser = argparse.ArgumentParser(
+        prog="python -m pilates.config.models",
+        description="Resolve PILATES scenario configuration inheritance and dump YAML to stdout.",
+    )
+    parser.add_argument(
+        "config_path",
+        help="Path to the scenario YAML configuration file.",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate the resolved configuration against PilatesConfig before dumping.",
+    )
+    args = parser.parse_args(argv)
+    resolved = resolve_config_dict(args.config_path)
+    if args.validate:
+        PilatesConfig(**resolved)
+    sys.stdout.write(yaml.safe_dump(resolved, sort_keys=False))
+    return 0
+
+
+__all__ = [
+    "ActivitySimAdmissionConfig",
+    "ActivitySimConfig",
+    "ActivitySimConfigRoot",
+    "ActivitySimDatabaseConfig",
+    "AdmissionExpectation",
+    "AdmissionPolicyConfig",
+    "AtlasConfig",
+    "BeamAdmissionConfig",
+    "BeamArtifactFormatsConfig",
+    "BeamConfig",
+    "BeamLinkstatsAdmissionConfig",
+    "DatabaseConfig",
+    "DeclaredDigestExpectation",
+    "DockerConfig",
+    "FullSkimsCreatorConfig",
+    "GeographyConfig",
+    "InfrastructureConfig",
+    "ModelSelection",
+    "PilatesConfig",
+    "PilatesRuntime",
+    "PostprocessingConfig",
+    "PriorRunExpectation",
+    "RunConfig",
+    "RuntimeFlags",
+    "RuntimeOptions",
+    "SharedConfig",
+    "SkimsConfig",
+    "UrbanSimAdmissionConfig",
+    "UrbanSimConfig",
+    "WorkflowConfig",
+    "ZoneSourceConfig",
+    "ZonesConfig",
+    "admission_policy_fingerprint",
+    "load_config",
+    "main",
+    "required_activitysim_config_roots",
+    "resolve_config_dict",
+    "validate_config",
+]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

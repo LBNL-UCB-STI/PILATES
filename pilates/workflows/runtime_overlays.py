@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
+from pilates.activitysim.outputs import configured_asim_output_keys
+from pilates.beam.outputs import requires_omx_skim_output
+from pilates.utils.io import get_activity_demand_model
 from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
 )
 
 
@@ -40,9 +45,14 @@ class StepRuntimeOverlayRule:
     add_required_inputs: Tuple[str, ...] = ()
     add_optional_inputs: Tuple[str, ...] = ()
     remove_optional_inputs: frozenset[str] = field(default_factory=frozenset)
-    role_overrides: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
-    def applies(self, *, step_name: str, profile: Any, run_mode: Any) -> bool:
+    def applies(
+        self,
+        *,
+        step_name: str,
+        land_use_enabled: bool,
+        run_mode: Any,
+    ) -> bool:
         """Return whether this overlay matches the current runtime shape."""
         if self.step_name != step_name:
             return False
@@ -50,32 +60,13 @@ class StepRuntimeOverlayRule:
             return False
         if (
             self.land_use_enabled is not None
-            and bool(getattr(profile, "land_use_enabled", False))
-            != self.land_use_enabled
+            and land_use_enabled != self.land_use_enabled
         ):
             return False
         return True
 
 
 _STEP_RUNTIME_OVERLAY_RULES: Tuple[StepRuntimeOverlayRule, ...] = (
-    StepRuntimeOverlayRule(
-        step_name="activitysim_preprocess",
-        run_mode="restart",
-        land_use_enabled=True,
-        add_optional_inputs=(USIM_DATASTORE_CURRENT_H5,),
-        role_overrides={
-            USIM_POPULATION_SOURCE_H5: {
-                "workspace_archive_fallback_allowed": False,
-                "restart_may_restore_synthetically": False,
-                "restart_requires_explicit_before_execution": True,
-            },
-            USIM_DATASTORE_CURRENT_H5: {
-                "workspace_archive_fallback_allowed": False,
-                "restart_may_restore_synthetically": False,
-                "restart_requires_explicit_before_execution": True,
-            },
-        },
-    ),
     StepRuntimeOverlayRule(
         step_name="activitysim_postprocess",
         land_use_enabled=False,
@@ -105,7 +96,7 @@ _STEP_RUNTIME_OVERLAY_RULES: Tuple[StepRuntimeOverlayRule, ...] = (
 def resolve_runtime_input_output_overrides(
     *,
     step_name: str,
-    profile: Any,
+    land_use_enabled: bool,
     run_mode: Any,
     required_inputs: Tuple[str, ...],
     optional_inputs: Tuple[str, ...],
@@ -119,7 +110,11 @@ def resolve_runtime_input_output_overrides(
     required = required_inputs
     optional = optional_inputs
     for rule in _STEP_RUNTIME_OVERLAY_RULES:
-        if not rule.applies(step_name=step_name, profile=profile, run_mode=run_mode):
+        if not rule.applies(
+            step_name=step_name,
+            land_use_enabled=land_use_enabled,
+            run_mode=run_mode,
+        ):
             continue
         required = _ordered_unique(required, rule.add_required_inputs)
         optional = tuple(
@@ -130,23 +125,52 @@ def resolve_runtime_input_output_overrides(
     return required, optional
 
 
-def resolve_runtime_role_policy_overrides(
+def resolve_runtime_output_overrides(
     *,
     step_name: str,
-    profile: Any,
-    run_mode: Any,
-) -> Dict[str, Dict[str, Any]]:
-    """Collect role-policy overlays for the current step/runtime shape.
+    settings: Any,
+    required_outputs: Tuple[str, ...],
+    optional_outputs: Tuple[str, ...],
+) -> tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Promote configured optional outputs into the effective run contract.
 
-    These values are merged into binding-derived `InputRolePolicy` instances by
-    the surface builder. They are intentionally runtime-policy deltas rather
-    than a replacement for binding rules.
+    Static step metadata describes the complete output vocabulary. The runtime
+    surface promotes only outputs that this configuration actually requests or
+    that a downstream enabled model requires.
     """
-    overrides: Dict[str, Dict[str, Any]] = {}
-    for rule in _STEP_RUNTIME_OVERLAY_RULES:
-        if not rule.applies(step_name=step_name, profile=profile, run_mode=run_mode):
-            continue
-        for key, policy in rule.role_overrides.items():
-            current = overrides.setdefault(key, {})
-            current.update(policy)
-    return overrides
+    promoted: Tuple[str, ...] = ()
+    demoted: Tuple[str, ...] = ()
+    if step_name in {"activitysim_run", "activitysim_postprocess"}:
+        activitysim_settings = getattr(settings, "activitysim", None)
+        if activitysim_settings is not None:
+            configured = set(configured_asim_output_keys(settings))
+            promoted = tuple(key for key in optional_outputs if key in configured)
+    elif step_name == "atlas_preprocess":
+        atlas_settings = getattr(settings, "atlas", None)
+        beamac = (
+            getattr(atlas_settings, "beamac", 0) if atlas_settings is not None else 0
+        )
+        if beamac and beamac > 0:
+            promoted = ("atlas_accessibility_csv",)
+    elif step_name == "beam_postprocess":
+        if requires_omx_skim_output(settings):
+            promoted = (FINAL_SKIMS_OMX,)
+        if get_activity_demand_model(settings) != "activitysim":
+            demoted = (ZARR_SKIMS,)
+
+    if not promoted and not demoted:
+        return required_outputs, optional_outputs
+
+    promoted_set = set(promoted)
+    demoted_set = set(demoted)
+    effective_required = tuple(
+        key
+        for key in _ordered_unique(required_outputs, promoted)
+        if key not in demoted_set
+    )
+    effective_optional = tuple(
+        key
+        for key in _ordered_unique(optional_outputs, demoted)
+        if key not in promoted_set
+    )
+    return effective_required, effective_optional

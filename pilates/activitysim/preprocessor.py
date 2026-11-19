@@ -13,12 +13,17 @@ import pandas as pd
 import requests
 import geopandas as gpd
 from shapely import wkt
-from tqdm import tqdm
+import yaml
 
 from pilates.config import PilatesConfig
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+from pilates.activitysim.config_roots import (
+    configured_activitysim_sharrow,
+    required_activitysim_config_roots,
+    sync_activitysim_sharrow_configs,
+)
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
@@ -31,22 +36,27 @@ from pilates.utils.zone_utils import (
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
     FINAL_SKIMS_OMX,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_PERSONS_TABLE,
 )
-from workflow_state import WorkflowState
+from pilates.workflows.state import WorkflowState
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+_ASIM_ATLAS_DISABLED_VEHICLE_MODEL_NAMES = frozenset(
+    {
+        "vehicle_ownership",
+        "auto_ownership_simulate",
+        "vehicle_type_choice",
+        "vehicle_type_choice_simulate",
+        "vehicle_allocation",
+    }
+)
 
 # Define expected data types for BEAM raw skims CSV files.
 # This helps in efficient memory usage and correct data interpretation when reading large CSVs.
@@ -144,6 +154,7 @@ def _asim_mutable_configs_dir(workspace: "Workspace") -> str:
         getattr(workspace, "full_path", os.getcwd()), "activitysim", "configs"
     )
 
+
 def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
     """
     Retrieves the ordered list of zone keys from the canonical zones file.
@@ -223,88 +234,6 @@ def _should_refresh_skims_copy(source_path: str, dest_path: str) -> bool:
     return False
 
 
-# Mapping of PILATES setting parameter names to ActivitySim config parameter names.
-# This allows dynamic updates to ActivitySim's settings.yaml.
-asim_param_map = {"random_seed": "rng_base_seed"}
-# Mapping of PILATES setting parameter names to their Pydantic paths within the PILATES config.
-# Used to retrieve the current value of a parameter from the PILATES settings.
-ASIM_PYDANTIC_PATH_MAP = {"random_seed": "activitysim.random_seed"}
-
-
-def update_asim_config(
-    settings: PilatesConfig,
-    full_path: str,
-    param: str,
-    valueOverride: Optional[str] = None,
-) -> None:
-    """
-    Updates a specific parameter in the ActivitySim configuration file (`settings.yaml`).
-
-    This function reads the ActivitySim `settings.yaml` file, locates the specified
-    parameter, and updates its value. If the parameter is not found, it will be
-    added to the end of the file.
-
-    Args:
-        settings (PilatesConfig): The current PILATES settings object.
-        full_path (str): The full path to the ActivitySim configuration directory.
-        param (str): The name of the parameter to update (e.g., "random_seed").
-        valueOverride (Optional[str]): An optional value to override the setting with.
-            If None, the value will be retrieved from the PILATES settings using
-            `ASIM_PYDANTIC_PATH_MAP`.
-    """
-    config_header = asim_param_map[param]
-    if valueOverride is None:
-        # Get the Pydantic path for the parameter from the mapping
-        pydantic_path = ASIM_PYDANTIC_PATH_MAP.get(param)
-        if not pydantic_path:
-            logger.warning(
-                f"Parameter '{param}' has no defined Pydantic path. Cannot update asim config."
-            )
-            return
-        # Retrieve the configuration value from PILATES settings
-        config_value = get_setting(settings, pydantic_path)
-    else:
-        config_value = valueOverride
-
-    # Do not update if the value from settings is None
-    if config_value is None:
-        logger.debug(
-            f"Skipping asim config update for '{param}' because value is None."
-        )
-        return
-
-    # Construct the full path to the ActivitySim settings.yaml file
-    path_list = [
-        full_path,
-        get_setting(settings, "activitysim.local_mutable_configs_folder"),
-        get_setting(settings, "activitysim.main_configs_dir", "configs"),
-        "settings.yaml",
-    ]
-
-    asim_config_path = os.path.join(*path_list)
-    modified = False
-    # Read the existing config file
-    with open(asim_config_path, "r") as file:
-        data = file.readlines()
-    # Write back the modified content
-    with open(asim_config_path, "w") as file:
-        for line in data:
-            if config_header in line:
-                if not modified:
-                    # Preserve indentation
-                    indent = line.split(config_header)[0]
-                    file.writelines(
-                        indent + config_header + ": " + str(config_value) + "\n"
-                    )
-                modified = True
-            else:
-                file.writelines(line)
-        # If the parameter was not found, add it to the end of the file
-        if not modified:
-            file.writelines("\n")
-            file.writelines(config_header + ": " + str(config_value) + "\n")
-
-
 def _ensure_required_asim_config_dirs(
     *,
     configs_dest_dir: str,
@@ -354,24 +283,118 @@ def required_asim_config_dirs(main_configs_dir: str) -> list[str]:
     The mutable config tree may contain a scenario-specific main root plus the
     standard overlay directories used by compile/run flows.
     """
-    ordered = [
-        main_configs_dir,
-        "configs",
-        "configs_extended",
-        "configs_mp",
-        "configs_sh_compile",
+    return [
+        root.as_posix() for root in required_activitysim_config_roots(main_configs_dir)
     ]
-    seen = set()
-    result = []
-    for dirname in ordered:
-        if not dirname or dirname in seen:
+
+
+def _is_atlas_vehicle_ownership_enabled(settings: PilatesConfig) -> bool:
+    model = get_setting(
+        settings,
+        "run.models.vehicle_ownership",
+        default=get_setting(settings, "vehicle_ownership_model"),
+    )
+    return str(model).lower() == "atlas"
+
+
+def _model_name_for_activitysim_disable(model_entry: Any) -> Optional[str]:
+    if isinstance(model_entry, str):
+        return model_entry
+    if isinstance(model_entry, dict) and len(model_entry) == 1:
+        return str(next(iter(model_entry)))
+    return None
+
+
+def _disable_activitysim_vehicle_ownership_models_in_file(
+    settings_path: Path,
+) -> list[str]:
+    loaded = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        return []
+    models = loaded.get("models")
+    if not isinstance(models, list):
+        return []
+
+    kept_models = []
+    removed: list[str] = []
+    for model in models:
+        model_name = _model_name_for_activitysim_disable(model)
+        if (
+            model_name is not None
+            and model_name.lower() in _ASIM_ATLAS_DISABLED_VEHICLE_MODEL_NAMES
+        ):
+            removed.append(model_name)
             continue
-        seen.add(dirname)
-        result.append(dirname)
-    return result
+        kept_models.append(model)
+
+    if not removed:
+        return []
+
+    loaded["models"] = kept_models
+    settings_path.write_text(
+        yaml.safe_dump(loaded, sort_keys=False),
+        encoding="utf-8",
+    )
+    return removed
+
+
+def _disable_activitysim_vehicle_ownership_models_for_atlas(
+    *,
+    settings: PilatesConfig,
+    configs_dest_dir: str,
+    main_configs_dir: str,
+) -> Dict[str, list[str]]:
+    """
+    Remove ActivitySim ownership model steps when ATLAS is the ownership source.
+
+    ATLAS owns household vehicle ownership in integrated runs. ActivitySim may
+    still consume vehicle ownership fields, but it must not recompute them and
+    overwrite the post-ATLAS population before BEAM staging.
+    """
+    if not _is_atlas_vehicle_ownership_enabled(settings):
+        return {}
+
+    removed_by_file: Dict[str, list[str]] = {}
+    for dirname in required_asim_config_dirs(main_configs_dir):
+        settings_path = Path(configs_dest_dir) / dirname / "settings.yaml"
+        if not settings_path.exists():
+            continue
+        removed = _disable_activitysim_vehicle_ownership_models_in_file(settings_path)
+        if not removed:
+            continue
+        removed_by_file[str(settings_path)] = removed
+        logger.warning(
+            "Disabled ActivitySim vehicle ownership model steps because ATLAS is "
+            "the configured ownership source. settings=%s removed_models=%s",
+            settings_path,
+            removed,
+        )
+    return removed_by_file
 
 
 ####################################
+def _resolve_preprocessor_workers(num_tasks: int) -> int:
+    """
+    Resolve bounded worker pool size for OD matrix preprocessing.
+
+    Prevents CPU oversubscription and OOM kills on high-core HPC nodes (e.g. 128 cores),
+    where cpu_count() - 1 would spawn 127 processes competing with OpenMP threads.
+    """
+    if num_tasks <= 0:
+        return 1
+    available_cpus = max(1, cpu_count() - 1)
+    env_cap = os.environ.get("PILATES_PREPROCESSOR_WORKERS") or os.environ.get(
+        "PILATES_THREADS"
+    )
+    if env_cap:
+        try:
+            available_cpus = min(available_cpus, max(1, int(env_cap)))
+        except ValueError:
+            pass
+    workers = min(available_cpus, num_tasks, 16)
+    return max(1, workers)
+
+
 #### RAW BEAM SKIMS TO SKIMS.OMX ###
 ####################################
 def read_skim(filename: str) -> pd.DataFrame:
@@ -432,9 +455,9 @@ def _load_raw_beam_skims(
         else:  # Assume path is a folder with multiple CSV files
             all_files = glob.glob(path_to_beam_skims + "/*")
             # Use multiprocessing to read multiple CSVs in parallel
-            agents = len(all_files)
-            pool = Pool(processes=agents)
-            result = pool.map(read_skim, all_files)
+            agents = _resolve_preprocessor_workers(len(all_files))
+            with Pool(processes=agents) as pool:
+                result = pool.map(read_skim, all_files)
             # Concatenate all read DataFrames
             skims = pd.concat(result, axis=0, ignore_index=True)
     except KeyError:
@@ -1081,7 +1104,8 @@ def _transit_skims(
     groupBy = transit_df.groupby(level=[0, 1])
 
     # Use a multiprocessing Pool to build OD matrices in parallel.
-    with Pool(cpu_count() - 1) as p:
+    workers = _resolve_preprocessor_workers(len(groupBy))
+    with Pool(workers) as p:
         ret_list = p.map(
             _build_od_matrix_parallel,
             [
@@ -1636,7 +1660,8 @@ def _auto_skims(
     groupBy = auto_df.groupby(level=[0, 1])
 
     # Use a multiprocessing Pool to build OD matrices in parallel.
-    with Pool(cpu_count() - 1) as p:
+    workers = _resolve_preprocessor_workers(len(groupBy))
+    with Pool(workers) as p:
         ret_list = p.map(
             _build_od_matrix_parallel,
             [
@@ -1952,59 +1977,6 @@ def skim_validations(
     plot_skims(settings, zone, PuT_time, order, 6, 3, "WLK_LOC_WLK_TIME", "in minutes")
 
 
-def _process_raw_h5_for_asim(
-    raw_blocks,
-    raw_persons,
-    raw_households,
-    raw_jobs,
-    settings,
-    year,
-    asim_zone_id_col,
-    workspace,
-):
-    """
-    Process raw H5 dataframes for ActivitySim.
-    """
-    # Add zone id to blocks table
-    from pilates.utils.zone_utils import get_block_to_zone_mapping
-
-    block_to_zone_map = get_block_to_zone_mapping(settings, year, workspace)
-    raw_blocks[asim_zone_id_col] = raw_blocks.index.map(block_to_zone_map)
-
-    # Update tables
-    households, unassigned_households = _update_households_table(
-        raw_households, raw_blocks, asim_zone_id_col
-    )
-    persons = _update_persons_table(
-        raw_persons,
-        households,
-        unassigned_households,
-        raw_blocks,
-        asim_zone_id_col,
-        settings=settings,
-    )
-    num_reassigned_jobs, jobs = _update_jobs_table(
-        raw_jobs,
-        raw_blocks,
-        settings,
-        settings.shared.geography.local_crs,
-        asim_zone_id_col,
-        workspace,
-    )
-    geoid_to_zone_mapping_updated, blocks = _update_blocks_table(
-        settings, year, raw_blocks, households, jobs, asim_zone_id_col, workspace
-    )
-
-    return (
-        blocks,
-        persons,
-        households,
-        jobs,
-        num_reassigned_jobs,
-        geoid_to_zone_mapping_updated,
-    )
-
-
 class ActivitysimPreprocessor(GenericPreprocessor):
     """
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
@@ -2018,22 +1990,28 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         Declare the input paths/artifacts this preprocessor expects without disk checks.
         """
         del state
-        region = getattr(getattr(settings, "run", None), "region", None)
-        urbansim_settings = getattr(settings, "urbansim", None)
-        region_mappings = getattr(urbansim_settings, "region_mappings", {}) or {}
-        region_to_region_id = region_mappings.get("region_to_region_id", {})
-        region_id = region_to_region_id.get(region)
-        input_template = getattr(urbansim_settings, "input_file_template", None)
+        region = get_setting(settings, "run.region")
+        region_to_region_id = (
+            get_setting(settings, "urbansim.region_mappings.region_to_region_id", {})
+            or {}
+        )
+        region_id = (
+            region_to_region_id.get(region)
+            if isinstance(region_to_region_id, dict)
+            else None
+        )
+        input_template = get_setting(settings, "urbansim.input_file_template")
         usim_input_path = None
         if region_id is not None and input_template:
             usim_input_fname = input_template.format(region_id=region_id)
+            usim_stem, usim_ext = os.path.splitext(usim_input_fname)
+            # ponytail: declare dedicated *_population_source.h5 destination directly
             usim_input_path = os.path.join(
-                workspace.get_usim_mutable_data_dir(), usim_input_fname
+                workspace.get_usim_mutable_data_dir(),
+                f"{usim_stem}_population_source{usim_ext}",
             )
 
-        skims_fname = getattr(
-            getattr(getattr(settings, "shared", None), "skims", None), "fname", None
-        )
+        skims_fname = get_setting(settings, "shared.skims.fname")
         final_skims_path = None
         if region and skims_fname:
             final_skims_path = os.path.join(
@@ -2047,63 +2025,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             FINAL_SKIMS_OMX: final_skims_path,
         }
 
-    @staticmethod
-    def runtime_expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Union[str, None]]:
-        """
-        Declare runtime expected inputs, including filesystem presence checks.
-        """
-        inputs = ActivitysimPreprocessor.declared_expected_inputs(
-            settings, state, workspace
-        )
-        for key in ("usim_population_source_h5", FINAL_SKIMS_OMX):
-            input_path = inputs.get(key)
-            inputs[key] = (
-                input_path if input_path and os.path.exists(input_path) else None
-            )
-        return inputs
-
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, Union[str, None]]:
-        return ActivitysimPreprocessor.runtime_expected_inputs(
-            settings, state, workspace
-        )
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
-    ) -> Dict[str, str]:
-        """
-        Declare the output paths/artifacts this preprocessor produces.
-
-        Notes
-        -----
-        Output keys
-            - ``asim_mutable_data_dir``: Local mutable data dir staged for
-              ActivitySim inputs.
-            - ``asim_mutable_configs_dir``: Config directory for ActivitySim
-              run-time settings.
-            - ``land_use_asim_in`` / ``households_asim_in`` /
-              ``persons_asim_in`` / ``omx_skims``: Canonical staged input
-              artifacts produced under the mutable data contract.
-        Related docs
-            - See `pilates/activitysim/inputs.py` for the corresponding input
-              descriptions used by ActivitySim and downstream models.
-        """
-        del settings, state
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        return {
-            "asim_mutable_data_dir": asim_data_dir,
-            "asim_mutable_configs_dir": _asim_mutable_configs_dir(workspace),
-            ASIM_LAND_USE_IN: os.path.join(asim_data_dir, "land_use.csv"),
-            ASIM_HOUSEHOLDS_IN: os.path.join(asim_data_dir, "households.csv"),
-            ASIM_PERSONS_IN: os.path.join(asim_data_dir, "persons.csv"),
-            ASIM_OMX_SKIMS: os.path.join(asim_data_dir, "skims.omx"),
-        }
-
     def __init__(
         self,
         model_name: str,
@@ -2111,20 +2032,12 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ):
         super().__init__(model_name, state)
 
-    def copy_data_to_mutable_location(
-        self,
-        settings: PilatesConfig,
-        output_dir: str,
-        workspace: Optional["Workspace"] = None,
-    ) -> Tuple[RecordStore, RecordStore]:
-        # Delegate to module-level function
-        return _copy_data_to_mutable_location(settings, output_dir, workspace)
-
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
+        prepare_omx_skims: bool = True,
         population_source_h5_path: Optional[str] = None,
         usim_population_households_table: Optional[str] = None,
         usim_population_persons_table: Optional[str] = None,
@@ -2137,6 +2050,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         preprocess_kwargs: Dict[str, Any] = {}
         if final_skims_omx is not None:
             preprocess_kwargs["final_skims_omx"] = final_skims_omx
+        if not allow_workspace_skim_fallback:
+            preprocess_kwargs["allow_workspace_skim_fallback"] = False
+        if not prepare_omx_skims:
+            preprocess_kwargs["prepare_omx_skims"] = False
         if population_source_h5_path is None:
             population_source_h5_path = (
                 str(usim_datastore_h5)
@@ -2161,44 +2078,20 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 for key, value in resolved_table_paths.items()
                 if value is not None
             }
-        record_store = self._preprocess(
+        return self._preprocess(
             workspace,
-            previous_records if previous_records is not None else RecordStore(),
             **preprocess_kwargs,
         )
-        records_by_key = {
-            getattr(record, "short_name", None): record
-            for record in (
-                record_store.all_records() if record_store is not None else []
-            )
-        }
-        output_values: Dict[str, Union[Path, Dict[str, str]]] = {
-            "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
-        }
-        input_hashes: Dict[str, str] = {}
-        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
-            record = records_by_key.get(record_key)
-            if record is None:
-                continue
-            record_path = artifact_to_path(
-                getattr(record, "file_path", None), workspace
-            )
-            if record_path is not None:
-                output_values[field_name] = Path(record_path)
-            content_hash = getattr(record, "content_hash", None)
-            if content_hash:
-                input_hashes[record_key] = content_hash
-        output_values["input_hashes"] = input_hashes
-        return ActivitySimPreprocessOutputs(**output_values)
 
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
+        prepare_omx_skims: bool = True,
         population_source_h5_path: Optional[str] = None,
         resolved_h5_table_paths: Optional[Dict[str, str]] = None,
-    ) -> RecordStore:
+    ) -> ActivitySimPreprocessOutputs:
         """
         Run all preprocessing steps for ActivitySim in order.
         """
@@ -2208,102 +2101,125 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("Starting ActivitysimPreprocessor.preprocess()")
 
-        # Collect any extra outputs created during preprocessing (e.g., on-demand copies)
-        output_records = RecordStore()
-
-        # Record inputs to preprocessor
-        # Raw BEAM skims are an input.
-        skims_fname = settings.shared.skims.fname
-        explicit_skims_path = (
-            str(Path(final_skims_omx))
-            if final_skims_omx is not None and Path(final_skims_omx).exists()
-            else None
-        )
-        path_to_beam_skims_in_current_run_workspace = (
-            explicit_skims_path
-            if explicit_skims_path is not None
-            else os.path.join(
-                workspace.get_beam_mutable_data_dir(),
-                settings.run.region,
-                skims_fname,
+        skims_omx_path: Optional[Path] = None
+        if prepare_omx_skims:
+            # Record inputs to preprocessor. Raw BEAM skims are a bootstrap input.
+            skims_fname = settings.shared.skims.fname
+            explicit_skims_path = (
+                str(Path(final_skims_omx))
+                if final_skims_omx is not None and Path(final_skims_omx).exists()
+                else None
             )
-        )
-
-        if explicit_skims_path is not None:
-            logger.info(
-                "[ActivitysimPreprocessor] Using explicit final_skims_omx artifact: %s",
-                explicit_skims_path,
-            )
-        elif final_skims_omx is not None:
-            logger.warning(
-                "[ActivitysimPreprocessor] Explicit final_skims_omx artifact did not "
-                "resolve to an existing path: %s. Falling back to legacy BEAM skims discovery.",
-                final_skims_omx,
-            )
-
-        # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
-        if explicit_skims_path is None and not os.path.exists(
-            path_to_beam_skims_in_current_run_workspace
-        ):
-            logger.info(
-                "[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
-            )
-            beam_production_path = os.path.abspath(
-                os.path.join(
-                    find_project_root(),  # Assuming find_project_root is available
-                    "pilates",
-                    "beam",
-                    "production",
+            path_to_beam_skims_in_current_run_workspace = (
+                explicit_skims_path
+                if explicit_skims_path is not None
+                else os.path.join(
+                    workspace.get_beam_mutable_data_dir(),
                     settings.run.region,
-                )
-            )
-            dest_dir = os.path.dirname(path_to_beam_skims_in_current_run_workspace)
-            os.makedirs(dest_dir, exist_ok=True)
-            shutil.copyfile(
-                os.path.join(beam_production_path, skims_fname),
-                path_to_beam_skims_in_current_run_workspace,
-            )
-            output_records.add_record(
-                FileRecord(
-                    file_path=path_to_beam_skims_in_current_run_workspace,
-                    description="BEAM skims copied to current workspace",
-                    short_name="omx_skims_current_workspace",
+                    skims_fname,
                 )
             )
 
-        if os.path.exists(
-            path_to_beam_skims_in_current_run_workspace
-        ):  # <--- This condition should now be true
-            skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
-            os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
-            if _should_refresh_skims_copy(
-                path_to_beam_skims_in_current_run_workspace, skims_loc
-            ):
-                shutil.copyfile(path_to_beam_skims_in_current_run_workspace, skims_loc)
+            if explicit_skims_path is not None:
                 logger.info(
-                    "Refreshed ActivitySim skims OMX from BEAM source: %s -> %s",
-                    path_to_beam_skims_in_current_run_workspace,
-                    skims_loc,
+                    "[ActivitysimPreprocessor] Using explicit final_skims_omx artifact: %s",
+                    explicit_skims_path,
                 )
-            else:
-                logger.debug(
-                    "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
-                    skims_loc,
+            elif final_skims_omx is not None:
+                logger.warning(
+                    "[ActivitysimPreprocessor] Explicit final_skims_omx artifact did not "
+                    "resolve to an existing path: %s. Falling back to legacy BEAM skims discovery.",
+                    final_skims_omx,
                 )
-        else:
-            os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
-            skims_loc = create_skims_from_beam(
-                settings,
-                self.state,
-                workspace,
-                output_dir=workspace.get_asim_mutable_data_dir(),
-            )
 
-        skim_record = FileRecord(
-            file_path=skims_loc,
-            short_name="omx_skims",
-            description="OD Skims copied over to ASim data directory",
-        )
+            if explicit_skims_path is None and not allow_workspace_skim_fallback:
+                raise FileNotFoundError(
+                    "ActivitySim preprocess requires the resolved final_skims_omx "
+                    "handoff after BEAM has run."
+                )
+
+            # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
+            if explicit_skims_path is None and not os.path.exists(
+                path_to_beam_skims_in_current_run_workspace
+            ):
+                from pilates.activitysim.admission import (
+                    ActivitySimInputAdmissionError,
+                    has_initial_skims_admission_policy,
+                )
+
+                if has_initial_skims_admission_policy(settings):
+                    policy = settings.activitysim.admission.initial_skims
+                    if policy is not None and policy.mode == "strict":
+                        raise ActivitySimInputAdmissionError(
+                            "ActivitySim initial skims admission policy is strict, "
+                            "but no staged skims exist in workspace and silent fallback "
+                            "to production skims is prohibited: "
+                            f"{path_to_beam_skims_in_current_run_workspace}"
+                        )
+                logger.info(
+                    "[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
+                )
+                try:
+                    from pilates.beam.preprocessor import BeamPreprocessor
+
+                    beam_production_path = BeamPreprocessor._find_beam_production_path(
+                        settings, settings.run.region
+                    )
+                except Exception:
+                    beam_production_path = os.path.abspath(
+                        os.path.join(
+                            find_project_root(),
+                            "pilates",
+                            "beam",
+                            "production",
+                            settings.run.region,
+                        )
+                    )
+                dest_dir = os.path.dirname(path_to_beam_skims_in_current_run_workspace)
+                os.makedirs(dest_dir, exist_ok=True)
+                shutil.copyfile(
+                    os.path.join(beam_production_path, skims_fname),
+                    path_to_beam_skims_in_current_run_workspace,
+                )
+
+            if os.path.exists(path_to_beam_skims_in_current_run_workspace):
+                skims_loc = os.path.join(
+                    workspace.get_asim_mutable_data_dir(), "skims.omx"
+                )
+                os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
+                if _should_refresh_skims_copy(
+                    path_to_beam_skims_in_current_run_workspace, skims_loc
+                ):
+                    shutil.copyfile(
+                        path_to_beam_skims_in_current_run_workspace, skims_loc
+                    )
+                    logger.info(
+                        "Refreshed ActivitySim skims OMX from BEAM source: %s -> %s",
+                        path_to_beam_skims_in_current_run_workspace,
+                        skims_loc,
+                    )
+                else:
+                    logger.debug(
+                        "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
+                        skims_loc,
+                    )
+            else:
+                os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
+                skims_loc = create_skims_from_beam(
+                    settings,
+                    self.state,
+                    workspace,
+                    output_dir=workspace.get_asim_mutable_data_dir(),
+                )
+
+            resolved_skims_path = artifact_to_path(skims_loc, workspace)
+            if resolved_skims_path is not None:
+                skims_omx_path = Path(resolved_skims_path)
+        else:
+            logger.info(
+                "[ActivitysimPreprocessor] Skipping OMX skim preparation; "
+                "ActivitySim will consume the prior BEAM-updated Zarr skims."
+            )
 
         # 2. Create ActivitySim input data from UrbanSim H5
         logger.info("Using H5 input mode for ActivitySim")
@@ -2325,13 +2241,26 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
-        all_outputs = (
-            ([skim_record] if skim_record else [])
-            + data_from_usim
-            + list(output_records.records.values())
-        )
-
-        return RecordStore(recordList=all_outputs)
+        records_by_key = {
+            record.short_name: record for record in data_from_usim if record.short_name
+        }
+        output_values: Dict[str, Union[Path, Dict[str, str]]] = {
+            "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
+        }
+        if skims_omx_path is not None:
+            output_values["omx_skims"] = skims_omx_path
+        input_hashes: Dict[str, str] = {}
+        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
+            record = records_by_key.get(record_key)
+            if record is None:
+                continue
+            record_path = artifact_to_path(record.file_path, workspace)
+            if record_path is not None:
+                output_values[field_name] = Path(record_path)
+            if record.content_hash:
+                input_hashes[record_key] = record.content_hash
+        output_values["input_hashes"] = input_hashes
+        return ActivitySimPreprocessOutputs(**output_values)
 
 
 #######################################
@@ -2795,37 +2724,87 @@ def enrollment_tables(
     return enrollment
 
 
-def _copy_data_to_mutable_location(
+def ensure_activitysim_mutable_configs(
     settings: PilatesConfig,
-    folder_path: str,
     workspace: Optional["Workspace"] = None,
-) -> Tuple[RecordStore, RecordStore]:
+    folder_path: Optional[str] = None,
+    *,
+    workspace_root: Optional[str | Path] = None,
+) -> Path:
     """
-    Copies ActivitySim source data (canonical zones, clipped geometries, configs)
-    to a mutable location within the current run's workspace.
+    Idempotently prepare ActivitySim mutable data and config directories in the workspace.
+    """
+    mutable_data_rel = str(
+        get_setting(
+            settings,
+            "activitysim.local_mutable_data_folder",
+            "activitysim/data",
+        )
+        or "activitysim/data"
+    )
+    mutable_configs_rel = str(
+        get_setting(
+            settings,
+            "activitysim.local_mutable_configs_folder",
+            "activitysim/configs",
+        )
+        or "activitysim/configs"
+    )
+    root_dir: Optional[str] = (
+        str(workspace_root) if workspace_root is not None else None
+    )
+    if root_dir is None and workspace is not None:
+        try:
+            root_dir = str(workspace.full_path)
+        except AttributeError:
+            root_dir = None
 
-    Args:
-        settings (PilatesConfig): The current PILATES settings object.
-        folder_path (str): The base path for the mutable ActivitySim data directory.
-    Returns:
-        Tuple[RecordStore, RecordStore]: A tuple containing two RecordStore objects:
-            - `input_records`: Records of the original source files.
-            - `output_records`: Records of the copied files in the mutable location.
-    """
-    logger.info("Copying ActivitySim source data to mutable location.")
-    input_dir = folder_path
-    os.makedirs(input_dir, exist_ok=True)
+    input_dir: Optional[str] = None
+    if folder_path is not None:
+        input_dir = str(folder_path)
+    elif workspace is not None:
+        try:
+            input_dir = str(workspace.get_asim_mutable_data_dir())
+        except AttributeError:
+            if root_dir is not None:
+                input_dir = os.path.join(root_dir, mutable_data_rel)
+            else:
+                try:
+                    input_dir = os.path.abspath(
+                        os.path.join(
+                            str(workspace.get_asim_mutable_configs_dir()),
+                            "..",
+                            "data",
+                        )
+                    )
+                except AttributeError:
+                    input_dir = None
+    elif root_dir is not None:
+        input_dir = os.path.join(root_dir, mutable_data_rel)
+    else:
+        input_dir = mutable_data_rel
+
+    configs_dest_dir: Optional[str] = None
+    if workspace is not None and folder_path is None:
+        try:
+            configs_dest_dir = str(workspace.get_asim_mutable_configs_dir())
+        except AttributeError:
+            if root_dir is not None:
+                configs_dest_dir = os.path.join(root_dir, mutable_configs_rel)
+    elif root_dir is not None and folder_path is None:
+        configs_dest_dir = os.path.join(root_dir, mutable_configs_rel)
+
+    if configs_dest_dir is None and input_dir is not None:
+        configs_dest_dir = os.path.abspath(
+            os.path.join(input_dir, "..", "..", mutable_configs_rel)
+        )
+    if configs_dest_dir is None:
+        return Path(mutable_configs_rel)
+
     region = get_setting(settings, "run.region")
-    input_records = RecordStore()
-    output_records = RecordStore()
     project_root = find_project_root(start_path=os.path.dirname(__file__))
     if not project_root:
         project_root = os.path.realpath(os.getcwd())
-        logger.warning(
-            "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
-            "This is error-prone in production and may affect inputs:// vs workspace:// URI labeling.",
-            project_root,
-        )
 
     def _resolve_inputs_path(path: str) -> str:
         if not path:
@@ -2835,209 +2814,105 @@ def _copy_data_to_mutable_location(
         return os.path.abspath(os.path.join(project_root, path))
 
     # --- 1. Handle Canonical Zone Geometries ---
-    zone_source_path = resolve_canonical_zone_source_path(settings, workspace)
-
-    if os.path.exists(zone_source_path):
-        zone_fname = os.path.basename(zone_source_path)
-        asim_zones_path = os.path.join(input_dir, zone_fname)
-        if os.path.abspath(zone_source_path) == os.path.abspath(asim_zones_path):
-            logger.info("Canonical zones already at destination: %s", asim_zones_path)
-        else:
-            logger.info(
-                f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
-            )
-            copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
-
-            input_records.add_record(
-                FileRecord(
-                    file_path=zone_source_path,
-                    short_name="canonical_zones_source",
+    try:
+        zones_config = settings.shared.geography.zones
+    except AttributeError:
+        zones_config = get_setting(settings, "shared.geography.zones")
+    if zones_config is not None and input_dir is not None:
+        zone_source_path = resolve_canonical_zone_source_path(settings, workspace)
+        if zone_source_path and os.path.exists(zone_source_path):
+            zone_fname = os.path.basename(zone_source_path)
+            asim_zones_path = os.path.join(input_dir, zone_fname)
+            if os.path.abspath(zone_source_path) == os.path.abspath(
+                asim_zones_path
+            ) or os.path.exists(asim_zones_path):
+                logger.info(
+                    "Canonical zones already at destination: %s",
+                    asim_zones_path,
                 )
-            )
-            output_records.add_record(
-                FileRecord(
-                    file_path=asim_zones_path,
-                    short_name="canonical_zones",
+            else:
+                logger.info(
+                    "Copying canonical zones from %s to %s",
+                    zone_source_path,
+                    asim_zones_path,
                 )
-            )
-    else:
-        logger.warning(
-            f"Canonical zone source file not found at {zone_source_path}, skipping copy."
-        )
+                copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
 
     # --- 2. Handle Clipped Geometries (from BEAM) ---
     clipped_geoms_rel_path = get_setting(settings, "activitysim.clipped_geoms_path")
-    if clipped_geoms_rel_path:
-        # This path is relative to the BEAM router directory
-        beam_prod_dir = _resolve_inputs_path(settings.beam.local_input_folder)
-        router_dir = os.path.join(beam_prod_dir, region, settings.beam.router_directory)
-        clipped_geoms_source_path = os.path.join(router_dir, clipped_geoms_rel_path)
-
+    beam_local_input = get_setting(settings, "beam.local_input_folder")
+    beam_router_dir = get_setting(settings, "beam.router_directory")
+    if clipped_geoms_rel_path and region and beam_local_input and beam_router_dir:
+        beam_prod_dir = _resolve_inputs_path(str(beam_local_input))
+        router_dir = os.path.join(beam_prod_dir, str(region), str(beam_router_dir))
+        clipped_geoms_source_path = os.path.join(
+            router_dir, str(clipped_geoms_rel_path)
+        )
         if os.path.exists(clipped_geoms_source_path):
             clipped_fname = os.path.basename(clipped_geoms_source_path)
             asim_clipped_path = os.path.join(input_dir, clipped_fname)
-            logger.info(
-                f"Copying clipped geoms from {clipped_geoms_source_path} to {asim_clipped_path}"
-            )
-            _copy_path_if_needed(clipped_geoms_source_path, asim_clipped_path)
-
-            input_records.add_record(
-                FileRecord(
-                    file_path=clipped_geoms_source_path,
-                    short_name="clipped_geoms_source",
-                )
-            )
-            output_records.add_record(
-                FileRecord(
-                    file_path=asim_clipped_path,
-                    short_name="clipped_geoms",
-                )
-            )
-        else:
-            logger.warning(
-                f"Clipped geoms file not found at {clipped_geoms_source_path}, skipping copy."
-            )
+            if not os.path.exists(asim_clipped_path):
+                _copy_path_if_needed(clipped_geoms_source_path, asim_clipped_path)
 
     # --- 3. Handle ActivitySim Configs ---
-    configs_source_dir = os.path.join(
-        _resolve_inputs_path(get_setting(settings, "activitysim.local_configs_folder")),
-        get_setting(settings, "run.region"),
+    main_configs_dir = str(
+        get_setting(settings, "activitysim.main_configs_dir", "configs") or "configs"
     )
-    configs_dest_dir = os.path.abspath(
-        os.path.join(
-            folder_path,
-            "..",
-            "..",
-            get_setting(settings, "activitysim.local_mutable_configs_folder"),
-        )
-    )
-    logger.info(
-        "Moving asim configs from {0} to {1}".format(
-            configs_source_dir, configs_dest_dir
-        )
-    )
-    _copytree_if_needed(configs_source_dir, configs_dest_dir)
-    _ensure_required_asim_config_dirs(
-        configs_dest_dir=configs_dest_dir,
-        main_configs_dir=get_setting(
-            settings, "activitysim.main_configs_dir", "configs"
-        ),
+    local_configs_folder = get_setting(settings, "activitysim.local_configs_folder")
+    configs_source_dir = (
+        os.path.join(_resolve_inputs_path(str(local_configs_folder)), str(region))
+        if local_configs_folder and region
+        else None
     )
 
-    # ActivitySim configs are captured via the config adapter; no artifact logging here.
-    return input_records, output_records
-
-
-def copy_beam_geoms(
-    settings: PilatesConfig,
-    beam_geoms_location: str,
-    asim_geoms_location: str,
-    beam_shape_location: Optional[str],
-    workspace: "Workspace",
-) -> Tuple[RecordStore, RecordStore]:
-    """
-    Copies and processes BEAM geometry files for ActivitySim.
-
-    This function reads BEAM geometry data, maps zone IDs according to the
-    configured zone type, and saves the processed geometries for ActivitySim.
-    It also handles an optional BEAM shapefile, updating its zone IDs if present.
-
-    Args:
-        settings (PilatesConfig): The current PILATES settings object.
-        beam_geoms_location (str): The file path to the input BEAM geometries CSV.
-        asim_geoms_location (str): The destination file path for the processed
-            ActivitySim geometries CSV.
-        beam_shape_location (Optional[str]): The optional file path to the BEAM
-            zones shapefile. If provided, its zone IDs will be updated.
-        workspace (Workspace): The current workspace object.
-
-    Returns:
-        Tuple[RecordStore, RecordStore]: A tuple containing two RecordStore objects:
-            - `input_records`: Records of the original BEAM geometry files.
-            - `output_records`: Records of the processed ActivitySim geometry files.
-    """
-    zone_type_column = {"block_group": "BLKGRP", "taz": "TAZ", "block": "BLK"}
-    beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={"GEOID": str})
-    beam_geoms_in = FileRecord(
-        file_path=beam_geoms_location,
-        short_name="beam_geoms_reference",
-        description="BEAM geometry file",
+    has_existing_base = any(
+        os.path.isdir(os.path.join(configs_dest_dir, cand))
+        for cand in (main_configs_dir, "configs_extended", "configs")
     )
-    zone_type = get_setting(settings, "shared.geography.zones.zone_type").lower()
-    zone_id_col = zone_type_column[zone_type]
-    from pilates.utils.zone_utils import get_block_to_zone_mapping
-
-    mapping = get_block_to_zone_mapping(
-        settings, get_setting(settings, "run.start_year"), workspace
-    )
-
-    if zone_id_col not in beam_geoms_file.columns:
-        if zone_type == "block":
-            logger.info("Mapping block IDs")
-            beam_geoms_file["TAZ"] = (
-                beam_geoms_file["GEOID"].astype(str).replace(mapping)
-            )
-
-        elif zone_type == "block_group":
-            logger.info("Mapping block group IDs to TAZ ids")
-            beam_geoms_file["TAZ"] = (
-                beam_geoms_file["GEOID"].astype(str).replace(mapping)
-            )
-
-        elif zone_type == "taz":
-            from_col = get_setting(
-                settings,
-                "shared.skims.geoms_index_col",
-                default=get_setting(settings, "geoms_index_col", "zone_id"),
-            )
-            to_col = "TAZ"
-            logger.info("Renaming TAZ column from {0} to {1}".format(from_col, to_col))
-            beam_geoms_file.rename(columns={from_col: to_col}, inplace=True)
-        else:
-            logger.error(f"Unrecognized zone type {zone_type}, ASim may fail")
-
-    beam_geoms_file.to_csv(asim_geoms_location)
-    asim_geoms_out = FileRecord(
-        file_path=asim_geoms_location,
-        short_name="asim_geoms",
-        description="ASIM geometry file",
-    )
-
-    inputs = [beam_geoms_in]
-    outputs = [asim_geoms_out]
-
-    if beam_shape_location is not None:
+    if (
+        not has_existing_base
+        and configs_source_dir is not None
+        and os.path.isdir(configs_source_dir)
+    ):
         logger.info(
-            "Mapping BEAM geometry geoid column {0} to zone_id column {1}".format(
-                get_setting(settings, "beam.skim_zone_geoid_col"),
-                get_setting(settings, "beam.skim_zone_source_id_col"),
-            )
+            "Copying ActivitySim configs from %s to %s",
+            configs_source_dir,
+            configs_dest_dir,
         )
-        beam_shape_in = FileRecord(
-            file_path=beam_shape_location,
-            short_name="beam_shape",
-            description="BEAM zones shapefile",
+        shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
+        has_existing_base = any(
+            os.path.isdir(os.path.join(configs_dest_dir, cand))
+            for cand in (main_configs_dir, "configs_extended", "configs")
         )
-        inputs.append(beam_shape_in)
-        zones = gpd.read_file(beam_shape_location)
-        zones[get_setting(settings, "beam.skim_zone_source_id_col")] = (
-            zones[get_setting(settings, "beam.skim_zone_geoid_col")]
-            .astype(str)
-            .map(mapping)
+
+    if local_configs_folder:
+        common_source_dir = os.path.join(
+            _resolve_inputs_path(str(local_configs_folder)),
+            "common",
         )
-        logger.info(
-            "Re-saving BEAM geometry shapefile with updated zone_id to {0}".format(
-                beam_shape_location
-            )
+        common_dest_dir = os.path.join(configs_dest_dir, "configs_common")
+        if os.path.isdir(common_source_dir) and not os.path.isdir(common_dest_dir):
+            shutil.copytree(common_source_dir, common_dest_dir, dirs_exist_ok=True)
+
+    if has_existing_base:
+        _ensure_required_asim_config_dirs(
+            configs_dest_dir=configs_dest_dir,
+            main_configs_dir=main_configs_dir,
         )
-        zones.to_file(beam_shape_location)
-        beam_shape_out = FileRecord(
-            file_path=beam_shape_location,
-            short_name="beam_shape",
-            description="BEAM zones shapefile",
+        _disable_activitysim_vehicle_ownership_models_for_atlas(
+            settings=settings,
+            configs_dest_dir=configs_dest_dir,
+            main_configs_dir=main_configs_dir,
         )
-        outputs.append(beam_shape_out)
-    return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
+        sync_activitysim_sharrow_configs(
+            configs_dest_dir,
+            main_configs_dir=main_configs_dir,
+            sharrow=configured_activitysim_sharrow(settings),
+        )
+    elif local_configs_folder:
+        os.makedirs(configs_dest_dir, exist_ok=True)
+
+    return Path(configs_dest_dir)
 
 
 def _update_persons_table(
@@ -3489,9 +3364,7 @@ def _update_jobs_table(
         )
         blocks_gdf = blocks_gdf.to_crs(local_crs)
 
-        for block_id in tqdm(
-            blocks_to_reassign, desc="Redistributing jobs from blocks:"
-        ):
+        for block_id in blocks_to_reassign:
             candidate_mask = (blocks_gdf.index.values != block_id) & (
                 blocks_gdf["square_meters_land"] > 0
             )
@@ -3904,61 +3777,6 @@ def _create_land_use_table(
     return zones
 
 
-def _detect_activitysim_h5_prefix(
-    store: pd.HDFStore,
-    *,
-    required_tables: Tuple[str, ...],
-    preferred_prefixes: Tuple[Optional[Union[str, int]], ...] = (),
-) -> Optional[str]:
-    normalized_keys = {key.strip("/") for key in store.keys()}
-    candidate_prefixes: List[str] = []
-    for prefix in preferred_prefixes:
-        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
-        if normalized not in candidate_prefixes:
-            candidate_prefixes.append(normalized)
-    for key in normalized_keys:
-        if "/" not in key:
-            continue
-        prefix = key.split("/", 1)[0]
-        if prefix not in candidate_prefixes:
-            candidate_prefixes.append(prefix)
-
-    for prefix in candidate_prefixes:
-        if all(
-            (f"{prefix}/{table_name}" if prefix else table_name) in normalized_keys
-            for table_name in required_tables
-        ):
-            return prefix
-    return None
-
-
-def _activitysim_h5_preferred_prefixes(
-    state: "WorkflowState",
-) -> Tuple[Optional[Union[str, int]], ...]:
-    """
-    Prefer the forecast-year slice inside a bound UrbanSim population datastore.
-
-    The population-source H5 handed off from UrbanSim/ATLAS can contain multiple
-    year-scoped table families. ActivitySim should consume the semantic target
-    population for the interval, which is represented by ``forecast_year`` when
-    available, not the workflow start year.
-    """
-    ordered_prefixes: List[Optional[Union[str, int]]] = []
-    for prefix in (
-        getattr(state, "forecast_year", None),
-        getattr(state, "year", None),
-        "",
-    ):
-        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
-        if normalized == "":
-            candidate: Optional[Union[str, int]] = ""
-        else:
-            candidate = normalized
-        if candidate not in ordered_prefixes:
-            ordered_prefixes.append(candidate)
-    return tuple(ordered_prefixes)
-
-
 def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: "WorkflowState",
@@ -4132,15 +3950,6 @@ def create_asim_data_from_h5(
         )
 
     return output_records
-
-
-def _activitysim_h5_table_path(
-    prefix: Optional[Union[str, int]], table_name: str
-) -> str:
-    normalized_prefix = str(prefix).strip("/") if prefix not in (None, "") else ""
-    if normalized_prefix:
-        return f"/{normalized_prefix}/{table_name}"
-    return f"/{table_name}"
 
 
 def _activitysim_preprocess_h5_input_key(

@@ -32,6 +32,7 @@ def test_build_archive_mounts_sets_workspace_to_archive_dir(tmp_path):
     )
 
     assert mounts["workspace"] == str(archive_run_dir.resolve())
+    assert mounts["beam_input"] == str((archive_run_dir / "beam" / "input").resolve())
     assert mounts["inputs"] == str(project_root.resolve())
     assert mounts["scratch"] == str(output_root.resolve())
 

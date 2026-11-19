@@ -53,3 +53,34 @@ def test_load_resolved_beam_config_tree_resolves_pwd_relative_values(tmp_path):
     )
 
     assert resolved["beam"]["outputs"]["base"] == str(tmp_path / "beam" / "output")
+
+
+def test_load_resolved_beam_config_tree_preserves_default_before_optional_env_override(
+    tmp_path,
+):
+    settings = _make_settings()
+    config_path = beam_primary_config_path(settings, workspace_path=str(tmp_path))
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        "\n".join(
+            [
+                'beam.outputs.baseOutputDirectory = ${PWD}"/output/sfbay"',
+                "beam.outputs.baseOutputDirectory = ${?BEAM_OUTPUT}",
+                'beam.outputs.writePlansInterval = "1"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    resolved = load_resolved_beam_config_tree(
+        config_path,
+        env_overrides=beam_config_env_overrides(
+            settings,
+            workspace_path=str(tmp_path),
+        ),
+    )
+
+    assert resolved["beam"]["outputs"]["baseOutputDirectory"] == str(
+        tmp_path / "beam" / "output" / "sfbay"
+    )

@@ -88,7 +88,6 @@ class TestComputeModelEnabledFlags:
         assert flags["vehicle_ownership_model_enabled"] is True
         assert flags["activity_demand_enabled"] is True
         assert flags["traffic_assignment_enabled"] is True
-        assert flags["impacts_enabled"] is False
         assert flags["replanning_enabled"] is True
 
     def test_all_models_enabled_flat_settings(
@@ -103,7 +102,6 @@ class TestComputeModelEnabledFlags:
         assert flags["vehicle_ownership_model_enabled"] is True
         assert flags["activity_demand_enabled"] is True
         assert flags["traffic_assignment_enabled"] is True
-        assert flags["impacts_enabled"] is False
         assert flags["replanning_enabled"] is True
 
     def test_land_use_disabled_by_warm_start_skims(
@@ -191,7 +189,6 @@ class TestParseArgsAndSettings:
             "vehicle_ownership_model_enabled": True,
             "activity_demand_enabled": True,
             "traffic_assignment_enabled": True,
-            "impacts_enabled": False,
             "replanning_enabled": True,
         }
 
@@ -240,7 +237,6 @@ class TestParseArgsAndSettings:
             "vehicle_ownership_model_enabled": True,
             "activity_demand_enabled": True,
             "traffic_assignment_enabled": True,
-            "impacts_enabled": False,
             "replanning_enabled": True,
         }
 
@@ -284,7 +280,6 @@ class TestParseArgsAndSettings:
             "vehicle_ownership_model_enabled": True,
             "activity_demand_enabled": True,
             "traffic_assignment_enabled": True,
-            "impacts_enabled": False,
             "replanning_enabled": True,
         }
 
@@ -324,7 +319,6 @@ class TestParseArgsAndSettings:
             "vehicle_ownership_model_enabled": True,
             "activity_demand_enabled": True,
             "traffic_assignment_enabled": True,
-            "impacts_enabled": False,
             "replanning_enabled": True,
         }
 
@@ -362,7 +356,6 @@ class TestParseArgsAndSettings:
             "vehicle_ownership_model_enabled": True,
             "activity_demand_enabled": True,
             "traffic_assignment_enabled": True,
-            "impacts_enabled": False,
             "replanning_enabled": True,
         }
 
@@ -397,7 +390,6 @@ class TestParseArgsAndSettings:
             "vehicle_ownership_model_enabled": True,
             "activity_demand_enabled": True,
             "traffic_assignment_enabled": True,
-            "impacts_enabled": False,
             "replanning_enabled": True,
         }
         mock_get_setting.side_effect = [

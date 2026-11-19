@@ -19,7 +19,7 @@ from pilates.workspace import Workspace
 logger = logging.getLogger(__name__)
 
 
-class ImpactsPresimRunner(GenericRunner[None, ImpactsPresimOutputs]):
+class ImpactsPresimRunner(GenericRunner[None, ImpactsPresimOutputs, Workspace]):
     """Runs the IMPACTS presim stage (EMFAC activities + fleet) before BEAM."""
 
     def _run(

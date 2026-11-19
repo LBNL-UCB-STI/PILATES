@@ -48,6 +48,14 @@ Use high-memory `lr7` mode (`480G`):
 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> --high-mem
 ```
 
+Use `lr6`:
+
+```bash
+./hpc/job_runner.sh -c scenarios/sfbay/settings-sfbay-smoke-sd-loop-hpc.yaml -a <slurm_account> -p lr6 --high-mem
+```
+
+By default `-p lr6` requests 32 CPUs and `90G` (70g BEAM heap). With `--high-mem` (or `-p lr6_m192`), it requests 32 CPUs and `180G` (150g BEAM heap).
+
 Force shared live archive output on LRC while keeping execution on node-local storage:
 
 ```bash
@@ -87,7 +95,9 @@ selections before submitting.
 
 `job_runner.sh` supports settings files that contain `${BEAM_MEMORY}` and `${BEAM_EXTRA_JVM_ARGS}`.
 
-- For `lr7 --high-mem`, default is `300g`.
+- For `lr6 --high-mem` (or `lr6_m192`), default is `150g` (180G job memory).
+- For default `lr6` (90G job memory), default is `70g`.
+- For `lr7 --high-mem`, default is `400g`.
 - For default `lr7` (240G job memory), default is `180g`.
 - For `lr8`, default is `600g`.
 
@@ -151,7 +161,7 @@ rm -f /global/scratch/users/$USER/sources/PILATES/PILATES-env/.last_requirements
 `job.sh` installs `consist` as follows:
 
 1. If local source exists at `CONSIST_SRC_DIR` (default `$PILATES_DIR/../consist`), install editable (`pip install -e`).
-2. Otherwise, install from PyPI package name in `CONSIST_PYPI_PACKAGE` or fall back to `consist==0.1.4`.
+2. Otherwise, install from PyPI package name in `CONSIST_PYPI_PACKAGE` or fall back to `consist==0.3.3`.
 3. Validate with `from consist import create_tracker`.
 
 Override examples:
@@ -161,7 +171,7 @@ CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist ./hpc/job_runner.sh 
 ```
 
 ```bash
-CONSIST_PYPI_PACKAGE=consist==0.1.4 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
+CONSIST_PYPI_PACKAGE=consist==0.3.3 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 ## Dependency Gates
@@ -357,13 +367,3 @@ scenario_id, year, iteration, stage, phase, submit_user, slurm_job_id,
 slurm_job_name, slurm_partition, node, duration_seconds, output_count,
 archive_run_dir, error
 ```
-
-## Legacy Config Migration
-
-If the passed settings file is in legacy format (does not contain `run:`, `shared:`, and `infrastructure:`), `job.sh` runs:
-
-```bash
-python3 scripts/migrate_config.py <old> <old>_migrated.yaml --no-validate
-```
-
-and uses the migrated file if migration succeeds.
