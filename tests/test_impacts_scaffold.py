@@ -65,7 +65,6 @@ def _make_settings(**impacts_kwargs) -> AttrDict:
                 "local_output_folder": "beam/output",
                 "router_directory": "beam/router",
             },
-            "impacts_enabled": True,
         }
     )
     impacts_kwargs.setdefault("local_input_folder", "impacts/input")
