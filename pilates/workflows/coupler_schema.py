@@ -35,6 +35,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_PERSONS_TABLE,
@@ -51,6 +52,9 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     ),
     USIM_DATASTORE_CURRENT_H5: (
         "UrbanSim current datastore (H5): latest mutable version produced by workflow steps."
+    ),
+    USIM_FORECAST_OUTPUT: (
+        "UrbanSim forecast output datastore (H5) produced by an UrbanSim run."
     ),
     USIM_POPULATION_SOURCE_H5: (
         "UrbanSim datastore (H5) selected as the population source for ActivitySim preprocess."
@@ -95,6 +99,9 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     ),
     "asim_input_land_use_csv_archived": (
         "Archived ActivitySim preprocess land use CSV restored on replay/restart."
+    ),
+    "asim_input_skims_omx_archived": (
+        "Archived ActivitySim preprocess skims OMX restored on replay/restart."
     ),
     BEAM_OUTPUT_PLANS_XML: "BEAM output plans XML (previous run warm-start source).",
     BEAM_EXPERIENCED_PLANS_XML: "BEAM experienced plans XML (previous run warm-start source).",
@@ -155,10 +162,18 @@ def _atlas_static_key_map(settings: Optional[PilatesConfig]) -> Dict[str, str]:
 
 
 _RUNTIME_YEAR_KEY_FAMILIES: Dict[str, str] = {
+    "atlas_continuation_{year}": "ATLAS continuation output bundle for year {year}.",
     "householdv_{year}": "ATLAS household-vehicle ownership output for year {year}.",
     "vehicles_{year}": "ATLAS vehicle ownership output for year {year}.",
     "usim_input_archive_{year}": "Archived UrbanSim datastore snapshot for year {year}.",
     "usim_input_merged_{year}": "Merged UrbanSim datastore snapshot for year {year}.",
+}
+
+_RUNTIME_YEAR_ITER_KEY_FAMILIES: Dict[str, str] = {
+    "events_parquet_{year}_{iteration}": "BEAM events parquet output for year {year}, iteration {iteration}.",
+    "raw_od_skims_{year}_{iteration}": "BEAM raw OD skims output for year {year}, iteration {iteration}.",
+    "raw_od_skims_zarr_{year}_{iteration}": "BEAM raw OD skims Zarr output for year {year}, iteration {iteration}.",
+    "path_traversal_links_{year}_{iteration}": "BEAM path traversal links output for year {year}, iteration {iteration}.",
 }
 
 
@@ -183,10 +198,22 @@ def _runtime_year_candidates(settings: Optional[PilatesConfig]) -> tuple[int, ..
 
 def _runtime_year_key_map(settings: Optional[PilatesConfig]) -> Dict[str, str]:
     keys: Dict[str, str] = {}
-    for year in _runtime_year_candidates(settings):
+    years = _runtime_year_candidates(settings)
+    for year in years:
         for family, description in _RUNTIME_YEAR_KEY_FAMILIES.items():
             key = family.format(year=year)
             keys[key] = description.format(year=year)
+    num_iters = 1
+    if settings is not None:
+        try:
+            num_iters = max(1, int(settings.run.supply_demand_iters or 1))
+        except AttributeError:
+            num_iters = 1
+    for year in years:
+        for iteration in range(num_iters):
+            for family, description in _RUNTIME_YEAR_ITER_KEY_FAMILIES.items():
+                key = family.format(year=year, iteration=iteration)
+                keys[key] = description.format(year=year, iteration=iteration)
     return keys
 
 
