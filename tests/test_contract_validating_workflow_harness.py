@@ -1043,6 +1043,15 @@ def test_stage_orchestrators_and_launcher_happy_path_workflow(tmp_path: Path) ->
         / "skims.omx"
     ).is_file()
     assert (
+        archive_run_dir
+        / "consist-recovery"
+        / "activitysim_run__supply_demand__y2017__i0__run"
+        / "activitysim"
+        / "output"
+        / "cache"
+        / "skims.zarr"
+    ).is_dir()
+    assert (
         scratch_run_dir
         / "activitysim"
         / "output"

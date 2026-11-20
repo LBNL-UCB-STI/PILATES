@@ -1387,7 +1387,7 @@ activitysim_run = StepDefinition(
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    archive_outputs=False,
+    archive_outputs=True,
 )
 activitysim_postprocess = StepDefinition(
     name="activitysim_postprocess",
