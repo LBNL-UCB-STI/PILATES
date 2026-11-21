@@ -4,10 +4,9 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping, Sequence
+from typing import Optional, List, Tuple, Dict, Any, Mapping, Sequence
 
-if TYPE_CHECKING:
-    from pilates.workspace import Workspace
+from pilates.workspace import Workspace
 
 from pilates.config import PilatesConfig
 from pilates.beam import beam_exchange
@@ -253,6 +252,13 @@ def ensure_beam_mutable_workspace(
 
     region = str(get_setting(settings, "run.region") or "")
     dest_region = os.path.join(dest_base_dir, region) if region else dest_base_dir
+    if (
+        output_dir is None
+        and isinstance(workspace, Workspace)
+        and workspace._beam_mutable_staged_dir == dest_region
+        and os.path.isdir(dest_region)
+    ):
+        return Path(dest_region)
 
     beam_production_path: Optional[str] = None
     if region:
@@ -352,6 +358,8 @@ def ensure_beam_mutable_workspace(
                     zone_output_path=sorted_zones_path,
                 )
 
+    if output_dir is None and isinstance(workspace, Workspace):
+        workspace._beam_mutable_staged_dir = dest_region
     return Path(dest_region)
 
 

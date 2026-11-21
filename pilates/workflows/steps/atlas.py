@@ -48,10 +48,10 @@ from pilates.workflows.state import WorkflowState
 from .shared import (
     _build_step_call_inputs,
     _execution_options_with_launch_context,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _native_execution_options,
     _persisted_output_path,
-    _strict_requested_output_cache_options,
 )
 from .urbansim import (
     _urbansim_population_source_path,
@@ -870,7 +870,7 @@ ATLAS_PREPROCESS = StepDefinition(
     input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT,
     outputs=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
     optional_output_keys=("atlas_accessibility_csv",),
 )
 
@@ -883,7 +883,7 @@ ATLAS_RUN = StepDefinition(
     output_paths=_atlas_run_native_output_paths,
     output_sets=_atlas_run_output_sets,
     execution_options=_atlas_run_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
 )
 
 ATLAS_POSTPROCESS = StepDefinition(
@@ -894,7 +894,7 @@ ATLAS_POSTPROCESS = StepDefinition(
     input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT,
     outputs=_atlas_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
 )
 
 # Canonical registry members use the workflow step names. Uppercase aliases keep

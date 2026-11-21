@@ -918,10 +918,6 @@ def run_traffic_assignment_phase(
                         sim_state.network, linkstats_warmstart=Path(resolved_ws)
                     ),
                 )
-        if get_setting(settings, "shared.geography.zones") is not None:
-            from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
-
-            _prepare_beam_zone_shapefile(workspace, settings)
         sim_state = _run_beam_full_skim(
             scenario=scenario,
             settings=settings,

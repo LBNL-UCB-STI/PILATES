@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from consist import (
-    CacheOptions,
     define_step,
     require_runtime_kwargs,
 )
@@ -24,6 +23,7 @@ from pilates.workflows.sim_state import ArtifactRef, SimState
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.steps.shared import (
     _build_step_call_inputs,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _native_execution_options,
 )
@@ -189,13 +189,6 @@ def _project_postprocessing_outputs(
     return dict(outputs)
 
 
-def _postprocessing_cache_options(**_: Any) -> CacheOptions:
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-    )
-
-
 postprocessing = StepDefinition(
     name="postprocessing",
     function=_postprocessing_callable,
@@ -204,7 +197,7 @@ postprocessing = StepDefinition(
     input_contract=_POSTPROCESSING_INPUT_CONTRACT,
     output_paths=_postprocessing_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_postprocessing_cache_options,
+    cache_options=_metadata_cache_options(),
     optional_output_keys=tuple(POSTPROCESSING_SCHEMA_OUTPUTS),
     archive_outputs=True,
 )

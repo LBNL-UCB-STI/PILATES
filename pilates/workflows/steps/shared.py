@@ -192,13 +192,21 @@ def _execution_options_with_launch_context(
     )
 
 
-def _strict_requested_output_cache_options(**_: Any) -> CacheOptions:
-    """Admit a cached model step only after all requested output paths hydrate."""
+def _metadata_cache_options(
+    cache_version: int | None = None,
+    *,
+    cache_hydration: str = "metadata",
+) -> Callable[..., CacheOptions]:
+    """Return a cache_options factory using zero-copy metadata hydration by default."""
 
-    return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
-    )
+    def _build(**_: Any) -> CacheOptions:
+        return CacheOptions(
+            validate_cached_outputs="lazy",
+            cache_hydration=cache_hydration,
+            cache_version=cache_version,
+        )
+
+    return _build
 
 
 def _native_contract_output_paths(

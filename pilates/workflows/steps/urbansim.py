@@ -49,10 +49,10 @@ from pilates.workflows.state import WorkflowState
 from .shared import (
     _build_step_call_inputs,
     _execution_options_with_launch_context,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _native_execution_options,
     _persisted_output_path,
-    _strict_requested_output_cache_options,
 )
 
 
@@ -449,7 +449,7 @@ URBANSIM_RUN = StepDefinition(
     input_contract=_URBANSIM_RUN_INPUT_CONTRACT,
     output_paths=_urbansim_run_native_output_paths,
     execution_options=_urbansim_run_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(cache_hydration="outputs-requested"),
     optional_output_keys=(USIM_FORECAST_OUTPUT,),
 )
 
@@ -461,7 +461,7 @@ URBANSIM_POSTPROCESS = StepDefinition(
     input_contract=_URBANSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_urbansim_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
 )
 
 # Canonical registry members use the workflow step names. Uppercase aliases keep

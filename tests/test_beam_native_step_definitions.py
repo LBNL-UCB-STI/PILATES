@@ -196,13 +196,6 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         )
 
     monkeypatch.setattr(BeamPreprocessor, "preprocess", _preprocess)
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
 
     def _settings(*, file_format: str = "parquet") -> SimpleNamespace:
         return SimpleNamespace(
@@ -980,13 +973,6 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
 
     from pilates.workflows.sim_state import DemandState
 
@@ -1049,13 +1035,6 @@ def test_beam_preprocess_ignores_beam_plans_out_in_start_year_iteration_0(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
 
     from pilates.workflows.sim_state import DemandState
 
@@ -1113,13 +1092,6 @@ def test_beam_preprocess_binds_beam_plans_out_in_iteration_1_when_file_exists(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
 
     from pilates.workflows.sim_state import DemandState
 
@@ -1174,13 +1146,6 @@ def test_beam_preprocess_omits_pruned_beam_plans_out_in_iteration_1(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
 
     from pilates.workflows.sim_state import DemandState
 
@@ -1226,13 +1191,6 @@ def test_beam_preprocess_preserves_atlas_vehicles_producer_basename(
         beam_steps,
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
-    )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=True)
-        ),
     )
 
     from pilates.workflows.sim_state import DemandState
@@ -1302,13 +1260,6 @@ def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabl
         beam_steps,
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
-    )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=True)
-        ),
     )
 
     resolved = _resolve_beam_preprocess_inputs(
@@ -1386,13 +1337,6 @@ def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned
         ),
         beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
         activitysim=SimpleNamespace(file_format="parquet"),
-    )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
     )
     observed_context: dict[str, object] = {}
 
@@ -1494,14 +1438,6 @@ def test_beam_preprocess_resolver_does_not_close_canonical_zone_source(
         def get(self, key: str, default: object = None) -> object:
             return inputs.get(key, default)
 
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
-
     with pytest.raises(FileNotFoundError, match="poisoned-zones.geojson"):
         _resolve_beam_preprocess_inputs(
             settings=settings,
@@ -1564,13 +1500,6 @@ def test_beam_preprocess_resolver_does_not_close_exchange_config_read(
         def get(self, key: str, default: object = None) -> object:
             return inputs.get(key, default)
 
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
     resolved = _resolve_beam_preprocess_inputs(
         settings=settings,
         state=SimpleNamespace(year=2030, current_inner_iter=0),

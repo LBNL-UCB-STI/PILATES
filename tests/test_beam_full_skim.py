@@ -946,7 +946,7 @@ class TestBeamFullSkimMode:
                 )
 
         assert updated.network.linkstats_warmstart == warmstart_file
-        mock_prepare_zones.assert_called_once_with(workspace, settings)
+        mock_prepare_zones.assert_not_called()
         mock_execute.assert_called_once()
         assert mock_execute.call_args.kwargs["definition"].name == "beam_full_skim"
 

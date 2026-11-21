@@ -16,13 +16,12 @@ from pathlib import Path
 import re
 import shutil
 from types import MappingProxyType
-from typing import Any, Callable, Iterable, Mapping, Protocol, runtime_checkable
+from typing import Any, Iterable, Mapping, Protocol, runtime_checkable
 
 import consist as cr
 from consist import (
     Artifact,
     ArtifactLike,
-    CacheOptions,
     ExecutionOptions,
     define_step,
 )
@@ -72,6 +71,7 @@ from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
+    resolve_existing_path,
 )
 from pilates.utils.zone_utils import resolve_canonical_zone_source
 from pilates.workflows.artifact_keys import (
@@ -103,17 +103,14 @@ from pilates.workflows.outputs_base import ValidationContext
 from pilates.utils.state_access import is_start_year, iteration_index
 from pilates.workspace import Workspace
 
-from .shared import _build_step_call_inputs, _path_from_output
+from .shared import (
+    _build_step_call_inputs,
+    _metadata_cache_options,
+    _native_contract_output_paths,
+    _path_from_output,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def build_enabled_workflow_surface(settings: Any) -> Any:
-    from pilates.workflows.surface import (
-        build_enabled_workflow_surface as _build_enabled_workflow_surface,
-    )
-
-    return _build_enabled_workflow_surface(settings)
 
 
 _ATLAS_VEHICLES2_BASENAME_RE = re.compile(r"^vehicles2_\d{4}\.csv(?:\.gz)?$")
@@ -855,15 +852,19 @@ class _HasArchiveRunDir(Protocol):
 
 
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
+    source_path = artifact_to_path(source, workspace=workspace)
     if key in {ZARR_SKIMS, LINKSTATS_WARMSTART}:
-        existing = artifact_to_existing_path(source, workspace=workspace)
+        existing = (
+            resolve_existing_path(source_path, workspace=workspace)
+            if source_path is not None
+            else None
+        )
         if existing is not None:
             existing_path = Path(existing).resolve()
             if not isinstance(workspace, _HasFullPath) or existing_path.is_relative_to(
                 Path(workspace.full_path).resolve()
             ):
                 return existing_path
-    source_path = artifact_to_path(source, workspace=workspace)
     if key == ATLAS_VEHICLES2_OUTPUT:
         source_name = Path(source_path).name if source_path is not None else ""
         if not _ATLAS_VEHICLES2_BASENAME_RE.fullmatch(source_name):
@@ -1014,69 +1015,6 @@ def _native_execution_options(
         input_paths=dict(step_inputs.logical_destinations),
         runtime_kwargs=runtime_kwargs,
         inject_context="_consist_ctx",
-    )
-
-
-def _native_contract_output_paths(
-    provider: Callable[..., Mapping[str, Any]],
-) -> Callable[[Any], Mapping[str, Any]]:
-    def resolve(context: Any) -> Mapping[str, Any]:
-        settings = context.get_runtime("settings", default=None)
-        state = context.get_runtime("state", default=None)
-        workspace = context.get_runtime("workspace", default=None)
-        if settings is None or state is None or workspace is None:
-            return {}
-        return provider(settings=settings, state=state, workspace=workspace)
-
-    return resolve
-
-
-def _strict_requested_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-    )
-
-
-def _beam_run_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Output cache options for beam_run."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-        cache_version=1,
-    )
-
-
-def _beam_postprocess_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Output cache options for beam_postprocess."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-        cache_version=1,
-    )
-
-
-def _beam_preprocess_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Reject preprocess caches written with incorrect population suffixes."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-        cache_version=3,
     )
 
 
@@ -1342,24 +1280,38 @@ def _beam_postprocess_split_output_paths(
     if selected_events_key is None:
         return {}
     source = inputs.get(selected_events_key)
-    source_path = artifact_to_existing_path(source, workspace=workspace)
-    if source_path is None or "://" in source_path or not Path(source_path).is_file():
-        raise RuntimeError(
-            "beam_postprocess cannot inspect selected events input "
-            f"{selected_events_key!r} to close typed outputs."
-        )
-    try:
-        import pandas as pd
+    event_types: list[str] | None = None
+    if isinstance(source, Artifact) and isinstance(source.meta, Mapping):
+        cached_types = source.meta.get("beam_event_types")
+        if isinstance(cached_types, (list, tuple)):
+            event_types = sorted(
+                {str(value) for value in cached_types if value is not None}
+            )
+    if event_types is None:
+        source_path = artifact_to_existing_path(source, workspace=workspace)
+        if (
+            source_path is None
+            or "://" in source_path
+            or not Path(source_path).is_file()
+        ):
+            raise RuntimeError(
+                "beam_postprocess cannot inspect selected events input "
+                f"{selected_events_key!r} to close typed outputs."
+            )
+        try:
+            import pandas as pd
 
-        event_types = pd.read_parquet(source_path, columns=["type"])["type"]
-    except Exception as exc:
-        raise RuntimeError(
-            "beam_postprocess cannot inspect event types for selected input "
-            f"{selected_events_key!r}: {source_path}."
-        ) from exc
-    if event_types.empty:
+            raw_types = pd.read_parquet(source_path, columns=["type"])["type"]
+        except Exception as exc:
+            raise RuntimeError(
+                "beam_postprocess cannot inspect event types for selected input "
+                f"{selected_events_key!r}: {source_path}."
+            ) from exc
+        if raw_types.empty:
+            return {}
+        event_types = sorted({str(value) for value in raw_types.dropna()})
+    if not event_types:
         return {}
-    event_types = sorted({str(value) for value in event_types.dropna()})
     root = Path(workspace.get_beam_output_dir())
     event_keys = tuple(
         f"events_parquet_{year}_{iteration}_type_{_sanitize_beam_event_type(event_type)}"
@@ -1468,7 +1420,12 @@ def _resolve_beam_postprocess_inputs(
         else active_sim_state.demand.skims_zarr
     )
     if _activitysim_skims_target_enabled(settings) and zarr_artifact is not None:
-        zarr_existing = artifact_to_existing_path(zarr_artifact, workspace=workspace)
+        zarr_path = artifact_to_path(zarr_artifact, workspace=workspace)
+        zarr_existing = (
+            resolve_existing_path(zarr_path, workspace=workspace)
+            if zarr_path is not None
+            else None
+        )
         zarr_existing_in_workspace = (
             Path(zarr_existing).resolve()
             if zarr_existing is not None
@@ -1959,6 +1916,25 @@ def _native_beam_run(
             settings=settings, state=state, workspace=workspace
         ),
     )
+    for key, path in sources.items():
+        if key.startswith("events_parquet") and path.is_file():
+            try:
+                import pandas as pd
+
+                raw_types = pd.read_parquet(path, columns=["type"])["type"]
+                beam_event_types = sorted({str(value) for value in raw_types.dropna()})
+                cr.set_output_meta(
+                    key,
+                    {"beam_event_types": beam_event_types},
+                    merge=True,
+                )
+            except Exception:
+                logger.debug(
+                    "Unable to extract beam_event_types metadata for %s (%s)",
+                    key,
+                    path,
+                    exc_info=True,
+                )
     del _consist_ctx
 
 
@@ -2219,7 +2195,7 @@ beam_preprocess = StepDefinition(
     input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT,
     outputs=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_beam_preprocess_output_cache,
+    cache_options=_metadata_cache_options(cache_version=3),
     optional_output_keys=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
 )
 beam_run = StepDefinition(
@@ -2230,7 +2206,7 @@ beam_run = StepDefinition(
     input_contract=_BEAM_RUN_INPUT_CONTRACT,
     output_paths=_beam_run_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_beam_run_output_cache,
+    cache_options=_metadata_cache_options(cache_version=1),
 )
 beam_postprocess = StepDefinition(
     name="beam_postprocess",
@@ -2240,7 +2216,7 @@ beam_postprocess = StepDefinition(
     input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_beam_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_beam_postprocess_output_cache,
+    cache_options=_metadata_cache_options(cache_version=1),
     optional_output_keys=(FINAL_SKIMS_OMX,),
 )
 beam_full_skim = StepDefinition(
@@ -2251,6 +2227,6 @@ beam_full_skim = StepDefinition(
     input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT,
     outputs=_beam_full_skim_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache,
+    cache_options=_metadata_cache_options(),
     optional_output_keys=(FINAL_SKIMS_OMX,),
 )

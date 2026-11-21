@@ -37,6 +37,8 @@ class Workspace:
         self._asim_mutable_data_dir_override: Optional[str] = None
         self._asim_runtime_cache_dir_override: Optional[str] = None
         self._beam_mutable_data_dir_override: Optional[str] = None
+        self._beam_mutable_staged_dir: Optional[str] = None
+        self._asim_mutable_staged_dir: Optional[str] = None
         self._setup_directories()
 
     @property

@@ -301,7 +301,13 @@ def execute_step(
         fn=definition.function,
         binding=binding,
         config_plan_ingest=(
-            definition.name not in ("activitysim_preprocess", "activitysim_postprocess")
+            definition.name
+            not in (
+                "activitysim_preprocess",
+                "activitysim_postprocess",
+                "beam_preprocess",
+                "beam_postprocess",
+            )
         ),
         year=year,
         iteration=resolved_iteration,

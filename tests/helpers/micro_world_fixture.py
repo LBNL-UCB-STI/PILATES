@@ -1057,10 +1057,6 @@ def build_micro_world(
             "asim_ridehail_measure_map": {},
             "ridehail_path_map": {},
         },
-        "postprocessing": {
-            "output_folder": "postprocessing/output",
-            "mep_output_folder": "postprocessing/mep",
-        },
     }
 
     cfg_file = tmp_path / "micro_world_settings.yaml"

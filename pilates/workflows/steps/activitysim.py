@@ -6,7 +6,6 @@ from typing import Any, Dict, Mapping, Protocol, runtime_checkable
 
 from consist import (
     Artifact,
-    CacheOptions,
     ExecutionOptions,
     define_step,
     require_runtime_kwargs,
@@ -77,12 +76,13 @@ from pilates.workflows.contracts import (
 )
 from pilates.workflows.sim_state import ArtifactRef, SimState
 from pilates.workspace import Workspace
-from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_path, resolve_existing_path
 from pilates.workflows.state import WorkflowState
 
 from .shared import (
     _activitysim_output_facet_meta,
     _build_step_call_inputs,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _persisted_output_path,
 )
@@ -488,14 +488,22 @@ def _activitysim_run_resolver(
     omx_input = resolved.inputs.get(ASIM_OMX_SKIMS)
     zarr_rejection: str | None = None
     if zarr_input is not None:
-        zarr_path = artifact_to_existing_path(
-            zarr_input, workspace=workspace
-        ) or artifact_to_path(zarr_input, workspace=workspace)
-        zarr_rejection = (
-            "could not resolve a concrete path"
-            if zarr_path is None
-            else validate_activitysim_zarr_skims(zarr_path)
+        zarr_path = artifact_to_path(zarr_input, workspace=workspace)
+        existing_zarr_path = (
+            resolve_existing_path(zarr_path, workspace=workspace)
+            if zarr_path is not None
+            else None
         )
+        if existing_zarr_path is not None:
+            zarr_rejection = validate_activitysim_zarr_skims(existing_zarr_path)
+        elif isinstance(zarr_input, Artifact):
+            zarr_rejection = None
+        else:
+            zarr_rejection = (
+                "could not resolve a concrete path"
+                if zarr_path is None
+                else validate_activitysim_zarr_skims(zarr_path)
+            )
 
     if zarr_input is not None and zarr_rejection is None:
         decision = ActivitySimSkimDecision(
@@ -561,9 +569,14 @@ def _activitysim_run_resolver(
         if key in selected_roles
     }
     if decision.role == ZARR_SKIMS:
-        zarr_existing = artifact_to_existing_path(
+        zarr_path = artifact_to_path(
             binding_inputs.get(ZARR_SKIMS), workspace=workspace
-        ) or artifact_to_path(binding_inputs.get(ZARR_SKIMS), workspace=workspace)
+        )
+        zarr_existing = (
+            resolve_existing_path(zarr_path, workspace=workspace)
+            if zarr_path is not None
+            else None
+        ) or zarr_path
         if zarr_existing is not None:
             logical_destinations[ZARR_SKIMS] = Path(zarr_existing)
     return StepCallInputs(
@@ -658,7 +671,7 @@ def _activitysim_postprocess_resolver(
     for role in _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES:
         if role in removed_roles or role not in inputs:
             continue
-        existing_local = _h5_input_local_path(inputs[role])
+        existing_local = _h5_input_local_path(inputs[role], workspace=workspace)
         if (
             existing_local is not None
             and existing_local.is_relative_to(workspace_root)
@@ -685,11 +698,17 @@ def _activitysim_postprocess_resolver(
     )
 
 
-def _h5_input_local_path(value: Any) -> Path | None:
+def _h5_input_local_path(
+    value: Any,
+    *,
+    workspace: Workspace | None = None,
+) -> Path | None:
     """Resolve an H5 input role value (Artifact or path) to its canonical local path."""
 
     if isinstance(value, Artifact):
-        candidate = value.ensure_local_path() or value.abs_path or value.path
+        candidate = (
+            artifact_to_path(value, workspace=workspace) or value.abs_path or value.path
+        )
         return Path(str(candidate)).resolve() if candidate else None
     if isinstance(value, (str, Path)):
         text = str(value).strip()
@@ -782,18 +801,6 @@ def _activitysim_execution_options(
         input_materialization="requested",
         input_materialization_mode="copy",
         runtime_kwargs=runtime_kwargs,
-    )
-
-
-def _activitysim_cache_options(
-    *, settings: PilatesConfig, state: WorkflowState, workspace: Workspace
-) -> CacheOptions:
-    """Admit a cache candidate with zero-copy metadata hydration."""
-
-    # del settings, state, workspace
-    return CacheOptions(
-        cache_hydration="metadata",
-        validate_cached_outputs="lazy",
     )
 
 
@@ -1317,7 +1324,7 @@ activitysim_preprocess = StepDefinition(
     input_contract=_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT,
     outputs=activitysim_preprocess_output_paths,
     execution_options=_activitysim_execution_options,
-    cache_options=_activitysim_cache_options,
+    cache_options=_metadata_cache_options(),
     archive_outputs=True,
 )
 activitysim_run = StepDefinition(
@@ -1328,7 +1335,7 @@ activitysim_run = StepDefinition(
     input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT,
     output_paths=_activitysim_run_native_output_paths,
     execution_options=_activitysim_execution_options,
-    cache_options=_activitysim_cache_options,
+    cache_options=_metadata_cache_options(),
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     archive_outputs=True,
 )
@@ -1340,7 +1347,7 @@ activitysim_postprocess = StepDefinition(
     input_contract=_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=activitysim_postprocess_output_paths,
     execution_options=_activitysim_execution_options,
-    cache_options=_activitysim_cache_options,
+    cache_options=_metadata_cache_options(),
     archive_outputs=True,
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
 )
