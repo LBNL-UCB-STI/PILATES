@@ -16,14 +16,12 @@ from pathlib import Path
 import re
 import shutil
 from types import MappingProxyType
-from typing import Any, Callable, Iterable, Mapping, Protocol, runtime_checkable
+from typing import Any, Iterable, Mapping
 
 import consist as cr
 from consist import (
     Artifact,
     ArtifactLike,
-    BindingResult,
-    CacheOptions,
     ExecutionOptions,
     define_step,
 )
@@ -31,6 +29,7 @@ from consist import (
 from pilates.utils.archive_paths import resolve_archive_run_dir
 
 from pilates.beam import beam_exchange
+from pilates.beam.beam_input_staging import _beam_vehicle_file_format
 from pilates.beam.config_hocon import (
     beam_primary_config_path,
 )
@@ -73,12 +72,9 @@ from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
+    resolve_existing_path,
 )
 from pilates.utils.zone_utils import resolve_canonical_zone_source
-from pilates.workflows.coupler_namespace import (
-    coupler_storage_keys,
-    coupler_storage_value,
-)
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_FULL_SKIMS,
@@ -92,35 +88,30 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
-from pilates.workflows.binding import (
-    ArtifactBindingRule,
-    artifact_rules_for_step_name,
-    resolve_artifact_roles,
+from pilates.workflows.state_helpers import (
+    requires_prior_beam_linkstats_handoff,
+    resolve_forecast_year,
 )
-from pilates.workflows.input_authority import requires_prior_beam_linkstats_handoff
-from pilates.workflows.state_helpers import resolve_forecast_year
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
 )
+from pilates.workflows.sim_state import ArtifactRef, SimState
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.utils.state_access import is_start_year, iteration_index
 from pilates.workspace import Workspace
 
-from .shared import _path_from_output
+from .shared import (
+    _build_step_call_inputs,
+    _metadata_cache_options,
+    _native_contract_output_paths,
+    _path_from_output,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def build_enabled_workflow_surface(settings: Any) -> Any:
-    from pilates.workflows.surface import (
-        build_enabled_workflow_surface as _build_enabled_workflow_surface,
-    )
-
-    return _build_enabled_workflow_surface(settings)
 
 
 _ATLAS_VEHICLES2_BASENAME_RE = re.compile(r"^vehicles2_\d{4}\.csv(?:\.gz)?$")
@@ -167,13 +158,13 @@ def _native_output_destination(
 def _linkstats_warmstart_suffix(
     *,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs | None,
+    step_inputs: StepCallInputs | None,
     settings: Any = None,
 ) -> str:
     """Preserve the selected warm-start file format in its logged output path."""
     source_path = None
-    if resolved_inputs is not None:
-        source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
+    if step_inputs is not None:
+        source = step_inputs.inputs.get(LINKSTATS_WARMSTART)
         source_path = artifact_to_path(source, workspace=workspace)
     if not source_path and settings is not None and workspace is not None:
         source_path = resolve_initial_linkstats_path(settings, workspace)
@@ -199,17 +190,24 @@ def _beam_population_input_suffix(settings: Any) -> str:
     )
 
 
+def _beam_vehicles_input_suffix(settings: Any) -> str:
+    """Return the suffix written by the ATLAS-to-BEAM vehicle staging step."""
+
+    preferred_format = get_setting(settings, "activitysim.file_format")
+    return f".{_beam_vehicle_file_format(preferred_format)}"
+
+
 def _beam_preprocess_native_output_paths(
     *,
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> dict[str, Path]:
     del state
     selected = (
-        tuple(resolved_inputs.metadata.get("native_output_keys", ()))
-        if resolved_inputs is not None
+        tuple(step_inputs.metadata.get("native_output_keys", ()))
+        if step_inputs is not None
         else (
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
@@ -234,10 +232,10 @@ def _beam_preprocess_native_output_paths(
         BEAM_PERSONS_IN: population_suffix,
         LINKSTATS_WARMSTART: _linkstats_warmstart_suffix(
             workspace=workspace,
-            resolved_inputs=resolved_inputs,
+            step_inputs=step_inputs,
             settings=settings,
         ),
-        "vehicles_beam_in": ".csv",
+        BEAM_VEHICLES_IN: _beam_vehicles_input_suffix(settings),
     }
     root = Path(workspace.get_beam_mutable_data_dir())
     return {
@@ -251,16 +249,10 @@ def _beam_preprocess_native_output_paths(
     }
 
 
-@runtime_checkable
-class _HasEffectiveSupplyDemandIterations(Protocol):
-    def effective_supply_demand_iterations(
-        self, *, resumed_iteration: int | None = None
-    ) -> int: ...
-
-
 def _is_final_beam_iteration(*, settings: Any, state: Any, iteration: int) -> bool:
-    if isinstance(state, _HasEffectiveSupplyDemandIterations):
-        total = state.effective_supply_demand_iterations(resumed_iteration=iteration)
+    effective_iters_fn = getattr(state, "effective_supply_demand_iterations", None)
+    if callable(effective_iters_fn):
+        total = effective_iters_fn(resumed_iteration=iteration)
     else:
         run_cfg = settings.run if hasattr(settings, "run") else None
         raw_total = (
@@ -277,9 +269,9 @@ def _beam_run_native_output_paths(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> dict[str, Path]:
-    del resolved_inputs
+    del step_inputs
     year = resolve_forecast_year(state)
     if year is None:
         raise RuntimeError("beam_run requires a resolved forecast year.")
@@ -325,16 +317,16 @@ def _beam_postprocess_native_output_paths(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> dict[str, Path]:
     """
     Declare static and dynamic output paths for ``beam_postprocess``.
 
     Static outputs include ``zarr_skims`` (when ActivitySim skim merging is
     enabled) and ``final_skims_omx`` (when downstream models or config require
-    OMX export). When ``resolved_inputs`` is provided, merges dynamic
+    OMX export). When ``step_inputs`` is provided, merges dynamic
     per-iteration event/link paths from
-    ``resolved_inputs.metadata["beam_postprocess_output_paths"]`` and enforces
+    ``step_inputs.metadata["beam_postprocess_output_paths"]`` and enforces
     disjoint keys and injective destination paths.
     """
     static_outputs: dict[str, Path] = {}
@@ -349,9 +341,9 @@ def _beam_postprocess_native_output_paths(
             Path(workspace.get_beam_mutable_data_dir()) / region / omx_name
         )
 
-    if resolved_inputs is None:
+    if step_inputs is None:
         return static_outputs
-    dynamic_outputs = resolved_inputs.metadata.get("beam_postprocess_output_paths", {})
+    dynamic_outputs = step_inputs.metadata.get("beam_postprocess_output_paths", {})
     if not isinstance(dynamic_outputs, Mapping):
         raise RuntimeError(
             "beam_postprocess resolved output paths must be a key-to-path mapping."
@@ -376,9 +368,9 @@ def _beam_full_skim_native_output_paths(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> dict[str, Path]:
-    del resolved_inputs
+    del step_inputs
     from pilates.beam.runner import beam_full_skim_output_paths
 
     return beam_full_skim_output_paths(settings, state, workspace)
@@ -489,16 +481,16 @@ def _project_beam_preprocess_outputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs,
+    step_inputs: StepCallInputs,
 ) -> BeamPreprocessOutputs:
-    output_resolved_inputs = (
-        resolved_inputs if "native_output_keys" in resolved_inputs.metadata else None
+    output_step_inputs = (
+        step_inputs if "native_output_keys" in step_inputs.metadata else None
     )
     declared_outputs = _beam_preprocess_native_output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=output_resolved_inputs,
+        step_inputs=output_step_inputs,
     )
     prepared = {}
     for key in (
@@ -522,13 +514,13 @@ def _project_beam_preprocess_outputs(
             and declared_outputs[key].exists()
         ):
             prepared[key] = declared_outputs[key]
-        elif key == "vehicles_beam_in":
+        elif key == BEAM_VEHICLES_IN:
             root = Path(workspace.get_beam_mutable_data_dir())
             dest = _native_output_destination(
                 root=root,
                 step_name="beam_preprocess",
-                key="vehicles_beam_in",
-                suffix=".csv",
+                key=BEAM_VEHICLES_IN,
+                suffix=_beam_vehicles_input_suffix(settings),
             )
             if dest.exists():
                 prepared[key] = dest
@@ -558,7 +550,7 @@ def _project_beam_preprocess_outputs(
                 )
         else:
             if not sidecar_path.is_file():
-                source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
+                source = step_inputs.inputs.get(LINKSTATS_WARMSTART)
                 source_path = artifact_to_path(source, workspace=workspace)
                 if not source_path and settings is not None and workspace is not None:
                     source_path = resolve_initial_linkstats_path(settings, workspace)
@@ -611,8 +603,9 @@ def _project_beam_run_outputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs,
+    step_inputs: StepCallInputs | None = None,
 ) -> BeamRunOutputs:
+    del step_inputs
     declared_outputs = _beam_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -734,7 +727,7 @@ def _project_beam_postprocess_outputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs,
+    step_inputs: StepCallInputs,
 ) -> BeamPostprocessOutputs:
     dynamic_output_keys = {
         key
@@ -745,7 +738,7 @@ def _project_beam_postprocess_outputs(
             or key.startswith("path_traversal_links_")
         )
     }
-    resolved_dynamic_outputs = resolved_inputs.metadata.get(
+    resolved_dynamic_outputs = step_inputs.metadata.get(
         "beam_postprocess_output_paths", {}
     )
     if not isinstance(resolved_dynamic_outputs, Mapping):
@@ -762,7 +755,7 @@ def _project_beam_postprocess_outputs(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved_inputs,
+        step_inputs=step_inputs,
     )
     projected = BeamPostprocessOutputs(
         zarr_skims=(
@@ -821,9 +814,9 @@ def _project_beam_full_skim_outputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs,
+    step_inputs: StepCallInputs,
 ) -> BeamFullSkimOutputs:
-    del resolved_inputs
+    del step_inputs
     declared_outputs = _beam_full_skim_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -850,26 +843,21 @@ def _project_beam_full_skim_outputs(
     return projected
 
 
-@runtime_checkable
-class _HasFullPath(Protocol):
-    full_path: str | Path
-
-
-@runtime_checkable
-class _HasArchiveRunDir(Protocol):
-    archive_run_dir: str | Path | None
-
-
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
+    source_path = artifact_to_path(source, workspace=workspace)
     if key in {ZARR_SKIMS, LINKSTATS_WARMSTART}:
-        existing = artifact_to_existing_path(source, workspace=workspace)
+        existing = (
+            resolve_existing_path(source_path, workspace=workspace)
+            if source_path is not None
+            else None
+        )
         if existing is not None:
             existing_path = Path(existing).resolve()
-            if not isinstance(workspace, _HasFullPath) or existing_path.is_relative_to(
-                Path(workspace.full_path).resolve()
+            ws_full_path = getattr(workspace, "full_path", None)
+            if ws_full_path is None or existing_path.is_relative_to(
+                Path(ws_full_path).resolve()
             ):
                 return existing_path
-    source_path = artifact_to_path(source, workspace=workspace)
     if key == ATLAS_VEHICLES2_OUTPUT:
         source_name = Path(source_path).name if source_path is not None else ""
         if not _ATLAS_VEHICLES2_BASENAME_RE.fullmatch(source_name):
@@ -888,44 +876,71 @@ def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
     )
 
 
+def _sim_state_beam_candidates(sim_state: SimState) -> dict[str, ArtifactRef | None]:
+    """Map typed ``SimState`` fields to BEAM semantic role keys."""
+    candidates: dict[str, ArtifactRef | None] = {
+        BEAM_PLANS_IN: sim_state.demand.plans,
+        BEAM_HOUSEHOLDS_IN: (
+            sim_state.demand.households
+            if sim_state.demand.households is not None
+            else sim_state.demand.households_in
+        ),
+        BEAM_PERSONS_IN: (
+            sim_state.demand.persons
+            if sim_state.demand.persons is not None
+            else sim_state.demand.persons_in
+        ),
+        ATLAS_VEHICLES2_OUTPUT: sim_state.atlas.hh_cars,
+        BEAM_VEHICLES_IN: sim_state.network.vehicles_in,
+        LINKSTATS: sim_state.network.linkstats,
+        LINKSTATS_WARMSTART: (
+            sim_state.network.linkstats
+            if sim_state.network.linkstats is not None
+            else sim_state.network.linkstats_warmstart
+        ),
+        BEAM_PLANS_OUT: sim_state.network.plans,
+        ZARR_SKIMS: (
+            sim_state.network.skims_zarr
+            if sim_state.network.skims_zarr is not None
+            else sim_state.demand.skims_zarr
+        ),
+    }
+    for key, value in sim_state.extras.items():
+        if value is not None and (key not in candidates or candidates[key] is None):
+            candidates[key] = value
+    return candidates
+
+
 def _resolved_beam_inputs(
     *,
     step_name: str,
-    coupler: Any,
+    sim_state: SimState,
     workspace: Any,
     required_roles: Iterable[str],
     optional_roles: Iterable[str] = (),
-    explicit_inputs: Mapping[str, Any] | None = None,
+    explicit_inputs: Mapping[str, ArtifactRef] | None = None,
     logical_destinations: Mapping[str, Path] | None = None,
     metadata: Mapping[str, Any] | None = None,
-) -> ResolvedStepInputs:
-    inputs: dict[str, Any] = dict(explicit_inputs or {})
-    source_by_role = {key: "explicit" for key in inputs}
-    selected_key_by_role = {key: key for key in inputs}
+) -> StepCallInputs:
+    candidates = _sim_state_beam_candidates(sim_state)
+    if explicit_inputs:
+        candidates.update(explicit_inputs)
     destinations = dict(logical_destinations or {})
-    for key in (*required_roles, *optional_roles):
-        if key in inputs:
-            continue
-        value = coupler_storage_value(coupler, key)
-        if value is None:
-            source_by_role[key] = "missing"
-            continue
-        inputs[key] = value
-        source_by_role[key] = "coupler"
-        selected_key_by_role[key] = key
-        destinations.setdefault(
-            key,
-            _input_destination(workspace=workspace, key=key, source=value),
-        )
-    return ResolvedStepInputs(
-        step_name=step_name,
-        binding=BindingResult(inputs=inputs),
-        required_roles=tuple(required_roles),
-        optional_roles=tuple(optional_roles),
-        source_by_role=source_by_role,
-        selected_key_by_role=selected_key_by_role,
+    req_tuple = tuple(required_roles)
+    opt_tuple = tuple(optional_roles)
+    for key in (*req_tuple, *opt_tuple):
+        if key not in destinations:
+            value = candidates.get(key)
+            if value is not None:
+                destinations[key] = _input_destination(
+                    workspace=workspace, key=key, source=value
+                )
+    return _build_step_call_inputs(
+        candidates=candidates,
+        required_roles=req_tuple,
+        optional_roles=opt_tuple,
         logical_destinations=destinations,
-        metadata=metadata or {},
+        metadata={"step_name": step_name, **(metadata or {})},
     )
 
 
@@ -961,107 +976,44 @@ def _native_execution_options(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs,
+    step_inputs: StepCallInputs,
 ) -> ExecutionOptions:
     del state, workspace
     runtime_kwargs: dict[str, Any] = {}
-    if "beam_preprocess_context" in resolved_inputs.metadata:
+    if "beam_preprocess_context" in step_inputs.metadata:
         runtime_kwargs["beam_preprocess_context"] = dict(
-            resolved_inputs.metadata["beam_preprocess_context"]
+            step_inputs.metadata["beam_preprocess_context"]
         )
         runtime_kwargs["beam_preprocess_identity_closure"] = (
             _beam_preprocess_identity_payload(
                 settings=settings,
-                resolved_inputs=resolved_inputs,
+                step_inputs=step_inputs,
             )
         )
-    if resolved_inputs.step_name in ("beam_run", "beam_full_skim"):
+    if step_inputs.metadata.get("step_name") in ("beam_run", "beam_full_skim"):
         runtime_kwargs["beam_run_identity_closure"] = _beam_run_identity_payload(
             settings=settings
         )
 
-    if "beam_postprocess_dynamic_paths" in resolved_inputs.metadata:
+    if "beam_postprocess_dynamic_paths" in step_inputs.metadata:
         runtime_kwargs["beam_run_dynamic_paths"] = dict(
-            resolved_inputs.metadata["beam_postprocess_dynamic_paths"]
+            step_inputs.metadata["beam_postprocess_dynamic_paths"]
         )
-    if "beam_postprocess_output_paths" in resolved_inputs.metadata:
+    if "beam_postprocess_output_paths" in step_inputs.metadata:
         runtime_kwargs["beam_postprocess_output_paths"] = dict(
-            resolved_inputs.metadata["beam_postprocess_output_paths"]
+            step_inputs.metadata["beam_postprocess_output_paths"]
         )
     return ExecutionOptions(
         input_binding="paths",
         input_materialization="requested",
-        input_paths=resolved_inputs.logical_destinations,
+        input_paths=dict(step_inputs.logical_destinations),
         runtime_kwargs=runtime_kwargs,
         inject_context="_consist_ctx",
     )
 
 
-def _native_contract_output_paths(
-    provider: Callable[..., Mapping[str, Any]],
-) -> Callable[[Any], Mapping[str, Any]]:
-    def resolve(context: Any) -> Mapping[str, Any]:
-        settings = context.get_runtime("settings", default=None)
-        state = context.get_runtime("state", default=None)
-        workspace = context.get_runtime("workspace", default=None)
-        if settings is None or state is None or workspace is None:
-            return {}
-        return provider(settings=settings, state=state, workspace=workspace)
-
-    return resolve
-
-
-def _strict_requested_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-    )
-
-
-def _beam_run_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Output cache options for beam_run."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-        cache_version=1,
-    )
-
-
-def _beam_postprocess_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Output cache options for beam_postprocess."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-        cache_version=1,
-    )
-
-
-def _beam_preprocess_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Reject preprocess caches written with incorrect population suffixes."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        validate_cached_outputs="lazy",
-        cache_hydration="metadata",
-        cache_version=3,
-    )
-
-
 def _beam_preprocess_identity_payload(
-    *, settings: Any, resolved_inputs: ResolvedStepInputs
+    *, settings: Any, step_inputs: StepCallInputs
 ) -> dict[str, Any]:
     """Return BEAM-preprocess's portable, resolver-owned identity closure.
 
@@ -1071,7 +1023,7 @@ def _beam_preprocess_identity_payload(
     identity inputs.
     """
 
-    preprocess_context = resolved_inputs.metadata.get("beam_preprocess_context", {})
+    preprocess_context = step_inputs.metadata.get("beam_preprocess_context", {})
     zones_enabled = "canonical_zone_source" in preprocess_context
     return {
         "schema_version": "beam_preprocess_identity_v1",
@@ -1079,7 +1031,7 @@ def _beam_preprocess_identity_payload(
             "status": "complete",
             "config_contract": "adapter:beam",
         },
-        "selected_roles": tuple(sorted(resolved_inputs.binding.inputs or {})),
+        "selected_roles": tuple(sorted(step_inputs.inputs.keys())),
         "launch": {
             "activitysim_file_format": get_setting(settings, "activitysim.file_format"),
             "zone_preparation": {
@@ -1116,8 +1068,14 @@ def _beam_preprocess_identity_payload(
 
 
 def _resolve_beam_preprocess_inputs(
-    *, settings: Any, state: Any, workspace: Any, coupler: Any
-) -> ResolvedStepInputs:
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_beam_mutable_workspace(settings, workspace)
     primary_config = _require_primary_beam_config(settings, workspace)
     exchange_scenario_folder = beam_exchange.resolve_beam_exchange_scenario_folder(
@@ -1145,10 +1103,11 @@ def _resolve_beam_preprocess_inputs(
                 ),
             }
         )
-    surface = build_enabled_workflow_surface(settings)
+    from pilates.utils.io import get_vehicle_ownership_model
+
     current_iter = iteration_index(state, default=0) or 0
     requires_atlas_vehicles = (
-        surface.profile.vehicle_ownership_model_enabled and current_iter == 0
+        get_vehicle_ownership_model(settings) is not None and current_iter == 0
     )
     required_roles = (
         BEAM_PLANS_IN,
@@ -1166,61 +1125,44 @@ def _resolve_beam_preprocess_inputs(
         *((ATLAS_VEHICLES2_OUTPUT,) if not requires_atlas_vehicles else ()),
         *((BEAM_PLANS_OUT,) if should_resolve_beam_plans_out else ()),
     )
-    resolved = resolve_artifact_roles(
+    resolved = _resolved_beam_inputs(
         step_name="beam_preprocess",
-        coupler=coupler,
-        settings=settings,
-        state=state,
+        sim_state=active_sim_state,
         workspace=workspace,
         required_roles=required_roles,
         optional_roles=optional_roles,
-        artifact_rules=artifact_rules_for_step_name(
-            "beam_preprocess", settings=settings
-        ),
-        logical_destinations={},
-        year=resolve_forecast_year(state),
-        surface=surface,
     )
-    logical_destinations = dict(resolved.logical_destinations)
-    for key, source in (resolved.binding.inputs or {}).items():
-        logical_destinations.setdefault(
-            key,
-            _input_destination(workspace=workspace, key=key, source=source),
+    native_output_keys = tuple(
+        key
+        for key in (
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            LINKSTATS_WARMSTART,
+            "vehicles_beam_in",
         )
-
-    return ResolvedStepInputs(
-        step_name=resolved.step_name,
-        binding=resolved.binding,
-        required_roles=resolved.required_roles,
-        optional_roles=resolved.optional_roles,
-        source_by_role=dict(resolved.source_by_role),
-        selected_key_by_role=dict(resolved.selected_key_by_role),
-        logical_destinations=logical_destinations,
+        if (
+            key in resolved.inputs
+            or (
+                key == LINKSTATS_WARMSTART
+                and resolve_initial_linkstats_path(settings, workspace) is not None
+            )
+            or (
+                key == "vehicles_beam_in"
+                and current_iter == 0
+                and ATLAS_VEHICLES2_OUTPUT in resolved.inputs
+            )
+        )
+    )
+    return StepCallInputs(
+        inputs=resolved.inputs,
+        required_keys=resolved.required_keys,
+        optional_keys=resolved.optional_keys,
+        logical_destinations=resolved.logical_destinations,
         metadata={
+            **resolved.metadata,
             "beam_preprocess_context": MappingProxyType(preprocess_context),
-            "native_output_keys": tuple(
-                key
-                for key in (
-                    BEAM_PLANS_IN,
-                    BEAM_HOUSEHOLDS_IN,
-                    BEAM_PERSONS_IN,
-                    LINKSTATS_WARMSTART,
-                    "vehicles_beam_in",
-                )
-                if (
-                    key in (resolved.binding.inputs or {})
-                    or (
-                        key == LINKSTATS_WARMSTART
-                        and resolve_initial_linkstats_path(settings, workspace)
-                        is not None
-                    )
-                    or (
-                        key == "vehicles_beam_in"
-                        and current_iter == 0
-                        and ATLAS_VEHICLES2_OUTPUT in (resolved.binding.inputs or {})
-                    )
-                )
-            ),
+            "native_output_keys": native_output_keys,
         },
     )
 
@@ -1230,20 +1172,28 @@ def _resolve_beam_run_inputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    coupler: Any,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    beam_preprocess_outputs: Mapping[str, ArtifactRef] | None = None,
+    **_: Any,
+) -> StepCallInputs:
     del state
+    active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_beam_mutable_workspace(settings, workspace)
+    explicit_inputs = (
+        prior_outputs if prior_outputs is not None else beam_preprocess_outputs
+    )
     return _resolved_beam_inputs(
         step_name="beam_run",
-        coupler=coupler,
+        sim_state=active_sim_state,
         workspace=workspace,
         required_roles=(
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
-        optional_roles=(LINKSTATS_WARMSTART,),
+        optional_roles=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
+        explicit_inputs=explicit_inputs,
     )
 
 
@@ -1324,24 +1274,38 @@ def _beam_postprocess_split_output_paths(
     if selected_events_key is None:
         return {}
     source = inputs.get(selected_events_key)
-    source_path = artifact_to_existing_path(source, workspace=workspace)
-    if source_path is None or "://" in source_path or not Path(source_path).is_file():
-        raise RuntimeError(
-            "beam_postprocess cannot inspect selected events input "
-            f"{selected_events_key!r} to close typed outputs."
-        )
-    try:
-        import pandas as pd
+    event_types: list[str] | None = None
+    if isinstance(source, Artifact) and isinstance(source.meta, Mapping):
+        cached_types = source.meta.get("beam_event_types")
+        if isinstance(cached_types, (list, tuple)):
+            event_types = sorted(
+                {str(value) for value in cached_types if value is not None}
+            )
+    if event_types is None:
+        source_path = artifact_to_existing_path(source, workspace=workspace)
+        if (
+            source_path is None
+            or "://" in source_path
+            or not Path(source_path).is_file()
+        ):
+            raise RuntimeError(
+                "beam_postprocess cannot inspect selected events input "
+                f"{selected_events_key!r} to close typed outputs."
+            )
+        try:
+            import pandas as pd
 
-        event_types = pd.read_parquet(source_path, columns=["type"])["type"]
-    except Exception as exc:
-        raise RuntimeError(
-            "beam_postprocess cannot inspect event types for selected input "
-            f"{selected_events_key!r}: {source_path}."
-        ) from exc
-    if event_types.empty:
+            raw_types = pd.read_parquet(source_path, columns=["type"])["type"]
+        except Exception as exc:
+            raise RuntimeError(
+                "beam_postprocess cannot inspect event types for selected input "
+                f"{selected_events_key!r}: {source_path}."
+            ) from exc
+        if raw_types.empty:
+            return {}
+        event_types = sorted({str(value) for value in raw_types.dropna()})
+    if not event_types:
         return {}
-    event_types = sorted({str(value) for value in event_types.dropna()})
     root = Path(workspace.get_beam_output_dir())
     event_keys = tuple(
         f"events_parquet_{year}_{iteration}_type_{_sanitize_beam_event_type(event_type)}"
@@ -1401,30 +1365,35 @@ def _resolve_beam_postprocess_inputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    coupler: Any,
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     beam_run_outputs: Mapping[str, Any] | BeamRunOutputs | None = None,
-) -> ResolvedStepInputs:
+    **_: Any,
+) -> StepCallInputs:
     """Resolve one BEAM postprocess closure.
 
     A fresh successor consumes the exact outputs of the BEAM run that just
-    completed.  Coupler discovery remains only for standalone resolution and
-    the separate upstream ActivitySim skim role.
+    completed.
     """
-
+    active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_beam_mutable_workspace(settings, workspace)
     year = resolve_forecast_year(state)
     if year is None:
         raise RuntimeError("beam_postprocess requires a resolved forecast year.")
     iteration = state.iteration
     fresh_outputs = (
-        beam_run_outputs.raw_outputs
-        if isinstance(beam_run_outputs, BeamRunOutputs)
-        else beam_run_outputs
+        prior_outputs
+        if prior_outputs is not None
+        else (
+            beam_run_outputs.raw_outputs
+            if isinstance(beam_run_outputs, BeamRunOutputs)
+            else beam_run_outputs
+        )
     )
     storage_keys = (
         fresh_outputs.keys()
         if fresh_outputs is not None
-        else coupler_storage_keys(coupler)
+        else active_sim_state.extras.keys()
     )
     dynamic_keys = _postprocess_dynamic_keys(
         storage_keys=storage_keys,
@@ -1439,9 +1408,18 @@ def _resolve_beam_postprocess_inputs(
     }
     from pilates.beam.postprocessor import _activitysim_skims_target_enabled
 
-    zarr_artifact = coupler_storage_value(coupler, ZARR_SKIMS)
+    zarr_artifact = (
+        active_sim_state.network.skims_zarr
+        if active_sim_state.network.skims_zarr is not None
+        else active_sim_state.demand.skims_zarr
+    )
     if _activitysim_skims_target_enabled(settings) and zarr_artifact is not None:
-        zarr_existing = artifact_to_existing_path(zarr_artifact, workspace=workspace)
+        zarr_path = artifact_to_path(zarr_artifact, workspace=workspace)
+        zarr_existing = (
+            resolve_existing_path(zarr_path, workspace=workspace)
+            if zarr_path is not None
+            else None
+        )
         zarr_existing_in_workspace = (
             Path(zarr_existing).resolve()
             if zarr_existing is not None
@@ -1464,7 +1442,7 @@ def _resolve_beam_postprocess_inputs(
     dynamic_paths = {key: destinations[key] for key in dynamic_keys}
     resolved = _resolved_beam_inputs(
         step_name="beam_postprocess",
-        coupler=coupler,
+        sim_state=active_sim_state,
         workspace=workspace,
         required_roles=dynamic_keys,
         optional_roles=optional_roles,
@@ -1483,18 +1461,15 @@ def _resolve_beam_postprocess_inputs(
     )
     split_outputs = _beam_postprocess_split_output_paths(
         selected_events_key=selected_events_key,
-        inputs=resolved.binding.inputs or {},
+        inputs=resolved.inputs,
         year=int(year),
         iteration=int(iteration),
         workspace=workspace,
     )
-    return ResolvedStepInputs(
-        step_name=resolved.step_name,
-        binding=resolved.binding,
-        required_roles=resolved.required_roles,
-        optional_roles=resolved.optional_roles,
-        source_by_role=resolved.source_by_role,
-        selected_key_by_role=resolved.selected_key_by_role,
+    return StepCallInputs(
+        inputs=resolved.inputs,
+        required_keys=resolved.required_keys,
+        optional_keys=resolved.optional_keys,
         logical_destinations=resolved.logical_destinations,
         metadata={
             **resolved.metadata,
@@ -1508,9 +1483,12 @@ def _resolve_beam_full_skim_inputs(
     settings: Any,
     state: Any,
     workspace: Any,
-    coupler: Any,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    **_: Any,
+) -> StepCallInputs:
     del state
+    active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_beam_mutable_workspace(settings, workspace)
     schedule = (
         str(get_setting(settings, "beam.full_skim.run_schedule", "never") or "never")
@@ -1532,10 +1510,11 @@ def _resolve_beam_full_skim_inputs(
         )
     return _resolved_beam_inputs(
         step_name="beam_full_skim",
-        coupler=coupler,
+        sim_state=active_sim_state,
         workspace=workspace,
         required_roles=(),
         optional_roles=optional_roles,
+        explicit_inputs=prior_outputs,
     )
 
 
@@ -1654,9 +1633,8 @@ def _native_beam_preprocess(
             settings=settings,
             state=state,
             workspace=workspace,
-            resolved_inputs=ResolvedStepInputs(
-                step_name="beam_preprocess",
-                binding=BindingResult(inputs=inputs),
+            step_inputs=StepCallInputs(
+                inputs=inputs,
                 metadata={"native_output_keys": tuple(produced.prepared_inputs)},
             ),
         ),
@@ -1699,13 +1677,9 @@ def _preflight_beam_launch_inputs(
     run_context: Any,
     expected_warmstart_path: Path | None = None,
 ) -> None:
-    report_dir_path = (
-        workspace.archive_run_dir if isinstance(workspace, _HasArchiveRunDir) else None
-    )
+    report_dir_path = getattr(workspace, "archive_run_dir", None)
     if report_dir_path is None:
-        report_dir_path = (
-            workspace.full_path if isinstance(workspace, _HasFullPath) else Path(".")
-        )
+        report_dir_path = getattr(workspace, "full_path", Path("."))
 
     validate_kwargs: dict[str, Any] = {
         "settings": settings,
@@ -1854,7 +1828,7 @@ def _archive_beam_launch_config(
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
     },
-    optional_input_keys=(LINKSTATS_WARMSTART,),
+    optional_input_keys=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
     schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
@@ -1865,6 +1839,7 @@ def _native_beam_run(
     households_beam_in: Path,
     persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
+    vehicles_beam_in: Artifact | Path | None = None,
     *,
     settings: Any,
     state: Any,
@@ -1880,6 +1855,14 @@ def _native_beam_run(
     }
     if linkstats_warmstart is not None:
         prepared[LINKSTATS_WARMSTART] = linkstats_warmstart
+    if vehicles_beam_in is not None:
+        resolved_vehicles = (
+            vehicles_beam_in
+            if isinstance(vehicles_beam_in, Path)
+            else artifact_to_path(vehicles_beam_in, workspace=workspace)
+        )
+        if resolved_vehicles is not None:
+            prepared[BEAM_VEHICLES_IN] = Path(resolved_vehicles)
     if beam_launch_config is None:
         year = resolve_forecast_year(state) or int(state.year)
         iteration = int(state.iteration)
@@ -1932,6 +1915,25 @@ def _native_beam_run(
             settings=settings, state=state, workspace=workspace
         ),
     )
+    for key, path in sources.items():
+        if key.startswith("events_parquet") and path.is_file():
+            try:
+                import pandas as pd
+
+                raw_types = pd.read_parquet(path, columns=["type"])["type"]
+                beam_event_types = sorted({str(value) for value in raw_types.dropna()})
+                cr.set_output_meta(
+                    key,
+                    {"beam_event_types": beam_event_types},
+                    merge=True,
+                )
+            except Exception:
+                logger.debug(
+                    "Unable to extract beam_event_types metadata for %s (%s)",
+                    key,
+                    path,
+                    exc_info=True,
+                )
     del _consist_ctx
 
 
@@ -2192,40 +2194,7 @@ beam_preprocess = StepDefinition(
     input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT,
     outputs=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_beam_preprocess_output_cache,
-    binding_rules=(
-        ArtifactBindingRule(
-            semantic_key=BEAM_PLANS_IN,
-            required=True,
-            preferred_keys=("beam_plans_asim_out", BEAM_PLANS_IN),
-        ),
-        ArtifactBindingRule(
-            semantic_key=BEAM_HOUSEHOLDS_IN,
-            required=True,
-            preferred_keys=("households_asim_out", BEAM_HOUSEHOLDS_IN),
-        ),
-        ArtifactBindingRule(
-            semantic_key=BEAM_PERSONS_IN,
-            required=True,
-            preferred_keys=("persons_asim_out", BEAM_PERSONS_IN),
-        ),
-        ArtifactBindingRule(
-            semantic_key=LINKSTATS_WARMSTART,
-            required=False,
-            preferred_keys=(LINKSTATS, LINKSTATS_WARMSTART),
-        ),
-        ArtifactBindingRule(
-            semantic_key=ATLAS_VEHICLES2_OUTPUT,
-            required=False,
-            allow_fallback=False,
-        ),
-        ArtifactBindingRule(
-            semantic_key=BEAM_PLANS_OUT,
-            required=False,
-            preferred_keys=(BEAM_PLANS_OUT,),
-            allow_fallback=False,
-        ),
-    ),
+    cache_options=_metadata_cache_options(cache_version=3),
     optional_output_keys=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
 )
 beam_run = StepDefinition(
@@ -2236,7 +2205,7 @@ beam_run = StepDefinition(
     input_contract=_BEAM_RUN_INPUT_CONTRACT,
     output_paths=_beam_run_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_beam_run_output_cache,
+    cache_options=_metadata_cache_options(cache_version=1),
 )
 beam_postprocess = StepDefinition(
     name="beam_postprocess",
@@ -2246,7 +2215,7 @@ beam_postprocess = StepDefinition(
     input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_beam_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_beam_postprocess_output_cache,
+    cache_options=_metadata_cache_options(cache_version=1),
     optional_output_keys=(FINAL_SKIMS_OMX,),
 )
 beam_full_skim = StepDefinition(
@@ -2257,6 +2226,6 @@ beam_full_skim = StepDefinition(
     input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT,
     outputs=_beam_full_skim_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache,
+    cache_options=_metadata_cache_options(),
     optional_output_keys=(FINAL_SKIMS_OMX,),
 )

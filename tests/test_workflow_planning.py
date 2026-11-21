@@ -551,7 +551,7 @@ def test_static_execution_plan_projects_schedule_and_iterations_from_workflow_st
 
 
 def test_after_final_iteration_full_skim_runs_under_beam_only_clamping():
-    from pilates.workflows.stages.supply_demand_beam import (
+    from pilates.workflows.orchestrator import (
         _should_run_full_skim as runtime_should_run_full_skim,
     )
 

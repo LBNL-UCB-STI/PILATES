@@ -5,7 +5,7 @@ import pytest
 import pandas as pd
 
 from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
-from pilates.workflows.stages.vehicle_ownership import (
+from pilates.workflows.orchestrator import (
     _validate_population_h5_for_activitysim_year,
 )
 

@@ -40,11 +40,11 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
 )
-from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
-from pilates.workflows.stages.supply_demand import (
-    run_supply_demand_stage as _run_supply_demand_stage,
-)
-from pilates.workflows.stages.vehicle_ownership import (
+from dataclasses import replace
+from pilates.workflows.orchestrator import (
+    _run_supply_demand_loop,
+    bootstrap_initial_state,
+    run_land_use_stage as _run_land_use_stage,
     run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
 )
 from tests.workflow_contract_harness import (
@@ -130,7 +130,8 @@ def _mark_initialized(
 
 def _publish_input_roles(
     scenario, state: WorkflowState, roles: dict[str, Path]
-) -> None:
+) -> dict[str, object]:
+    published: dict[str, object] = {}
     with scenario.trace(
         "stub_input_publication",
         model="initialization",
@@ -139,7 +140,10 @@ def _publish_input_roles(
         tags=["init", "stub-matrix"],
     ):
         for key, path in roles.items():
-            scenario.coupler.set_from_artifact(key, cr.log_input(path, key=key))
+            artifact = cr.log_input(path, key=key)
+            scenario.coupler.set_from_artifact(key, artifact)
+            published[key] = artifact
+    return published
 
 
 def _scenario_run(env: dict):
@@ -233,7 +237,7 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         )
         + "\n",
     )
-    _publish_input_roles(
+    published_inputs = _publish_input_roles(
         scenario,
         state,
         {
@@ -272,10 +276,20 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
 
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
 
-    _run_supply_demand_stage(
+    sim_state = bootstrap_initial_state(
         scenario=scenario,
+        settings=env["settings"],
+        state=state,
+        workspace=env["workspace"],
+    )
+    sim_state = replace(sim_state, extras={**sim_state.extras, **published_inputs})
+    _run_supply_demand_loop(
+        scenario=scenario,
+        settings=env["settings"],
+        state=state,
+        workspace=env["workspace"],
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=env["context"],
     )
 
     steps = _steps_by_model(env)
@@ -410,7 +424,7 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
         activitysim_index_col="TAZ",
         source_crs="EPSG:4326",
     )
-    _publish_input_roles(
+    published_inputs = _publish_input_roles(
         scenario,
         state,
         {
@@ -477,10 +491,20 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
 
     monkeypatch.setattr(DummyRunner, "run", _run_dummy_runner)
 
-    _run_supply_demand_stage(
+    sim_state = bootstrap_initial_state(
         scenario=scenario,
+        settings=env["settings"],
+        state=state,
+        workspace=env["workspace"],
+    )
+    sim_state = replace(sim_state, extras={**sim_state.extras, **published_inputs})
+    _run_supply_demand_loop(
+        scenario=scenario,
+        settings=env["settings"],
+        state=state,
+        workspace=env["workspace"],
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=env["context"],
     )
 
     steps = _steps_by_model(env)
@@ -593,17 +617,28 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
     monkeypatch.setattr(UrbansimRunner, "_run", _fake_urbansim_run)
     monkeypatch.setattr(AtlasRunner, "_run", _fake_atlas_run)
 
-    _run_land_use_stage(
+    sim_state = bootstrap_initial_state(
         scenario=scenario,
+        settings=env["settings"],
+        state=state,
+        workspace=env["workspace"],
+    )
+    sim_state = _run_land_use_stage(
+        scenario=scenario,
+        settings=env["settings"],
+        state=state,
+        workspace=env["workspace"],
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=env["context"],
     )
 
-    _run_vehicle_ownership_stage(
+    sim_state = _run_vehicle_ownership_stage(
         scenario=scenario,
-        coupler=coupler,
+        settings=env["settings"],
+        state=state,
+        workspace=env["workspace"],
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=env["context"],
     )
 
     assert coupler.get(USIM_DATASTORE_H5) is not None

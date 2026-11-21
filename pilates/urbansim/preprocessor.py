@@ -14,7 +14,7 @@ from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.zone_utils import resolve_canonical_zone_source_path
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 
 if TYPE_CHECKING:
     from pilates.workflows.state import WorkflowState

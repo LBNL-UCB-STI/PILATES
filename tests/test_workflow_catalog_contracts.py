@@ -38,7 +38,6 @@ def test_catalog_retains_only_policy_and_references_committed_definitions():
         assert spec.optional_input_keys == _metadata_keys(metadata.optional_input_keys)
         assert spec.schema_output_keys == _metadata_keys(metadata.schema_outputs)
         assert spec.optional_output_keys == definition.optional_output_keys
-        assert spec.binding_rules == definition.binding_rules
         assert set(spec.output_keys) | set(spec.optional_output_keys) == set(
             spec.schema_output_keys
         )

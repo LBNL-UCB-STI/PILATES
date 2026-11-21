@@ -20,9 +20,7 @@ from typing import (
     List,
     Mapping,
     Optional,
-    Protocol,
     Tuple,
-    runtime_checkable,
 )
 
 from consist.core.step_context import StepContext
@@ -46,7 +44,7 @@ from pilates.config.models import (
 )
 from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.state_access import current_year, is_start_year
+from pilates.utils.state_access import current_year
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -67,36 +65,6 @@ def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
     )
 
     return _catalog_provenance_builder_key(step_name)
-
-
-@runtime_checkable
-class _HasFullPath(Protocol):
-    full_path: str | Path
-
-
-@runtime_checkable
-class _HasAsimMutableConfigsDir(Protocol):
-    def get_asim_mutable_configs_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasBeamMutableDataDir(Protocol):
-    def get_beam_mutable_data_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasBeamOutputDir(Protocol):
-    def get_beam_output_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasAsimOutputDir(Protocol):
-    def get_asim_output_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasModelDump(Protocol):
-    def model_dump(self) -> Dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -451,17 +419,19 @@ def build_urbansim_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
 
 def build_urbansim_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.urbansim
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
 def build_atlas_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.atlas
-    if not isinstance(cfg, _HasModelDump):
+    model_dump = getattr(cfg, "model_dump", None)
+    if not callable(model_dump):
         return {}
     return _only_keys(
-        cfg.model_dump(),
+        model_dump(),
         [
             "max_retries",
             "sample_size",
@@ -480,8 +450,9 @@ def build_atlas_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
 
 def build_atlas_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.atlas
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
@@ -491,8 +462,9 @@ def build_postprocessing_identity_config(settings: PilatesConfig) -> Dict[str, A
         if isinstance(settings, PilatesConfig)
         else vars(settings).get("postprocessing")
     )
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
@@ -627,56 +599,12 @@ def consist_step_meta(
     def _workspace_path_from_value(value: Any) -> Optional[str]:
         if value is None:
             return None
-        if isinstance(value, _HasFullPath) and isinstance(value.full_path, (Path, str)):
-            return str(value.full_path)
+        full_path = getattr(value, "full_path", None)
+        if isinstance(full_path, (Path, str)):
+            return str(full_path)
         if isinstance(value, (Path, str)):
             return str(value)
         return None
-
-    def _atlas_selected_usim_h5(state: Any) -> Any:
-        state_vars = vars(state)
-        current_h5 = state_vars.get("atlas_usim_datastore_h5")
-        base_h5 = state_vars.get("atlas_usim_datastore_base_h5")
-        if is_start_year(state) and base_h5 is not None:
-            return base_h5
-        return current_h5 if current_h5 is not None else base_h5
-
-    def _atlas_usim_households_identity(ctx: StepContext) -> Dict[str, Any]:
-        state = ctx.get_runtime("state", default=None)
-        if state is None:
-            return {}
-        selected_h5 = _atlas_selected_usim_h5(state)
-        if selected_h5 is None:
-            return {}
-
-        from pilates.utils.coupler_helpers import artifact_to_existing_path
-        from pilates.utils.usim_h5 import fingerprint_usim_h5_table
-
-        workspace_obj = ctx.get_runtime("workspace", default=None)
-        h5_path = artifact_to_existing_path(selected_h5, workspace=workspace_obj)
-        if h5_path is None:
-            return {
-                "atlas_usim_households_identity_status": "unresolved",
-                "atlas_usim_households_source": str(selected_h5),
-            }
-
-        year = current_year(state)
-        fingerprint = fingerprint_usim_h5_table(
-            h5_path=h5_path,
-            year=int(year) if year is not None else None,
-            table="households",
-        )
-        return {
-            "atlas_usim_households_identity_status": "resolved",
-            "atlas_usim_households_fingerprint_version": fingerprint[
-                "fingerprint_version"
-            ],
-            "atlas_usim_households_sha256": fingerprint["sha256"],
-            "atlas_usim_households_requested_year": fingerprint["requested_year"],
-            "atlas_usim_households_table_path": fingerprint["resolved_table_path"],
-            "atlas_usim_households_row_count": fingerprint["row_count"],
-            "atlas_usim_households_column_count": fingerprint["column_count"],
-        }
 
     def _activitysim_adapter(ctx: StepContext) -> Any:
         settings = ctx.get_runtime("settings", default=None)
@@ -697,8 +625,11 @@ def consist_step_meta(
 
         workspace_obj = ctx.get_runtime("workspace", default=None)
         mutable_configs_root: Optional[Path] = None
-        if isinstance(workspace_obj, _HasAsimMutableConfigsDir):
-            mutable_configs_root = Path(workspace_obj.get_asim_mutable_configs_dir())
+        get_asim_mutable_configs_dir = getattr(
+            workspace_obj, "get_asim_mutable_configs_dir", None
+        )
+        if callable(get_asim_mutable_configs_dir):
+            mutable_configs_root = Path(get_asim_mutable_configs_dir())
         else:
             ws_path = _workspace_path_from_value(workspace_obj)
             if ws_path:
@@ -826,20 +757,21 @@ def consist_step_meta(
         if workspace_root is not None:
             path_aliases["workspace"] = workspace_root
         if workspace_obj is not None:
-            if isinstance(workspace_obj, _HasBeamMutableDataDir):
+            get_beam_mutable_data_dir = getattr(
+                workspace_obj, "get_beam_mutable_data_dir", None
+            )
+            if callable(get_beam_mutable_data_dir):
                 path_aliases["beam_input"] = (
                     config_root.parent
                     if launch_config is None
-                    else Path(workspace_obj.get_beam_mutable_data_dir())
+                    else Path(get_beam_mutable_data_dir())
                 )
-            if isinstance(workspace_obj, _HasBeamOutputDir):
-                path_aliases["beam_output"] = Path(workspace_obj.get_beam_output_dir())
-            if settings.activitysim is not None and isinstance(
-                workspace_obj, _HasAsimOutputDir
-            ):
-                path_aliases["activitysim_output"] = Path(
-                    workspace_obj.get_asim_output_dir()
-                )
+            get_beam_output_dir = getattr(workspace_obj, "get_beam_output_dir", None)
+            if callable(get_beam_output_dir):
+                path_aliases["beam_output"] = Path(get_beam_output_dir())
+            get_asim_output_dir = getattr(workspace_obj, "get_asim_output_dir", None)
+            if settings.activitysim is not None and callable(get_asim_output_dir):
+                path_aliases["activitysim_output"] = Path(get_asim_output_dir())
         path_aliases["beam_region_input"] = config_root
 
         vehicle_file_policy = BeamReferencePolicy(
@@ -1018,7 +950,6 @@ def consist_step_meta(
                 main_forecast_year = vars(state).get("main_forecast_year")
                 if main_forecast_year is not None:
                     atlas_runtime_identity["main_forecast_year"] = main_forecast_year
-                atlas_runtime_identity.update(_atlas_usim_households_identity(ctx))
             if atlas_runtime_identity:
                 resolved["config"] = {
                     **dict(resolved.get("config") or {}),

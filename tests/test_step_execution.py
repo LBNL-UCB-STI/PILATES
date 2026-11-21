@@ -22,14 +22,14 @@ from consist.core.tracker import Tracker
 from consist.models.artifact import Artifact
 from consist.models.run import Run
 
-from pilates.workflows.binding import build_resolved_binding
-from pilates.workflows.output_projection import require_output
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
+    require_output,
 )
+from pilates.workflows.sim_state import LandUseState, SimState
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
@@ -78,9 +78,7 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         output_sets=lambda **_: output_sets,
         project_outputs=lambda outputs, **_: SimpleNamespace(
             received_outputs=outputs,
@@ -148,9 +146,7 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda received_outputs, **_: received_outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
@@ -213,9 +209,7 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
     definition = StepDefinition(
         name="staging",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="staging", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda received_outputs, **_: received_outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
         archive_outputs=False,
@@ -254,7 +248,7 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
     def example(*, settings, state, workspace) -> None:
         return None
 
-    resolved = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    resolved = StepCallInputs(inputs={})
     cache_options = CacheOptions(cache_hydration="outputs-requested")
     execution_options = ExecutionOptions(
         input_binding="paths",
@@ -343,9 +337,7 @@ def test_execute_step_enable_archive_copy_false_authoritatively_disables_archiva
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
         archive_outputs=True,
@@ -419,11 +411,9 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         archive_run_dir=str(archive_root),
         get_usim_mutable_data_dir=lambda: str(forecast_h5.parent),
     )
-    resolved = ResolvedStepInputs(
-        step_name="urbansim_run",
-        binding=BindingResult(inputs={USIM_DATASTORE_H5: input_h5}),
-        required_roles=(USIM_DATASTORE_H5,),
-        source_by_role={USIM_DATASTORE_H5: "coupler"},
+    resolved = StepCallInputs(
+        inputs={USIM_DATASTORE_H5: input_h5},
+        required_keys=(USIM_DATASTORE_H5,),
         metadata={
             "urbansim_launch_context": urbansim.UrbanSimLaunchContext(
                 mutable_data_dir=forecast_h5.parent,
@@ -442,7 +432,7 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         year=2030,
         iteration=0,
         phase="run",
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
 
     assert URBANSIM_RUN.archive_outputs is True
@@ -501,9 +491,7 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
     definition = StepDefinition(
         name="archive_probe",
         function=archive_probe,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="archive_probe", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs,
         output_paths=lambda **_: {
             "summary": "bundle/summary.csv",
@@ -676,6 +664,7 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
             year=state.year,
             iteration=0,
             phase="postprocess",
+            sim_state=SimState(land_use=LandUseState(current_h5=artifact)),
         )
 
     source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
@@ -702,19 +691,18 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
 
 def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None:
     calls: list[object] = []
-    binding = BindingResult(inputs={"source": "selected"})
-    resolved = ResolvedStepInputs(step_name="example", binding=binding)
+    supplied = StepCallInputs(inputs={"source": Path("/tmp/selected")})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
         return None
 
     def resolve_inputs(**kwargs):
-        calls.append(("resolve", kwargs["coupler"]))
-        return resolved
+        calls.append(("resolve", kwargs["sim_state"]))
+        return supplied
 
-    def project(outputs, *, settings, state, workspace, resolved_inputs):
-        calls.append(("project", outputs, resolved_inputs))
+    def project(outputs, *, settings, state, workspace, step_inputs):
+        calls.append(("project", outputs, step_inputs))
         return outputs["result"]
 
     definition = StepDefinition(
@@ -749,13 +737,14 @@ def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None
         year=2035,
         iteration=1,
         phase="run",
+        sim_state=SimState(),
         runtime_kwargs={"extra": "value"},
     )
 
     assert projected == "persisted"
     assert [call[0] for call in calls] == ["resolve", "run", "project"]
     run_kwargs = calls[1][1]
-    assert run_kwargs["binding"] is resolved.binding
+    assert run_kwargs["binding"].inputs == {"source": Path("/tmp/selected")}
     assert run_kwargs["execution_options"].input_paths == {
         "source": "/workspace/selected"
     }
@@ -767,12 +756,11 @@ def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None
         "extra": "value",
         "provider_value": "preserved",
     }
-    assert calls[2][2].input_contract is _EXAMPLE_INPUT_CONTRACT
+    assert calls[2][2] is supplied
 
 
 def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
-    binding = BindingResult(inputs={})
-    supplied = ResolvedStepInputs(step_name="example", binding=binding)
+    supplied = StepCallInputs()
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -798,7 +786,7 @@ def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert projected == "persisted"
@@ -819,18 +807,11 @@ def test_execute_step_forwards_a_strict_binding_unchanged(tmp_path: Path) -> Non
     def example(payload: Path, *, settings, state, workspace) -> None:
         del payload, settings, state, workspace
 
-    binding = build_resolved_binding(
-        step_name="example",
-        function=example,
-        selected_artifacts={"payload": artifact},
+    supplied = StepCallInputs(
+        inputs={"payload": artifact},
         logical_destinations={"payload": Path("inputs/payload.txt")},
-        selection_diagnostics={},
-        step_identity=SimpleNamespace(
-            name="example__y2030__i1__phase_test",
-            step_contract_identity="sha256:step-v1:" + "0" * 64,
-        ),
+        required_keys=("payload",),
     )
-    supplied = ResolvedStepInputs(step_name="example", binding=binding)
     definition = StepDefinition(
         name="example",
         function=example,
@@ -854,14 +835,14 @@ def test_execute_step_forwards_a_strict_binding_unchanged(tmp_path: Path) -> Non
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
-    assert seen["binding"] is binding
+    assert seen["binding"].inputs == {"payload": artifact}
 
 
 def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
-    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    supplied = StepCallInputs(metadata={"tag": "example"})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -872,8 +853,8 @@ def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
         function=example,
         resolve_inputs=lambda **_: supplied,
         project_outputs=lambda outputs, **_: outputs["result"],
-        output_paths=lambda *, resolved_inputs, **_: {
-            "result": f"/outputs/{resolved_inputs.step_name}"
+        output_paths=lambda *, step_inputs, **_: {
+            "result": f"/outputs/{step_inputs.metadata['tag']}"
         },
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
@@ -893,7 +874,7 @@ def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert seen["output_paths"] == {"result": "/outputs/example"}
@@ -901,7 +882,7 @@ def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
 
 def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() -> None:
     binding = BindingResult(inputs={})
-    supplied = ResolvedStepInputs(step_name="example", binding=binding)
+    supplied = StepCallInputs(inputs=binding.inputs or {})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -932,7 +913,7 @@ def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() 
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
     scenario.run = lambda **_: SimpleNamespace(
         outputs={"result": "persisted"}, cache_hit=True
@@ -947,7 +928,7 @@ def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() 
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert miss_output == hit_output == "persisted"
@@ -981,9 +962,7 @@ def test_execute_step_evaluates_dynamic_metadata_once(tmp_path: Path) -> None:
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
@@ -1010,7 +989,7 @@ def test_execute_step_evaluates_dynamic_metadata_once(tmp_path: Path) -> None:
 
 
 def test_execute_step_propagates_configured_code_identity_into_cache_options() -> None:
-    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    supplied = StepCallInputs(inputs={})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -1043,7 +1022,7 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     definition_with_default_code_identity = StepDefinition(
@@ -1064,7 +1043,7 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     definition_with_explicit_code_identity = StepDefinition(
@@ -1088,7 +1067,7 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert seen == [
@@ -1143,9 +1122,7 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs["result"],
         archive_outputs=True,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
@@ -1191,9 +1168,7 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
     definition_v2 = StepDefinition(
         name="example",
         function=example_v2,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs["result"],
         archive_outputs=True,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
@@ -1230,7 +1205,7 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
 def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postprocess() -> (
     None
 ):
-    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    supplied = StepCallInputs(inputs={})
 
     @define_step(model="activitysim", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -1264,7 +1239,7 @@ def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postpr
             year=None,
             iteration=None,
             phase=None,
-            resolved_inputs=supplied,
+            step_inputs=supplied,
         )
 
     assert seen_ingest == {
@@ -1358,10 +1333,7 @@ def test_execute_step_strict_resume_raises_scenario_drift_error_on_prefix_miss(
         project_outputs=lambda outputs, **_: outputs["result"],
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
-    supplied = ResolvedStepInputs(
-        step_name="drift_test_step",
-        binding=BindingResult(inputs={}),
-    )
+    supplied = StepCallInputs(inputs={})
     settings = SimpleNamespace(run=SimpleNamespace(resume_policy="strict"))
     workspace = SimpleNamespace(
         full_path=str(tmp_path),
@@ -1389,7 +1361,7 @@ def test_execute_step_strict_resume_raises_scenario_drift_error_on_prefix_miss(
             year=None,
             iteration=None,
             phase=None,
-            resolved_inputs=supplied,
+            step_inputs=supplied,
         )
 
     assert body_called is False

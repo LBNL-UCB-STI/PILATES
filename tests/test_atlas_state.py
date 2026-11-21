@@ -1,4 +1,4 @@
-from pilates.workflows.stages.vehicle_ownership import AtlasSubState
+from pilates.workflows.orchestrator import AtlasSubState
 
 
 class DummyState:

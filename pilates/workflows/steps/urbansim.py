@@ -5,9 +5,7 @@ import shutil
 from typing import Any, Dict, Mapping
 
 from consist import (
-    Artifact,
     ExecutionOptions,
-    StepIdentity,
     define_step,
 )
 
@@ -26,7 +24,6 @@ from pilates.urbansim.preprocessor import (
 )
 from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
 from pilates.utils.consist_runtime import require_runtime_kwargs
-from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
@@ -37,25 +34,25 @@ from pilates.workflows.artifact_keys import (
     USIM_INPUT_MERGED_PREFIX,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.coupler_namespace import resolve_coupler_value
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
 )
+from pilates.workflows.sim_state import SimState
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
 
 from .shared import (
+    _build_step_call_inputs,
     _execution_options_with_launch_context,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _native_execution_options,
     _persisted_output_path,
-    _resolve_native_inputs,
-    _strict_requested_output_cache_options,
 )
 
 
@@ -64,13 +61,13 @@ from .shared import (
 
 def _urbansim_run_execution_options(
     *,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
     **_: Any,
 ) -> ExecutionOptions:
     """Pass the resolver-owned UrbanSim launch context through runtime kwargs."""
 
     return _execution_options_with_launch_context(
-        resolved_inputs=resolved_inputs,
+        step_inputs=step_inputs,
         step_name="urbansim_run",
         context_key="urbansim_launch_context",
         expected_type=UrbanSimLaunchContext,
@@ -82,8 +79,9 @@ def _urbansim_run_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
+    del step_inputs
     return {
         "usim_datastore_h5": Path(workspace.get_usim_mutable_data_dir())
         / get_usim_datastore_fname(settings, io="output", year=state.forecast_year)
@@ -95,7 +93,7 @@ def _urbansim_postprocess_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
     """
     Declare output paths for ``urbansim_postprocess``.
@@ -104,6 +102,7 @@ def _urbansim_postprocess_native_output_paths(
     merged next-iteration datastore, the pre-merge output archive snapshot, and
     the ``USIM_POPULATION_SOURCE_H5`` alias consumed by downstream stages.
     """
+    del step_inputs
     forecast_year = state.forecast_year
     mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
     datastore_path = mutable_data_dir / get_usim_datastore_fname(settings, io="input")
@@ -149,8 +148,10 @@ def _resolve_urbansim_run_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
@@ -165,9 +166,11 @@ def _resolve_urbansim_run_inputs(
             workspace=workspace,
         )[USIM_DATASTORE_H5]
     )
-    return _resolve_native_inputs(
-        step_name="urbansim_run",
-        function=_native_urbansim_run,
+    return _build_step_call_inputs(
+        candidates={
+            USIM_DATASTORE_H5: active_sim_state.land_use.current_h5,
+            FINAL_SKIMS_OMX: active_sim_state.network.skims_omx,
+        },
         required_roles=(
             USIM_DATASTORE_H5,
             *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
@@ -178,7 +181,6 @@ def _resolve_urbansim_run_inputs(
             / settings.urbansim.input_file_template.format(region_id=region_id),
             FINAL_SKIMS_OMX: mutable_data_dir / "final_skims.omx",
         },
-        coupler=coupler,
         metadata={
             "urbansim_launch_context": UrbanSimLaunchContext(
                 mutable_data_dir=mutable_data_dir,
@@ -193,18 +195,18 @@ def _resolve_urbansim_postprocess_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-    step_identity: StepIdentity | None = None,
-) -> ResolvedStepInputs:
-    base_value = resolve_coupler_value(coupler, USIM_DATASTORE_BASE_H5).value
-    has_base_datastore = isinstance(base_value, Artifact) or (
-        step_identity is None and isinstance(base_value, (str, Path))
-    )
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
+    has_base_datastore = active_sim_state.land_use.prior_h5 is not None
     mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
     input_name = get_usim_datastore_fname(settings, io="input")
-    return _resolve_native_inputs(
-        step_name="urbansim_postprocess",
-        function=_native_urbansim_postprocess,
+    return _build_step_call_inputs(
+        candidates={
+            USIM_DATASTORE_H5: active_sim_state.land_use.current_h5,
+            USIM_DATASTORE_BASE_H5: active_sim_state.land_use.prior_h5,
+        },
         required_roles=(USIM_DATASTORE_H5,),
         optional_roles=((USIM_DATASTORE_BASE_H5,) if has_base_datastore else ()),
         logical_destinations={
@@ -217,8 +219,6 @@ def _resolve_urbansim_postprocess_inputs(
             ),
             USIM_DATASTORE_BASE_H5: mutable_data_dir / input_name,
         },
-        coupler=coupler,
-        step_identity=step_identity,
     )
 
 
@@ -384,8 +384,9 @@ def _project_urbansim_run(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> NativeUrbanSimRunOutputs:
+    del step_inputs
     declared_outputs = _urbansim_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -409,8 +410,9 @@ def _project_urbansim_postprocess(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> NativeUrbanSimPostprocessOutputs:
+    del step_inputs
     declared_outputs = _urbansim_postprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -447,7 +449,7 @@ URBANSIM_RUN = StepDefinition(
     input_contract=_URBANSIM_RUN_INPUT_CONTRACT,
     output_paths=_urbansim_run_native_output_paths,
     execution_options=_urbansim_run_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(cache_hydration="outputs-requested"),
     optional_output_keys=(USIM_FORECAST_OUTPUT,),
 )
 
@@ -459,8 +461,7 @@ URBANSIM_POSTPROCESS = StepDefinition(
     input_contract=_URBANSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_urbansim_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
-    preflight_identity=True,
+    cache_options=_metadata_cache_options(),
 )
 
 # Canonical registry members use the workflow step names. Uppercase aliases keep

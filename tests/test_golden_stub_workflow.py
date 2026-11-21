@@ -79,9 +79,16 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.steps import activitysim_preprocess
-from pilates.workflows.stages.land_use import run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from consist import BindingResult
+from pilates.workflows.orchestrator import (
+    _run_supply_demand_loop,
+    bootstrap_initial_state,
+    run_activity_demand_phase,
+    run_land_use_stage,
+    run_traffic_assignment_phase,
+    run_vehicle_ownership_stage,
+)
+from pilates.workflows.sim_state import LandUseState, SimState
 from tests.workflow_contract_harness import build_runtime_context
 from pilates.workflows.state import WorkflowState
 
@@ -1004,11 +1011,21 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
         cr.log_output(init_marker, key="golden_init_marker")
     assert init_marker.exists()
 
-    # Phase 1: land-use stage publishes UrbanSim datastore handles.
-    run_land_use_stage(
+    sim_state = bootstrap_initial_state(
         scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+    # Phase 1: land-use stage publishes UrbanSim datastore handles.
+    sim_state = run_land_use_stage(
+        scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=golden_stub_env["context"],
     )
     coupler_base_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_BASE_H5), workspace)
     coupler_current_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
@@ -1022,11 +1039,13 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
 
     # Phase 2: vehicle ownership stage consumes datastore handles and
     # produces Atlas outputs plus ActivitySim-ready tables.
-    run_vehicle_ownership_stage(
+    sim_state = run_vehicle_ownership_stage(
         scenario=scenario,
-        coupler=coupler,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=golden_stub_env["context"],
     )
     assert (
         Path(workspace.get_atlas_mutable_input_dir()) / "year2017" / "households.csv"
@@ -1078,10 +1097,13 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
 
     asim_archive_year = state.current_year
     asim_archive_iteration = state.current_inner_iter
-    run_supply_demand_stage(
+    sim_state = _run_supply_demand_loop(
         scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=golden_stub_env["context"],
     )
 
     zarr_from_coupler = artifact_to_path(coupler.get(ZARR_SKIMS), workspace)
@@ -1239,16 +1261,11 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
 
 def test_golden_stub_workflow_uses_direct_native_stage_contracts() -> None:
     """The golden harness follows the same native execution boundary as the matrix."""
-    from pilates.workflows.stages import land_use
-    from pilates.workflows.stages import supply_demand_activity
-    from pilates.workflows.stages import supply_demand_beam
-    from pilates.workflows.stages import vehicle_ownership
-
     for stage in (
-        land_use.run_land_use_stage,
-        vehicle_ownership.run_vehicle_ownership_stage,
-        supply_demand_activity._run_activity_demand_phase,
-        supply_demand_beam._run_beam_steps,
+        run_land_use_stage,
+        run_vehicle_ownership_stage,
+        run_activity_demand_phase,
+        run_traffic_assignment_phase,
     ):
         source = inspect.getsource(stage)
         assert "execute_step(" in source
@@ -1297,22 +1314,30 @@ def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
         source_artifact = cr.log_input(source_path, key=USIM_POPULATION_SOURCE_H5)
         scenario.coupler.set_from_artifact(USIM_POPULATION_SOURCE_H5, source_artifact)
 
+    native_sim_state = SimState(
+        land_use=LandUseState(population_source=source_artifact)
+    )
+
     def run_native_preprocess(native_workspace: Workspace, *, project: bool = True):
         resolved = activitysim_preprocess.resolve_inputs(
             settings=settings,
             state=state,
             workspace=native_workspace,
-            coupler=scenario.coupler,
+            sim_state=native_sim_state,
         )
         options = activitysim_preprocess.execution_options(
             settings=settings,
             state=state,
             workspace=native_workspace,
-            resolved_inputs=resolved,
+            step_inputs=resolved,
         )
         result = scenario.run(
             fn=activitysim_preprocess.function,
-            binding=resolved.binding,
+            binding=BindingResult(
+                inputs=dict(resolved.inputs),
+                input_keys=resolved.required_keys,
+                optional_input_keys=resolved.optional_keys,
+            ),
             year=state.forecast_year,
             iteration=state.current_inner_iter,
             phase="preprocess",
@@ -1321,7 +1346,7 @@ def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
                 settings=settings,
                 state=state,
                 workspace=native_workspace,
-                resolved_inputs=resolved,
+                step_inputs=resolved,
             ),
             cache_options=replace(
                 activitysim_preprocess.cache_options(
@@ -1350,7 +1375,7 @@ def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
             settings=settings,
             state=state,
             workspace=native_workspace,
-            resolved_inputs=resolved,
+            step_inputs=resolved,
         )
 
     first, first_outputs = run_native_preprocess(first_workspace)

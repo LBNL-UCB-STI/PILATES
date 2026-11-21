@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import re
 from fnmatch import fnmatchcase
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -23,11 +22,7 @@ from pilates.utils.io import (
     get_vehicle_ownership_model,
 )
 from pilates.workflows.contracts import StepDefinition, WorkflowStepProvenanceSpec
-from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.workflows.steps import STEP_DEFINITIONS
-
-if TYPE_CHECKING:
-    from pilates.workflows.binding import ArtifactBindingRule
 
 
 @dataclass(frozen=True)
@@ -94,10 +89,6 @@ class WorkflowStepSpec:
     @property
     def optional_output_keys(self) -> Tuple[str, ...]:
         return tuple(self.definition.optional_output_keys)
-
-    @property
-    def binding_rules(self) -> Tuple[ArtifactBindingRule, ...]:
-        return tuple(self.definition.binding_rules)
 
 
 @dataclass(frozen=True)
@@ -359,7 +350,7 @@ def workflow_step_key_match(
     *,
     direction: str,
 ) -> WorkflowStepKeyMatch:
-    canonical_key = canonical_artifact_key_from_raw_key(key)
+    canonical_key = key.split("/", 1)[-1] if "/" in key else key
     used_alias = canonical_key != key
     spec = workflow_step_spec_for_step_name(step_name)
     if spec is None:

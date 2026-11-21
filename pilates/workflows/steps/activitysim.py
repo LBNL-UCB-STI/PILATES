@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Mapping, Protocol, runtime_checkable
+from typing import Any, Dict, Mapping
 
 from consist import (
     Artifact,
-    BindingResult,
-    CacheOptions,
     ExecutionOptions,
     define_step,
     require_runtime_kwargs,
@@ -49,9 +47,8 @@ from pilates.activitysim.postprocessor import (
     _next_iter_usim_input_store_path,
 )
 from pilates.config.models import PilatesConfig
-from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.state_access import current_year, iteration_index
+from pilates.utils.state_access import iteration_index
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -64,28 +61,28 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.binding import (
-    ArtifactBindingRule,
-    activitysim_population_source_selection_rules,
-    resolve_artifact_roles,
-)
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
-from pilates.workflows.output_projection import require_output
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.runtime_overlays import resolve_runtime_input_output_overrides
-from pilates.workflows.state_helpers import resolve_forecast_year
+from pilates.workflows.state_helpers import (
+    requires_prior_beam_skim_handoff,
+    resolve_forecast_year,
+)
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
+    require_output,
 )
+from pilates.workflows.sim_state import ArtifactRef, SimState
 from pilates.workspace import Workspace
-from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_path, resolve_existing_path
 from pilates.workflows.state import WorkflowState
 
 from .shared import (
     _activitysim_output_facet_meta,
+    _build_step_call_inputs,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _persisted_output_path,
 )
@@ -163,8 +160,9 @@ def activitysim_preprocess_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
+    del step_inputs
     """
     Declare cache-recoverable file outputs from ActivitySim preprocessing.
 
@@ -205,8 +203,9 @@ def activitysim_postprocess_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
+    del step_inputs
     """
     Declare ActivitySim postprocess outputs for Consist logging and hydration.
 
@@ -341,22 +340,61 @@ def _activitysim_launch_context(
     )
 
 
-def _native_activitysim_resolved_inputs(
+def _sim_state_role_candidates(
+    sim_state: SimState,
+    *,
+    land_use_enabled: bool,
+) -> dict[str, ArtifactRef | None]:
+    """Map typed ``SimState`` fields to ActivitySim role names."""
+    candidates: dict[str, ArtifactRef | None] = {
+        USIM_POPULATION_SOURCE_H5: (
+            sim_state.land_use.population_source
+            if sim_state.land_use.population_source is not None
+            else (sim_state.land_use.current_h5 if not land_use_enabled else None)
+        ),
+        USIM_DATASTORE_CURRENT_H5: sim_state.land_use.current_h5,
+        USIM_DATASTORE_BASE_H5: sim_state.land_use.prior_h5,
+        FINAL_SKIMS_OMX: sim_state.network.skims_omx,
+        ASIM_OMX_SKIMS: (
+            sim_state.network.skims_omx
+            if sim_state.network.skims_omx is not None
+            else sim_state.demand.skims_omx_in
+        ),
+        ZARR_SKIMS: (
+            sim_state.network.skims_zarr
+            if sim_state.network.skims_zarr is not None
+            else sim_state.demand.skims_zarr
+        ),
+        ASIM_LAND_USE_IN: sim_state.demand.land_use_csv,
+        ASIM_HOUSEHOLDS_IN: sim_state.demand.households_in,
+        ASIM_PERSONS_IN: sim_state.demand.persons_in,
+        "households_asim_out": sim_state.demand.households,
+        "persons_asim_out": sim_state.demand.persons,
+        "tours_asim_out": sim_state.demand.tours,
+        "trips_asim_out": sim_state.demand.trips,
+        "beam_plans_asim_out": sim_state.demand.plans,
+    }
+    for key, value in sim_state.extras.items():
+        if key not in candidates or candidates[key] is None:
+            candidates[key] = value
+    return candidates
+
+
+def _native_activitysim_step_inputs(
     *,
     step_name: str,
     required_roles: tuple[str, ...],
     optional_roles: tuple[str, ...],
     logical_destinations: Mapping[str, Any],
-    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
-    """Freeze the one ActivitySim semantic selection for a native invocation."""
+    sim_state: SimState,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+) -> StepCallInputs:
+    """Build typed ``StepCallInputs`` for an ActivitySim step from ``SimState``."""
 
-    allow_population_bootstrap_fallback = not _land_use_enabled(state)
     workspace_root = Path(get_setting(workspace, "full_path", "."))
-    destinations = {
+    destinations: dict[str, Path] = {
         key: Path(path)
         if path is not None
         else workspace_root / "activitysim" / "native-inputs" / key
@@ -367,75 +405,20 @@ def _native_activitysim_resolved_inputs(
         destinations.setdefault(
             key, workspace_root / "activitysim" / "native-inputs" / key
         )
-
-    rules = {
-        role: ArtifactBindingRule(semantic_key=role, required=True)
-        for role in required_roles
-    }
-    rules.update(
-        {
-            role: ArtifactBindingRule(semantic_key=role, required=False)
-            for role in optional_roles
-        }
+    candidates = _sim_state_role_candidates(
+        sim_state,
+        land_use_enabled=_land_use_enabled(state),
     )
-    if step_name == "activitysim_preprocess":
-        rules[USIM_POPULATION_SOURCE_H5] = ArtifactBindingRule(
-            semantic_key=USIM_POPULATION_SOURCE_H5,
-            required=True,
-            allow_fallback=allow_population_bootstrap_fallback,
-            preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-            fallback_provider=(
-                "activitysim_population_source"
-                if allow_population_bootstrap_fallback
-                else None
-            ),
-        )
-    elif step_name == "activitysim_run":
-        rules[ASIM_OMX_SKIMS] = ArtifactBindingRule(
-            semantic_key=ASIM_OMX_SKIMS,
-            required=False,
-            preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
-        )
-    elif step_name == "activitysim_postprocess":
-        rules[ASIM_OMX_SKIMS] = ArtifactBindingRule(
-            semantic_key=ASIM_OMX_SKIMS,
-            required=True,
-            preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
-        )
-        rules[USIM_DATASTORE_CURRENT_H5] = ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=False,
-            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
-        )
-        rules[USIM_DATASTORE_BASE_H5] = ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_BASE_H5,
-            required=False,
-            allow_fallback=True,
-            fallback_provider="activitysim_input_datastore",
-        )
-        rules[USIM_POPULATION_SOURCE_H5] = ArtifactBindingRule(
-            semantic_key=USIM_POPULATION_SOURCE_H5,
-            required=False,
-            allow_fallback=allow_population_bootstrap_fallback,
-            preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-            fallback_provider=(
-                "activitysim_population_source"
-                if allow_population_bootstrap_fallback
-                else None
-            ),
-        )
-
-    return resolve_artifact_roles(
-        step_name=step_name,
+    if prior_outputs is not None:
+        for key, value in prior_outputs.items():
+            if value is not None:
+                candidates[key] = value
+    return _build_step_call_inputs(
+        candidates=candidates,
         required_roles=required_roles,
         optional_roles=optional_roles,
-        artifact_rules=tuple(rules.values()),
         logical_destinations=destinations,
-        coupler=coupler,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=current_year(state),
+        metadata={"step_name": step_name},
     )
 
 
@@ -444,15 +427,16 @@ def _activitysim_preprocess_resolver(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
-    # ponytail: use declared_expected_inputs directly without two-way destination rewrites
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_activitysim_mutable_configs(settings, workspace)
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
     )
-    return _native_activitysim_resolved_inputs(
+    return _native_activitysim_step_inputs(
         step_name="activitysim_preprocess",
         required_roles=_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
         optional_roles=(
@@ -461,16 +445,10 @@ def _activitysim_preprocess_resolver(
         logical_destinations=ActivitysimPreprocessor.declared_expected_inputs(
             settings, state, workspace
         ),
-        settings=settings,
         state=state,
         workspace=workspace,
-        coupler=coupler,
+        sim_state=active_sim_state,
     )
-
-
-@runtime_checkable
-class _AsimMutableConfigsWorkspaceLike(Protocol):
-    def get_asim_mutable_configs_dir(self) -> str: ...
 
 
 def _activitysim_run_resolver(
@@ -478,8 +456,10 @@ def _activitysim_run_resolver(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_activitysim_mutable_configs(settings, workspace)
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
@@ -487,45 +467,47 @@ def _activitysim_run_resolver(
     )
     required_roles = _ACTIVITYSIM_RUN_REQUIRED_ROLES
     optional_roles = _ACTIVITYSIM_RUN_SKIM_ROLES
-    resolved = _native_activitysim_resolved_inputs(
+    resolved = _native_activitysim_step_inputs(
         step_name="activitysim_run",
         required_roles=required_roles,
         optional_roles=optional_roles,
         logical_destinations=ActivitysimRunner.declared_expected_inputs(
             settings, state, workspace
         ),
-        settings=settings,
         state=state,
         workspace=workspace,
-        coupler=coupler,
+        sim_state=active_sim_state,
     )
 
-    zarr_source = resolved.source_by_role.get(ZARR_SKIMS, "missing")
-    omx_source = resolved.source_by_role.get(ASIM_OMX_SKIMS, "missing")
+    zarr_input = resolved.inputs.get(ZARR_SKIMS)
+    omx_input = resolved.inputs.get(ASIM_OMX_SKIMS)
     zarr_rejection: str | None = None
-    if zarr_source != "missing":
-        zarr_input = (resolved.binding.inputs or {}).get(ZARR_SKIMS)
-        zarr_path = artifact_to_existing_path(
-            zarr_input, workspace=workspace
-        ) or artifact_to_path(zarr_input, workspace=workspace)
-        zarr_rejection = (
-            "could not resolve a concrete path"
-            if zarr_path is None
-            else validate_activitysim_zarr_skims(zarr_path)
+    if zarr_input is not None:
+        zarr_path = artifact_to_path(zarr_input, workspace=workspace)
+        existing_zarr_path = (
+            resolve_existing_path(zarr_path, workspace=workspace)
+            if zarr_path is not None
+            else None
         )
+        if existing_zarr_path is not None:
+            zarr_rejection = validate_activitysim_zarr_skims(existing_zarr_path)
+        elif isinstance(zarr_input, Artifact):
+            zarr_rejection = None
+        else:
+            zarr_rejection = (
+                "could not resolve a concrete path"
+                if zarr_path is None
+                else validate_activitysim_zarr_skims(zarr_path)
+            )
 
-    # A valid published Zarr is authoritative. Otherwise the preprocessor's
-    # or BEAM's OMX artifact is the source that this invocation converts and
-    # publishes as Zarr. Keep the unselected source out of the binding so it
-    # cannot affect materialization or cache identity.
-    if zarr_source != "missing" and zarr_rejection is None:
+    if zarr_input is not None and zarr_rejection is None:
         decision = ActivitySimSkimDecision(
             role=ZARR_SKIMS,
             mode="zarr",
             produces_zarr=False,
-            selected_source=zarr_source,
+            selected_source="sim_state",
         )
-    elif omx_source != "missing":
+    elif omx_input is not None:
         if zarr_rejection is not None:
             logger.warning(
                 "activitysim_run rejected %s before binding selection: %s; "
@@ -534,9 +516,12 @@ def _activitysim_run_resolver(
                 zarr_rejection,
                 ASIM_OMX_SKIMS,
             )
+        get_asim_mutable_configs_dir = getattr(
+            workspace, "get_asim_mutable_configs_dir", None
+        )
         configs_root = (
-            workspace.get_asim_mutable_configs_dir()
-            if isinstance(workspace, _AsimMutableConfigsWorkspaceLike)
+            get_asim_mutable_configs_dir()
+            if callable(get_asim_mutable_configs_dir)
             else None
         )
         produces_zarr = activitysim_persists_zarr_skims(
@@ -547,7 +532,7 @@ def _activitysim_run_resolver(
             role=ASIM_OMX_SKIMS,
             mode="omx",
             produces_zarr=produces_zarr,
-            selected_source=omx_source,
+            selected_source="sim_state",
         )
     elif zarr_rejection is not None:
         raise RuntimeError(f"activitysim_run rejected {ZARR_SKIMS}: {zarr_rejection}")
@@ -562,12 +547,9 @@ def _activitysim_run_resolver(
         )
 
     selected_roles = (*_ACTIVITYSIM_RUN_REQUIRED_ROLES, decision.role)
-    # The native selector has already frozen each selected artifact under its
-    # semantic role.  Subset that immutable selection so unselected skim
-    # alternatives cannot affect this run's materialization or cache identity.
-    binding_inputs: dict[str, Any] = {}
+    binding_inputs: dict[str, ArtifactRef] = {}
     for role in selected_roles:
-        value = (resolved.binding.inputs or {}).get(role)
+        value = resolved.inputs.get(role)
         if value is None:
             raise RuntimeError(
                 f"activitysim_run resolved role has no concrete binding value: {role}"
@@ -585,33 +567,23 @@ def _activitysim_run_resolver(
         if key in selected_roles
     }
     if decision.role == ZARR_SKIMS:
-        zarr_existing = artifact_to_existing_path(
+        zarr_path = artifact_to_path(
             binding_inputs.get(ZARR_SKIMS), workspace=workspace
-        ) or artifact_to_path(binding_inputs.get(ZARR_SKIMS), workspace=workspace)
+        )
+        zarr_existing = (
+            resolve_existing_path(zarr_path, workspace=workspace)
+            if zarr_path is not None
+            else None
+        ) or zarr_path
         if zarr_existing is not None:
             logical_destinations[ZARR_SKIMS] = Path(zarr_existing)
-    selected = ResolvedStepInputs(
-        step_name=resolved.step_name,
-        binding=BindingResult(
-            inputs=binding_inputs,
-            metadata=metadata,
-        ),
-        required_roles=_ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=(decision.role,),
-        source_by_role={
-            key: value
-            for key, value in resolved.source_by_role.items()
-            if key in selected_roles
-        },
-        selected_key_by_role={
-            key: value
-            for key, value in resolved.selected_key_by_role.items()
-            if key in selected_roles
-        },
+    return StepCallInputs(
+        inputs=binding_inputs,
+        required_keys=_ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        optional_keys=(decision.role,),
         logical_destinations=logical_destinations,
         metadata=metadata,
     )
-    return selected
 
 
 def _activitysim_postprocess_resolver(
@@ -619,14 +591,15 @@ def _activitysim_postprocess_resolver(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_activitysim_mutable_configs(settings, workspace)
     required_roles, optional_roles = resolve_runtime_input_output_overrides(
         step_name="activitysim_postprocess",
         land_use_enabled=_land_use_enabled(state),
-        # Postprocess H5 requiredness is mode-independent. Restart-only
-        # preprocess guards remain part of prebootstrap policy.
         run_mode=None,
         required_inputs=(
             *_ACTIVITYSIM_POSTPROCESS_BASE_REQUIRED_ROLES,
@@ -634,19 +607,19 @@ def _activitysim_postprocess_resolver(
         ),
         optional_inputs=_ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES,
     )
-    resolved = _native_activitysim_resolved_inputs(
+    resolved = _native_activitysim_step_inputs(
         step_name="activitysim_postprocess",
         required_roles=required_roles,
         optional_roles=optional_roles,
         logical_destinations=ActivitysimPostprocessor.declared_expected_inputs(
             settings, state, workspace
         ),
-        settings=settings,
         state=state,
         workspace=workspace,
-        coupler=coupler,
+        sim_state=active_sim_state,
+        prior_outputs=prior_outputs,
     )
-    inputs = dict(resolved.binding.inputs or {})
+    inputs = dict(resolved.inputs)
     removed_roles: set[str] = set()
     if (
         USIM_DATASTORE_BASE_H5 in inputs
@@ -672,10 +645,6 @@ def _activitysim_postprocess_resolver(
     current_datastore = inputs.get(USIM_DATASTORE_CURRENT_H5)
     base_datastore = inputs.get(USIM_DATASTORE_BASE_H5)
     if _is_population_source_alias(population_source, current_datastore):
-        # Vehicle ownership intentionally aliases the current datastore role to
-        # the immutable population snapshot.  The ActivitySim postprocessor can
-        # use that snapshot for both optional parameters, but Consist must receive
-        # the artifact once so requested staging has one unambiguous input key.
         inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
         current_datastore = None
         removed_roles.add(USIM_DATASTORE_CURRENT_H5)
@@ -700,7 +669,7 @@ def _activitysim_postprocess_resolver(
     for role in _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES:
         if role in removed_roles or role not in inputs:
             continue
-        existing_local = _h5_input_local_path(inputs[role])
+        existing_local = _h5_input_local_path(inputs[role], workspace=workspace)
         if (
             existing_local is not None
             and existing_local.is_relative_to(workspace_root)
@@ -714,28 +683,30 @@ def _activitysim_postprocess_resolver(
     if not removed_roles and not destinations_updated:
         return resolved
 
-    return ResolvedStepInputs(
-        step_name=resolved.step_name,
-        binding=BindingResult(
-            inputs=inputs or None,
-            input_keys=resolved.binding.input_keys,
-            optional_input_keys=resolved.binding.optional_input_keys,
-            metadata=resolved.binding.metadata,
+    return StepCallInputs(
+        inputs=inputs,
+        required_keys=tuple(
+            k for k in resolved.required_keys if k not in removed_roles
         ),
-        required_roles=resolved.required_roles,
-        optional_roles=resolved.optional_roles,
-        source_by_role=resolved.source_by_role,
-        selected_key_by_role=resolved.selected_key_by_role,
+        optional_keys=tuple(
+            k for k in resolved.optional_keys if k not in removed_roles
+        ),
         logical_destinations=filtered_destinations,
         metadata=resolved.metadata,
     )
 
 
-def _h5_input_local_path(value: Any) -> Path | None:
+def _h5_input_local_path(
+    value: Any,
+    *,
+    workspace: Workspace | None = None,
+) -> Path | None:
     """Resolve an H5 input role value (Artifact or path) to its canonical local path."""
 
     if isinstance(value, Artifact):
-        candidate = value.ensure_local_path() or value.abs_path or value.path
+        candidate = (
+            artifact_to_path(value, workspace=workspace) or value.abs_path or value.path
+        )
         return Path(str(candidate)).resolve() if candidate else None
     if isinstance(value, (str, Path)):
         text = str(value).strip()
@@ -770,18 +741,19 @@ def _activitysim_execution_options(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> ExecutionOptions:
     """Request Consist materialization at the one deterministic path per role."""
 
     del state
-    selected_roles = set(resolved_inputs.selected_roles())
+    if step_inputs is None:
+        return ExecutionOptions(input_binding="paths")
+    selected_roles = set(step_inputs.inputs.keys())
     runtime_kwargs: dict[str, Any] = {}
-    if resolved_inputs.step_name == "activitysim_run":
+    if step_inputs.metadata.get("step_name") == "activitysim_run":
         data_roles = [role for role in selected_roles if role != ZARR_SKIMS]
         staged_destinations = {
-            Path(resolved_inputs.logical_destinations[role]).parent
-            for role in data_roles
+            Path(step_inputs.logical_destinations[role]).parent for role in data_roles
         }
         if len(staged_destinations) != 1:
             raise RuntimeError(
@@ -804,9 +776,9 @@ def _activitysim_execution_options(
             / "configs",
             config_roots=config_roots,
             runtime_zarr_path=(
-                Path(resolved_inputs.logical_destinations[ZARR_SKIMS])
+                Path(step_inputs.logical_destinations[ZARR_SKIMS])
                 if ZARR_SKIMS in selected_roles
-                and ZARR_SKIMS in resolved_inputs.logical_destinations
+                and ZARR_SKIMS in step_inputs.logical_destinations
                 else None
             ),
         )
@@ -821,7 +793,7 @@ def _activitysim_execution_options(
         input_binding="paths",
         input_paths={
             key: destination
-            for key, destination in resolved_inputs.logical_destinations.items()
+            for key, destination in step_inputs.logical_destinations.items()
             if key in selected_roles
         },
         input_materialization="requested",
@@ -830,24 +802,12 @@ def _activitysim_execution_options(
     )
 
 
-def _activitysim_cache_options(
-    *, settings: PilatesConfig, state: WorkflowState, workspace: Workspace
-) -> CacheOptions:
-    """Admit a cache candidate with zero-copy metadata hydration."""
-
-    # del settings, state, workspace
-    return CacheOptions(
-        cache_hydration="metadata",
-        validate_cached_outputs="lazy",
-    )
-
-
 def _activitysim_run_produces_zarr(
-    resolved_inputs: ResolvedStepInputs,
+    step_inputs: StepCallInputs,
 ) -> bool:
     """Return the immutable native invocation decision for Zarr publication."""
 
-    value = resolved_inputs.metadata.get(_ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY)
+    value = step_inputs.metadata.get(_ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY)
     if not isinstance(value, bool):
         raise RuntimeError(
             "activitysim_run requires resolver metadata "
@@ -861,7 +821,7 @@ def _activitysim_run_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs,
+    step_inputs: StepCallInputs,
 ) -> Dict[str, Any]:
     """Declare only the immutable invocation-specific native output set."""
 
@@ -869,7 +829,7 @@ def _activitysim_run_native_output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
-        produces_zarr=_activitysim_run_produces_zarr(resolved_inputs),
+        produces_zarr=_activitysim_run_produces_zarr(step_inputs),
     )
 
 
@@ -879,8 +839,9 @@ def _project_activitysim_preprocess_outputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> ActivitySimPreprocessOutputs:
+    del step_inputs
     declared_outputs = activitysim_preprocess_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -928,13 +889,13 @@ def _project_activitysim_run_outputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> ActivitySimRunOutputs:
-    if resolved_inputs is None:
+    if step_inputs is None:
         raise RuntimeError(
             "activitysim_run projection requires the resolved native skim decision"
         )
-    produces_zarr = _activitysim_run_produces_zarr(resolved_inputs)
+    produces_zarr = _activitysim_run_produces_zarr(step_inputs)
     if (ZARR_SKIMS in outputs) != produces_zarr:
         expected = "include" if produces_zarr else "omit"
         raise RuntimeError(
@@ -945,7 +906,7 @@ def _project_activitysim_run_outputs(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved_inputs,
+        step_inputs=step_inputs,
     )
     projected = ActivitySimRunOutputs(
         output_dir=Path(workspace.get_asim_output_dir()),
@@ -981,8 +942,9 @@ def _project_activitysim_postprocess_outputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> ActivitySimPostprocessOutputs:
+    del step_inputs
     declared_outputs = activitysim_postprocess_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -1190,21 +1152,14 @@ def _activitysim_run_callable(
         workspace=workspace,
     )
 
-    class DummyResolvedInputs:
-        def __init__(self, mode: str) -> None:
-            from pilates.workflows.artifact_keys import ASIM_OMX_SKIMS, ZARR_SKIMS
-
-            self.selected_key_by_role = {
-                "omx_skims": ZARR_SKIMS if mode == "zarr" else ASIM_OMX_SKIMS
-            }
-            self.metadata = {_ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: mode == "zarr"}
-
-    dummy_resolved = DummyResolvedInputs(skim_mode)
+    step_inputs_stub = StepCallInputs(
+        metadata={_ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: skim_mode == "zarr"}
+    )
     declared_outputs = _activitysim_run_native_output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=dummy_resolved,
+        step_inputs=step_inputs_stub,
     )
     outputs_mock = {k: None for k in declared_outputs}
     from pilates.workflows.steps.shared import _validation_context
@@ -1214,7 +1169,7 @@ def _activitysim_run_callable(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=dummy_resolved,
+        step_inputs=step_inputs_stub,
     )
     projected.validate(
         _validation_context(
@@ -1367,14 +1322,7 @@ activitysim_preprocess = StepDefinition(
     input_contract=_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT,
     outputs=activitysim_preprocess_output_paths,
     execution_options=_activitysim_execution_options,
-    cache_options=_activitysim_cache_options,
-    binding_rules=(
-        *activitysim_population_source_selection_rules(),
-        ArtifactBindingRule(
-            semantic_key=FINAL_SKIMS_OMX,
-            required=False,
-        ),
-    ),
+    cache_options=_metadata_cache_options(),
     archive_outputs=True,
 )
 activitysim_run = StepDefinition(
@@ -1385,7 +1333,7 @@ activitysim_run = StepDefinition(
     input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT,
     output_paths=_activitysim_run_native_output_paths,
     execution_options=_activitysim_execution_options,
-    cache_options=_activitysim_cache_options,
+    cache_options=_metadata_cache_options(),
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     archive_outputs=True,
 )
@@ -1397,28 +1345,7 @@ activitysim_postprocess = StepDefinition(
     input_contract=_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=activitysim_postprocess_output_paths,
     execution_options=_activitysim_execution_options,
-    cache_options=_activitysim_cache_options,
+    cache_options=_metadata_cache_options(),
     archive_outputs=True,
-    binding_rules=(
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=False,
-            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
-        ),
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_BASE_H5,
-            required=False,
-            allow_fallback=True,
-            fallback_provider="activitysim_input_datastore",
-        ),
-        ArtifactBindingRule(
-            semantic_key=USIM_POPULATION_SOURCE_H5,
-            required=False,
-            allow_fallback=True,
-            preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-            fallback_provider="activitysim_population_source",
-        ),
-    ),
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    preflight_identity=False,
 )

@@ -4,8 +4,10 @@ import inspect
 import pytest
 
 import pilates.atlas.preprocessor as atlas_preprocessor_module
-from pilates.workflows.stages.land_use import run_land_use_stage
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from pilates.workflows.orchestrator import (
+    run_land_use_stage,
+    run_vehicle_ownership_stage,
+)
 
 
 def _touch(path: Path, content: str = "x") -> None:

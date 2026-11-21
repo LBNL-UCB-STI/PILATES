@@ -5,7 +5,6 @@ import os
 from typing import Any, Dict, Mapping
 
 from consist import (
-    BindingResult,
     ExecutionOptions,
     OutputSet,
     define_step,
@@ -23,7 +22,6 @@ from pilates.config.models import PilatesConfig
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_runtime import require_runtime_kwargs
-from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import get_land_use_model
 from pilates.utils.settings_helper import get as get_setting
@@ -32,33 +30,28 @@ from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
-    OMX_SKIMS,
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
-    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.binding import ArtifactBindingRule
-from pilates.workflows.coupler_namespace import resolve_coupler_value
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
 )
+from pilates.workflows.sim_state import ArtifactRef, SimState
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
 
 from .shared import (
+    _build_step_call_inputs,
     _execution_options_with_launch_context,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _native_execution_options,
     _persisted_output_path,
-    _resolve_native_inputs,
-    _strict_requested_output_cache_options,
 )
 from .urbansim import (
     _urbansim_population_source_path,
@@ -74,13 +67,13 @@ _ATLAS_VEHICLES_CSV_INPUT = "atlas_vehicles_csv"
 
 def _atlas_run_execution_options(
     *,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
     **_: Any,
 ) -> ExecutionOptions:
     """Pass the resolver-owned ATLAS launch context through runtime kwargs."""
 
     return _execution_options_with_launch_context(
-        resolved_inputs=resolved_inputs,
+        step_inputs=step_inputs,
         step_name="atlas_run",
         context_key="atlas_launch_context",
         expected_type=AtlasLaunchContext,
@@ -92,9 +85,9 @@ def _atlas_preprocess_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
-    del resolved_inputs
+    del step_inputs
     return dict(
         _atlas_preprocess_prepared_input_paths(
             settings=settings,
@@ -147,8 +140,9 @@ def _atlas_run_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
+    del settings, step_inputs
     output_dir = Path(workspace.get_atlas_output_dir())
     forecast_year = state.forecast_year
     return {
@@ -162,11 +156,11 @@ def _atlas_run_output_sets(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Mapping[str, OutputSet]:
     """Declare the ATLAS continuation surface exactly."""
 
-    del settings, resolved_inputs
+    del settings, step_inputs
     forecast_year = state.forecast_year
     continuation_members = ("vehicles_output.RData", "households_output.RData")
     return {
@@ -183,7 +177,7 @@ def _atlas_postprocess_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
     """
     Declare output paths for ``atlas_postprocess``.
@@ -192,6 +186,7 @@ def _atlas_postprocess_native_output_paths(
     for downstream ActivitySim runs and, when ``year`` or ``forecast_year`` is
     set on ``state``, ``ATLAS_VEHICLES2_OUTPUT`` for BEAM.
     """
+    del step_inputs
     output_year = state.year if state.year is not None else state.forecast_year
     vehicles2_path = (
         Path(workspace.get_atlas_output_dir()) / f"vehicles2_{output_year}.csv"
@@ -248,51 +243,48 @@ def _prefer_base_datastore_key(
     return False
 
 
-def _select_atlas_datastore_from_coupler(
+def _select_atlas_datastore_from_sim_state(
     *,
-    coupler: CouplerProtocol,
+    sim_state: SimState,
     use_base_datastore: bool,
     prefer_base_key: bool = True,
     expected_filename: str,
-) -> Any:
+) -> ArtifactRef | None:
     if use_base_datastore:
         candidates = (
-            (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_H5)
+            (sim_state.land_use.prior_h5, sim_state.land_use.current_h5)
             if prefer_base_key
-            else (USIM_DATASTORE_H5, USIM_DATASTORE_BASE_H5)
+            else (sim_state.land_use.current_h5, sim_state.land_use.prior_h5)
         )
     else:
-        forecast_candidate = resolve_coupler_value(coupler, USIM_FORECAST_OUTPUT)
-        current_candidate = resolve_coupler_value(coupler, USIM_DATASTORE_H5)
-        forecast_name = os.path.basename(
-            artifact_to_path(forecast_candidate.value) or ""
-        )
-        current_name = os.path.basename(artifact_to_path(current_candidate.value) or "")
+        forecast_candidate = sim_state.land_use.forecast_output
+        current_candidate = sim_state.land_use.current_h5
+        forecast_name = os.path.basename(artifact_to_path(forecast_candidate) or "")
+        current_name = os.path.basename(artifact_to_path(current_candidate) or "")
         if (
-            forecast_candidate.value is not None
+            forecast_candidate is not None
             and forecast_name == expected_filename
             and current_name != expected_filename
         ):
             return forecast_candidate
-        pop_candidate = resolve_coupler_value(coupler, USIM_POPULATION_SOURCE_H5)
-        pop_name = os.path.basename(artifact_to_path(pop_candidate.value) or "")
+        pop_candidate = sim_state.land_use.population_source
+        pop_name = os.path.basename(artifact_to_path(pop_candidate) or "")
         expected_stem = Path(expected_filename).stem
         if (
-            pop_candidate.value is not None
+            pop_candidate is not None
             and pop_name.startswith(expected_stem)
             and current_name != expected_filename
         ):
             return pop_candidate
         candidates = (
-            USIM_DATASTORE_H5,
-            USIM_FORECAST_OUTPUT,
-            USIM_DATASTORE_BASE_H5,
+            sim_state.land_use.current_h5,
+            sim_state.land_use.forecast_output,
+            sim_state.land_use.prior_h5,
         )
-    for candidate_key in candidates:
-        resolved = resolve_coupler_value(coupler, candidate_key)
-        if resolved.value is not None:
-            return resolved
-    return resolve_coupler_value(coupler, USIM_DATASTORE_H5)
+    for candidate in candidates:
+        if candidate is not None:
+            return candidate
+    return sim_state.land_use.current_h5
 
 
 def _resolve_atlas_datastore_target(
@@ -300,8 +292,8 @@ def _resolve_atlas_datastore_target(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> tuple[bool, Path, Any]:
+    sim_state: SimState,
+) -> tuple[bool, Path, ArtifactRef | None]:
     land_use_enabled = bool(
         get_setting(
             settings,
@@ -321,17 +313,15 @@ def _resolve_atlas_datastore_target(
         io="input" if (use_base_datastore and prefer_base_key) else "output",
         year=state.forecast_year,
     )
-    selected_datastore = _select_atlas_datastore_from_coupler(
-        coupler=coupler,
+    selected_datastore = _select_atlas_datastore_from_sim_state(
+        sim_state=sim_state,
         use_base_datastore=use_base_datastore,
         prefer_base_key=prefer_base_key,
         expected_filename=usim_input_fname,
     )
     mutable_dir = Path(workspace.get_usim_mutable_data_dir())
     if use_base_datastore and prefer_base_key:
-        selected_name = os.path.basename(
-            artifact_to_path(selected_datastore.value) or ""
-        )
+        selected_name = os.path.basename(artifact_to_path(selected_datastore) or "")
         try:
             main_forecast_year = state.main_forecast_year
         except AttributeError:
@@ -367,23 +357,25 @@ def _resolve_atlas_preprocess_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
     )
-    use_base_datastore, atlas_input, selected_datastore = (
-        _resolve_atlas_datastore_target(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            coupler=coupler,
-        )
+    _, atlas_input, selected_datastore = _resolve_atlas_datastore_target(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=active_sim_state,
     )
-    resolved = _resolve_native_inputs(
-        step_name="atlas_preprocess",
-        function=_native_atlas_preprocess,
+    return _build_step_call_inputs(
+        candidates={
+            USIM_DATASTORE_H5: selected_datastore,
+            FINAL_SKIMS_OMX: active_sim_state.network.skims_omx,
+        },
         required_roles=(
             USIM_DATASTORE_H5,
             *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
@@ -394,34 +386,7 @@ def _resolve_atlas_preprocess_inputs(
             FINAL_SKIMS_OMX: Path(workspace.get_atlas_mutable_input_dir())
             / "final_skims.omx",
         },
-        coupler=coupler,
     )
-    current_bound = (resolved.binding.inputs or {}).get(USIM_DATASTORE_H5)
-    if selected_datastore.value is not None and (
-        use_base_datastore
-        or current_bound is None
-        or selected_datastore.value is not current_bound
-    ):
-        updated_inputs = dict(resolved.binding.inputs or {})
-        updated_inputs[USIM_DATASTORE_H5] = selected_datastore.value
-        updated_sources = dict(resolved.source_by_role)
-        updated_sources[USIM_DATASTORE_H5] = selected_datastore.source
-        updated_keys = dict(resolved.selected_key_by_role)
-        if selected_datastore.storage_key is not None:
-            updated_keys[USIM_DATASTORE_H5] = selected_datastore.storage_key
-        updated_destinations = dict(resolved.logical_destinations)
-        updated_destinations[USIM_DATASTORE_H5] = Path(atlas_input)
-        return ResolvedStepInputs(
-            step_name=resolved.step_name,
-            binding=BindingResult(inputs=updated_inputs),
-            required_roles=resolved.required_roles,
-            optional_roles=resolved.optional_roles,
-            source_by_role=updated_sources,
-            selected_key_by_role=updated_keys,
-            logical_destinations=updated_destinations,
-            metadata=resolved.metadata,
-        )
-    return resolved
 
 
 def _resolve_atlas_run_inputs(
@@ -429,24 +394,33 @@ def _resolve_atlas_run_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     prepared_inputs = _atlas_preprocess_prepared_input_paths(
         settings=settings,
         state=state,
         workspace=workspace,
     )
+    candidates: dict[str, ArtifactRef | None] = {
+        key: (
+            prior_outputs.get(key)
+            if prior_outputs is not None
+            else active_sim_state.extras.get(key)
+        )
+        for key in prepared_inputs
+    }
     launch_context = AtlasLaunchContext(
         input_root=Path(workspace.get_atlas_mutable_input_dir()),
         output_root=Path(workspace.get_atlas_output_dir()),
     )
-    return _resolve_native_inputs(
-        step_name="atlas_run",
-        function=_native_atlas_run,
+    return _build_step_call_inputs(
+        candidates=candidates,
         required_roles=tuple(prepared_inputs),
         optional_roles=(),
         logical_destinations=prepared_inputs,
-        coupler=coupler,
         metadata={"atlas_launch_context": launch_context},
     )
 
@@ -456,14 +430,16 @@ def _resolve_atlas_postprocess_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     forecast_year = state.forecast_year
     _, datastore_dest, selected_datastore = _resolve_atlas_datastore_target(
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=coupler,
+        sim_state=active_sim_state,
     )
     semantic_roles = {
         _ATLAS_HOUSEHOLDV_CSV_INPUT: f"householdv_{forecast_year}",
@@ -477,27 +453,15 @@ def _resolve_atlas_postprocess_inputs(
         / f"vehicles_{forecast_year}.csv",
         USIM_DATASTORE_H5: datastore_dest,
     }
-    selected_inputs: dict[str, Any] = {}
-    source_by_role: dict[str, str] = {}
-    selected_key_by_role: dict[str, str] = {}
-    for parameter, semantic_role in semantic_roles.items():
-        resolved = (
-            selected_datastore
-            if parameter == USIM_DATASTORE_H5
-            else resolve_coupler_value(coupler, semantic_role)
-        )
-        source_by_role[parameter] = resolved.source
-        if resolved.storage_key is not None:
-            selected_key_by_role[parameter] = resolved.storage_key
-        if resolved.value is not None:
-            selected_inputs[parameter] = resolved.value
-
-    return ResolvedStepInputs(
-        step_name="atlas_postprocess",
-        binding=BindingResult(inputs=selected_inputs),
+    candidates: dict[str, ArtifactRef | None] = {
+        _ATLAS_HOUSEHOLDV_CSV_INPUT: active_sim_state.atlas.households_with_cars,
+        _ATLAS_VEHICLES_CSV_INPUT: active_sim_state.atlas.vehicles,
+        USIM_DATASTORE_H5: selected_datastore,
+    }
+    return _build_step_call_inputs(
+        candidates=candidates,
         required_roles=tuple(semantic_roles),
-        source_by_role=source_by_role,
-        selected_key_by_role=selected_key_by_role,
+        optional_roles=(),
         logical_destinations=logical_destinations,
         metadata={"semantic_role_by_parameter": semantic_roles},
     )
@@ -796,7 +760,7 @@ def _native_atlas_postprocess(
         year=state.forecast_year,
     )
     if not state.is_start_year():
-        from pilates.workflows.stages.vehicle_ownership import (
+        from pilates.workflows.orchestrator import (
             _validate_population_h5_for_activitysim_year,
         )
 
@@ -813,8 +777,9 @@ def _project_atlas_preprocess(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> AtlasPreprocessOutputs:
+    del step_inputs
     declared_outputs = _atlas_preprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -841,8 +806,9 @@ def _project_atlas_run(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> AtlasRunOutputs:
+    del step_inputs
     declared_outputs = _atlas_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -868,8 +834,9 @@ def _project_atlas_postprocess(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> AtlasPostprocessOutputs:
+    del step_inputs
     declared_outputs = _atlas_postprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -903,30 +870,7 @@ ATLAS_PREPROCESS = StepDefinition(
     input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT,
     outputs=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
-    binding_rules=(
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
-        ),
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_BASE_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_DATASTORE_BASE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-            ),
-        ),
-        ArtifactBindingRule(
-            semantic_key=OMX_SKIMS,
-            required=False,
-            allow_fallback=True,
-            preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
-        ),
-    ),
+    cache_options=_metadata_cache_options(),
     optional_output_keys=("atlas_accessibility_csv",),
 )
 
@@ -939,7 +883,7 @@ ATLAS_RUN = StepDefinition(
     output_paths=_atlas_run_native_output_paths,
     output_sets=_atlas_run_output_sets,
     execution_options=_atlas_run_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
 )
 
 ATLAS_POSTPROCESS = StepDefinition(
@@ -950,7 +894,7 @@ ATLAS_POSTPROCESS = StepDefinition(
     input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT,
     outputs=_atlas_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
 )
 
 # Canonical registry members use the workflow step names. Uppercase aliases keep

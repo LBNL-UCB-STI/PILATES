@@ -10,7 +10,7 @@ from uuid import UUID
 import consist
 import pandas as pd
 import pytest
-from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_contract
+from consist import Tracker, resolve_step_contract
 from consist.models.artifact import Artifact
 
 from pilates.workflows.artifact_keys import (
@@ -21,7 +21,7 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.stages.vehicle_ownership import AtlasSubState
+from pilates.workflows.orchestrator import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, atlas, urbansim
 from pilates.workflows import consist_metadata as step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
@@ -229,31 +229,32 @@ def test_urbansim_run_resolver_requires_final_skims_only_after_beam_handoff(
         FINAL_SKIMS_OMX: tmp_path / "selected" / "final_skims.omx",
     }
 
-    class _Coupler:
-        def get(self, key: str) -> object:
-            return selected.get(key)
+    from pilates.workflows.sim_state import LandUseState, NetworkState, SimState
+
+    sim_state = SimState(
+        land_use=LandUseState(current_h5=selected[USIM_DATASTORE_H5]),
+        network=NetworkState(skims_omx=selected[FINAL_SKIMS_OMX]),
+    )
 
     bootstrap = URBANSIM_RUN.resolve_inputs(
         settings=settings,
         state=SimpleNamespace(current_year=2020, forecast_year=2020, iteration=0),
         workspace=workspace,
-        coupler=_Coupler(),
+        sim_state=sim_state,
     )
     later = URBANSIM_RUN.resolve_inputs(
         settings=settings,
         state=SimpleNamespace(current_year=2030, forecast_year=2030, iteration=0),
         workspace=workspace,
-        coupler=_Coupler(),
+        sim_state=sim_state,
     )
 
-    assert bootstrap.required_roles == (USIM_DATASTORE_H5,)
-    assert bootstrap.optional_roles == (FINAL_SKIMS_OMX,)
+    assert bootstrap.required_keys == (USIM_DATASTORE_H5,)
     assert bootstrap.metadata["urbansim_launch_context"] == UrbanSimLaunchContext(
         mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
         output_datastore=Path(workspace.get_usim_mutable_data_dir()) / "output_2020.h5",
     )
-    assert later.required_roles == (USIM_DATASTORE_H5, FINAL_SKIMS_OMX)
-    assert later.optional_roles == ()
+    assert later.required_keys == (USIM_DATASTORE_H5, FINAL_SKIMS_OMX)
     assert later.logical_destinations == {
         USIM_DATASTORE_H5: Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5",
         FINAL_SKIMS_OMX: Path(workspace.get_usim_mutable_data_dir())
@@ -616,6 +617,9 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
                 source_h5, key=USIM_DATASTORE_H5, direction="input"
             )
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, source_artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
+        sim_state = SimState(land_use=LandUseState(current_h5=source_artifact))
         prepared_result, _ = execute_step(
             scenario=scenario,
             definition=ATLAS_PREPROCESS,
@@ -626,6 +630,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
             year=2030,
             iteration=1,
             phase="preprocess",
+            sim_state=sim_state,
         )
         continuation_result, _ = execute_step(
             scenario=scenario,
@@ -637,6 +642,10 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
             year=2030,
             iteration=1,
             phase="run",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=source_artifact),
+                extras=dict(prepared_result.outputs),
+            ),
         )
 
     prepared_keys = tuple(
@@ -878,6 +887,8 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
         scenario.coupler.update(run_result.outputs)
         assert scenario.coupler.get(ATLAS_OUTPUT_DIR) is None
 
+        from pilates.workflows.sim_state import AtlasState, LandUseState, SimState
+
         _, projected = execute_step(
             scenario=scenario,
             definition=ATLAS_POSTPROCESS,
@@ -888,6 +899,17 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
             year=2030,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(
+                land_use=LandUseState(
+                    current_h5=scenario.coupler.get(USIM_DATASTORE_H5)
+                ),
+                atlas=AtlasState(
+                    vehicles=run_result.outputs.get("vehicles_2030"),
+                    households_with_cars=run_result.outputs.get("householdv_2030"),
+                    last_simulated_year=2030,
+                ),
+                extras=dict(run_result.outputs),
+            ),
         )
 
     assert projected.processed_outputs[ATLAS_VEHICLES2_OUTPUT] == (
@@ -1110,6 +1132,8 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, h5_artifact)
         scenario.coupler.set_from_artifact("householdv_2023", householdv_artifact)
         scenario.coupler.set_from_artifact("vehicles_2023", vehicles_artifact)
+        from pilates.workflows.sim_state import AtlasState, LandUseState, SimState
+
         result, projected = execute_step(
             scenario=scenario,
             definition=definition,
@@ -1120,6 +1144,14 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
             year=state.year,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=h5_artifact),
+                atlas=AtlasState(
+                    vehicles=vehicles_artifact,
+                    households_with_cars=householdv_artifact,
+                    last_simulated_year=2023,
+                ),
+            ),
         )
 
     assert seen == {"path": output_h5}
@@ -1163,6 +1195,7 @@ def test_native_resolver_selects_one_coupler_artifact_at_its_model_destination(
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     with tracker.start_run("seed", "test"):
@@ -1172,47 +1205,23 @@ def test_native_resolver_selects_one_coupler_artifact_at_its_model_destination(
             direction="input",
         )
 
-    class _Coupler:
-        def get(self, key: str):
-            return {USIM_DATASTORE_H5: artifact}.get(key)
+    from pilates.workflows.contracts import StepCallInputs
+    from pilates.workflows.sim_state import LandUseState, SimState
+
+    sim_state = SimState(land_use=LandUseState(current_h5=artifact))
 
     workspace = _workspace(tmp_path)
     settings = _settings()
     state = _state()
-    with tracker.scenario("urbansim") as scenario:
-        identity = scenario.resolve_step_identity(
-            URBANSIM_POSTPROCESS.function,
-            year=state.year,
-            iteration=1,
-            phase="postprocess",
-            stage="land_use",
-            execution_options=ExecutionOptions(
-                input_binding="paths",
-                runtime_kwargs={
-                    "settings": settings,
-                    "state": state,
-                    "workspace": workspace,
-                },
-            ),
-        )
-        resolved = URBANSIM_POSTPROCESS.resolve_inputs(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            coupler=_Coupler(),
-            step_identity=identity,
-        )
+    resolved = URBANSIM_POSTPROCESS.resolve_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=sim_state,
+    )
 
-    assert isinstance(resolved.binding, ResolvedBinding)
-    assert resolved.binding.step_name == identity.name
-    assert resolved.binding.step_contract_identity == identity.step_contract_identity
-    assert (
-        resolved.binding.inputs[USIM_DATASTORE_H5].artifact.artifact_id == artifact.id
-    )
-    assert resolved.binding.inputs[USIM_DATASTORE_H5].destination == Path(
-        "inputs/usim_datastore_h5"
-    )
-    assert resolved.source_by_role == {USIM_DATASTORE_H5: "coupler"}
+    assert isinstance(resolved, StepCallInputs)
+    assert resolved.inputs[USIM_DATASTORE_H5].id == artifact.id
     assert resolved.logical_destinations == {
         USIM_DATASTORE_H5: Path(workspace.get_usim_mutable_data_dir())
         / "output_2030.h5"
@@ -1229,6 +1238,7 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     with tracker.start_run("seed", "test"):
@@ -1279,6 +1289,8 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
 
     with tracker.scenario("urbansim") as scenario:
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
         result, projected = execute_step(
             scenario=scenario,
             definition=definition,
@@ -1289,12 +1301,13 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
             year=state.year,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(land_use=LandUseState(current_h5=artifact)),
         )
 
     snapshot = seen["snapshot"]
     assert snapshot != source
     assert snapshot.read_text(encoding="utf-8") == "tracked h5 bytes\n"
-    assert snapshot.is_relative_to(tmp_path / "consist-runs" / ".resolved-bindings")
+    assert snapshot == (Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5")
     assert output.read_bytes() == source.read_bytes()
     assert projected == result.outputs
 
@@ -1312,6 +1325,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
     tracker = Tracker(
         run_dir=run_dir,
         db_path=str(db_path),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     with tracker.start_run("seed", "test"):
@@ -1369,6 +1383,8 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
 
     with tracker.scenario("urbansim") as scenario:
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, trusted)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
         result, _ = execute_step(
             scenario=scenario,
             definition=definition,
@@ -1379,6 +1395,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
             year=state.year,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(land_use=LandUseState(current_h5=trusted)),
         )
 
     override = observed_override["artifact"]
@@ -1386,11 +1403,6 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
     assert override.run_id is None
     assert override.meta["hash_semantics"]["source"] == "caller_supplied"
 
-    input_identity = result.run.meta["input_identity"]
-    assert input_identity["version"] == 1
-    assert input_identity["strict_input_count"] == 1
-    assert input_identity["strict_binding_identity"]
-    assert input_identity["bindings"] == []
     assert output.read_bytes() == source.read_bytes()
 
     tracker.close()
@@ -1407,6 +1419,7 @@ def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     roles = (USIM_DATASTORE_H5, "atlas_mutable_input_dir", ATLAS_OUTPUT_DIR)
@@ -1422,54 +1435,27 @@ def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
                 direction="input",
             )
 
-    class _Coupler:
-        def get(self, key: str):
-            return artifacts.get(key)
+    from pilates.workflows.contracts import StepCallInputs
+    from pilates.workflows.sim_state import LandUseState, SimState
 
+    sim_state = SimState(land_use=LandUseState(current_h5=artifacts[USIM_DATASTORE_H5]))
     settings = _settings()
     state = _state()
     workspace = _workspace(tmp_path)
     eligible_definitions = (URBANSIM_POSTPROCESS,)
 
-    with tracker.scenario("urbansim-atlas") as scenario:
-        for definition in eligible_definitions:
-            assert definition.preflight_identity is True
-            identity = scenario.resolve_step_identity(
-                definition.function,
-                year=state.year,
-                iteration=1,
-                phase=definition.name.rsplit("_", 1)[1],
-                stage="land_use",
-                execution_options=ExecutionOptions(
-                    input_binding="paths",
-                    runtime_kwargs={
-                        "settings": settings,
-                        "state": state,
-                        "workspace": workspace,
-                    },
-                ),
-            )
-            resolved = definition.resolve_inputs(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                coupler=_Coupler(),
-                step_identity=identity,
-            )
-
-            assert isinstance(resolved.binding, ResolvedBinding)
-            assert resolved.binding.step_name == identity.name
-            assert (
-                resolved.binding.step_contract_identity
-                == identity.step_contract_identity
-            )
-            assert all(
-                not input.destination.is_absolute()
-                for input in resolved.binding.inputs.values()
-                if input.destination is not None
-            )
-
-    assert URBANSIM_RUN.preflight_identity is False
+    for definition in eligible_definitions:
+        resolved = definition.resolve_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            sim_state=sim_state,
+        )
+        assert isinstance(resolved, StepCallInputs)
+        assert resolved.inputs[USIM_DATASTORE_H5].id == artifacts[USIM_DATASTORE_H5].id
+        assert all(
+            Path(dest).is_absolute() for dest in resolved.logical_destinations.values()
+        )
 
 
 def test_native_callables_forward_resolved_paths_to_model_adapters(
