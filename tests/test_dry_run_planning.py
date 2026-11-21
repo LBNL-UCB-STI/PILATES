@@ -6,7 +6,9 @@ import sys
 import time
 from pathlib import Path
 
-from pilates.config.models import load_config
+import yaml
+
+from pilates.config.models import PilatesConfig, load_config
 import pilates.workflows.orchestrator  # noqa: F401 - warm import before timing
 from pilates.workflows.dry_run import (
     ExecutionPlan,
@@ -17,8 +19,49 @@ from pilates.workflows.dry_run import (
 )
 
 SEATTLE_ACTIVITYSIM_BEAM = "scenarios/seattle/settings-new-asim-seattle-null.yaml"
-SFBAY_BEAM_ONLY = "scenarios/sfbay/settings-sfbay-consist-hpc.yaml"
 SFBAY_FULL_USIM = "scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml"
+
+_BEAM_ONLY_YAML = """\
+run:
+  region: sfbay
+  scenario: base
+  start_year: 2017
+  end_year: 2017
+  output_directory: /tmp/pilates_dry_run
+  output_run_name: beam_only
+  models:
+    travel: beam
+shared:
+  geography:
+    FIPS: {}
+    local_crs: "EPSG:26910"
+  skims:
+    fname: skims.omx
+  database:
+    path: /tmp/pilates_dry_run/provenance.duckdb
+infrastructure: {}
+beam:
+  config: sfbay-pilates-base-calibrated.conf
+  local_input_folder: pilates/beam/input
+  local_mutable_data_folder: pilates/beam/mutable
+  local_output_folder: pilates/beam/output
+  scenario_folder: urbansim
+  router_directory: pilates/beam/r5
+  skims_shapefile: taz_sfbay.geojson
+  skim_zone_source_id_col: taz
+  skim_zone_geoid_col: GEOID
+postprocessing:
+  enabled: true
+  output_folder: postprocessing
+  mep_output_folder: mep
+"""
+
+
+def _make_beam_only_settings(output_dir: Path | None = None) -> PilatesConfig:
+    settings = PilatesConfig.model_validate(yaml.safe_load(_BEAM_ONLY_YAML))
+    if output_dir is not None:
+        _set_output_dir(settings, output_dir)
+    return settings
 
 
 def _set_output_dir(settings, target: Path) -> None:
@@ -118,9 +161,8 @@ def test_plan_pilates_activitysim_only(tmp_path: Path):
 
 
 def test_plan_pilates_beam_only_with_and_without_postprocessing(tmp_path: Path):
-    settings = load_config(SFBAY_BEAM_ONLY)
     missing_out = tmp_path / "beam_only_out"
-    _set_output_dir(settings, missing_out)
+    settings = _make_beam_only_settings(missing_out)
 
     t0 = time.perf_counter()
     plan_with_post = plan_pilates(settings, include_postprocessing=True)
@@ -146,7 +188,7 @@ def test_plan_pilates_beam_only_with_and_without_postprocessing(tmp_path: Path):
 
 
 def test_plan_renderers_json_mermaid_and_html():
-    settings = load_config(SFBAY_BEAM_ONLY)
+    settings = _make_beam_only_settings()
     plan = plan_pilates(settings, include_postprocessing=True)
 
     json_text = render_plan_json(plan)
@@ -168,13 +210,15 @@ def test_plan_renderers_json_mermaid_and_html():
     assert "beam_run_y2017_i0" in html_text
 
 
-def test_render_workflow_lineage_cli_outputs_clean_json():
+def test_render_workflow_lineage_cli_outputs_clean_json(tmp_path: Path):
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(_BEAM_ONLY_YAML, encoding="utf-8")
     proc = subprocess.run(
         [
             sys.executable,
             "pilates/scripts/render_workflow_lineage.py",
             "-c",
-            SFBAY_BEAM_ONLY,
+            str(config_path),
             "--format",
             "json",
         ],

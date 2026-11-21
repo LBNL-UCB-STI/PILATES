@@ -1093,22 +1093,44 @@ def _resolve_beam_preprocess_inputs(
         "exchange_scenario_folder": Path(exchange_scenario_folder),
     }
     if zones is not None:
-        canonical_zone_source, zone_source = resolve_canonical_zone_source(
-            settings, workspace
-        )
-        preprocess_context.update(
-            {
-                "canonical_zone_source": Path(canonical_zone_source),
-                "canonical_zone_id_column": zone_source["canonical_id_col"],
-                "canonical_zone_index_column": zone_source["activitysim_index_col"],
-                "zone_output_path": (
-                    Path(workspace.get_beam_mutable_data_dir())
-                    / settings.run.region
-                    / "shape"
-                    / "canonical_zones_sorted.geojson"
-                ),
-            }
-        )
+        from pilates.workspace import is_dry_run_workspace
+
+        if is_dry_run_workspace(workspace):
+            preprocess_context.update(
+                {
+                    "canonical_zone_source": (
+                        Path(workspace.get_beam_mutable_data_dir())
+                        / settings.run.region
+                        / "shape"
+                        / "canonical_zones.geojson"
+                    ),
+                    "canonical_zone_id_column": "zone_id",
+                    "canonical_zone_index_column": "zone_id",
+                    "zone_output_path": (
+                        Path(workspace.get_beam_mutable_data_dir())
+                        / settings.run.region
+                        / "shape"
+                        / "canonical_zones_sorted.geojson"
+                    ),
+                }
+            )
+        else:
+            canonical_zone_source, zone_source = resolve_canonical_zone_source(
+                settings, workspace
+            )
+            preprocess_context.update(
+                {
+                    "canonical_zone_source": Path(canonical_zone_source),
+                    "canonical_zone_id_column": zone_source["canonical_id_col"],
+                    "canonical_zone_index_column": zone_source["activitysim_index_col"],
+                    "zone_output_path": (
+                        Path(workspace.get_beam_mutable_data_dir())
+                        / settings.run.region
+                        / "shape"
+                        / "canonical_zones_sorted.geojson"
+                    ),
+                }
+            )
     from pilates.utils.io import get_vehicle_ownership_model
 
     current_iter = iteration_index(state, default=0) or 0
