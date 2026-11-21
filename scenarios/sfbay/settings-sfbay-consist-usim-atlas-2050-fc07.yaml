@@ -16,6 +16,8 @@ atlas:
   adscen: baseline
 
 shared:
+  skims:
+    fname: skims.omx
   database:
     path: /global/home/groups-sw/pc_beamcore/database/provenance_sfbay.duckdb
 
