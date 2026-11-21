@@ -860,6 +860,59 @@ def consist_step_meta(
                 required=False,
                 reason="generated_from_declared_r5_input_before_beam_execution",
             )
+        freight_enabled = False
+        try:
+            from pilates.beam.config_hocon import (
+                _lookup_dotted_key,
+                load_resolved_beam_config_tree,
+            )
+
+            freight_tree = load_resolved_beam_config_tree(
+                primary_config,
+                env_overrides=beam_config_env_overrides(
+                    settings,
+                    config_root=config_root,
+                ),
+            )
+            freight_enabled = bool(
+                _lookup_dotted_key(freight_tree, "beam.agentsim.agents.freight.enabled")
+            )
+        except Exception:
+            freight_enabled = False
+
+        freight_required_keys = (
+            ("plansFilePath", "beam_freight_plans"),
+            ("toursFilePath", "beam_freight_tours"),
+            ("carriersFilePath", "beam_freight_carriers"),
+        )
+        for suffix, role in freight_required_keys:
+            fq_key = f"beam.agentsim.agents.freight.{suffix}"
+            if freight_enabled:
+                reference_policies[fq_key] = BeamReferencePolicy(
+                    identity_policy="content_hash",
+                    required=True,
+                    role=role,
+                    reason="freight_enabled_mandatory_input",
+                )
+            else:
+                reference_policies[fq_key] = BeamReferencePolicy(
+                    identity_policy="ignored",
+                    required=False,
+                    reason="freight_disabled",
+                )
+        for suffix, role in (
+            ("vehicleTypesFilePath", "beam_freight_vehicle_types"),
+            ("carrierParkingFilePath", "beam_freight_carrier_parking"),
+        ):
+            reference_policies[f"beam.agentsim.agents.freight.{suffix}"] = (
+                BeamReferencePolicy(
+                    identity_policy="content_hash",
+                    required=False,
+                    role=role,
+                    reason="optional_freight_input_read_whenever_configured",
+                )
+            )
+
         runtime_output_keys = (
             "beam.router.skim.activity-sim-skimmer.fileBaseName",
             "beam.router.skim.drive-time-skimmer.fileBaseName",

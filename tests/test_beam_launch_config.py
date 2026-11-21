@@ -1044,3 +1044,116 @@ def test_build_beam_launch_config_injects_full_skim_calculation_timeout_hours(
         )
         == "/app/output"
     )
+
+
+def test_build_beam_launch_config_stages_external_and_relative_freight_paths(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.config_hocon import (
+        beam_config_env_overrides,
+        resolve_beam_config_value,
+    )
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    _write_base_config(source_root)
+    (source_root / "freight").mkdir()
+    rel_plans = source_root / "freight" / "payload-plans.csv"
+    rel_plans.write_text("planId\n1\n", encoding="utf-8")
+
+    external_dir = tmp_path / "external_freight"
+    external_dir.mkdir()
+    ext_tours = external_dir / "freight-tours.csv"
+    ext_tours.write_text("tourId\n1\n", encoding="utf-8")
+    ext_vtypes = external_dir / "freight-vehicle-types.csv"
+    ext_vtypes.write_text("vehicleTypeId\ntruck\n", encoding="utf-8")
+
+    (source_root / "beam.conf").write_text(
+        (source_root / "beam.conf").read_text(encoding="utf-8")
+        + "\n"
+        + f"""
+beam.agentsim.agents.freight {{
+  enabled = true
+  plansFilePath = "freight/payload-plans.csv"
+  toursFilePath = "{ext_tours.as_posix()}"
+  carriersFilePath = ${{beam.inputDirectory}}"/freight/carriers.csv"
+  vehicleTypesFilePath = "{ext_vtypes.as_posix()}"
+}}
+""",
+        encoding="utf-8",
+    )
+
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={},
+    )
+
+    env = beam_config_env_overrides(settings, config_root=launch_config.root)
+    assert resolve_beam_config_value(
+        launch_config.primary_config,
+        key="beam.agentsim.agents.freight.plansFilePath",
+        env_overrides=env,
+    ) == str(launch_config.root / "freight" / "payload-plans.csv")
+    staged_tours = launch_config.root / ".pilates" / "freight" / "freight-tours.csv"
+    staged_vtypes = (
+        launch_config.root / ".pilates" / "freight" / "freight-vehicle-types.csv"
+    )
+    assert staged_tours.is_file()
+    assert staged_vtypes.is_file()
+    assert resolve_beam_config_value(
+        launch_config.primary_config,
+        key="beam.agentsim.agents.freight.toursFilePath",
+        env_overrides=env,
+    ) == str(staged_tours)
+    assert resolve_beam_config_value(
+        launch_config.primary_config,
+        key="beam.agentsim.agents.freight.vehicleTypesFilePath",
+        env_overrides=env,
+    ) == str(staged_vtypes)
+
+
+def test_beam_consist_metadata_registers_freight_reference_policies(
+    tmp_path: Path,
+) -> None:
+    from consist.core.step_context import StepContext
+    from pilates.workflows.consist_metadata import consist_step_meta
+
+    for enabled in (False, True):
+        root = tmp_path / f"enabled_{enabled}" / "beam" / "input" / "seattle"
+        _write_base_config(root)
+        (root / "beam.conf").write_text(
+            (root / "beam.conf").read_text(encoding="utf-8")
+            + f"\nbeam.agentsim.agents.freight.enabled = {str(enabled).lower()}\n",
+            encoding="utf-8",
+        )
+        settings = _settings()
+        workspace = SimpleNamespace(
+            full_path=root.parent.parent.parent,
+            get_beam_mutable_data_dir=lambda: str(root.parent),
+        )
+        adapter = consist_step_meta("beam_run")["adapter"](
+            StepContext(
+                func_name="beam_run",
+                model="beam_run",
+                runtime_kwargs={"settings": settings, "workspace": workspace},
+            )
+        )
+        policies = adapter.reference_policies
+        plans_policy = policies["beam.agentsim.agents.freight.plansFilePath"]
+        vtypes_policy = policies["beam.agentsim.agents.freight.vehicleTypesFilePath"]
+        if enabled:
+            assert plans_policy.identity_policy == "content_hash"
+            assert plans_policy.required is True
+        else:
+            assert plans_policy.identity_policy == "ignored"
+            assert plans_policy.required is False
+        assert vtypes_policy.identity_policy == "content_hash"
+        assert vtypes_policy.required is False
