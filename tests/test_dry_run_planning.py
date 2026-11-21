@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from pilates.config.models import load_config
+import pilates.workflows.orchestrator  # noqa: F401 - warm import before timing
 from pilates.workflows.dry_run import (
     ExecutionPlan,
     plan_pilates,
@@ -132,7 +135,9 @@ def test_plan_pilates_beam_only_with_and_without_postprocessing(tmp_path: Path):
         "postprocessing",
     ]
 
+    had_postprocessing = settings.postprocessing is not None
     plan_no_post = plan_pilates(settings, include_postprocessing=False)
+    assert (settings.postprocessing is not None) == had_postprocessing
     assert [s.step_name for s in plan_no_post.steps] == [
         "beam_preprocess",
         "beam_run",
@@ -161,3 +166,26 @@ def test_plan_renderers_json_mermaid_and_html():
     assert "<!DOCTYPE html>" in html_text
     assert "mermaid" in html_text
     assert "beam_run_y2017_i0" in html_text
+
+
+def test_render_workflow_lineage_cli_outputs_clean_json():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "pilates/scripts/render_workflow_lineage.py",
+            "-c",
+            SFBAY_BEAM_ONLY,
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    parsed = json.loads(proc.stdout)
+    assert [step["step_name"] for step in parsed["steps"]] == [
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+        "postprocessing",
+    ]

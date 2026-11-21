@@ -226,6 +226,11 @@ def _admit_bootstrap_input(
     return ref
 
 
+def _stage_banner(message: str, plan_recorder: DryRunRecorder | None) -> None:
+    if plan_recorder is None:
+        formatted_print(message)
+
+
 def bootstrap_initial_state(
     *,
     scenario: Any,
@@ -244,27 +249,21 @@ def bootstrap_initial_state(
     raw_full_path = getattr(workspace, "full_path", None)
     workspace_root = Path(str(raw_full_path)) if raw_full_path is not None else None
 
+    if plan_recorder is not None:
+        from pilates.workflows.dry_run import SymbolicArtifact
+
     # 1. UrbanSim initial datastore
     requires_usim = (
         get_land_use_model(settings) == "urbansim"
         or get_activity_demand_model(settings) == "activitysim"
         or get_vehicle_ownership_model(settings) == "atlas"
     )
-    has_skim_consumer = (
-        get_activity_demand_model(settings) == "activitysim"
-        or get_land_use_model(settings) == "urbansim"
-        or get_vehicle_ownership_model(settings) == "atlas"
-        or get_traffic_assignment_model(settings) == "beam"
-    )
-
-    if plan_recorder is not None:
-        from pilates.workflows.dry_run import SymbolicArtifact
-
-        if (
-            uses_input_datastore(state)
-            and requires_usim
-            and get_setting(settings, "urbansim") is not None
-        ):
+    if (
+        uses_input_datastore(state)
+        and requires_usim
+        and get_setting(settings, "urbansim") is not None
+    ):
+        if plan_recorder is not None:
             land_use = replace(
                 land_use,
                 prior_h5=SymbolicArtifact(
@@ -281,9 +280,50 @@ def bootstrap_initial_state(
                     else None
                 ),
             )
-        if has_skim_consumer and not requires_prior_beam_skim_handoff(
-            settings=settings, state=state
-        ):
+        else:
+            static_source = resolve_urbansim_initial_datastore_source_path(settings)
+            if static_source is not None and static_source.exists():
+                h5_path = str(static_source)
+                base_ref = _admit_bootstrap_input(
+                    scenario,
+                    key=USIM_DATASTORE_BASE_H5,
+                    path=h5_path,
+                    admitted_cache=admitted_cache,
+                )
+                curr_ref = _admit_bootstrap_input(
+                    scenario,
+                    key=USIM_DATASTORE_CURRENT_H5,
+                    path=h5_path,
+                    admitted_cache=admitted_cache,
+                )
+                pop_ref = (
+                    _admit_bootstrap_input(
+                        scenario,
+                        key=USIM_POPULATION_SOURCE_H5,
+                        path=h5_path,
+                        admitted_cache=admitted_cache,
+                    )
+                    if get_land_use_model(settings) != "urbansim"
+                    else None
+                )
+                land_use = replace(
+                    land_use,
+                    prior_h5=base_ref,
+                    current_h5=curr_ref,
+                    population_source=pop_ref,
+                )
+
+    # 2. Initial skims
+    has_skim_consumer = (
+        get_activity_demand_model(settings) == "activitysim"
+        or get_land_use_model(settings) == "urbansim"
+        or get_vehicle_ownership_model(settings) == "atlas"
+        or get_traffic_assignment_model(settings) == "beam"
+    )
+    if has_skim_consumer and not requires_prior_beam_skim_handoff(
+        settings=settings, state=state
+    ):
+        if plan_recorder is not None:
             demand = replace(
                 demand,
                 skims_omx_in=SymbolicArtifact(
@@ -297,134 +337,74 @@ def bootstrap_initial_state(
                         key=FINAL_SKIMS_OMX, producer_step="bootstrap"
                     ),
                 )
-        if (
-            get_traffic_assignment_model(settings) == "beam"
-            and get_activity_demand_model(settings) is None
-        ):
-            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
-                extras[key] = SymbolicArtifact(key=key, producer_step="bootstrap")
-        if get_traffic_assignment_model(
-            settings
-        ) == "beam" and not requires_prior_beam_linkstats_handoff(
-            settings=settings, state=state
-        ):
-            network = replace(
-                network,
-                linkstats_warmstart=SymbolicArtifact(
-                    key=LINKSTATS_WARMSTART, producer_step="bootstrap"
-                ),
-            )
-        return SimState(
-            land_use=land_use,
-            demand=demand,
-            network=network,
-            extras=extras,
-        )
-
-    if (
-        uses_input_datastore(state)
-        and requires_usim
-        and get_setting(settings, "urbansim") is not None
-    ):
-        static_source = resolve_urbansim_initial_datastore_source_path(settings)
-        if static_source is not None and static_source.exists():
-            h5_path = str(static_source)
-            base_ref = _admit_bootstrap_input(
-                scenario,
-                key=USIM_DATASTORE_BASE_H5,
-                path=h5_path,
-                admitted_cache=admitted_cache,
-            )
-            curr_ref = _admit_bootstrap_input(
-                scenario,
-                key=USIM_DATASTORE_CURRENT_H5,
-                path=h5_path,
-                admitted_cache=admitted_cache,
-            )
-            pop_ref = (
-                _admit_bootstrap_input(
-                    scenario,
-                    key=USIM_POPULATION_SOURCE_H5,
-                    path=h5_path,
-                    admitted_cache=admitted_cache,
-                )
-                if get_land_use_model(settings) != "urbansim"
-                else None
-            )
-            land_use = replace(
-                land_use,
-                prior_h5=base_ref,
-                current_h5=curr_ref,
-                population_source=pop_ref,
+        else:
+            from pilates.activitysim.admission import (
+                resolve_bootstrap_activitysim_skims_path,
             )
 
-    # 2. Initial skims
-    if has_skim_consumer and not requires_prior_beam_skim_handoff(
-        settings=settings, state=state
-    ):
-        from pilates.activitysim.admission import (
-            resolve_bootstrap_activitysim_skims_path,
-        )
-
-        if workspace_root is not None:
-            try:
-                candidate = resolve_bootstrap_activitysim_skims_path(
-                    settings=settings,
-                    workspace_path=workspace_root,
-                )
-            except Exception:
-                candidate = None
-            if candidate is not None and candidate.is_file():
-                omx_ref = _admit_bootstrap_input(
-                    scenario,
-                    key=ASIM_OMX_SKIMS,
-                    path=str(candidate),
-                    admitted_cache=admitted_cache,
-                )
-                demand = replace(demand, skims_omx_in=omx_ref)
-                if get_traffic_assignment_model(settings) is None:
-                    final_ref = _admit_bootstrap_input(
+            if workspace_root is not None:
+                try:
+                    candidate = resolve_bootstrap_activitysim_skims_path(
+                        settings=settings,
+                        workspace_path=workspace_root,
+                    )
+                except Exception:
+                    candidate = None
+                if candidate is not None and candidate.is_file():
+                    omx_ref = _admit_bootstrap_input(
                         scenario,
-                        key=FINAL_SKIMS_OMX,
+                        key=ASIM_OMX_SKIMS,
                         path=str(candidate),
                         admitted_cache=admitted_cache,
                     )
-                    network = replace(network, skims_omx=final_ref)
+                    demand = replace(demand, skims_omx_in=omx_ref)
+                    if get_traffic_assignment_model(settings) is None:
+                        final_ref = _admit_bootstrap_input(
+                            scenario,
+                            key=FINAL_SKIMS_OMX,
+                            path=str(candidate),
+                            admitted_cache=admitted_cache,
+                        )
+                        network = replace(network, skims_omx=final_ref)
 
     # 3. BEAM exchange inputs (when ActivitySim is disabled)
     if (
         get_traffic_assignment_model(settings) == "beam"
         and get_activity_demand_model(settings) is None
     ):
-        try:
-            record_store = beam_exchange.register_existing_beam_exchange_inputs(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            )
-        except FileNotFoundError as exc:
-            logger.warning(
-                "Bootstrap could not seed default BEAM inputs: %s",
-                exc,
-            )
-            record_store = None
-        allowed_keys = {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}
-        base_path = str(workspace_root) if workspace_root is not None else None
-        if record_store is not None:
-            for record in record_store.all_records():
-                key = record.short_name
-                if key not in allowed_keys:
-                    continue
-                path = record.get_absolute_path(base_path=base_path)
-                if not path or not os.path.exists(path):
-                    continue
-                ref = _admit_bootstrap_input(
-                    scenario,
-                    key=key,
-                    path=path,
-                    admitted_cache=admitted_cache,
+        if plan_recorder is not None:
+            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+                extras[key] = SymbolicArtifact(key=key, producer_step="bootstrap")
+        else:
+            try:
+                record_store = beam_exchange.register_existing_beam_exchange_inputs(
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
                 )
-                extras[key] = ref
+            except FileNotFoundError as exc:
+                logger.warning(
+                    "Bootstrap could not seed default BEAM inputs: %s",
+                    exc,
+                )
+                record_store = None
+            allowed_keys = {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}
+            base_path = str(workspace_root) if workspace_root is not None else None
+            if record_store is not None:
+                for record in record_store.all_records():
+                    key = record.short_name
+                    if key not in allowed_keys:
+                        continue
+                    path = record.get_absolute_path(base_path=base_path)
+                    if not path or not os.path.exists(path):
+                        continue
+                    ref = _admit_bootstrap_input(
+                        scenario,
+                        key=key,
+                        path=path,
+                        admitted_cache=admitted_cache,
+                    )
+                    extras[key] = ref
 
     # 4. BEAM warmstart linkstats
     if get_traffic_assignment_model(
@@ -432,15 +412,23 @@ def bootstrap_initial_state(
     ) == "beam" and not requires_prior_beam_linkstats_handoff(
         settings=settings, state=state
     ):
-        warmstart_path = resolve_initial_linkstats_path(settings, workspace)
-        if warmstart_path and os.path.exists(warmstart_path):
-            ws_ref = _admit_bootstrap_input(
-                scenario,
-                key=LINKSTATS_WARMSTART,
-                path=warmstart_path,
-                admitted_cache=admitted_cache,
+        if plan_recorder is not None:
+            network = replace(
+                network,
+                linkstats_warmstart=SymbolicArtifact(
+                    key=LINKSTATS_WARMSTART, producer_step="bootstrap"
+                ),
             )
-            network = replace(network, linkstats_warmstart=ws_ref)
+        else:
+            warmstart_path = resolve_initial_linkstats_path(settings, workspace)
+            if warmstart_path and os.path.exists(warmstart_path):
+                ws_ref = _admit_bootstrap_input(
+                    scenario,
+                    key=LINKSTATS_WARMSTART,
+                    path=warmstart_path,
+                    admitted_cache=admitted_cache,
+                )
+                network = replace(network, linkstats_warmstart=ws_ref)
 
     sim_state = SimState(
         land_use=land_use,
@@ -448,7 +436,8 @@ def bootstrap_initial_state(
         network=network,
         extras=extras,
     )
-    _sync_coupler(scenario, sim_state, last_synced=last_synced)
+    if plan_recorder is None:
+        _sync_coupler(scenario, sim_state, last_synced=last_synced)
     return sim_state
 
 
@@ -464,7 +453,7 @@ def run_land_use_stage(
     plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Execute UrbanSim run + postprocess and return updated ``SimState``."""
-    formatted_print(f"LAND USE MODEL FOR YEAR {year}")
+    _stage_banner(f"LAND USE MODEL FOR YEAR {year}", plan_recorder)
     logger.info("[land_use] year=%s run_id=%s", year, cr.current_run_id())
 
     prior_h5 = sim_state.land_use.current_h5
@@ -728,7 +717,7 @@ def run_activity_demand_phase(
 ) -> SimState:
     """Execute ActivitySim preprocess, run, and postprocess for one iteration."""
     population_year = _activitysim_population_year(state)
-    formatted_print("ACTIVITY DEMAND MODEL")
+    _stage_banner("ACTIVITY DEMAND MODEL", plan_recorder)
     logger.info("[activity_demand] year=%s iteration=%s", year, iteration)
 
     prep_result, _ = execute_step(
@@ -955,7 +944,7 @@ def run_traffic_assignment_phase(
             "is not yet wired in orchestrator."
         )
 
-    formatted_print("TRAFFIC ASSIGNMENT MODEL")
+    _stage_banner("TRAFFIC ASSIGNMENT MODEL", plan_recorder)
     forecast_year = resolve_forecast_year(state)
     beam_year = int(forecast_year) if forecast_year is not None else year
 
@@ -1131,7 +1120,9 @@ def _run_supply_demand_loop(
 
     for it in range(state.iteration, total_iters):
         state.iteration = it
-        formatted_print(f"SUPPLY/DEMAND ITERATION {it + 1}/{total_iters}")
+        _stage_banner(
+            f"SUPPLY/DEMAND ITERATION {it + 1}/{total_iters}", active_recorder
+        )
 
         if get_activity_demand_model(settings) is not None:
             sim_state = run_activity_demand_phase(
@@ -1244,7 +1235,7 @@ def run_pilates(
     )
 
     for year in env.state:
-        formatted_print(f"STARTING YEAR {year}")
+        _stage_banner(f"STARTING YEAR {year}", env.plan_recorder)
         logger.info(
             "[launcher] starting year=%s run_id=%s",
             year,
@@ -1267,8 +1258,9 @@ def run_pilates(
                 )
 
         if get_vehicle_ownership_model(env.settings) is not None:
-            formatted_print(
-                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {env.state.forecast_year}"
+            _stage_banner(
+                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {env.state.forecast_year}",
+                env.plan_recorder,
             )
             sim_state = run_vehicle_ownership_stage(
                 scenario=env.scenario,
@@ -1304,7 +1296,7 @@ def run_pilates(
                 )
 
         if env.settings.postprocessing is not None:
-            formatted_print("POST-PROCESSING")
+            _stage_banner("POST-PROCESSING", env.plan_recorder)
             sim_state = run_postprocessing_stage(
                 scenario=env.scenario,
                 settings=env.settings,

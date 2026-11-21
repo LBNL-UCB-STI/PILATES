@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import html
 import json
 from pathlib import Path
+import re
 from typing import Any, Iterable, Mapping
 
 from pilates.config.models import PilatesConfig
+from pilates.workflows.artifact_keys import (
+    BEAM_FULL_SKIMS,
+    FINAL_SKIMS_OMX,
+    USIM_DATASTORE_H5,
+    ZARR_SKIMS,
+)
 from pilates.workflows.state import WorkflowState
 from pilates.workspace import Workspace
 
@@ -54,44 +61,31 @@ class ExecutionPlan:
     edges: tuple[PlannedEdge, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "steps": [
-                {
-                    "step_id": step.step_id,
-                    "step_name": step.step_name,
-                    "year": step.year,
-                    "iteration": step.iteration,
-                    "inputs": dict(step.inputs),
-                    "outputs": list(step.outputs),
-                }
-                for step in self.steps
-            ],
-            "edges": [
-                {
-                    "source_step": edge.source_step,
-                    "target_step": edge.target_step,
-                    "artifact_key": edge.artifact_key,
-                }
-                for edge in self.edges
-            ],
-        }
+        return asdict(self)
 
 
 class SymbolicOutputs(dict[str, SymbolicArtifact]):
-    """Symbolic outputs mapping supporting both ``dict.get()`` and attribute access."""
+    """Symbolic outputs mapping supporting both ``dict.get()`` and typed attribute access."""
 
     @property
     def processed_outputs(self) -> SymbolicOutputs:
         return self
 
     @property
-    def raw_outputs(self) -> SymbolicOutputs:
-        return self
+    def usim_datastore_h5(self) -> SymbolicArtifact | None:
+        return self.get(USIM_DATASTORE_H5)
 
-    def __getattr__(self, name: str) -> Any:
-        if name in self:
-            return self[name]
-        return None
+    @property
+    def zarr_skims(self) -> SymbolicArtifact | None:
+        return self.get(ZARR_SKIMS)
+
+    @property
+    def final_skims_omx(self) -> SymbolicArtifact | None:
+        return self.get(FINAL_SKIMS_OMX)
+
+    @property
+    def full_skims(self) -> SymbolicArtifact | None:
+        return self.get(BEAM_FULL_SKIMS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +108,7 @@ class SymbolicRunResult:
 class SymbolicScenario:
     """Minimal scenario stub for dry-run ``run_pilates()``."""
 
-    coupler: Any = None
+    coupler: None = None
 
 
 @dataclass(slots=True)
@@ -151,7 +145,7 @@ class DryRunRecorder:
         step_name: str,
         year: int,
         iteration: int | None,
-        inputs: Mapping[str, Any],
+        inputs: Mapping[str, object],
         output_keys: Iterable[str],
     ) -> str:
         step_id = self._allocate_step_id(
@@ -201,9 +195,9 @@ def plan_pilates(
     from pilates.workflows.orchestrator import run_pilates
 
     active_settings = (
-        settings
+        settings.model_copy(deep=True)
         if include_postprocessing or settings.postprocessing is None
-        else settings.model_copy(update={"postprocessing": None})
+        else settings.model_copy(update={"postprocessing": None}, deep=True)
     )
     state = WorkflowState.from_settings(active_settings)
     workspace = Workspace(
@@ -228,6 +222,10 @@ def render_plan_json(plan: ExecutionPlan) -> str:
     return json.dumps(plan.to_dict(), indent=2, sort_keys=True)
 
 
+def _mermaid_node_id(raw_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "_", raw_id)
+
+
 def render_plan_mermaid(
     plan: ExecutionPlan,
     *,
@@ -245,34 +243,50 @@ def render_plan_mermaid(
     if has_bootstrap:
         lines.append('bootstrap(["bootstrap"])')
 
+    step_node_ids = {
+        step.step_id: _mermaid_node_id(step.step_id) for step in plan.steps
+    }
+
     for step in plan.steps:
+        node_id = step_node_ids[step.step_id]
         scope = (
             f"y{step.year} / i{step.iteration}"
             if step.iteration is not None
             else f"y{step.year}"
         )
         label = json.dumps(f"{step.step_name}<br/>{scope}")
-        lines.append(f"{step.step_id}[{label}]")
+        lines.append(f"{node_id}[{label}]")
 
     for edge in plan.edges:
+        source_id = (
+            "bootstrap"
+            if edge.source_step == "bootstrap"
+            else step_node_ids.get(edge.source_step, _mermaid_node_id(edge.source_step))
+        )
+        target_id = step_node_ids.get(
+            edge.target_step, _mermaid_node_id(edge.target_step)
+        )
         edge_label = json.dumps(edge.artifact_key)
-        lines.append(f"{edge.source_step} -->|{edge_label}| {edge.target_step}")
+        lines.append(f"{source_id} -->|{edge_label}| {target_id}")
 
     terminal_nodes: list[str] = []
     if not hide_terminal_artifacts:
         consumed_pairs = {(edge.source_step, edge.artifact_key) for edge in plan.edges}
         term_index = 0
         for step in plan.steps:
+            node_id = step_node_ids[step.step_id]
             for key in step.outputs:
                 if (step.step_id, key) not in consumed_pairs:
                     term_index += 1
-                    node_id = f"term_{term_index}"
-                    terminal_nodes.append(node_id)
-                    lines.append(f"{node_id}([{json.dumps(key)}])")
-                    lines.append(f"{step.step_id} --> {node_id}")
+                    term_id = f"term_{term_index}"
+                    terminal_nodes.append(term_id)
+                    lines.append(f"{term_id}([{json.dumps(key)}])")
+                    lines.append(f"{node_id} --> {term_id}")
 
     if plan.steps:
-        lines.append(f"class {','.join(step.step_id for step in plan.steps)} step;")
+        lines.append(
+            f"class {','.join(step_node_ids[step.step_id] for step in plan.steps)} step;"
+        )
     if has_bootstrap:
         lines.append("class bootstrap bootstrap;")
     if terminal_nodes:
@@ -289,7 +303,7 @@ def render_plan_html(
     """Render ``ExecutionPlan`` as a self-contained HTML page with Mermaid diagram."""
     mermaid_src = html.escape(
         render_plan_mermaid(plan, hide_terminal_artifacts=hide_terminal_artifacts)
-    )
+    ).replace("</", "<\\/")
     return "\n".join(
         [
             "<!DOCTYPE html>",

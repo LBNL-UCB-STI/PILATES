@@ -848,11 +848,13 @@ def _project_beam_full_skim_outputs(
 
 
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
+    from pilates.workspace import is_dry_run_workspace
+
     source_path = artifact_to_path(source, workspace=workspace)
     if key in {ZARR_SKIMS, LINKSTATS_WARMSTART}:
         existing = (
             resolve_existing_path(source_path, workspace=workspace)
-            if source_path is not None
+            if source_path is not None and not is_dry_run_workspace(workspace)
             else None
         )
         if existing is not None:
@@ -1422,10 +1424,12 @@ def _resolve_beam_postprocess_inputs(
         else active_sim_state.demand.skims_zarr
     )
     if _activitysim_skims_target_enabled(settings) and zarr_artifact is not None:
+        from pilates.workspace import is_dry_run_workspace
+
         zarr_path = artifact_to_path(zarr_artifact, workspace=workspace)
         zarr_existing = (
             resolve_existing_path(zarr_path, workspace=workspace)
-            if zarr_path is not None
+            if zarr_path is not None and not is_dry_run_workspace(workspace)
             else None
         )
         zarr_existing_in_workspace = (

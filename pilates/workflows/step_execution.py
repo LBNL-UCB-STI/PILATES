@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Mapping, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Mapping, TypeVar, overload
 
 from consist import (
     BindingResult,
@@ -13,6 +13,7 @@ from consist import (
     ExecutionOptions,
     OutputPolicyOptions,
     RunCompletionArchivePolicy,
+    RunResult,
 )
 
 from pilates.utils.archive_paths import ArchiveRunDirLike, workspace_storage_roots
@@ -22,7 +23,11 @@ from pilates.workflows.contracts import StepCallInputs, StepDefinition
 from pilates.workflows.sim_state import ArtifactRef, SimState
 
 if TYPE_CHECKING:
-    from pilates.workflows.dry_run import DryRunRecorder
+    from pilates.workflows.dry_run import (
+        DryRunRecorder,
+        SymbolicOutputs,
+        SymbolicRunResult,
+    )
 
 OutputT = TypeVar("OutputT")
 
@@ -117,6 +122,46 @@ def _configured_step_archive_root(
     return (Path(archive_root) / "consist-recovery" / scope).resolve()
 
 
+@overload
+def execute_step(
+    *,
+    scenario: Any,
+    definition: StepDefinition[OutputT],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    stage: str,
+    year: int | None,
+    iteration: int | None = _UNSET_ITERATION,
+    phase: str | None = None,
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    runtime_kwargs: dict[str, Any] | None = None,
+    step_inputs: StepCallInputs | None = None,
+    plan_recorder: None = None,
+) -> tuple[RunResult, OutputT]: ...
+
+
+@overload
+def execute_step(
+    *,
+    scenario: Any,
+    definition: StepDefinition[OutputT],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    stage: str,
+    year: int | None,
+    iteration: int | None = _UNSET_ITERATION,
+    phase: str | None = None,
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    runtime_kwargs: dict[str, Any] | None = None,
+    step_inputs: StepCallInputs | None = None,
+    plan_recorder: DryRunRecorder,
+) -> tuple[SymbolicRunResult, SymbolicOutputs]: ...
+
+
 def execute_step(
     *,
     scenario: Any,
@@ -133,12 +178,27 @@ def execute_step(
     runtime_kwargs: dict[str, Any] | None = None,
     step_inputs: StepCallInputs | None = None,
     plan_recorder: DryRunRecorder | None = None,
-) -> tuple[Any, Any]:
+) -> tuple[RunResult | SymbolicRunResult, OutputT | SymbolicOutputs]:
     """Resolve once, run once, then project persisted ``RunResult.outputs`` once."""
 
     resolved_iteration: int | None = (
         iteration_index(state) if iteration is _UNSET_ITERATION else iteration
     )
+    resolver_kwargs: dict[str, Any] = {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+        "sim_state": sim_state if sim_state is not None else SimState(),
+    }
+    if prior_outputs is not None:
+        resolver_kwargs["prior_outputs"] = prior_outputs
+    resolved_step_inputs = (
+        step_inputs
+        if step_inputs is not None
+        else definition.resolve_inputs(**resolver_kwargs)
+    )
+    resolved_step_inputs.require_complete(definition.name)
+
     if plan_recorder is not None:
         from pilates.workflows.dry_run import (
             SymbolicArtifact,
@@ -147,36 +207,15 @@ def execute_step(
             SymbolicRunResult,
         )
 
-        resolver_kwargs: dict[str, Any] = {
-            "settings": settings,
-            "state": state,
-            "workspace": workspace,
-            "sim_state": sim_state if sim_state is not None else SimState(),
-        }
-        if prior_outputs is not None:
-            resolver_kwargs["prior_outputs"] = prior_outputs
-        resolved_step_inputs = (
-            step_inputs
-            if step_inputs is not None
-            else definition.resolve_inputs(**resolver_kwargs)
-        )
-        resolved_step_inputs.require_complete(definition.name)
-
         output_keys: list[str] = []
         declared_paths: dict[str, Path] = {}
-        if definition.outputs is not None:
-            declared = definition.outputs(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_inputs=resolved_step_inputs,
-            )
-            for key, val in declared.items():
-                output_keys.append(key)
-                if isinstance(val, (Path, str, os.PathLike)):
-                    declared_paths[key] = Path(val)
-        elif definition.output_paths is not None:
-            declared = definition.output_paths(
+        output_fn = (
+            definition.outputs
+            if definition.outputs is not None
+            else definition.output_paths
+        )
+        if output_fn is not None:
+            declared = output_fn(
                 settings=settings,
                 state=state,
                 workspace=workspace,
@@ -264,20 +303,6 @@ def execute_step(
             # let's replace it properly.
             definition = replace(definition, function=_drift_guard_wrapper)
 
-    resolver_kwargs: dict[str, Any] = {
-        "settings": settings,
-        "state": state,
-        "workspace": workspace,
-        "sim_state": sim_state if sim_state is not None else SimState(),
-    }
-    if prior_outputs is not None:
-        resolver_kwargs["prior_outputs"] = prior_outputs
-    resolved_step_inputs = (
-        step_inputs
-        if step_inputs is not None
-        else definition.resolve_inputs(**resolver_kwargs)
-    )
-    resolved_step_inputs.require_complete(definition.name)
     binding = BindingResult(inputs=dict(resolved_step_inputs.inputs))
     options = (
         definition.execution_options(

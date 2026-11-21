@@ -569,12 +569,14 @@ def _activitysim_run_resolver(
         if key in selected_roles
     }
     if decision.role == ZARR_SKIMS:
+        from pilates.workspace import is_dry_run_workspace
+
         zarr_path = artifact_to_path(
             binding_inputs.get(ZARR_SKIMS), workspace=workspace
         )
         zarr_existing = (
             resolve_existing_path(zarr_path, workspace=workspace)
-            if zarr_path is not None
+            if zarr_path is not None and not is_dry_run_workspace(workspace)
             else None
         ) or zarr_path
         if zarr_existing is not None:
