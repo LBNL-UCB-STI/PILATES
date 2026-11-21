@@ -46,31 +46,24 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
 )
+from pilates.config.models import PilatesConfig
 from pilates.workflows.state import WorkflowState
+from tests.conftest import (
+    ConformingTestWorkspace,
+    make_conforming_settings,
+)
 
 
-class DummyWorkspace:
+class DummyWorkspace(ConformingTestWorkspace):
     def __init__(self, full_path="/tmp/bootstrap", settings=None):
-        self.full_path = full_path
-        self.settings = settings
-
-    def get_usim_mutable_data_dir(self):
-        return os.path.join(self.full_path, "urbansim", "data")
-
-    def get_asim_mutable_data_dir(self):
-        return os.path.join(self.full_path, "activitysim", "data")
-
-    def get_asim_mutable_configs_dir(self):
-        return os.path.join(self.full_path, "activitysim", "configs")
-
-    def get_asim_output_dir(self):
-        return os.path.join(self.full_path, "activitysim", "output")
-
-    def get_atlas_mutable_input_dir(self):
-        return os.path.join(self.full_path, "atlas", "atlas_input")
-
-    def get_beam_mutable_data_dir(self):
-        return os.path.join(self.full_path, "beam", "input")
+        if settings is None:
+            settings = make_conforming_settings(full_path)
+        super().__init__(
+            settings=settings,
+            output_path=full_path,
+            folder_name="",
+            full_path=full_path,
+        )
 
 
 class DummySnapshotTracker:
@@ -163,25 +156,31 @@ def _state():
     )
 
 
-class _WorkspaceStub:
+class _WorkspaceStub(ConformingTestWorkspace):
     def __init__(
         self,
-        _settings,
+        settings,
         local_root: str,
         folder_name: str,
         *,
         archive_run_dir: str | None = None,
         on_archive_commit=None,
-        expected_prefix_steps=None,
+        expected_prefix_steps=0,
     ):
-        self.full_path = os.path.join(local_root, folder_name)
-        self.archive_run_dir = archive_run_dir
-        self.on_archive_commit = on_archive_commit
-        self.expected_prefix_steps = expected_prefix_steps
-        os.makedirs(self.full_path, exist_ok=True)
-
-    def get_atlas_mutable_input_dir(self):
-        return os.path.join(self.full_path, "atlas", "atlas_input")
+        super().__init__(
+            settings=(
+                settings
+                if isinstance(settings, PilatesConfig)
+                else make_conforming_settings(local_root)
+            ),
+            output_path=local_root,
+            folder_name=folder_name,
+            archive_run_dir=archive_run_dir,
+            on_archive_commit=on_archive_commit,
+            expected_prefix_steps=(
+                expected_prefix_steps if expected_prefix_steps is not None else 0
+            ),
+        )
 
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
@@ -974,6 +973,9 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
+        def snapshot_after_archive_step(self, *args, **kwargs):
+            pass
+
     class TrackerStub:
         def __init__(self):
             self.trace_calls = []
@@ -1095,6 +1097,9 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
     class SnapshotStub:
         def final_snapshot(self):
             return True
+
+        def snapshot_after_archive_step(self, *args, **kwargs):
+            pass
 
     class StateStub:
         def __init__(self):
@@ -1257,7 +1262,10 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     monkeypatch.setattr(
         run_module,
         "ConsistDbSnapshotManager",
-        lambda **_kwargs: SimpleNamespace(final_snapshot=lambda: True),
+        lambda **_kwargs: SimpleNamespace(
+            final_snapshot=lambda: True,
+            snapshot_after_archive_step=lambda *args, **kwargs: None,
+        ),
     )
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
@@ -1671,7 +1679,10 @@ def _prepared_outer_admission_run(
         workspace=workspace,
         runtime_context=SimpleNamespace(),
         tracker=tracker,
-        snapshot_manager=SimpleNamespace(final_snapshot=lambda: True),
+        snapshot_manager=SimpleNamespace(
+            final_snapshot=lambda: True,
+            snapshot_after_archive_step=lambda *args, **kwargs: None,
+        ),
         run_name="outer-admission-test",
         scenario_id="test",
         seed=None,

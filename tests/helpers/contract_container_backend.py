@@ -843,6 +843,17 @@ class ContractValidatingContainerBackend:
                     f"BEAM warmStart.path does not exist: {warmstart_path} -> {ws_hpath}"
                 )
 
+        initial_linkstats = _extract_conf_val(
+            "beam.warmStart.initialLinkstatsFilePath", ""
+        )
+        if initial_linkstats and initial_linkstats.startswith("/"):
+            ls_hpath = mounts.resolve(initial_linkstats, require_writable=False)
+            if not ls_hpath.exists():
+                raise FileNotFoundError(
+                    f"BEAM warmStart.initialLinkstatsFilePath does not exist in mount: "
+                    f"{initial_linkstats} -> {ls_hpath}"
+                )
+
         if model_name == "beam_Router":
             return
 

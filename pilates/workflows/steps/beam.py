@@ -1711,9 +1711,11 @@ def _preflight_beam_launch_inputs(
     run_context: Any,
     expected_warmstart_path: Path | None = None,
 ) -> None:
-    report_dir_path = getattr(workspace, "archive_run_dir", None)
-    if report_dir_path is None:
-        report_dir_path = getattr(workspace, "full_path", Path("."))
+    report_dir_path = (
+        workspace.archive_run_dir
+        if workspace.archive_run_dir is not None
+        else workspace.full_path
+    )
 
     validate_kwargs: dict[str, Any] = {
         "settings": settings,
