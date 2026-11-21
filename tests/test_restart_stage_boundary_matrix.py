@@ -272,7 +272,7 @@ def test_run_completion_archive_handles_nested_scalar_and_enclosing_directory_ar
         ),
     )
 
-    expected_roots = {str(workspace_root.resolve()), str(recovery_root.resolve())}
+    expected_roots = {str(recovery_root.resolve())}
     for key, expected_path in (
         ("beam_skims_raw", raw_skim),
         ("final_skims_omx", final_omx),

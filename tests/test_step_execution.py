@@ -681,7 +681,6 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
     source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
     assert source == population_source
     assert result.outputs[USIM_POPULATION_SOURCE_H5].recovery_roots == [
-        str(workspace_root.resolve()),
         str(
             (
                 archive_root
