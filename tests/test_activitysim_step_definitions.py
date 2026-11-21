@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from consist import (
-    BindingResult,
     Tracker,
     resolve_step_contract,
 )
@@ -32,7 +31,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.contracts import StepCallInputs
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import activitysim
 
@@ -62,12 +61,11 @@ def _tracked_artifacts(tmp_path: Path, *keys: str) -> dict[str, object]:
     return artifacts
 
 
-def _activitysim_run_resolution(*, produces_zarr: bool) -> ResolvedStepInputs:
+def _activitysim_run_resolution(*, produces_zarr: bool) -> StepCallInputs:
     """Build the immutable native skim decision for direct projector tests."""
 
-    return ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(),
+    return StepCallInputs(
+        inputs={},
         metadata={
             "activitysim_skim_mode": "omx" if produces_zarr else "zarr",
             "activitysim_produces_zarr": produces_zarr,
@@ -212,13 +210,13 @@ def test_activitysim_native_steps_declare_zarr_directly_without_output_set(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=_activitysim_run_resolution(produces_zarr=False),
+        step_inputs=_activitysim_run_resolution(produces_zarr=False),
     )
     zarr_output_paths = activitysim.activitysim_run.output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=_activitysim_run_resolution(produces_zarr=True),
+        step_inputs=_activitysim_run_resolution(produces_zarr=True),
     )
 
     assert ZARR_SKIMS not in zarr_input_paths
@@ -231,66 +229,41 @@ def test_activitysim_native_steps_declare_zarr_directly_without_output_set(
 
 
 def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
-    monkeypatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
+    from pilates.workflows.sim_state import LandUseState, NetworkState, SimState
+
     selected_artifacts = _tracked_artifacts(
         tmp_path, USIM_POPULATION_SOURCE_H5, "final_skims_omx"
     )
-    captured: dict[str, object] = {}
-
-    def resolve_roles(**kwargs: object) -> ResolvedStepInputs:
-        captured.update(kwargs)
-        return ResolvedStepInputs(
-            step_name="activitysim_preprocess",
-            binding=BindingResult(
-                inputs={
-                    USIM_POPULATION_SOURCE_H5: selected_artifacts[
-                        USIM_POPULATION_SOURCE_H5
-                    ],
-                    "final_skims_omx": selected_artifacts["final_skims_omx"],
-                }
-            ),
-            required_roles=(USIM_POPULATION_SOURCE_H5,),
-            optional_roles=("final_skims_omx",),
-            source_by_role={
-                USIM_POPULATION_SOURCE_H5: "explicit",
-                "final_skims_omx": "explicit",
-            },
-            logical_destinations=kwargs["logical_destinations"],
-            metadata={},
-        )
-
-    monkeypatch.setattr(activitysim, "resolve_artifact_roles", resolve_roles)
     workspace = SimpleNamespace(
         get_asim_mutable_configs_dir=lambda: str(tmp_path / "configs"),
         get_usim_mutable_data_dir=lambda: str(tmp_path / "usim"),
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam"),
     )
+    sim_state = SimState(
+        land_use=LandUseState(
+            population_source=selected_artifacts[USIM_POPULATION_SOURCE_H5]
+        ),
+        network=NetworkState(skims_omx=selected_artifacts["final_skims_omx"]),
+    )
 
     resolved = activitysim.activitysim_preprocess.resolve_inputs(
         settings=SimpleNamespace(run=SimpleNamespace(region="test")),
-        state=SimpleNamespace(year=2025),
+        state=SimpleNamespace(year=2025, is_enabled=lambda _s: False),
         workspace=workspace,
-        coupler=object(),
+        sim_state=sim_state,
     )
 
-    assert isinstance(resolved.binding, BindingResult)
-    assert dict(resolved.binding.inputs or {}) == {
+    assert isinstance(resolved, StepCallInputs)
+    assert dict(resolved.inputs) == {
         USIM_POPULATION_SOURCE_H5: selected_artifacts[USIM_POPULATION_SOURCE_H5],
         "final_skims_omx": selected_artifacts["final_skims_omx"],
     }
-    assert resolved.required_roles == (USIM_POPULATION_SOURCE_H5,)
-    assert resolved.source_by_role[USIM_POPULATION_SOURCE_H5] == "explicit"
     assert set(resolved.logical_destinations) == {
         USIM_POPULATION_SOURCE_H5,
         "final_skims_omx",
     }
-    rules = {rule.semantic_key: rule for rule in captured["artifact_rules"]}
-    assert rules[USIM_POPULATION_SOURCE_H5].allow_fallback is True
-    assert rules[USIM_POPULATION_SOURCE_H5].fallback_provider == (
-        "activitysim_population_source"
-    )
-    assert rules["final_skims_omx"].required is False
 
 
 def test_activitysim_postprocess_resolver_omits_current_alias_of_population_source(
@@ -299,21 +272,10 @@ def test_activitysim_postprocess_resolver_omits_current_alias_of_population_sour
     population_source = _tracked_artifacts(tmp_path, USIM_POPULATION_SOURCE_H5)[
         USIM_POPULATION_SOURCE_H5
     ]
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_postprocess",
-        binding=BindingResult(
-            inputs={
-                USIM_POPULATION_SOURCE_H5: population_source,
-                USIM_DATASTORE_CURRENT_H5: population_source,
-            }
-        ),
-        optional_roles=(
-            USIM_POPULATION_SOURCE_H5,
-            USIM_DATASTORE_CURRENT_H5,
-        ),
-        source_by_role={
-            USIM_POPULATION_SOURCE_H5: "coupler",
-            USIM_DATASTORE_CURRENT_H5: "coupler",
+    base_resolution = StepCallInputs(
+        inputs={
+            USIM_POPULATION_SOURCE_H5: population_source,
+            USIM_DATASTORE_CURRENT_H5: population_source,
         },
         logical_destinations={
             USIM_POPULATION_SOURCE_H5: tmp_path / "population-source.h5",
@@ -322,7 +284,7 @@ def test_activitysim_postprocess_resolver_omits_current_alias_of_population_sour
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -335,13 +297,11 @@ def test_activitysim_postprocess_resolver_omits_current_alias_of_population_sour
         settings=_activitysim_test_settings(),
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
-        coupler=object(),
     )
 
-    assert dict(resolved.binding.inputs or {}) == {
+    assert dict(resolved.inputs) == {
         USIM_POPULATION_SOURCE_H5: population_source,
     }
-    assert resolved.selected_roles() == (USIM_POPULATION_SOURCE_H5,)
 
 
 def test_activitysim_postprocess_resolver_requires_only_configured_outputs(
@@ -351,18 +311,13 @@ def test_activitysim_postprocess_resolver_requires_only_configured_outputs(
 
     captured: dict[str, tuple[str, ...]] = {}
 
-    def _resolve_native(**kwargs: object) -> ResolvedStepInputs:
+    def _resolve_native(**kwargs: object) -> StepCallInputs:
         roles = kwargs["required_roles"]
         assert isinstance(roles, tuple)
         captured["required_roles"] = roles
-        return ResolvedStepInputs(
-            step_name="activitysim_postprocess",
-            binding=BindingResult(),
-        )
+        return StepCallInputs()
 
-    monkeypatch.setattr(
-        activitysim, "_native_activitysim_resolved_inputs", _resolve_native
-    )
+    monkeypatch.setattr(activitysim, "_native_activitysim_step_inputs", _resolve_native)
     monkeypatch.setattr(
         activitysim.ActivitysimPostprocessor,
         "declared_expected_inputs",
@@ -378,7 +333,6 @@ def test_activitysim_postprocess_resolver_requires_only_configured_outputs(
         settings=settings,
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
-        coupler=object(),
     )
 
     assert captured["required_roles"] == (
@@ -398,33 +352,15 @@ def test_activitysim_postprocess_land_use_requires_h5_roles_before_execution(
 ) -> None:
     """Missing land-use H5 roles must fail at the resolved-input boundary."""
 
-    def _resolve_native(**kwargs: object) -> ResolvedStepInputs:
-        required_roles = kwargs["required_roles"]
-        optional_roles = kwargs["optional_roles"]
-        assert isinstance(required_roles, tuple)
-        assert isinstance(optional_roles, tuple)
-        return ResolvedStepInputs(
-            step_name="activitysim_postprocess",
-            binding=BindingResult(),
-            required_roles=required_roles,
-            optional_roles=optional_roles,
-            source_by_role={
-                role: (
-                    "missing"
-                    if role
-                    in {
-                        USIM_POPULATION_SOURCE_H5,
-                        USIM_DATASTORE_CURRENT_H5,
-                    }
-                    else "coupler"
-                )
-                for role in (*required_roles, *optional_roles)
-            },
-        )
+    captured: dict[str, tuple[str, ...]] = {}
 
-    monkeypatch.setattr(
-        activitysim, "_native_activitysim_resolved_inputs", _resolve_native
-    )
+    def _resolve_native(**kwargs: object) -> StepCallInputs:
+        required_roles = kwargs["required_roles"]
+        assert isinstance(required_roles, tuple)
+        captured["required_roles"] = required_roles
+        return StepCallInputs()
+
+    monkeypatch.setattr(activitysim, "_native_activitysim_step_inputs", _resolve_native)
     monkeypatch.setattr(
         activitysim.ActivitysimPostprocessor,
         "declared_expected_inputs",
@@ -435,21 +371,14 @@ def test_activitysim_postprocess_land_use_requires_h5_roles_before_execution(
     )
     state = SimpleNamespace(is_enabled=lambda _stage: True)
 
-    resolved = activitysim._activitysim_postprocess_resolver(
+    activitysim._activitysim_postprocess_resolver(
         settings=settings,
         state=state,
         workspace=SimpleNamespace(),
-        coupler=object(),
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            "activitysim_postprocess is missing required input roles: "
-            "usim_datastore_h5, usim_population_source_h5"
-        ),
-    ):
-        resolved.require_complete()
+    assert USIM_DATASTORE_CURRENT_H5 in captured["required_roles"]
+    assert USIM_POPULATION_SOURCE_H5 in captured["required_roles"]
 
 
 def test_activitysim_postprocess_resolver_omits_current_artifact_with_population_key(
@@ -471,18 +400,11 @@ def test_activitysim_postprocess_resolver_omits_current_artifact_with_population
         population_artifact = tracker.log_artifact(
             source_paths[1], key=USIM_POPULATION_SOURCE_H5, direction="input"
         )
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_postprocess",
-        binding=BindingResult(
-            inputs={
-                USIM_POPULATION_SOURCE_H5: population_artifact,
-                USIM_DATASTORE_CURRENT_H5: current_artifact,
-            }
-        ),
-        optional_roles=(
-            USIM_POPULATION_SOURCE_H5,
-            USIM_DATASTORE_CURRENT_H5,
-        ),
+    base_resolution = StepCallInputs(
+        inputs={
+            USIM_POPULATION_SOURCE_H5: population_artifact,
+            USIM_DATASTORE_CURRENT_H5: current_artifact,
+        },
         logical_destinations={
             USIM_POPULATION_SOURCE_H5: tmp_path / "population-source.h5",
             USIM_DATASTORE_CURRENT_H5: tmp_path / "current.h5",
@@ -490,7 +412,7 @@ def test_activitysim_postprocess_resolver_omits_current_artifact_with_population
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -503,10 +425,9 @@ def test_activitysim_postprocess_resolver_omits_current_artifact_with_population
         settings=_activitysim_test_settings(),
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
-        coupler=object(),
     )
 
-    assert dict(resolved.binding.inputs or {}) == {
+    assert dict(resolved.inputs) == {
         USIM_POPULATION_SOURCE_H5: population_artifact,
     }
 
@@ -532,24 +453,11 @@ def test_activitysim_postprocess_resolver_deduplicates_tracked_h5_aliases(
             direction="input",
         )
 
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_postprocess",
-        binding=BindingResult(
-            inputs={
-                USIM_POPULATION_SOURCE_H5: artifact,
-                USIM_DATASTORE_CURRENT_H5: artifact,
-                USIM_DATASTORE_BASE_H5: artifact,
-            }
-        ),
-        optional_roles=(
-            USIM_POPULATION_SOURCE_H5,
-            USIM_DATASTORE_CURRENT_H5,
-            USIM_DATASTORE_BASE_H5,
-        ),
-        source_by_role={
-            USIM_POPULATION_SOURCE_H5: "coupler",
-            USIM_DATASTORE_CURRENT_H5: "coupler",
-            USIM_DATASTORE_BASE_H5: "coupler",
+    base_resolution = StepCallInputs(
+        inputs={
+            USIM_POPULATION_SOURCE_H5: artifact,
+            USIM_DATASTORE_CURRENT_H5: artifact,
+            USIM_DATASTORE_BASE_H5: artifact,
         },
         logical_destinations={
             USIM_POPULATION_SOURCE_H5: tmp_path / "population-source.h5",
@@ -559,7 +467,7 @@ def test_activitysim_postprocess_resolver_deduplicates_tracked_h5_aliases(
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -583,12 +491,11 @@ def test_activitysim_postprocess_resolver_deduplicates_tracked_h5_aliases(
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=object(),
     )
 
-    assert isinstance(resolved.binding, BindingResult)
-    assert set(resolved.binding.inputs) == {USIM_POPULATION_SOURCE_H5}
-    assert resolved.binding.inputs[USIM_POPULATION_SOURCE_H5].id == artifact.id
+    assert isinstance(resolved, StepCallInputs)
+    assert set(resolved.inputs) == {USIM_POPULATION_SOURCE_H5}
+    assert resolved.inputs[USIM_POPULATION_SOURCE_H5].id == artifact.id
     assert resolved.logical_destinations == {
         USIM_POPULATION_SOURCE_H5: source.resolve(),
     }
@@ -632,23 +539,15 @@ def test_activitysim_postprocess_executes_h5_aliases_in_place_without_snapshots(
             source.write_text(f"{role}\n", encoding="utf-8")
             inputs[role] = tracker.log_artifact(source, key=role, direction="input")
 
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_postprocess",
-        binding=BindingResult(inputs=inputs),
-        required_roles=required_roles,
-        optional_roles=(
-            USIM_POPULATION_SOURCE_H5,
-            USIM_DATASTORE_CURRENT_H5,
-            USIM_DATASTORE_BASE_H5,
-        ),
-        source_by_role={role: "coupler" for role in inputs},
+    base_resolution = StepCallInputs(
+        inputs=inputs,
         logical_destinations={
             role: (tmp_path / "sources" / role).resolve() for role in inputs
         },
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -853,7 +752,7 @@ def test_activitysim_projectors_validate_persisted_outputs(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
         workspace=workspace,
-        resolved_inputs=_activitysim_run_resolution(produces_zarr=False),
+        step_inputs=_activitysim_run_resolution(produces_zarr=False),
     )
     postprocess = activitysim.activitysim_postprocess.project_outputs(
         {key: artifact(path) for key, path in postprocess_paths.items()},
@@ -905,37 +804,19 @@ def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
         if key in published_roles or key not in activitysim._ACTIVITYSIM_RUN_SKIM_ROLES
     )
     selected_artifacts = _tracked_artifacts(tmp_path, *selected_keys)
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(inputs=selected_artifacts),
-        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
-        source_by_role={
-            key: published_roles.get(
-                key,
-                "coupler"
-                if key not in activitysim._ACTIVITYSIM_RUN_SKIM_ROLES
-                else "missing",
-            )
-            for key in all_roles
-        },
-        selected_key_by_role={key: key for key in selected_keys},
+    base_resolution = StepCallInputs(
+        inputs=selected_artifacts,
         logical_destinations={key: Path(f"/native/{key}") for key in all_roles},
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
         activitysim.ActivitysimRunner,
         "declared_expected_inputs",
         staticmethod(lambda *_args: {key: Path(f"/native/{key}") for key in all_roles}),
-    )
-    coupler = SimpleNamespace(
-        get=lambda key, default=None: pytest.fail(
-            f"activitysim_run reread frozen native role {key!r}"
-        )
     )
     workspace = SimpleNamespace(
         full_path=str(tmp_path),
@@ -950,43 +831,34 @@ def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
         workspace=workspace,
-        coupler=coupler,
     )
 
-    assert resolved.selected_roles() == (
+    expected_roles = (
         activitysim.ASIM_LAND_USE_IN,
         activitysim.ASIM_HOUSEHOLDS_IN,
         activitysim.ASIM_PERSONS_IN,
         expected_skim_role,
     )
+    assert tuple(resolved.inputs) == expected_roles
     assert resolved.metadata["activitysim_skim_mode"] == expected_mode
     assert resolved.metadata["activitysim_produces_zarr"] is produces_zarr
     assert "activitysim_launch_context" not in resolved.metadata
     assert "activitysim_config_staging_plan" not in resolved.metadata
-    assert set(resolved.logical_destinations) == set(resolved.selected_roles())
-    assert isinstance(resolved.binding, BindingResult)
-    assert dict(resolved.binding.inputs or {}) == {
-        key: selected_artifacts[key] for key in resolved.selected_roles()
+    assert set(resolved.logical_destinations) == set(expected_roles)
+    assert dict(resolved.inputs) == {
+        key: selected_artifacts[key] for key in expected_roles
     }
 
 
 def test_activitysim_run_resolver_rejects_when_no_published_skim_source(
     monkeypatch,
 ) -> None:
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(input_keys=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES),
-        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
-        source_by_role={
-            **{key: "coupler" for key in activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES},
-            activitysim.ZARR_SKIMS: "missing",
-            activitysim.ASIM_OMX_SKIMS: "missing",
-        },
+    base_resolution = StepCallInputs(
+        inputs={key: object() for key in activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES},
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -1008,7 +880,6 @@ def test_activitysim_run_resolver_rejects_when_no_published_skim_source(
             settings=SimpleNamespace(),
             state=SimpleNamespace(),
             workspace=SimpleNamespace(),
-            coupler=object(),
         )
 
 
@@ -1024,18 +895,13 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
     (invalid_zarr / ".zgroup").write_text("{}\n", encoding="utf-8")
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(inputs=selected_artifacts),
-        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
-        source_by_role={key: "coupler" for key in all_roles},
-        selected_key_by_role={key: key for key in all_roles},
+    base_resolution = StepCallInputs(
+        inputs=selected_artifacts,
         logical_destinations={key: Path(f"native/{key}") for key in all_roles},
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -1057,10 +923,9 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
         workspace=workspace,
-        coupler=object(),
     )
 
-    assert resolved.selected_roles() == (
+    assert tuple(resolved.inputs) == (
         *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
         activitysim.ASIM_OMX_SKIMS,
     )
@@ -1070,7 +935,7 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
         role=activitysim.ASIM_OMX_SKIMS,
         mode="omx",
         produces_zarr=True,
-        selected_source="coupler",
+        selected_source="sim_state",
     )
     assert resolved.metadata["activitysim_skim_mode"] == "omx"
     assert resolved.metadata["activitysim_produces_zarr"] is True
@@ -1083,7 +948,7 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
         "role": activitysim.ASIM_OMX_SKIMS,
         "mode": "omx",
         "produces_zarr": True,
-        "selected_source": "coupler",
+        "selected_source": "sim_state",
     }
 
 
@@ -1095,21 +960,13 @@ def test_activitysim_run_resolver_rejects_invalid_zarr_without_omx_before_execut
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
     (invalid_zarr / ".zgroup").write_text('{"zarr_format": 1}\n', encoding="utf-8")
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(inputs=selected_artifacts),
-        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
-        source_by_role={
-            **{key: "coupler" for key in all_roles},
-            activitysim.ASIM_OMX_SKIMS: "missing",
-        },
-        selected_key_by_role={key: key for key in all_roles},
+    base_resolution = StepCallInputs(
+        inputs=selected_artifacts,
         logical_destinations={key: Path(f"native/{key}") for key in all_roles},
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -1138,16 +995,8 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
     (invalid_zarr / ".zgroup").write_text('{"zarr_format": 1}\n', encoding="utf-8")
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(inputs=selected_artifacts),
-        required_roles=(
-            *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
-            activitysim.ZARR_SKIMS,
-        ),
-        optional_roles=(),
-        source_by_role={key: "coupler" for key in all_roles},
-        selected_key_by_role={key: key for key in all_roles},
+    base_resolution = StepCallInputs(
+        inputs=selected_artifacts,
         logical_destinations={key: Path(f"native/{key}") for key in all_roles},
     )
     monkeypatch.setattr(
@@ -1157,7 +1006,7 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -1187,13 +1036,8 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_prior_beam_handoff_when_
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
     (invalid_zarr / ".zgroup").write_text('{"zarr_format": 1}\n', encoding="utf-8")
-    base_resolution = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(inputs=selected_artifacts),
-        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
-        source_by_role={key: "coupler" for key in all_roles},
-        selected_key_by_role={key: key for key in all_roles},
+    base_resolution = StepCallInputs(
+        inputs=selected_artifacts,
         logical_destinations={key: Path(f"native/{key}") for key in all_roles},
     )
     monkeypatch.setattr(
@@ -1203,7 +1047,7 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_prior_beam_handoff_when_
     )
     monkeypatch.setattr(
         activitysim,
-        "_native_activitysim_resolved_inputs",
+        "_native_activitysim_step_inputs",
         lambda **_kwargs: base_resolution,
     )
     monkeypatch.setattr(
@@ -1231,21 +1075,18 @@ def test_activitysim_execution_options_build_context_from_materialization_destin
     source_configs = tmp_path / "activitysim" / "configs"
     for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
         (source_configs / dirname).mkdir(parents=True)
-    resolved = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(
-            inputs={
-                ASIM_LAND_USE_IN: object(),
-                ASIM_HOUSEHOLDS_IN: object(),
-                ASIM_PERSONS_IN: object(),
-            }
-        ),
-        required_roles=(ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN),
+    resolved = StepCallInputs(
+        inputs={
+            ASIM_LAND_USE_IN: object(),
+            ASIM_HOUSEHOLDS_IN: object(),
+            ASIM_PERSONS_IN: object(),
+        },
         logical_destinations={
             ASIM_LAND_USE_IN: staged_data / "land_use.csv",
             ASIM_HOUSEHOLDS_IN: staged_data / "households.csv",
             ASIM_PERSONS_IN: staged_data / "persons.csv",
         },
+        metadata={"step_name": "activitysim_run"},
     )
     settings = SimpleNamespace(
         activitysim=SimpleNamespace(main_configs_dir="configs_extended")
@@ -1263,7 +1104,7 @@ def test_activitysim_execution_options_build_context_from_materialization_destin
         settings=settings,
         state=None,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
 
     assert isinstance(
@@ -1295,24 +1136,20 @@ def test_activitysim_execution_options_allows_zarr_skims_in_cache_dir(
     runtime_cache = tmp_path / "activitysim" / "output" / "cache"
     for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
         (source_configs / dirname).mkdir(parents=True)
-    resolved = ResolvedStepInputs(
-        step_name="activitysim_run",
-        binding=BindingResult(
-            inputs={
-                ASIM_LAND_USE_IN: object(),
-                ASIM_HOUSEHOLDS_IN: object(),
-                ASIM_PERSONS_IN: object(),
-                ZARR_SKIMS: object(),
-            }
-        ),
-        required_roles=(ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN),
-        optional_roles=(ZARR_SKIMS,),
+    resolved = StepCallInputs(
+        inputs={
+            ASIM_LAND_USE_IN: object(),
+            ASIM_HOUSEHOLDS_IN: object(),
+            ASIM_PERSONS_IN: object(),
+            ZARR_SKIMS: object(),
+        },
         logical_destinations={
             ASIM_LAND_USE_IN: staged_data / "land_use.csv",
             ASIM_HOUSEHOLDS_IN: staged_data / "households.csv",
             ASIM_PERSONS_IN: staged_data / "persons.csv",
             ZARR_SKIMS: runtime_cache / "skims.zarr",
         },
+        metadata={"step_name": "activitysim_run"},
     )
     settings = SimpleNamespace(
         activitysim=SimpleNamespace(
@@ -1331,7 +1168,7 @@ def test_activitysim_execution_options_allows_zarr_skims_in_cache_dir(
         settings=settings,
         state=None,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
 
     assert isinstance(

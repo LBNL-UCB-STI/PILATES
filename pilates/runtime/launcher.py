@@ -33,7 +33,6 @@ from pilates.workspace import Workspace, Workspace as _RealWorkspace
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
 from pilates.utils import consist_runtime as cr
-from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
 from pilates.workflows.consist_metadata import (
     build_scenario_consist_kwargs,
 )
@@ -52,7 +51,8 @@ from pilates.urbansim.admission import (
     preflight_bootstrap_urbansim_datastore_admission,
 )
 from pilates.utils.admission_helpers import extract_admission_reports
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
+from pilates.workflows.orchestrator import run_pilates
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime.failure_hints import (
@@ -80,12 +80,6 @@ from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.surface import (
     EnabledWorkflowSurface,
     build_enabled_workflow_surface,
-)
-from pilates.workflows.stages import (
-    run_land_use_stage,
-    run_postprocessing_stage,
-    run_supply_demand_stage,
-    run_vehicle_ownership_stage,
 )
 from pilates.workflows.state import WorkflowState
 from pilates.workflows.catalog import validate_workflow_step_contracts
@@ -660,95 +654,20 @@ def main(
                             cr.current_run()
                         ),
                     )
-            seed_bootstrap_artifacts_to_coupler(
+            run_pilates(
+                scenario=cast(ScenarioWithCoupler, scenario),
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                coupler=coupler,
-                scenario=scenario,
+                snapshot_manager=snapshot_manager,
+                on_activity_demand_boundary=(
+                    lambda y, iteration: _snapshot_activitysim_boundary(
+                        snapshot_manager,
+                        year=y,
+                        iteration=iteration,
+                    )
+                ),
             )
-            scenario.capture_coupler_snapshot(phase="init")
-
-            # 7. MAIN WORKFLOW LOOP
-            # Iterates through forecast years. For each year, runs sequential stages:
-            # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
-            #
-            # Each stage executes its declared StepDefinition entries via
-            # StepDefinition.resolve_inputs(...) and execute_step(...) on the active
-            # Consist scenario.
-            #
-            for year in state:
-                formatted_print(f"STARTING YEAR {year}")
-                logger.info(
-                    "[launcher] starting year=%s run_id=%s",
-                    year,
-                    cr.current_run_id(),
-                )
-                if state.should_run(WorkflowState.Stage.land_use):
-                    run_land_use_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        year=year,
-                        context=runtime_context,
-                    )
-                    state.complete_step(WorkflowState.Stage.land_use)
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_land_use_y{year}"
-                    )
-
-                if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-                    formatted_print(
-                        f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
-                    )
-                    run_vehicle_ownership_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        coupler=coupler,
-                        year=year,
-                        context=runtime_context,
-                    )
-                    state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_vehicle_ownership_y{year}"
-                    )
-
-                if state.should_run(WorkflowState.Stage.supply_demand_loop):
-                    run_supply_demand_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        year=year,
-                        on_activity_demand_boundary=(
-                            lambda iteration, y=year: _snapshot_activitysim_boundary(
-                                snapshot_manager,
-                                year=y,
-                                iteration=iteration,
-                            )
-                        ),
-                        on_iteration_boundary=(
-                            lambda iteration, y=year: (
-                                snapshot_manager.on_outer_iteration_boundary(
-                                    year=y,
-                                    iteration=iteration,
-                                )
-                            )
-                        ),
-                        context=runtime_context,
-                    )
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_supply_demand_y{year}"
-                    )
-
-                if state.should_run(WorkflowState.Stage.postprocessing):
-                    formatted_print("POST-PROCESSING")
-                    run_postprocessing_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        year=year,
-                        context=runtime_context,
-                    )
-                    state.complete_step(WorkflowState.Stage.postprocessing)
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_postprocessing_y{year}"
-                    )
-                snapshot_manager.maybe_snapshot_interval(
-                    reason=f"year_boundary_y{year}"
-                )
 
         formatted_print("SIMULATION COMPLETE")
         logger.info("[Main] Simulation complete.")

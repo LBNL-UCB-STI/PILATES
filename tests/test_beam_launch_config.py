@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
-from consist import BindingResult, Tracker
+from consist import Tracker
 from pilates.config.models import BeamArtifactFormatsConfig
 
 
@@ -624,7 +624,7 @@ def test_beam_preprocess_step_identity_uses_portable_closure_shape(
     """Role shape and launch choices matter; workspace/scheduler paths do not."""
     from consist.core.step_context import StepContext
 
-    from pilates.workflows.resolved_inputs import ResolvedStepInputs
+    from pilates.workflows.contracts import StepCallInputs
     from pilates.workflows.consist_metadata import consist_step_meta
     from pilates.workflows.steps.beam import (
         _beam_preprocess_identity_payload,
@@ -659,9 +659,8 @@ def test_beam_preprocess_step_identity_uses_portable_closure_shape(
         }
         if include_warmstart:
             inputs["linkstats_warmstart"] = root / "linkstats.parquet"
-        resolved = ResolvedStepInputs(
-            step_name="beam_preprocess",
-            binding=BindingResult(inputs=inputs),
+        resolved = StepCallInputs(
+            inputs=inputs,
             metadata={
                 "beam_preprocess_context": {
                     "primary_config": root / "beam.conf",
@@ -681,7 +680,7 @@ def test_beam_preprocess_step_identity_uses_portable_closure_shape(
             ),
             "beam_preprocess_identity_closure": _beam_preprocess_identity_payload(
                 settings=settings,
-                resolved_inputs=resolved,
+                step_inputs=resolved,
             ),
             "scheduler_allocation": scheduler_allocation,
             "output_destination": output_destination,

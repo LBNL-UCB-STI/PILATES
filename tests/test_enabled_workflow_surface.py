@@ -359,7 +359,7 @@ def test_surface_standalone_full_skim_requires_only_beam_full_skims():
 
 def test_polaris_travel_model_does_not_enable_or_schedule_beam_steps():
     from pilates.workflows.catalog import enabled_schema_step_models
-    from pilates.workflows.input_authority import (
+    from pilates.workflows.state_helpers import (
         requires_prior_beam_linkstats_handoff,
         requires_prior_beam_skim_handoff,
     )

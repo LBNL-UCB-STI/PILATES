@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from consist import Artifact, MaterializedArtifact, Tracker
 
 from pilates.utils import coupler_helpers
-from pilates.workflows.coupler_namespace import set_coupler_from_artifact
 
 
 def test_artifact_to_path_ignores_uri(tmp_path) -> None:
@@ -69,67 +68,6 @@ class HistoricalArtifact:
     @property
     def path(self) -> Path:
         return self._path
-
-
-def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
-    coupler = CouplerWithSetFromArtifact()
-    set_coupler_from_artifact(
-        coupler, "usim_datastore_h5", "artifact", fallback="fallback"
-    )
-    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", "artifact")]
-
-
-def test_set_coupler_from_artifact_falls_back_to_set() -> None:
-    coupler = CouplerWithSetOnly()
-    set_coupler_from_artifact(
-        coupler, "usim_datastore_h5", None, fallback="/tmp/path.h5"
-    )
-    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
-
-
-def test_set_coupler_from_artifact_canonicalizes_namespaced_key() -> None:
-    coupler = CouplerWithSetOnly()
-    set_coupler_from_artifact(
-        coupler,
-        "activitysim/households_asim_in",
-        None,
-        fallback="/tmp/households.csv",
-    )
-    assert coupler.calls == [("set", "households_asim_in", "/tmp/households.csv")]
-
-
-def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> None:
-    coupler = CouplerWithNamespaceView()
-    set_coupler_from_artifact(
-        coupler,
-        "linkstats_warmstart",
-        None,
-        fallback="/tmp/linkstats.csv.gz",
-    )
-    assert (
-        "view.set",
-        "beam/linkstats_warmstart",
-        "/tmp/linkstats.csv.gz",
-    ) in coupler.calls
-    assert (
-        "set_from_artifact",
-        "linkstats_warmstart",
-        "/tmp/linkstats.csv.gz",
-    ) in coupler.calls
-
-
-def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() -> None:
-    coupler = CouplerWithNamespaceView()
-    artifact = SimpleNamespace(id="artifact-1")
-
-    set_coupler_from_artifact(
-        coupler,
-        "usim_datastore_h5",
-        artifact,
-        fallback="/tmp/path.h5",
-    )
-
-    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
 
 
 def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(

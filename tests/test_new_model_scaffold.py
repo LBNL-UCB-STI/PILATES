@@ -569,10 +569,7 @@ def test_scaffold_applies_cleanly_against_real_repo_files(tmp_path: Path) -> Non
     for relpath in (
         "pilates/workflows/steps/__init__.py",
         "pilates/workflows/catalog.py",
-        "pilates/workflows/stages/land_use.py",
-        "pilates/workflows/stages/vehicle_ownership.py",
-        "pilates/workflows/stages/supply_demand.py",
-        "pilates/workflows/stages/postprocessing.py",
+        "pilates/workflows/orchestrator.py",
     ):
         src = repo_root / relpath
         dst = tmp_path / relpath

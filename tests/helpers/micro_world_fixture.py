@@ -101,14 +101,13 @@ class MicroWorldEnv:
 
     def seed_scenario_coupler(self, sc: ScenarioWithCoupler) -> None:
         """Seed initial tracked artifacts into the scenario coupler."""
-        from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
+        from pilates.workflows.orchestrator import bootstrap_initial_state
 
-        seed_bootstrap_artifacts_to_coupler(
+        bootstrap_initial_state(
+            scenario=sc,
             settings=self.settings,
             state=self.state,
             workspace=self.workspace,
-            coupler=sc.coupler,
-            scenario=sc,
         )
         if sc.coupler.get(USIM_POPULATION_SOURCE_H5) is None:
             current_h5 = sc.coupler.get(USIM_DATASTORE_H5)

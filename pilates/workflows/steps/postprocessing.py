@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from consist import (
-    BindingResult,
     CacheOptions,
     define_step,
     require_runtime_kwargs,
@@ -14,21 +13,16 @@ from consist import (
 from pilates.config.models import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.utils.state_access import current_year, iteration_index
-from pilates.workflows.artifact_keys import (
-    BEAM_NETWORK_FINAL,
-    LINKSTATS,
-    USIM_DATASTORE_CURRENT_H5,
-    USIM_FORECAST_OUTPUT,
-)
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.coupler_namespace import coupler_storage_value
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
 )
+from pilates.workflows.sim_state import ArtifactRef, SimState
 from pilates.workflows.steps.shared import (
+    _build_step_call_inputs,
     _native_contract_output_paths,
     _native_execution_options,
 )
@@ -68,9 +62,9 @@ def _postprocessing_output_paths(
     settings: Any,
     state: Any,
     workspace: Any,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> dict[str, Path]:
-    del resolved_inputs
+    del step_inputs
     out_paths: dict[str, Path] = {}
     if isinstance(settings, _HasPostprocessing) and settings.postprocessing is not None:
         post_cfg = settings.postprocessing
@@ -146,60 +140,50 @@ def _postprocessing_callable(
 
 def _resolve_postprocessing_inputs(
     *,
-    coupler: Any = None,
+    sim_state: SimState | None = None,
     settings: Any = None,
     state: Any = None,
     workspace: Any = None,
     **_: Any,
-) -> ResolvedStepInputs:
-    del settings
-    year = current_year(state) or 0
-    iteration = iteration_index(state)
-
-    candidate_roles = {
-        "events_parquet": (f"events_parquet_{year}_{iteration}", "events_parquet"),
-        "network": (BEAM_NETWORK_FINAL,),
-        "linkstats": (LINKSTATS,),
-        "households": ("households_asim_out", "households_asim_in"),
-        "persons": ("persons_asim_out", "persons_asim_in"),
-        "plans": ("beam_plans_asim_out",),
-        "tours": ("tours_asim_out",),
-        "trips": ("trips_asim_out",),
-        "usim_datastore": (USIM_DATASTORE_CURRENT_H5, USIM_FORECAST_OUTPUT),
+) -> StepCallInputs:
+    del settings, state
+    active_sim_state = sim_state if sim_state is not None else SimState()
+    candidates: dict[str, ArtifactRef | None] = {
+        "events_parquet": active_sim_state.network.events_parquet,
+        "network": active_sim_state.network.network_csv,
+        "linkstats": active_sim_state.network.linkstats,
+        "households": (
+            active_sim_state.demand.households
+            if active_sim_state.demand.households is not None
+            else active_sim_state.demand.households_in
+        ),
+        "persons": (
+            active_sim_state.demand.persons
+            if active_sim_state.demand.persons is not None
+            else active_sim_state.demand.persons_in
+        ),
+        "plans": active_sim_state.demand.plans,
+        "tours": active_sim_state.demand.tours,
+        "trips": active_sim_state.demand.trips,
+        "usim_datastore": (
+            active_sim_state.land_use.current_h5
+            if active_sim_state.land_use.current_h5 is not None
+            else active_sim_state.land_use.forecast_output
+        ),
     }
 
-    inputs: dict[str, Any] = {}
-    source_by_role: dict[str, str] = {}
-    selected_key_by_role: dict[str, str] = {}
     destinations: dict[str, Path] = {}
-
-    for logical_role, candidates in candidate_roles.items():
-        found_val = None
-        found_key = None
-        for cand in candidates:
-            val = coupler_storage_value(coupler, cand)
+    if workspace is not None:
+        for role, val in candidates.items():
             if val is not None:
-                found_val = val
-                found_key = cand
-                break
-        if found_val is not None:
-            inputs[logical_role] = found_val
-            source_by_role[logical_role] = "coupler"
-            selected_key_by_role[logical_role] = found_key or logical_role
-            if workspace is not None:
-                src_p = artifact_to_path(found_val, workspace=workspace)
+                src_p = artifact_to_path(val, workspace=workspace)
                 if src_p:
-                    destinations[logical_role] = Path(src_p)
-        else:
-            source_by_role[logical_role] = "missing"
+                    destinations[role] = Path(src_p)
 
-    return ResolvedStepInputs(
-        step_name="postprocessing",
-        binding=BindingResult(inputs=inputs),
+    return _build_step_call_inputs(
+        candidates=candidates,
         required_roles=(),
-        optional_roles=tuple(candidate_roles.keys()),
-        source_by_role=source_by_role,
-        selected_key_by_role=selected_key_by_role,
+        optional_roles=tuple(candidates.keys()),
         logical_destinations=destinations,
     )
 
@@ -210,9 +194,9 @@ def _project_postprocessing_outputs(
     settings: Any = None,
     state: Any = None,
     workspace: Any = None,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> dict[str, Any]:
-    del settings, state, workspace, resolved_inputs
+    del settings, state, workspace, step_inputs
     return dict(outputs)
 
 

@@ -110,7 +110,6 @@ def test_build_coupler_schema_expands_runtime_year_scoped_keys():
     assert "usim_input_archive_2019" in schema
     assert "usim_input_merged_2019" in schema
     assert "usim_forecast_output" in schema
-    assert "urbansim/usim_forecast_output" in schema
     assert "asim_input_skims_omx_archived" in schema
     assert "raw_od_skims_zarr_2019_0" in schema
     assert "events_parquet_2019_0" in schema
@@ -132,7 +131,6 @@ def test_build_coupler_schema_declares_beam_plans_handoff_alias():
     schema = build_coupler_schema([], settings=_settings())
 
     assert "beam_plans_asim_out" in schema
-    assert "beam/beam_plans_asim_out" in schema
 
 
 def test_build_coupler_schema_without_extras_is_empty_for_no_steps():

@@ -272,12 +272,9 @@ def _build_step_runtime_surface(
     - binding-spec fallback/explicit/coupler policy
     - restart- or run-shape-specific overlays
     """
-    from pilates.workflows.binding import artifact_rules_for_step_name
-
     step_spec = workflow_step_spec_for_step_name(step_name)
     if step_spec is None:
         raise KeyError(f"Unknown workflow step '{step_name}'.")
-    binding_rules = artifact_rules_for_step_name(step_name, settings=settings)
 
     required_inputs = step_spec.input_keys
     optional_inputs = step_spec.optional_input_keys
@@ -301,21 +298,12 @@ def _build_step_runtime_surface(
     )
 
     input_role_policies: Dict[str, InputRolePolicy] = {}
-    declared_input_keys = set(_ordered_unique(required_inputs, optional_inputs))
-    if binding_rules:
-        for rule in binding_rules:
-            if rule.semantic_key not in declared_input_keys:
-                continue
-            input_role_policies[rule.semantic_key] = _make_input_role_policy(
-                rule=rule,
-            )
     for key in _ordered_unique(required_inputs, optional_inputs):
-        if key not in input_role_policies:
-            input_role_policies[key] = InputRolePolicy(
-                explicit_inputs_allowed=True,
-                coupler_fallback_allowed=True,
-                workspace_archive_fallback_allowed=False,
-            )
+        input_role_policies[key] = InputRolePolicy(
+            explicit_inputs_allowed=True,
+            coupler_fallback_allowed=True,
+            workspace_archive_fallback_allowed=False,
+        )
 
     return StepRuntimeSurface(
         step_name=step_name,

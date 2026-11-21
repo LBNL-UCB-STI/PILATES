@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Protocol, TypeVar, runtime_checkable
 
 from consist import (
+    BindingResult,
     CacheOptions,
     ExecutionOptions,
     OutputPolicyOptions,
@@ -17,8 +18,8 @@ from consist import (
 )
 
 from pilates.utils.archive_paths import ArchiveRunDirLike, workspace_storage_roots
-from pilates.workflows.contracts import StepDefinition
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.contracts import StepCallInputs, StepDefinition
+from pilates.workflows.sim_state import SimState
 
 OutputT = TypeVar("OutputT")
 
@@ -187,8 +188,9 @@ def execute_step(
     year: int | None,
     iteration: int | None,
     phase: str | None,
+    sim_state: SimState | None = None,
     runtime_kwargs: dict[str, Any] | None = None,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> tuple[RunResult, OutputT]:
     """Resolve once, run once, then project persisted ``RunResult.outputs`` once."""
 
@@ -260,20 +262,21 @@ def execute_step(
         "settings": settings,
         "state": state,
         "workspace": workspace,
-        "coupler": scenario.coupler,
+        "sim_state": sim_state if sim_state is not None else SimState(),
     }
-    if step_identity is not None:
-        resolver_kwargs["step_identity"] = step_identity
-    resolved = (
-        resolved_inputs or definition.resolve_inputs(**resolver_kwargs)
-    ).with_input_contract(definition.input_contract)
-    resolved.require_complete()
+    resolved_step_inputs = (
+        step_inputs
+        if step_inputs is not None
+        else definition.resolve_inputs(**resolver_kwargs)
+    )
+    resolved_step_inputs.require_complete(definition.name)
+    binding = BindingResult(inputs=dict(resolved_step_inputs.inputs))
     options = (
         definition.execution_options(
             settings=settings,
             state=state,
             workspace=workspace,
-            resolved_inputs=resolved,
+            step_inputs=resolved_step_inputs,
         )
         if definition.execution_options is not None
         else ExecutionOptions(input_binding="paths")
@@ -297,7 +300,7 @@ def execute_step(
     )
     result = scenario.run(
         fn=definition.function,
-        binding=resolved.binding,
+        binding=binding,
         config_plan_ingest=(
             definition.name not in ("activitysim_preprocess", "activitysim_postprocess")
         ),
@@ -310,7 +313,7 @@ def execute_step(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                resolved_inputs=resolved,
+                step_inputs=resolved_step_inputs,
             )
             if definition.outputs is not None
             else None
@@ -320,7 +323,7 @@ def execute_step(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                resolved_inputs=resolved,
+                step_inputs=resolved_step_inputs,
             )
             if definition.outputs is None and definition.output_paths is not None
             else None
@@ -330,7 +333,7 @@ def execute_step(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                resolved_inputs=resolved,
+                step_inputs=resolved_step_inputs,
             )
             if definition.output_sets is not None
             else None
@@ -360,5 +363,5 @@ def execute_step(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved_step_inputs,
     )
