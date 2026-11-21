@@ -12,22 +12,11 @@ from pilates.workflows.orchestrator import (
 from pilates.workflows.sim_state import SimState
 
 
-def test_workflow_runtime_context_builds_surface_when_missing(monkeypatch) -> None:
+def test_workflow_runtime_context_builds_from_parts() -> None:
     settings = SimpleNamespace()
     state = SimpleNamespace()
-    workspace = SimpleNamespace()
-    built_surface = SimpleNamespace(profile=SimpleNamespace())
-    captured = {}
-
-    def _fake_build_enabled_workflow_surface(received_settings, *, state):
-        captured["settings"] = received_settings
-        captured["state"] = state
-        return built_surface
-
-    monkeypatch.setattr(
-        "pilates.workflows.surface.build_enabled_workflow_surface",
-        _fake_build_enabled_workflow_surface,
-    )
+    cb = lambda _msg: None
+    workspace = SimpleNamespace(on_archive_commit=cb, expected_prefix_steps=4)
 
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
@@ -35,24 +24,11 @@ def test_workflow_runtime_context_builds_surface_when_missing(monkeypatch) -> No
         workspace=workspace,
     )
 
-    assert context.surface is built_surface
-    assert captured == {"settings": settings, "state": state}
-
-
-def test_workflow_runtime_context_reuses_explicit_surface() -> None:
-    settings = SimpleNamespace()
-    state = SimpleNamespace()
-    workspace = SimpleNamespace()
-    surface = SimpleNamespace(profile=SimpleNamespace())
-
-    context = WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-
-    assert context.surface is surface
+    assert context.settings is settings
+    assert context.state is state
+    assert context.workspace is workspace
+    assert context.on_archive_commit is cb
+    assert context.expected_prefix_steps == 4
 
 
 def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
@@ -100,12 +76,10 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
     )
     state = _FakeState()
     workspace = SimpleNamespace(full_path=str(tmp_path))
-    surface = SimpleNamespace(profile=SimpleNamespace())
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
         workspace=workspace,
-        surface=surface,
     )
     seen = {}
 
@@ -178,7 +152,6 @@ def test_supply_demand_snapshots_after_activitysim_before_beam(
         ),
         state=_FakeState(),
         workspace=SimpleNamespace(full_path=str(tmp_path)),
-        surface=SimpleNamespace(profile=SimpleNamespace()),
     )
     events: list[str] = []
     monkeypatch.setattr(
@@ -209,12 +182,10 @@ def test_run_postprocessing_stage_uses_runtime_context(
     settings = SimpleNamespace()
     state = SimpleNamespace(iteration=0)
     workspace = SimpleNamespace(full_path=str(tmp_path))
-    surface = SimpleNamespace(profile=SimpleNamespace())
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
         workspace=workspace,
-        surface=surface,
     )
     captured = {}
 

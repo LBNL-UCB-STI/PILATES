@@ -59,12 +59,21 @@ IdentityInput = Tuple[str, Path]
 _DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
 
 
-def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
-    from pilates.workflows.catalog import (
-        provenance_builder_key_for_step_name as _catalog_provenance_builder_key,
-    )
+_STEP_PROVENANCE_BUILDER_PREFIXES: Tuple[Tuple[str, str], ...] = (
+    ("urbansim_", "urbansim"),
+    ("atlas_", "atlas"),
+    ("activitysim_", "activitysim"),
+    ("beam_", "beam"),
+)
 
-    return _catalog_provenance_builder_key(step_name)
+
+def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
+    if step_name == "postprocessing":
+        return "postprocessing"
+    for prefix, builder_key in _STEP_PROVENANCE_BUILDER_PREFIXES:
+        if step_name.startswith(prefix):
+            return builder_key
+    return None
 
 
 @dataclass(frozen=True)

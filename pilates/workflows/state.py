@@ -3,14 +3,11 @@ from __future__ import annotations
 from bisect import bisect_left
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import logging
 
 from pilates.config import PilatesConfig
 from pilates.workflows._profile import ensure_runtime_flags_initialized
-
-if TYPE_CHECKING:
-    from pilates.workflows.surface import EnabledWorkflowSurface
 
 logger = logging.getLogger(__name__)
 
@@ -258,26 +255,14 @@ class WorkflowState:
     def for_planning(
         cls,
         settings: PilatesConfig,
-        *,
-        surface: Optional["EnabledWorkflowSurface"] = None,
     ) -> "WorkflowState":
         """Construct a fresh, side-effect-free workflow state for static planning."""
-        if surface is not None:
-            land_use_enabled = surface.stage_enabled("land_use")
-            vehicle_ownership_model_enabled = surface.stage_enabled(
-                "vehicle_ownership_model"
-            )
-            activity_demand_enabled = surface.stage_enabled("activity_demand")
-            traffic_assignment_enabled = surface.stage_enabled("traffic_assignment")
-        else:
-            ensure_runtime_flags_initialized(settings)
-            runtime_flags = settings.runtime.flags
-            land_use_enabled = runtime_flags.land_use_enabled
-            vehicle_ownership_model_enabled = (
-                runtime_flags.vehicle_ownership_model_enabled
-            )
-            activity_demand_enabled = runtime_flags.activity_demand_enabled
-            traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
+        ensure_runtime_flags_initialized(settings)
+        runtime_flags = settings.runtime.flags
+        land_use_enabled = runtime_flags.land_use_enabled
+        vehicle_ownership_model_enabled = runtime_flags.vehicle_ownership_model_enabled
+        activity_demand_enabled = runtime_flags.activity_demand_enabled
+        traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
         out = cls(
             settings.run.start_year,
             settings.run.end_year,

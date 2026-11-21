@@ -76,13 +76,7 @@ from pilates.runtime.run_publishers import (
 )
 from pilates.runtime.storage_probe import log_local_storage_info_if_enabled
 from pilates.workflows._profile import ensure_runtime_flags_initialized
-from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.surface import (
-    EnabledWorkflowSurface,
-    build_enabled_workflow_surface,
-)
 from pilates.workflows.state import WorkflowState
-from pilates.workflows.catalog import validate_workflow_step_contracts
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -111,7 +105,6 @@ class PreparedRunContext:
 
     settings: PilatesConfig
     state: WorkflowState
-    surface: EnabledWorkflowSurface
     workspace: Workspace
     runtime_context: WorkflowRuntimeContext
     tracker: Any
@@ -235,7 +228,6 @@ def _build_scenario_runtime_contract(
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
-    surface: EnabledWorkflowSurface,
 ) -> Dict[str, Any]:
     return scenario_runtime.build_scenario_runtime_contract(
         settings=settings,
@@ -245,13 +237,10 @@ def _build_scenario_runtime_contract(
         seed=seed,
         cache_epoch=cache_epoch,
         build_scenario_consist_kwargs_fn=build_scenario_consist_kwargs,
-        build_coupler_schema_fn=build_coupler_schema,
-        validate_workflow_step_contracts_fn=validate_workflow_step_contracts,
         build_schema_steps_fn=_build_schema_steps,
         filter_schema_steps_for_enabled_models_fn=_filter_schema_steps_for_enabled_models,
         merge_epoch_facet_fn=scenario_runtime.merge_epoch_facet,
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
-        surface=surface,
     )
 
 
@@ -285,7 +274,6 @@ def _prepare_run_context(
     ensure_runtime_flags_initialized(settings)
     if state is None:
         state = WorkflowState.from_settings(settings)
-    surface = build_enabled_workflow_surface(settings, state=state)
     set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
@@ -466,14 +454,12 @@ def _prepare_run_context(
         settings=settings,
         state=state,
         workspace=workspace,
-        surface=surface,
         on_archive_commit=on_archive_commit,
         expected_prefix_steps=expected_prefix_steps,
     )
     return PreparedRunContext(
         settings=settings,
         state=state,
-        surface=surface,
         workspace=workspace,
         runtime_context=runtime_context,
         tracker=tracker,
@@ -528,7 +514,6 @@ def main(
     )
     settings = prepared.settings
     state = prepared.state
-    surface = prepared.surface
     workspace = prepared.workspace
     tracker = prepared.tracker
     snapshot_manager = prepared.snapshot_manager
@@ -580,19 +565,16 @@ def main(
             scenario_id=scenario_id,
             seed=run_seed,
             cache_epoch=cache_epoch,
-            surface=surface,
         )
         scenario_kwargs = scenario_contract["scenario_kwargs"]
         schema_steps_all = scenario_contract["schema_steps_all"]
         schema_steps_enabled = scenario_contract["schema_steps_enabled"]
-        coupler_schema = scenario_contract["coupler_schema"]
         required_output_keys = scenario_contract["required_output_keys"]
 
         preview_count = 25
         logger.info(
-            "Scenario output contract: declared_keys=%d require_outputs=%d "
+            "Scenario output contract: require_outputs=%d "
             "(enabled_steps=%d/%d). Preview: %s",
-            len(coupler_schema),
             len(required_output_keys),
             len(schema_steps_enabled),
             len(schema_steps_all),
@@ -620,12 +602,6 @@ def main(
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            coupler = scenario.coupler
-            coupler.declare_outputs(
-                *coupler_schema.keys(),
-                warn_undefined=True,
-                description=coupler_schema,
-            )
             # ponytail: bootstrap_initialization is retired; admit initial inputs
             # directly on fresh start or restart at the initial workflow boundary.
             if not is_restart_run or _is_at_initial_workflow_boundary(state):
