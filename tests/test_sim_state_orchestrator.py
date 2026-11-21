@@ -60,7 +60,6 @@ def test_sim_state_to_role_map_projects_canonical_coupler_keys(tmp_path: Path) -
             households_with_cars=_artifact("householdv_2017", tmp_path),
             hh_cars=_artifact(ATLAS_VEHICLES2_OUTPUT, tmp_path),
             rdata_bundle=_artifact("atlas_continuation_2017", tmp_path),
-            output_dir=tmp_path / "atlas_out",
             last_simulated_year=2017,
         ),
         demand=DemandState(
@@ -73,7 +72,6 @@ def test_sim_state_to_role_map_projects_canonical_coupler_keys(tmp_path: Path) -
             tours=_artifact("tours_asim_out", tmp_path),
             trips=_artifact("trips_asim_out", tmp_path),
             plans=_artifact("beam_plans_asim_out", tmp_path),
-            output_dir=tmp_path / "asim_out",
         ),
         network=NetworkState(
             skims_omx=_artifact(FINAL_SKIMS_OMX, tmp_path),
@@ -115,8 +113,6 @@ def test_sim_state_to_role_map_projects_canonical_coupler_keys(tmp_path: Path) -
         LINKSTATS_WARMSTART,
         BEAM_PLANS_OUT,
         BEAM_EXPERIENCED_PLANS_XML,
-        "events_parquet",
-        BEAM_NETWORK_FINAL,
         BEAM_FULL_SKIMS,
         "inexus_output",
         "custom_pre_beam_out",

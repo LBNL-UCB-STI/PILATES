@@ -1445,7 +1445,6 @@ def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
     eligible_definitions = (URBANSIM_POSTPROCESS,)
 
     for definition in eligible_definitions:
-        assert definition.preflight_identity is True
         resolved = definition.resolve_inputs(
             settings=settings,
             state=state,
@@ -1457,8 +1456,6 @@ def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
         assert all(
             Path(dest).is_absolute() for dest in resolved.logical_destinations.values()
         )
-
-    assert URBANSIM_RUN.preflight_identity is False
 
 
 def test_native_callables_forward_resolved_paths_to_model_adapters(

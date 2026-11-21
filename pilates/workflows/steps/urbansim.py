@@ -462,7 +462,6 @@ URBANSIM_POSTPROCESS = StepDefinition(
     output_paths=_urbansim_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
-    preflight_identity=True,
 )
 
 # Canonical registry members use the workflow step names. Uppercase aliases keep

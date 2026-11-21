@@ -208,7 +208,7 @@ def _resolve_stage_patch_plan_options(
 
     default_target_module = _MAJOR_STAGE_TO_STAGE_MODULE.get(
         major_stage,
-        f"pilates/workflows/stages/{major_stage}.py",
+        "pilates/workflows/orchestrator.py",
     )
     target_module = Path(
         _normalize_optional_arg(stage_target_module_arg) or default_target_module
@@ -869,7 +869,7 @@ def _render_stage_patch_execution_block(
     if pattern == STAGE_PATTERN_LINEAR:
         return dedent(
             f"""
-            _, {spec.model}_preprocess_outputs = execute_step(
+            prep_result, {spec.model}_preprocess_outputs = execute_step(
                 scenario=scenario,
                 definition={spec.model}_preprocess,
                 settings=settings,
@@ -881,7 +881,7 @@ def _render_stage_patch_execution_block(
                 phase="preprocess",
                 sim_state=sim_state,
             )
-            _, {spec.model}_run_outputs = execute_step(
+            run_result, {spec.model}_run_outputs = execute_step(
                 scenario=scenario,
                 definition={spec.model}_run,
                 settings=settings,
@@ -892,8 +892,9 @@ def _render_stage_patch_execution_block(
                 iteration=None,
                 phase="run",
                 sim_state=sim_state,
+                prior_outputs=prep_result.outputs,
             )
-            _, {spec.model}_postprocess_outputs = execute_step(
+            post_result, {spec.model}_postprocess_outputs = execute_step(
                 scenario=scenario,
                 definition={spec.model}_postprocess,
                 settings=settings,
@@ -904,31 +905,38 @@ def _render_stage_patch_execution_block(
                 iteration=None,
                 phase="postprocess",
                 sim_state=sim_state,
+                prior_outputs=run_result.outputs,
             )
+            # TODO: update sim_state from post_result.outputs / {spec.model}_postprocess_outputs
+            _sync_coupler(scenario, sim_state, last_synced=last_synced)
             """
         ).strip()
     if pattern == STAGE_PATTERN_ITERATIVE:
         return dedent(
             f"""
             for iteration in range(settings.run.supply_demand_iters):
-                _, {spec.model}_preprocess_outputs = execute_step(
+                prep_result, {spec.model}_preprocess_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_preprocess,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
                     phase="preprocess", sim_state=sim_state,
                 )
-                _, {spec.model}_run_outputs = execute_step(
+                run_result, {spec.model}_run_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_run,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
                     phase="run", sim_state=sim_state,
+                    prior_outputs=prep_result.outputs,
                 )
-                _, {spec.model}_postprocess_outputs = execute_step(
+                post_result, {spec.model}_postprocess_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_postprocess,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
                     phase="postprocess", sim_state=sim_state,
+                    prior_outputs=run_result.outputs,
                 )
+                # TODO: update sim_state from post_result.outputs / {spec.model}_postprocess_outputs
+                _sync_coupler(scenario, sim_state, last_synced=last_synced)
             """
         ).strip()
     raise ValueError(f"Unsupported stage patch pattern: {pattern}")
@@ -1070,7 +1078,7 @@ def _render_stage_patch_plan(
         f"""
         ## Required Variable Adaptation Checklist
 
-        - [ ] Confirm the stage function has `coupler`, `scenario`, `state`, `settings`, `workspace`, `surface`, and `year`, or adapt the snippet to an existing `WorkflowRuntimeContext`.
+        - [ ] Confirm the stage function has `scenario`, `state`, `settings`, `workspace`, `sim_state`, `year`, and `last_synced`.
         - [ ] Replace placeholder `<stage_name>` and adapt the explicit `execute_step(...)` calls to the target stage.
         - [ ] Complete each generated resolver with the model's semantic roles,
               concrete selected artifacts, and deterministic destinations.
@@ -1228,9 +1236,9 @@ def _render_checklist(
         ## Required Follow-up Wiring
 
         - [ ] Start from one of the generated stage template snippets and wire
-              the new model into the target stage module under
-              `pilates/workflows/stages/*.py` using explicit `execute_step(...)`
-              calls for preprocess, run, and postprocess.
+              the new model into `pilates/workflows/orchestrator.py` using
+              explicit `execute_step(...)` calls for preprocess, run, and
+              postprocess, updating `SimState` and calling `_sync_coupler`.
         - [ ] If generated, use the stage patch plan artifact in
               `docs/checklists/stage_templates/` to add native imports,
               one resolver call per phase, and explicit `execute_step(...)`
@@ -1241,8 +1249,9 @@ def _render_checklist(
               correct for your model.
         - [ ] Keep model enablement on the surface path. Do not derive run shape
               from raw settings or `WorkflowProfile` inside the model module.
-        - [ ] Keep runtime source precedence and fallback policy in binding, not
-              in stage-local `coupler.get(...)` chains.
+        - [ ] Keep runtime source precedence and fallback policy in `SimState`
+              and `StepDefinition.resolve_inputs`, not in stage-local
+              `coupler.get(...)` chains.
         - [ ] Define semantic input roles once in the resolver, declare output
               schema on `@define_step`, and make the `StepDefinition` projector
               validate and type the persisted Consist outputs.
@@ -1254,8 +1263,8 @@ def _render_checklist(
         - [ ] If this model needs provenance hashing/facets, confirm the generated
               catalog `provenance` metadata and add builder support in
               `pilates/workflows/consist_metadata.py` as needed.
-        - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`.
-        - [ ] Add/extend coupler schema entries in `pilates/workflows/coupler_schema.py`.
+        - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`
+              and `SimState.to_role_map()` in `pilates/workflows/sim_state.py`.
 
         ## Test Plan
 

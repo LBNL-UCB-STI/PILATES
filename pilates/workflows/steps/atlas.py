@@ -395,6 +395,7 @@ def _resolve_atlas_run_inputs(
     state: WorkflowState,
     workspace: Workspace,
     sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     **_: Any,
 ) -> StepCallInputs:
     active_sim_state = sim_state if sim_state is not None else SimState()
@@ -404,7 +405,12 @@ def _resolve_atlas_run_inputs(
         workspace=workspace,
     )
     candidates: dict[str, ArtifactRef | None] = {
-        key: active_sim_state.extras.get(key) for key in prepared_inputs
+        key: (
+            prior_outputs.get(key)
+            if prior_outputs is not None
+            else active_sim_state.extras.get(key)
+        )
+        for key in prepared_inputs
     }
     launch_context = AtlasLaunchContext(
         input_root=Path(workspace.get_atlas_mutable_input_dir()),

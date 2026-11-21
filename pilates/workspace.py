@@ -33,6 +33,7 @@ class Workspace:
         self.on_archive_commit: Optional[Callable[[str], None]] = on_archive_commit
         self.expected_prefix_steps: int = expected_prefix_steps
         self.step_execution_counter: int = 0
+        self.db_mutation_seq: int = 0
         self._asim_mutable_data_dir_override: Optional[str] = None
         self._asim_runtime_cache_dir_override: Optional[str] = None
         self._beam_mutable_data_dir_override: Optional[str] = None

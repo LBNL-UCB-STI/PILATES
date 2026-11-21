@@ -389,6 +389,7 @@ def _native_activitysim_step_inputs(
     state: WorkflowState,
     workspace: Workspace,
     sim_state: SimState,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
 ) -> StepCallInputs:
     """Build typed ``StepCallInputs`` for an ActivitySim step from ``SimState``."""
 
@@ -408,6 +409,10 @@ def _native_activitysim_step_inputs(
         sim_state,
         land_use_enabled=_land_use_enabled(state),
     )
+    if prior_outputs is not None:
+        for key, value in prior_outputs.items():
+            if value is not None:
+                candidates[key] = value
     return _build_step_call_inputs(
         candidates=candidates,
         required_roles=required_roles,
@@ -576,6 +581,7 @@ def _activitysim_postprocess_resolver(
     state: WorkflowState,
     workspace: Workspace,
     sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     **_: Any,
 ) -> StepCallInputs:
     active_sim_state = sim_state if sim_state is not None else SimState()
@@ -600,6 +606,7 @@ def _activitysim_postprocess_resolver(
         state=state,
         workspace=workspace,
         sim_state=active_sim_state,
+        prior_outputs=prior_outputs,
     )
     inputs = dict(resolved.inputs)
     removed_roles: set[str] = set()
@@ -1336,5 +1343,4 @@ activitysim_postprocess = StepDefinition(
     cache_options=_activitysim_cache_options,
     archive_outputs=True,
     optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    preflight_identity=False,
 )

@@ -16,7 +16,6 @@ from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_FULL_SKIMS,
-    BEAM_NETWORK_FINAL,
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
@@ -37,6 +36,7 @@ class LandUseState:
 
     current_h5: ArtifactRef | None = None
     prior_h5: ArtifactRef | None = None
+    merged_h5: ArtifactRef | None = None
     forecast_output: ArtifactRef | None = None
     population_source: ArtifactRef | None = None
 
@@ -49,7 +49,6 @@ class AtlasState:
     households_with_cars: ArtifactRef | None = None
     hh_cars: ArtifactRef | None = None
     rdata_bundle: ArtifactRef | None = None
-    output_dir: ArtifactRef | None = None
     last_simulated_year: int | None = None
 
 
@@ -67,7 +66,6 @@ class DemandState:
     trips: ArtifactRef | None = None
     plans: ArtifactRef | None = None
     skims_zarr: ArtifactRef | None = None
-    output_dir: ArtifactRef | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,10 +153,6 @@ class SimState:
             roles[BEAM_PLANS_OUT] = self.network.plans
         if self.network.experienced_plans is not None:
             roles[BEAM_EXPERIENCED_PLANS_XML] = self.network.experienced_plans
-        if self.network.events_parquet is not None:
-            roles["events_parquet"] = self.network.events_parquet
-        if self.network.network_csv is not None:
-            roles[BEAM_NETWORK_FINAL] = self.network.network_csv
         if self.network.full_skims is not None:
             roles[BEAM_FULL_SKIMS] = self.network.full_skims
 

@@ -1241,12 +1241,16 @@ def _resolve_beam_run_inputs(
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     beam_preprocess_outputs: Mapping[str, ArtifactRef] | None = None,
     **_: Any,
 ) -> StepCallInputs:
     del state
     active_sim_state = sim_state if sim_state is not None else SimState()
     ensure_beam_mutable_workspace(settings, workspace)
+    explicit_inputs = (
+        prior_outputs if prior_outputs is not None else beam_preprocess_outputs
+    )
     return _resolved_beam_inputs(
         step_name="beam_run",
         sim_state=active_sim_state,
@@ -1257,7 +1261,7 @@ def _resolve_beam_run_inputs(
             BEAM_PERSONS_IN,
         ),
         optional_roles=(LINKSTATS_WARMSTART,),
-        explicit_inputs=beam_preprocess_outputs,
+        explicit_inputs=explicit_inputs,
     )
 
 
@@ -1416,6 +1420,7 @@ def _resolve_beam_postprocess_inputs(
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     beam_run_outputs: Mapping[str, Any] | BeamRunOutputs | None = None,
     **_: Any,
 ) -> StepCallInputs:
@@ -1431,9 +1436,13 @@ def _resolve_beam_postprocess_inputs(
         raise RuntimeError("beam_postprocess requires a resolved forecast year.")
     iteration = state.iteration
     fresh_outputs = (
-        beam_run_outputs.raw_outputs
-        if isinstance(beam_run_outputs, BeamRunOutputs)
-        else beam_run_outputs
+        prior_outputs
+        if prior_outputs is not None
+        else (
+            beam_run_outputs.raw_outputs
+            if isinstance(beam_run_outputs, BeamRunOutputs)
+            else beam_run_outputs
+        )
     )
     storage_keys = (
         fresh_outputs.keys()
@@ -1524,6 +1533,7 @@ def _resolve_beam_full_skim_inputs(
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     **_: Any,
 ) -> StepCallInputs:
     del state
@@ -1553,6 +1563,7 @@ def _resolve_beam_full_skim_inputs(
         workspace=workspace,
         required_roles=(),
         optional_roles=optional_roles,
+        explicit_inputs=prior_outputs,
     )
 
 

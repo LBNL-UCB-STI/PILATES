@@ -906,8 +906,6 @@ def test_native_beam_run_skips_initial_linkstats_admission_on_subsequent_iterati
 def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
     tmp_path: Path,
 ) -> None:
-    assert beam_full_skim.preflight_identity is False
-
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),

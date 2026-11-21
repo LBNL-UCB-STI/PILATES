@@ -27,17 +27,6 @@ def canonicalize_output_mapping(
     return canonical
 
 
-def merge_canonical_output_mappings(
-    *mappings: Optional[Mapping[str, RunOutputValue]],
-) -> Dict[str, RunOutputValue]:
-    merged: Dict[str, RunOutputValue] = {}
-    for mapping in mappings:
-        if not mapping:
-            continue
-        merged.update(canonicalize_output_mapping(mapping))
-    return merged
-
-
 def load_tracker_run_outputs(
     run_id: Optional[str],
     *,

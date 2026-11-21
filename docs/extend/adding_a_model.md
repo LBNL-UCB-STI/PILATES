@@ -85,11 +85,13 @@ class MyModelRunOutputs(StepOutputsBase):
 
 In `pilates/workflows/steps/<model>.py`, build `StepCallInputs` directly from `SimState` and pair each step with an `InputContract`:
 
-- Select upstream inputs directly from `sim_state` (for example `sim_state.demand.households or sim_state.demand.households_in`) using plain Python conditionals—no `ArtifactBindingRule` or `coupler_schema.py` registration is needed.
+- Select upstream inputs directly from `sim_state` (for example `sim_state.demand.households or sim_state.demand.households_in`) using plain Python conditionals—no `ArtifactBindingRule` is needed; register new coupler keys in `pilates/workflows/artifact_keys.py` and `SimState.to_role_map()` (plus `pilates/workflows/coupler_schema.py` if adding a typed coupler schema field).
 - Set `ConfigContract.adapter("my_model")` when the step hashes a Consist `ConfigAdapter` directory, or `ConfigContract.payload()` when the step hashes config parameters.
 - Start with `status="incomplete"` and a clear `reason` string while scaffolding; promote to `status="complete"` once `resolve_inputs` supplies all artifact bindings and config identity fields required for cache hits and hydration.
 
 ```python
+from pathlib import Path
+
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
@@ -105,12 +107,15 @@ _MY_MODEL_RUN_INPUT_CONTRACT = InputContract(
 
 
 def _resolve_my_model_inputs(
-    *, sim_state: SimState | None = None, **_: object
+    *, workspace: object, sim_state: SimState | None = None, **_: object
 ) -> StepCallInputs:
     active = sim_state if sim_state is not None else SimState()
     households = active.demand.households or active.land_use.current_h5
     return StepCallInputs(
         inputs={"households_in": households} if households is not None else {},
+        logical_destinations={
+            "households_in": Path(workspace.full_path) / "my_model" / "households.csv"
+        },
         required_keys=("households_in",),
     )
 ```

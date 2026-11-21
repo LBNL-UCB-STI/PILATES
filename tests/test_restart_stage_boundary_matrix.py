@@ -192,7 +192,6 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
             output_sets=None,
             execution_options=None,
             input_contract=None,
-            preflight_identity=False,
         ),
     )
     monkeypatch.setattr(
@@ -206,7 +205,6 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
             output_sets=None,
             execution_options=None,
             input_contract=None,
-            preflight_identity=False,
         ),
     )
     monkeypatch.setattr(beam_stage, "_maybe_fail_after_beam_run_for_canary", failpoint)

@@ -106,7 +106,7 @@ def _postprocessing_callable(
             process_event_file,
         )
 
-        year = current_year(state) or 0
+        year = resolve_forecast_year(state) or current_year(state) or 0
         iter_idx = iteration_index(state)
         declared = _postprocessing_output_paths(
             settings=settings, state=state, workspace=workspace

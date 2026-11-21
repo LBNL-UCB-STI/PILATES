@@ -46,7 +46,7 @@ from pilates.config.models import (
 )
 from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.state_access import current_year, is_start_year
+from pilates.utils.state_access import current_year
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -633,51 +633,6 @@ def consist_step_meta(
             return str(value)
         return None
 
-    def _atlas_selected_usim_h5(state: Any) -> Any:
-        state_vars = vars(state)
-        current_h5 = state_vars.get("atlas_usim_datastore_h5")
-        base_h5 = state_vars.get("atlas_usim_datastore_base_h5")
-        if is_start_year(state) and base_h5 is not None:
-            return base_h5
-        return current_h5 if current_h5 is not None else base_h5
-
-    def _atlas_usim_households_identity(ctx: StepContext) -> Dict[str, Any]:
-        state = ctx.get_runtime("state", default=None)
-        if state is None:
-            return {}
-        selected_h5 = _atlas_selected_usim_h5(state)
-        if selected_h5 is None:
-            return {}
-
-        from pilates.utils.coupler_helpers import artifact_to_existing_path
-        from pilates.utils.usim_h5 import fingerprint_usim_h5_table
-
-        workspace_obj = ctx.get_runtime("workspace", default=None)
-        h5_path = artifact_to_existing_path(selected_h5, workspace=workspace_obj)
-        if h5_path is None:
-            return {
-                "atlas_usim_households_identity_status": "unresolved",
-                "atlas_usim_households_source": str(selected_h5),
-            }
-
-        year = current_year(state)
-        fingerprint = fingerprint_usim_h5_table(
-            h5_path=h5_path,
-            year=int(year) if year is not None else None,
-            table="households",
-        )
-        return {
-            "atlas_usim_households_identity_status": "resolved",
-            "atlas_usim_households_fingerprint_version": fingerprint[
-                "fingerprint_version"
-            ],
-            "atlas_usim_households_sha256": fingerprint["sha256"],
-            "atlas_usim_households_requested_year": fingerprint["requested_year"],
-            "atlas_usim_households_table_path": fingerprint["resolved_table_path"],
-            "atlas_usim_households_row_count": fingerprint["row_count"],
-            "atlas_usim_households_column_count": fingerprint["column_count"],
-        }
-
     def _activitysim_adapter(ctx: StepContext) -> Any:
         settings = ctx.get_runtime("settings", default=None)
         if settings is None:
@@ -1018,7 +973,6 @@ def consist_step_meta(
                 main_forecast_year = vars(state).get("main_forecast_year")
                 if main_forecast_year is not None:
                     atlas_runtime_identity["main_forecast_year"] = main_forecast_year
-                atlas_runtime_identity.update(_atlas_usim_households_identity(ctx))
             if atlas_runtime_identity:
                 resolved["config"] = {
                     **dict(resolved.get("config") or {}),

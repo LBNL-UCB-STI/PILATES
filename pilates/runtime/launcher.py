@@ -530,7 +530,6 @@ def main(
     state = prepared.state
     surface = prepared.surface
     workspace = prepared.workspace
-    runtime_context = prepared.runtime_context
     tracker = prepared.tracker
     snapshot_manager = prepared.snapshot_manager
     run_name = prepared.run_name

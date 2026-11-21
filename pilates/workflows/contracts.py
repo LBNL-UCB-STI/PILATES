@@ -126,7 +126,6 @@ class StepDefinition(Generic[OutputT]):
     execution_options: Callable[..., ExecutionOptions] | None = None
     cache_options: Callable[..., CacheOptions] | None = None
     optional_output_keys: tuple[str, ...] = ()
-    preflight_identity: bool = False
     archive_outputs: bool = True
 
     def __post_init__(self) -> None:

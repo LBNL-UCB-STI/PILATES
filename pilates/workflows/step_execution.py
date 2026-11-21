@@ -14,16 +14,17 @@ from consist import (
     OutputPolicyOptions,
     RunCompletionArchivePolicy,
     RunResult,
-    StepIdentity,
 )
 
 from pilates.utils.archive_paths import ArchiveRunDirLike, workspace_storage_roots
+from pilates.utils.state_access import iteration_index
 from pilates.workflows.contracts import StepCallInputs, StepDefinition
-from pilates.workflows.sim_state import SimState
+from pilates.workflows.sim_state import ArtifactRef, SimState
 
 OutputT = TypeVar("OutputT")
 
 CodeIdentityMode = Literal["repo_git", "callable_module", "callable_source"]
+_UNSET_ITERATION: Any = object()
 
 
 class ScenarioDriftError(RuntimeError):
@@ -79,6 +80,11 @@ class _HasMainForecastYear(Protocol):
 @runtime_checkable
 class _HasCacheHit(Protocol):
     cache_hit: bool
+
+
+@runtime_checkable
+class _HasDbMutationSeq(Protocol):
+    db_mutation_seq: int
 
 
 def _is_step_archive_enabled(
@@ -186,14 +192,18 @@ def execute_step(
     workspace: Any,
     stage: str,
     year: int | None,
-    iteration: int | None,
-    phase: str | None,
+    iteration: int | None = _UNSET_ITERATION,
+    phase: str | None = None,
     sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     runtime_kwargs: dict[str, Any] | None = None,
     step_inputs: StepCallInputs | None = None,
 ) -> tuple[RunResult, OutputT]:
     """Resolve once, run once, then project persisted ``RunResult.outputs`` once."""
 
+    resolved_iteration: int | None = (
+        iteration_index(state) if iteration is _UNSET_ITERATION else iteration
+    )
     base_runtime_kwargs = {
         **(runtime_kwargs or {}),
         "settings": settings,
@@ -245,25 +255,14 @@ def execute_step(
             # let's replace it properly.
             definition = replace(definition, function=_drift_guard_wrapper)
 
-    step_identity: StepIdentity | None = None
-    if definition.preflight_identity:
-        preflight_options = ExecutionOptions(
-            input_binding="paths", runtime_kwargs=base_runtime_kwargs
-        )
-        step_identity = scenario.resolve_step_identity(
-            definition.function,
-            year=year,
-            iteration=iteration,
-            phase=phase,
-            stage=stage,
-            execution_options=preflight_options,
-        )
     resolver_kwargs: dict[str, Any] = {
         "settings": settings,
         "state": state,
         "workspace": workspace,
         "sim_state": sim_state if sim_state is not None else SimState(),
     }
+    if prior_outputs is not None:
+        resolver_kwargs["prior_outputs"] = prior_outputs
     resolved_step_inputs = (
         step_inputs
         if step_inputs is not None
@@ -295,7 +294,7 @@ def execute_step(
         workspace=workspace,
         stage=stage,
         year=year,
-        iteration=iteration,
+        iteration=resolved_iteration,
         phase=phase,
     )
     result = scenario.run(
@@ -305,7 +304,7 @@ def execute_step(
             definition.name not in ("activitysim_preprocess", "activitysim_postprocess")
         ),
         year=year,
-        iteration=iteration,
+        iteration=resolved_iteration,
         phase=phase,
         stage=stage,
         outputs=(
@@ -352,9 +351,10 @@ def execute_step(
             ),
         ),
         execution_options=options,
-        step_identity=step_identity,
     )
     is_hit = result.cache_hit if isinstance(result, _HasCacheHit) else False
+    if not is_hit and isinstance(workspace, _HasDbMutationSeq):
+        workspace.db_mutation_seq += 1
     if step_archive_root is not None and not is_hit:
         if isinstance(workspace, _HasOnArchiveCommit) and workspace.on_archive_commit:
             workspace.on_archive_commit(definition.name)

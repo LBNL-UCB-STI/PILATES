@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 import logging
 import os
 from pathlib import Path
 import sys
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from consist import Artifact
 
@@ -67,7 +67,7 @@ from pilates.workflows.state_helpers import (
     requires_prior_beam_skim_handoff,
     resolve_forecast_year,
 )
-from pilates.workflows.step_execution import execute_step
+from pilates.workflows.step_execution import _HasDbMutationSeq, execute_step
 from pilates.workflows.steps import (
     activitysim_postprocess,
     activitysim_preprocess,
@@ -100,6 +100,11 @@ class _WorkspaceRootLike(Protocol):
 @runtime_checkable
 class _HasCoupler(Protocol):
     coupler: Any
+
+
+@runtime_checkable
+class _HasRunModels(Protocol):
+    models: Any
 
 
 @runtime_checkable
@@ -150,31 +155,99 @@ class AtlasSubState:
         del sub_stage_progress
 
 
-def _sync_coupler(scenario: Any, sim_state: SimState) -> None:
+@dataclass(slots=True)
+class _OrchestratorEnv:
+    """Shared execution environment threaded through ``run_pilates()``."""
+
+    scenario: ScenarioWithCoupler
+    settings: PilatesConfig
+    state: WorkflowState
+    workspace: Workspace
+    snapshot_manager: _SnapshotManagerLike | None = None
+    on_activity_demand_boundary: Optional[Callable[[int, int], None]] = None
+    last_synced: dict[str, ArtifactRef] = field(default_factory=dict)
+    last_snapshotted_seq: int = 0
+
+    def maybe_on_activity_demand_boundary(self, *, year: int, iteration: int) -> None:
+        if self.on_activity_demand_boundary is None:
+            return
+        if isinstance(self.workspace, _HasDbMutationSeq):
+            seq = self.workspace.db_mutation_seq
+            if seq == self.last_snapshotted_seq:
+                return
+            self.on_activity_demand_boundary(year, iteration)
+            self.last_snapshotted_seq = seq
+            return
+        self.on_activity_demand_boundary(year, iteration)
+
+    def maybe_on_outer_iteration_boundary(self, *, year: int, iteration: int) -> None:
+        if self.snapshot_manager is None:
+            return
+        if isinstance(self.workspace, _HasDbMutationSeq):
+            seq = self.workspace.db_mutation_seq
+            if seq == self.last_snapshotted_seq:
+                return
+            self.snapshot_manager.on_outer_iteration_boundary(
+                year=year,
+                iteration=iteration,
+            )
+            self.last_snapshotted_seq = seq
+            return
+        self.snapshot_manager.on_outer_iteration_boundary(
+            year=year,
+            iteration=iteration,
+        )
+
+
+def _sync_coupler(
+    scenario: Any,
+    sim_state: SimState,
+    last_synced: dict[str, ArtifactRef] | None = None,
+) -> None:
     if isinstance(scenario, _HasCoupler) and scenario.coupler is not None:
         role_map = sim_state.to_role_map()
-        changed = {
-            key: value
-            for key, value in role_map.items()
-            if scenario.coupler.get(key) is not value
-        }
-        if changed:
-            scenario.coupler.update(changed)
+        if last_synced is not None:
+            changed = {
+                key: value
+                for key, value in role_map.items()
+                if last_synced.get(key) is not value
+            }
+            if changed:
+                scenario.coupler.update(changed)
+                last_synced.update(changed)
+        elif role_map:
+            scenario.coupler.update(role_map)
 
 
-def _admit_bootstrap_input(scenario: Any, *, key: str, path: str) -> ArtifactRef:
+def _admit_bootstrap_input(
+    scenario: Any,
+    *,
+    key: str,
+    path: str,
+    admitted_cache: dict[str, ArtifactRef] | None = None,
+) -> ArtifactRef:
+    if admitted_cache is not None and path in admitted_cache:
+        return admitted_cache[path]
     try:
         first_step_started = bool(scenario._first_step_started)
     except AttributeError:
         first_step_started = False
     if not first_step_started:
         try:
-            artifact = scenario.add_input(path, key=key)
+            try:
+                artifact = scenario.add_input(path, key=key, reuse_if_unchanged=True)
+            except TypeError:
+                artifact = scenario.add_input(path, key=key)
             if isinstance(artifact, Artifact):
+                if admitted_cache is not None:
+                    admitted_cache[path] = artifact
                 return artifact
         except AttributeError:
             pass
-    return Path(path)
+    ref = Path(path)
+    if admitted_cache is not None:
+        admitted_cache[path] = ref
+    return ref
 
 
 def bootstrap_initial_state(
@@ -183,12 +256,14 @@ def bootstrap_initial_state(
     settings: PilatesConfig,
     state: Any,
     workspace: Workspace,
+    last_synced: dict[str, ArtifactRef] | None = None,
 ) -> SimState:
     """Resolve initial exogenous artifacts into a typed ``SimState`` and sync coupler."""
     land_use = LandUseState()
     demand = DemandState()
     network = NetworkState()
     extras: dict[str, ArtifactRef] = {}
+    admitted_cache: dict[str, ArtifactRef] = {}
     workspace_root = (
         Path(str(workspace.full_path))
         if isinstance(workspace, _WorkspaceRootLike) and workspace.full_path is not None
@@ -210,14 +285,23 @@ def bootstrap_initial_state(
         if static_source is not None and static_source.exists():
             h5_path = str(static_source)
             base_ref = _admit_bootstrap_input(
-                scenario, key=USIM_DATASTORE_BASE_H5, path=h5_path
+                scenario,
+                key=USIM_DATASTORE_BASE_H5,
+                path=h5_path,
+                admitted_cache=admitted_cache,
             )
             curr_ref = _admit_bootstrap_input(
-                scenario, key=USIM_DATASTORE_CURRENT_H5, path=h5_path
+                scenario,
+                key=USIM_DATASTORE_CURRENT_H5,
+                path=h5_path,
+                admitted_cache=admitted_cache,
             )
             pop_ref = (
                 _admit_bootstrap_input(
-                    scenario, key=USIM_POPULATION_SOURCE_H5, path=h5_path
+                    scenario,
+                    key=USIM_POPULATION_SOURCE_H5,
+                    path=h5_path,
+                    admitted_cache=admitted_cache,
                 )
                 if get_land_use_model(settings) != "urbansim"
                 else None
@@ -253,12 +337,18 @@ def bootstrap_initial_state(
                 candidate = None
             if candidate is not None and candidate.is_file():
                 omx_ref = _admit_bootstrap_input(
-                    scenario, key=ASIM_OMX_SKIMS, path=str(candidate)
+                    scenario,
+                    key=ASIM_OMX_SKIMS,
+                    path=str(candidate),
+                    admitted_cache=admitted_cache,
                 )
                 demand = replace(demand, skims_omx_in=omx_ref)
                 if get_traffic_assignment_model(settings) is None:
                     final_ref = _admit_bootstrap_input(
-                        scenario, key=FINAL_SKIMS_OMX, path=str(candidate)
+                        scenario,
+                        key=FINAL_SKIMS_OMX,
+                        path=str(candidate),
+                        admitted_cache=admitted_cache,
                     )
                     network = replace(network, skims_omx=final_ref)
 
@@ -289,14 +379,13 @@ def bootstrap_initial_state(
                 path = record.get_absolute_path(base_path=base_path)
                 if not path or not os.path.exists(path):
                     continue
-                ref = _admit_bootstrap_input(scenario, key=key, path=path)
+                ref = _admit_bootstrap_input(
+                    scenario,
+                    key=key,
+                    path=path,
+                    admitted_cache=admitted_cache,
+                )
                 extras[key] = ref
-                if key == BEAM_PLANS_IN:
-                    demand = replace(demand, plans=ref)
-                elif key == BEAM_HOUSEHOLDS_IN:
-                    demand = replace(demand, households_in=ref)
-                elif key == BEAM_PERSONS_IN:
-                    demand = replace(demand, persons_in=ref)
 
     # 4. BEAM warmstart linkstats
     if get_traffic_assignment_model(
@@ -307,7 +396,10 @@ def bootstrap_initial_state(
         warmstart_path = resolve_initial_linkstats_path(settings, workspace)
         if warmstart_path and os.path.exists(warmstart_path):
             ws_ref = _admit_bootstrap_input(
-                scenario, key=LINKSTATS_WARMSTART, path=warmstart_path
+                scenario,
+                key=LINKSTATS_WARMSTART,
+                path=warmstart_path,
+                admitted_cache=admitted_cache,
             )
             network = replace(network, linkstats_warmstart=ws_ref)
 
@@ -317,7 +409,7 @@ def bootstrap_initial_state(
         network=network,
         extras=extras,
     )
-    _sync_coupler(scenario, sim_state)
+    _sync_coupler(scenario, sim_state, last_synced=last_synced)
     return sim_state
 
 
@@ -329,6 +421,7 @@ def run_land_use_stage(
     workspace: Workspace,
     sim_state: SimState,
     year: int,
+    last_synced: dict[str, ArtifactRef] | None = None,
 ) -> SimState:
     """Execute UrbanSim run + postprocess and return updated ``SimState``."""
     formatted_print(f"LAND USE MODEL FOR YEAR {year}")
@@ -343,7 +436,6 @@ def run_land_use_stage(
         workspace=workspace,
         stage="land_use",
         year=year,
-        iteration=iteration_index(state),
         phase="run",
         sim_state=sim_state,
     )
@@ -368,11 +460,10 @@ def run_land_use_stage(
         workspace=workspace,
         stage="land_use",
         year=year,
-        iteration=iteration_index(state),
         phase="postprocess",
         sim_state=sim_state,
     )
-    archive_key = f"{USIM_INPUT_ARCHIVE_PREFIX}{year}"
+    archive_key = f"{USIM_INPUT_ARCHIVE_PREFIX}{resolve_forecast_year(state) or year}"
     archived_base = post_result.outputs.get(archive_key, sim_state.land_use.prior_h5)
     population_source = post_result.outputs.get(
         USIM_POPULATION_SOURCE_H5,
@@ -382,19 +473,20 @@ def run_land_use_stage(
         raise RuntimeError(
             "UrbanSim postprocess did not produce the population-source snapshot"
         )
-    current_h5: ArtifactRef = post_result.outputs.get(
+    curr_ref: ArtifactRef = post_result.outputs.get(
         USIM_DATASTORE_H5, post_outputs.usim_datastore_h5
     )
     sim_state = replace(
         sim_state,
         land_use=replace(
             sim_state.land_use,
-            current_h5=current_h5,
+            current_h5=curr_ref,
+            merged_h5=curr_ref,
             prior_h5=archived_base,
             population_source=population_source,
         ),
     )
-    _sync_coupler(scenario, sim_state)
+    _sync_coupler(scenario, sim_state, last_synced=last_synced)
     return sim_state
 
 
@@ -441,6 +533,7 @@ def run_vehicle_ownership_stage(
     workspace: Workspace,
     sim_state: SimState,
     year: int,
+    last_synced: dict[str, ArtifactRef] | None = None,
 ) -> SimState:
     """Execute ATLAS vehicle ownership sub-years and return updated ``SimState``."""
     logger.info(
@@ -460,15 +553,16 @@ def run_vehicle_ownership_stage(
         )
 
     forecast_datastore_ref = (
-        sim_state.land_use.forecast_output
-        or sim_state.land_use.population_source
+        sim_state.land_use.merged_h5
         or sim_state.land_use.current_h5
+        or sim_state.land_use.population_source
+        or sim_state.land_use.forecast_output
     )
 
     for atlas_year in _atlas_sub_years(state):
         atlas_state = AtlasSubState(state, atlas_year)
         try:
-            prep_result, prep_outputs = execute_step(
+            prep_result, _ = execute_step(
                 scenario=scenario,
                 definition=atlas_preprocess,
                 settings=settings,
@@ -480,12 +574,8 @@ def run_vehicle_ownership_stage(
                 phase="preprocess",
                 sim_state=sim_state,
             )
-            prep_extras: dict[str, ArtifactRef] = dict(sim_state.extras)
-            for k, p in prep_outputs.prepared_inputs.items():
-                prep_extras[k] = prep_result.outputs.get(k, p)
-            sim_for_run = replace(sim_state, extras=prep_extras)
 
-            run_result, run_outputs = execute_step(
+            run_result, _ = execute_step(
                 scenario=scenario,
                 definition=atlas_run,
                 settings=settings,
@@ -495,25 +585,20 @@ def run_vehicle_ownership_stage(
                 year=atlas_year,
                 iteration=iteration_index(state),
                 phase="run",
-                sim_state=sim_for_run,
+                sim_state=sim_state,
+                prior_outputs=prep_result.outputs,
             )
-            vehicles_ref = run_result.outputs.get(
-                f"vehicles_{atlas_year}",
-                run_outputs.raw_outputs.get(f"vehicles_{atlas_year}"),
-            )
-            hhv_ref = run_result.outputs.get(
-                f"householdv_{atlas_year}",
-                run_outputs.raw_outputs.get(f"householdv_{atlas_year}"),
-            )
-            rdata_ref = run_result.outputs.get(f"atlas_continuation_{atlas_year}")
             sim_state = replace(
                 sim_state,
                 atlas=replace(
                     sim_state.atlas,
-                    vehicles=vehicles_ref,
-                    households_with_cars=hhv_ref,
-                    rdata_bundle=rdata_ref,
-                    output_dir=run_outputs.atlas_output_dir,
+                    vehicles=run_result.outputs.get(f"vehicles_{atlas_year}"),
+                    households_with_cars=run_result.outputs.get(
+                        f"householdv_{atlas_year}"
+                    ),
+                    rdata_bundle=run_result.outputs.get(
+                        f"atlas_continuation_{atlas_year}"
+                    ),
                     last_simulated_year=atlas_year,
                 ),
             )
@@ -530,16 +615,13 @@ def run_vehicle_ownership_stage(
                 phase="postprocess",
                 sim_state=sim_state,
             )
-            hh_cars_ref = post_result.outputs.get(
-                ATLAS_VEHICLES2_OUTPUT,
-                post_outputs.processed_outputs.get(ATLAS_VEHICLES2_OUTPUT),
-            )
+            hh_cars_ref = post_result.outputs.get(ATLAS_VEHICLES2_OUTPUT)
             pop_ref: ArtifactRef | None = post_result.outputs.get(
                 USIM_POPULATION_SOURCE_H5,
                 post_outputs.usim_datastore_h5,
             )
             updated_land_use = sim_state.land_use
-            if post_outputs.usim_datastore_h5 is not None:
+            if pop_ref is not None:
                 if atlas_year != forecast_year:
                     updated_land_use = replace(
                         updated_land_use,
@@ -568,7 +650,7 @@ def run_vehicle_ownership_stage(
             persist_state_on_error(state, f"ATLAS year {atlas_year}")
             sys.exit(1)
 
-    _sync_coupler(scenario, sim_state)
+    _sync_coupler(scenario, sim_state, last_synced=last_synced)
     return sim_state
 
 
@@ -593,13 +675,14 @@ def run_activity_demand_phase(
     sim_state: SimState,
     year: int,
     iteration: int,
+    last_synced: dict[str, ArtifactRef] | None = None,
 ) -> SimState:
     """Execute ActivitySim preprocess, run, and postprocess for one iteration."""
     population_year = _activitysim_population_year(state)
     formatted_print("ACTIVITY DEMAND MODEL")
     logger.info("[activity_demand] year=%s iteration=%s", year, iteration)
 
-    prep_result, prep_outputs = execute_step(
+    prep_result, _ = execute_step(
         scenario=scenario,
         definition=activitysim_preprocess,
         settings=settings,
@@ -615,18 +698,11 @@ def run_activity_demand_phase(
         sim_state,
         demand=replace(
             sim_state.demand,
-            land_use_csv=prep_result.outputs.get(
-                ASIM_LAND_USE_IN, prep_outputs.land_use_table
-            ),
-            households_in=prep_result.outputs.get(
-                ASIM_HOUSEHOLDS_IN, prep_outputs.households_table
-            ),
-            persons_in=prep_result.outputs.get(
-                ASIM_PERSONS_IN, prep_outputs.persons_table
-            ),
+            land_use_csv=prep_result.outputs.get(ASIM_LAND_USE_IN),
+            households_in=prep_result.outputs.get(ASIM_HOUSEHOLDS_IN),
+            persons_in=prep_result.outputs.get(ASIM_PERSONS_IN),
             skims_omx_in=prep_result.outputs.get(
-                ASIM_OMX_SKIMS,
-                prep_outputs.omx_skims or sim_state.demand.skims_omx_in,
+                ASIM_OMX_SKIMS, sim_state.demand.skims_omx_in
             ),
         ),
     )
@@ -643,45 +719,23 @@ def run_activity_demand_phase(
         phase="run",
         sim_state=sim_state,
     )
-    run_extras: dict[str, ArtifactRef] = dict(sim_state.extras)
-    for k, p in run_outputs.raw_outputs.items():
-        run_extras[k] = run_result.outputs.get(k, p)
-    zarr_ref = run_result.outputs.get(
-        ZARR_SKIMS, run_outputs.raw_outputs.get(ZARR_SKIMS)
-    )
+    zarr_ref = run_result.outputs.get(ZARR_SKIMS, run_outputs.zarr_skims)
     sim_state = replace(
         sim_state,
         demand=replace(
             sim_state.demand,
-            households=run_result.outputs.get(
-                "households_asim_out",
-                run_outputs.raw_outputs.get("households_asim_out"),
-            ),
-            persons=run_result.outputs.get(
-                "persons_asim_out",
-                run_outputs.raw_outputs.get("persons_asim_out"),
-            ),
-            tours=run_result.outputs.get(
-                "tours_asim_out",
-                run_outputs.raw_outputs.get("tours_asim_out"),
-            ),
-            trips=run_result.outputs.get(
-                "trips_asim_out",
-                run_outputs.raw_outputs.get("trips_asim_out"),
-            ),
-            plans=run_result.outputs.get(
-                "beam_plans_asim_out",
-                run_outputs.raw_outputs.get("beam_plans_asim_out"),
-            ),
+            households=run_result.outputs.get("households_asim_out"),
+            persons=run_result.outputs.get("persons_asim_out"),
+            tours=run_result.outputs.get("tours_asim_out"),
+            trips=run_result.outputs.get("trips_asim_out"),
+            plans=run_result.outputs.get("beam_plans_asim_out"),
             skims_zarr=zarr_ref
             if zarr_ref is not None
             else sim_state.demand.skims_zarr,
-            output_dir=run_outputs.output_dir,
         ),
-        extras=run_extras,
     )
 
-    post_result, post_outputs = execute_step(
+    post_result, _ = execute_step(
         scenario=scenario,
         definition=activitysim_postprocess,
         settings=settings,
@@ -692,8 +746,9 @@ def run_activity_demand_phase(
         iteration=iteration,
         phase="postprocess",
         sim_state=sim_state,
+        prior_outputs=run_result.outputs,
     )
-    next_h5 = post_result.outputs.get(USIM_DATASTORE_H5, post_outputs.usim_datastore_h5)
+    next_h5 = post_result.outputs.get(USIM_DATASTORE_H5)
     updated_land_use = (
         replace(sim_state.land_use, current_h5=next_h5)
         if next_h5 is not None
@@ -717,7 +772,7 @@ def run_activity_demand_phase(
             ),
         ),
     )
-    _sync_coupler(scenario, sim_state)
+    _sync_coupler(scenario, sim_state, last_synced=last_synced)
     return sim_state
 
 
@@ -737,8 +792,12 @@ def _effective_supply_demand_iterations(
     if isinstance(state, WorkflowState):
         return state.effective_supply_demand_iterations(resumed_iteration=iteration)
     configured_iters = int(settings.run.supply_demand_iters)
-    models = vars(settings.run).get("models")
-    if models is not None and models.activity_demand is None and configured_iters > 1:
+    if (
+        isinstance(settings.run, _HasRunModels)
+        and settings.run.models is not None
+        and settings.run.models.activity_demand is None
+        and configured_iters > 1
+    ):
         return max(1, iteration + 1)
     return configured_iters
 
@@ -767,6 +826,8 @@ def _run_beam_full_skim(
     sim_state: SimState,
     beam_year: int,
     iteration: int,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    clear_zarr_on_omx: bool = False,
 ) -> SimState:
     skim_result, skim_outputs = execute_step(
         scenario=scenario,
@@ -779,19 +840,32 @@ def _run_beam_full_skim(
         iteration=iteration,
         phase="full_skim",
         sim_state=sim_state,
+        prior_outputs=prior_outputs,
+    )
+    new_skims_omx = skim_result.outputs.get(
+        FINAL_SKIMS_OMX, skim_outputs.final_skims_omx
+    )
+    next_demand = (
+        replace(sim_state.demand, skims_zarr=None)
+        if clear_zarr_on_omx and new_skims_omx is not None
+        else sim_state.demand
+    )
+    next_network = replace(
+        sim_state.network,
+        full_skims=skim_result.outputs.get(BEAM_FULL_SKIMS, skim_outputs.full_skims),
+        skims_omx=(
+            new_skims_omx if new_skims_omx is not None else sim_state.network.skims_omx
+        ),
+        skims_zarr=(
+            None
+            if clear_zarr_on_omx and new_skims_omx is not None
+            else sim_state.network.skims_zarr
+        ),
     )
     return replace(
         sim_state,
-        network=replace(
-            sim_state.network,
-            full_skims=skim_result.outputs.get(
-                BEAM_FULL_SKIMS, skim_outputs.full_skims
-            ),
-            skims_omx=skim_result.outputs.get(
-                FINAL_SKIMS_OMX,
-                skim_outputs.final_skims_omx or sim_state.network.skims_omx,
-            ),
-        ),
+        demand=next_demand,
+        network=next_network,
     )
 
 
@@ -816,6 +890,7 @@ def run_traffic_assignment_phase(
     sim_state: SimState,
     year: int,
     iteration: int,
+    last_synced: dict[str, ArtifactRef] | None = None,
 ) -> SimState:
     """Execute BEAM (or standalone full skim) for one iteration."""
     traffic_model = get_traffic_assignment_model(settings)
@@ -855,11 +930,12 @@ def run_traffic_assignment_phase(
             sim_state=sim_state,
             beam_year=beam_year,
             iteration=iteration,
+            clear_zarr_on_omx=True,
         )
-        _sync_coupler(scenario, sim_state)
+        _sync_coupler(scenario, sim_state, last_synced=last_synced)
         return sim_state
 
-    prep_result, prep_outputs = execute_step(
+    prep_result, _ = execute_step(
         scenario=scenario,
         definition=beam_preprocess,
         settings=settings,
@@ -871,31 +947,17 @@ def run_traffic_assignment_phase(
         phase="preprocess",
         sim_state=sim_state,
     )
-    prep_inputs: dict[str, ArtifactRef] = {
-        k: prep_result.outputs.get(k, p)
-        for k, p in prep_outputs.prepared_inputs.items()
-    }
     sim_for_beam = replace(
         sim_state,
         network=replace(
             sim_state.network,
             linkstats_warmstart=prep_result.outputs.get(
-                LINKSTATS_WARMSTART,
-                prep_outputs.prepared_inputs.get(
-                    LINKSTATS_WARMSTART, sim_state.network.linkstats_warmstart
-                ),
+                LINKSTATS_WARMSTART, sim_state.network.linkstats_warmstart
             ),
         ),
     )
 
-    run_inputs = beam_run.resolve_inputs(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        sim_state=sim_for_beam,
-        beam_preprocess_outputs=prep_inputs,
-    )
-    run_result, run_outputs = execute_step(
+    run_result, _ = execute_step(
         scenario=scenario,
         definition=beam_run,
         settings=settings,
@@ -906,18 +968,10 @@ def run_traffic_assignment_phase(
         iteration=iteration,
         phase="run",
         sim_state=sim_for_beam,
-        step_inputs=run_inputs,
+        prior_outputs=prep_result.outputs,
     )
     logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
     _maybe_fail_after_beam_run_for_canary(year=beam_year, iteration=iteration)
-
-    postprocess_inputs = beam_postprocess.resolve_inputs(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        sim_state=sim_for_beam,
-        beam_run_outputs=run_result.outputs,
-    )
 
     post_result, post_outputs = execute_step(
         scenario=scenario,
@@ -930,41 +984,26 @@ def run_traffic_assignment_phase(
         iteration=iteration,
         phase="postprocess",
         sim_state=sim_for_beam,
-        step_inputs=postprocess_inputs,
+        prior_outputs=run_result.outputs,
     )
 
     events_key = f"events_parquet_{beam_year}_{iteration}"
-    events_pq = run_result.outputs.get(
-        events_key,
-        run_outputs.raw_outputs.get(events_key, sim_state.network.events_parquet),
-    )
+    events_pq = run_result.outputs.get(events_key)
     sim_state = replace(
         sim_state,
         network=replace(
             sim_state.network,
-            plans=run_result.outputs.get(
-                BEAM_PLANS_OUT,
-                run_outputs.raw_outputs.get(BEAM_PLANS_OUT),
-            ),
-            experienced_plans=run_result.outputs.get(
-                BEAM_EXPERIENCED_PLANS_XML,
-                run_outputs.raw_outputs.get(BEAM_EXPERIENCED_PLANS_XML),
-            ),
+            plans=run_result.outputs.get(BEAM_PLANS_OUT),
+            experienced_plans=run_result.outputs.get(BEAM_EXPERIENCED_PLANS_XML),
             network_csv=post_result.outputs.get(
                 BEAM_NETWORK_FINAL,
                 run_result.outputs.get(
-                    BEAM_NETWORK_FINAL,
-                    run_outputs.raw_outputs.get(
-                        BEAM_NETWORK_FINAL, sim_state.network.network_csv
-                    ),
+                    BEAM_NETWORK_FINAL, sim_state.network.network_csv
                 ),
             ),
             linkstats=post_result.outputs.get(
                 LINKSTATS,
-                run_result.outputs.get(
-                    LINKSTATS,
-                    run_outputs.raw_outputs.get(LINKSTATS, sim_state.network.linkstats),
-                ),
+                run_result.outputs.get(LINKSTATS, sim_state.network.linkstats),
             ),
             skims_omx=post_result.outputs.get(
                 FINAL_SKIMS_OMX,
@@ -987,9 +1026,10 @@ def run_traffic_assignment_phase(
             sim_state=sim_state,
             beam_year=beam_year,
             iteration=iteration,
+            prior_outputs=prep_result.outputs,
         )
 
-    _sync_coupler(scenario, sim_state)
+    _sync_coupler(scenario, sim_state, last_synced=last_synced)
     return sim_state
 
 
@@ -1003,10 +1043,13 @@ def _run_supply_demand_loop(
     year: int,
     on_activity_demand_boundary: Optional[Callable[[int], None]] = None,
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
+    env: _OrchestratorEnv | None = None,
+    last_synced: dict[str, ArtifactRef] | None = None,
 ) -> SimState:
     """Run the supply-demand loop (ActivitySim + optional pre/post-BEAM + BEAM)."""
     logger.info("[supply_demand] year=%s run_id=%s", year, cr.current_run_id())
 
+    active_last_synced = env.last_synced if env is not None else last_synced
     configured_iters = settings.run.supply_demand_iters
     resumed_iteration = int(state.iteration or 0)
     total_iters = _effective_supply_demand_iterations(
@@ -1035,8 +1078,11 @@ def _run_supply_demand_loop(
                 sim_state=sim_state,
                 year=year,
                 iteration=it,
+                last_synced=active_last_synced,
             )
-            if on_activity_demand_boundary is not None:
+            if env is not None:
+                env.maybe_on_activity_demand_boundary(year=year, iteration=it)
+            elif on_activity_demand_boundary is not None:
                 on_activity_demand_boundary(it)
 
         # Optional pre-BEAM extension point:
@@ -1052,13 +1098,16 @@ def _run_supply_demand_loop(
                 sim_state=sim_state,
                 year=year,
                 iteration=it,
+                last_synced=active_last_synced,
             )
 
         # Optional post-BEAM extension point:
         # if settings.my_model is not None and settings.my_model.enabled:
         #     sim_state = run_my_model_post_beam(...)
 
-        if on_iteration_boundary is not None:
+        if env is not None:
+            env.maybe_on_outer_iteration_boundary(year=year, iteration=it)
+        elif on_iteration_boundary is not None:
             on_iteration_boundary(it)
 
     return sim_state
@@ -1072,9 +1121,11 @@ def run_postprocessing_stage(
     workspace: Workspace,
     sim_state: SimState,
     year: int,
+    last_synced: dict[str, ArtifactRef] | None = None,
 ) -> SimState:
     """Execute global postprocessing and return updated ``SimState``."""
-    logger.info("[postprocessing] year=%s run_id=%s", year, cr.current_run_id())
+    post_year = resolve_forecast_year(state) or year
+    logger.info("[postprocessing] year=%s run_id=%s", post_year, cr.current_run_id())
     post_result, post_outputs = execute_step(
         scenario=scenario,
         definition=postprocessing_step,
@@ -1082,8 +1133,7 @@ def run_postprocessing_stage(
         state=state,
         workspace=workspace,
         stage="postprocessing",
-        year=year,
-        iteration=iteration_index(state),
+        year=post_year,
         phase="postprocess",
         sim_state=sim_state,
     )
@@ -1092,7 +1142,7 @@ def run_postprocessing_stage(
     )
     if inexus_ref is not None:
         sim_state = replace(sim_state, inexus_outputs=inexus_ref)
-    _sync_coupler(scenario, sim_state)
+    _sync_coupler(scenario, sim_state, last_synced=last_synced)
     return sim_state
 
 
@@ -1106,105 +1156,99 @@ def run_pilates(
     on_activity_demand_boundary: Optional[Callable[[int, int], None]] = None,
 ) -> SimState:
     """Run the full PILATES forecast-year loop over typed ``SimState``."""
-    sim_state = bootstrap_initial_state(
+    env = _OrchestratorEnv(
         scenario=scenario,
         settings=settings,
         state=state,
         workspace=workspace,
+        snapshot_manager=snapshot_manager,
+        on_activity_demand_boundary=on_activity_demand_boundary,
+    )
+    sim_state = bootstrap_initial_state(
+        scenario=env.scenario,
+        settings=env.settings,
+        state=env.state,
+        workspace=env.workspace,
+        last_synced=env.last_synced,
     )
 
-    for year in state:
+    for year in env.state:
         formatted_print(f"STARTING YEAR {year}")
         logger.info(
             "[launcher] starting year=%s run_id=%s",
             year,
             cr.current_run_id(),
         )
-        if get_land_use_model(settings) is not None:
+        if get_land_use_model(env.settings) is not None:
             sim_state = run_land_use_stage(
-                scenario=scenario,
-                settings=settings,
-                state=state,
-                workspace=workspace,
+                scenario=env.scenario,
+                settings=env.settings,
+                state=env.state,
+                workspace=env.workspace,
                 sim_state=sim_state,
                 year=year,
+                last_synced=env.last_synced,
             )
-            if snapshot_manager is not None:
-                snapshot_manager.maybe_snapshot_interval(
+            if env.snapshot_manager is not None:
+                env.snapshot_manager.maybe_snapshot_interval(
                     reason=f"after_land_use_y{year}"
                 )
 
-        if get_vehicle_ownership_model(settings) is not None:
+        if get_vehicle_ownership_model(env.settings) is not None:
             formatted_print(
-                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
+                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {env.state.forecast_year}"
             )
             sim_state = run_vehicle_ownership_stage(
-                scenario=scenario,
-                settings=settings,
-                state=state,
-                workspace=workspace,
+                scenario=env.scenario,
+                settings=env.settings,
+                state=env.state,
+                workspace=env.workspace,
                 sim_state=sim_state,
                 year=year,
+                last_synced=env.last_synced,
             )
-            if snapshot_manager is not None:
-                snapshot_manager.maybe_snapshot_interval(
+            if env.snapshot_manager is not None:
+                env.snapshot_manager.maybe_snapshot_interval(
                     reason=f"after_vehicle_ownership_y{year}"
                 )
 
         if (
-            get_activity_demand_model(settings) is not None
-            or get_traffic_assignment_model(settings) is not None
+            get_activity_demand_model(env.settings) is not None
+            or get_traffic_assignment_model(env.settings) is not None
         ):
             sim_state = _run_supply_demand_loop(
-                scenario=scenario,
-                settings=settings,
-                state=state,
-                workspace=workspace,
+                scenario=env.scenario,
+                settings=env.settings,
+                state=env.state,
+                workspace=env.workspace,
                 sim_state=sim_state,
                 year=year,
-                on_activity_demand_boundary=(
-                    (
-                        lambda iteration, y=year: on_activity_demand_boundary(
-                            y, iteration
-                        )
-                    )
-                    if on_activity_demand_boundary is not None
-                    else None
-                ),
-                on_iteration_boundary=(
-                    (
-                        lambda iteration, y=year: (
-                            snapshot_manager.on_outer_iteration_boundary(
-                                year=y,
-                                iteration=iteration,
-                            )
-                        )
-                    )
-                    if snapshot_manager is not None
-                    else None
-                ),
+                env=env,
             )
-            if snapshot_manager is not None:
-                snapshot_manager.maybe_snapshot_interval(
+            if env.snapshot_manager is not None:
+                env.snapshot_manager.maybe_snapshot_interval(
                     reason=f"after_supply_demand_y{year}"
                 )
 
-        if state.is_enabled(WorkflowState.Stage.postprocessing):
+        if env.settings.postprocessing is not None:
             formatted_print("POST-PROCESSING")
             sim_state = run_postprocessing_stage(
-                scenario=scenario,
-                settings=settings,
-                state=state,
-                workspace=workspace,
+                scenario=env.scenario,
+                settings=env.settings,
+                state=env.state,
+                workspace=env.workspace,
                 sim_state=sim_state,
                 year=year,
+                last_synced=env.last_synced,
             )
-            if snapshot_manager is not None:
-                snapshot_manager.maybe_snapshot_interval(
+            if env.snapshot_manager is not None:
+                env.snapshot_manager.maybe_snapshot_interval(
                     reason=f"after_postprocessing_y{year}"
                 )
 
-        if snapshot_manager is not None:
-            snapshot_manager.maybe_snapshot_interval(reason=f"year_boundary_y{year}")
+        if env.snapshot_manager is not None:
+            env.snapshot_manager.maybe_snapshot_interval(
+                reason=f"year_boundary_y{year}"
+            )
 
     return sim_state
