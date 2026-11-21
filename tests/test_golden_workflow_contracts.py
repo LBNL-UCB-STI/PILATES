@@ -20,13 +20,13 @@ from pilates.urbansim.outputs import UrbanSimRunOutputs
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows import binding as workflow_binding
+from pilates.workflows import orchestrator as workflow_binding
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
 )
-from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
+from pilates.workflows.orchestrator import run_land_use_stage as _run_land_use_stage
 from tests.test_golden_stub_workflow import _write_file
 
 
@@ -48,11 +48,11 @@ def _initialize(env) -> None:
         cr.log_input(source_path, key="golden_surface_init_source")
         _write_file(init_marker, "initialized")
         cr.log_output(init_marker, key="golden_surface_init_marker")
-    workflow_binding.seed_bootstrap_artifacts_to_coupler(
+    return workflow_binding.bootstrap_initial_state(
+        scenario=scenario,
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=coupler,
     )
 
 
@@ -79,12 +79,15 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
         lambda *_args, **_kwargs: {"000000000000001": "1"},
     )
 
-    _initialize(golden_stub_env)
+    sim_state = _initialize(golden_stub_env)
 
     _run_land_use_stage(
         scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=sim_state,
         year=state.forecast_year,
-        context=golden_stub_env["context"],
     )
     land_use_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert land_use_datastore is not None

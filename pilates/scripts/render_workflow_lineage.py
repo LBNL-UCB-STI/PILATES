@@ -9,9 +9,13 @@ if __package__ in {None, ""}:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from pilates.workflows.lineage_render import render_plan_json, render_plan_mermaid
-from pilates.workflows.lineage_render import render_plan_html
-from pilates.workflows.planning import build_static_execution_plan_from_file
+from pilates.config.models import load_config
+from pilates.workflows.dry_run import (
+    plan_pilates,
+    render_plan_html,
+    render_plan_json,
+    render_plan_mermaid,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -50,8 +54,9 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    plan = build_static_execution_plan_from_file(
-        args.config,
+    settings = load_config(args.config)
+    plan = plan_pilates(
+        settings,
         include_postprocessing=not args.no_postprocessing,
     )
     if args.format == "mermaid":

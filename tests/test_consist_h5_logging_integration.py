@@ -4,12 +4,10 @@ import pytest
 from consist.types import H5ChildSpec
 
 from pilates.utils import consist_runtime as cr
-from pilates.workflows.coupler_namespace import set_coupler_from_artifact
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.stages import vehicle_ownership as vehicle_ownership_stage
 
 
 def test_consist_log_h5_container_integration(tmp_path):
@@ -99,16 +97,8 @@ def test_vehicle_ownership_aliases_real_population_h5_container_with_children(
                 child_selection="include_only",
             )
             container_artifact = logged[0] if isinstance(logged, tuple) else logged
-            set_coupler_from_artifact(
-                coupler,
-                USIM_POPULATION_SOURCE_H5,
-                container_artifact,
-                fallback=str(h5_path),
-            )
-            vehicle_ownership_stage._publish_current_h5_alias(
-                coupler=coupler,
-                fallback_path=h5_path,
-            )
+            coupler.set_from_artifact(USIM_POPULATION_SOURCE_H5, container_artifact)
+            coupler.set_from_artifact(USIM_DATASTORE_CURRENT_H5, container_artifact)
 
     population_source = coupler.get(USIM_POPULATION_SOURCE_H5)
     current = coupler.get(USIM_DATASTORE_CURRENT_H5)

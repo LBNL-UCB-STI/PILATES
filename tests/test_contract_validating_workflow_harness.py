@@ -25,9 +25,15 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.stages.vehicle_ownership import AtlasSubState
+from pilates.workflows.orchestrator import AtlasSubState
+from pilates.workflows.sim_state import (
+    AtlasState,
+    DemandState,
+    LandUseState,
+    NetworkState,
+    SimState,
+)
 from pilates.workflows.steps.beam import _compile_beam_launch_config
-from pilates.workflows.stages.vehicle_ownership import _publish_current_h5_alias
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import (
     activitysim_postprocess,
@@ -58,6 +64,62 @@ from pilates.runtime import launcher
 pytestmark = pytest.mark.contract_harness
 
 
+def _exec_step(*, scenario, stage, year, sim_state=None, step_inputs=None, **kwargs):
+    if sim_state is None and step_inputs is None:
+        atlas_year = year if stage == "vehicle_ownership" else None
+        sim_state = _sim_state_from_coupler(scenario.coupler, atlas_year=atlas_year)
+    result, out = execute_step(
+        scenario=scenario,
+        stage=stage,
+        year=year,
+        sim_state=sim_state,
+        step_inputs=step_inputs,
+        **kwargs,
+    )
+    if result is not None and getattr(result, "outputs", None):
+        scenario.coupler.update(result.outputs)
+    return result, out
+
+
+def _sim_state_from_coupler(coupler, *, atlas_year: int | None = None) -> SimState:
+    extras = {k: coupler.get(k) for k in coupler.keys() if coupler.get(k) is not None}
+    return SimState(
+        land_use=LandUseState(
+            current_h5=coupler.get(USIM_DATASTORE_H5),
+            prior_h5=coupler.get(USIM_DATASTORE_BASE_H5),
+            population_source=coupler.get(USIM_POPULATION_SOURCE_H5),
+        ),
+        atlas=AtlasState(
+            vehicles=coupler.get(f"vehicles_{atlas_year}") if atlas_year else None,
+            households_with_cars=(
+                coupler.get(f"householdv_{atlas_year}") if atlas_year else None
+            ),
+            hh_cars=coupler.get("atlas_vehicles2_output"),
+            last_simulated_year=atlas_year,
+        ),
+        demand=DemandState(
+            land_use_csv=coupler.get("land_use_asim_in"),
+            households_in=coupler.get("households_asim_in"),
+            persons_in=coupler.get("persons_asim_in"),
+            skims_omx_in=coupler.get(ASIM_OMX_SKIMS),
+            households=coupler.get("households_asim_out"),
+            persons=coupler.get("persons_asim_out"),
+            tours=coupler.get("tours_asim_out"),
+            trips=coupler.get("trips_asim_out"),
+            plans=coupler.get("beam_plans_asim_out"),
+            skims_zarr=coupler.get(ZARR_SKIMS),
+        ),
+        network=NetworkState(
+            skims_omx=coupler.get(FINAL_SKIMS_OMX),
+            skims_zarr=coupler.get(ZARR_SKIMS),
+            linkstats=coupler.get("linkstats"),
+            linkstats_warmstart=coupler.get("linkstats_warmstart"),
+            plans=coupler.get("beam_plans_out"),
+        ),
+        extras=extras,
+    )
+
+
 def _run_activitysim_and_beam_preprocess(
     env: MicroWorldEnv,
     sc,
@@ -71,7 +133,7 @@ def _run_activitysim_and_beam_preprocess(
     env.state.forecast_year = year
     env.state.current_inner_iter = iteration
 
-    _, asim_pre = execute_step(
+    _, asim_pre = _exec_step(
         scenario=sc,
         definition=activitysim_preprocess,
         settings=env.settings,
@@ -84,7 +146,7 @@ def _run_activitysim_and_beam_preprocess(
     )
     assert asim_pre is not None
 
-    _, asim_run_out = execute_step(
+    _, asim_run_out = _exec_step(
         scenario=sc,
         definition=activitysim_run,
         settings=env.settings,
@@ -101,7 +163,7 @@ def _run_activitysim_and_beam_preprocess(
     if bypass_atlas_restore_suffix_bug:
         env.settings.vehicle_ownership_model_enabled = False
     try:
-        _, asim_post = execute_step(
+        _, asim_post = _exec_step(
             scenario=sc,
             definition=activitysim_postprocess,
             settings=env.settings,
@@ -116,7 +178,7 @@ def _run_activitysim_and_beam_preprocess(
         env.settings.vehicle_ownership_model_enabled = prev_vo_enabled
     assert asim_post is not None
 
-    _, beam_pre = execute_step(
+    _, beam_pre = _exec_step(
         scenario=sc,
         definition=beam_preprocess,
         settings=env.settings,
@@ -163,7 +225,7 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
     with ContractValidatingContainerBackend() as backend:
         with env.scenario_context("happy_path_full_chain") as sc:
             # 1. UrbanSim Run & Postprocess (2010 -> 2015)
-            _, usim_run_out = execute_step(
+            _, usim_run_out = _exec_step(
                 scenario=sc,
                 definition=urbansim_run,
                 settings=env.settings,
@@ -177,7 +239,7 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
             assert usim_run_out is not None
             assert Path(usim_run_out.usim_datastore_h5).exists()
 
-            _, usim_post_out = execute_step(
+            _, usim_post_out = _exec_step(
                 scenario=sc,
                 definition=urbansim_postprocess,
                 settings=env.settings,
@@ -198,7 +260,7 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
             atlas_state = AtlasSubState(env.state, 2015)
 
             # 2. ATLAS Preprocess, Run & Postprocess
-            _, atlas_pre_out = execute_step(
+            _, atlas_pre_out = _exec_step(
                 scenario=sc,
                 definition=atlas_preprocess,
                 settings=env.settings,
@@ -208,10 +270,11 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 year=2015,
                 iteration=0,
                 phase="preprocess",
+                sim_state=_sim_state_from_coupler(sc.coupler, atlas_year=2015),
             )
             assert atlas_pre_out is not None
 
-            _, atlas_run_out = execute_step(
+            _, atlas_run_out = _exec_step(
                 scenario=sc,
                 definition=atlas_run,
                 settings=env.settings,
@@ -221,10 +284,11 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 year=2015,
                 iteration=0,
                 phase="run",
+                sim_state=_sim_state_from_coupler(sc.coupler, atlas_year=2015),
             )
             assert atlas_run_out is not None
 
-            _, atlas_post_out = execute_step(
+            _, atlas_post_out = _exec_step(
                 scenario=sc,
                 definition=atlas_postprocess,
                 settings=env.settings,
@@ -234,13 +298,13 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 year=2015,
                 iteration=0,
                 phase="postprocess",
+                sim_state=_sim_state_from_coupler(sc.coupler, atlas_year=2015),
             )
             assert atlas_post_out is not None
             assert atlas_post_out.usim_datastore_h5 is not None
-            _publish_current_h5_alias(
-                coupler=sc.coupler,
-                fallback_path=atlas_post_out.usim_datastore_h5,
-            )
+            pop_art = sc.coupler.get(USIM_POPULATION_SOURCE_H5)
+            if pop_art is not None:
+                sc.coupler[USIM_DATASTORE_H5] = pop_art
             with pd.HDFStore(str(atlas_post_out.usim_datastore_h5), mode="r") as store:
                 assert "/households" in store.keys()
                 hh_df = store["/households"]
@@ -258,9 +322,9 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc.coupler,
+                sim_state=_sim_state_from_coupler(sc.coupler),
             )
-            beam_run_result, beam_run_out = execute_step(
+            beam_run_result, beam_run_out = _exec_step(
                 scenario=sc,
                 definition=beam_run,
                 settings=env.settings,
@@ -271,7 +335,7 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 iteration=0,
                 phase="run",
                 runtime_kwargs={"beam_launch_config": launch_cfg},
-                resolved_inputs=beam_run_inputs,
+                step_inputs=beam_run_inputs,
             )
             assert beam_run_out is not None
             assert Path(beam_run_out.raw_outputs["raw_od_skims_zarr_2015_0"]).is_dir()
@@ -280,10 +344,10 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc.coupler,
+                sim_state=_sim_state_from_coupler(sc.coupler),
                 beam_run_outputs=beam_run_result.outputs,
             )
-            _, beam_post_out = execute_step(
+            _, beam_post_out = _exec_step(
                 scenario=sc,
                 definition=beam_postprocess,
                 settings=env.settings,
@@ -293,7 +357,7 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 year=2015,
                 iteration=0,
                 phase="postprocess",
-                resolved_inputs=beam_post_inputs,
+                step_inputs=beam_post_inputs,
             )
             assert beam_post_out is not None
             assert beam_post_out.zarr_skims is not None
@@ -353,10 +417,10 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc1.coupler,
+                sim_state=_sim_state_from_coupler(sc1.coupler),
             )
             exec_before_warm = len(backend.invocations)
-            _, first_run = execute_step(
+            _, first_run = _exec_step(
                 scenario=sc1,
                 definition=beam_run,
                 settings=env.settings,
@@ -367,7 +431,7 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 iteration=0,
                 phase="run",
                 runtime_kwargs={"beam_launch_config": launch_cfg},
-                resolved_inputs=run_inputs_1,
+                step_inputs=run_inputs_1,
             )
             assert len(backend.invocations) == exec_before_warm + 1
             assert first_run is not None
@@ -389,10 +453,10 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc2.coupler,
+                sim_state=_sim_state_from_coupler(sc2.coupler),
             )
             exec_before_phase_a = len(backend.invocations)
-            _, hydrated_run = execute_step(
+            _, hydrated_run = _exec_step(
                 scenario=sc2,
                 definition=beam_run,
                 settings=env.settings,
@@ -403,7 +467,7 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 iteration=0,
                 phase="run",
                 runtime_kwargs={"beam_launch_config": launch_cfg_2},
-                resolved_inputs=run_inputs_2,
+                step_inputs=run_inputs_2,
             )
             # Cache hit: container backend was NOT re-executed
             assert len(backend.invocations) == exec_before_phase_a
@@ -427,14 +491,14 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc3.coupler,
+                sim_state=_sim_state_from_coupler(sc3.coupler),
             )
             exec_before_phase_b = len(backend.invocations)
             with pytest.raises(
                 FileNotFoundError,
                 match="Cannot archive artifact 'raw_od_skims_zarr_2015_0': source bytes are unavailable",
             ):
-                execute_step(
+                _exec_step(
                     scenario=sc3,
                     definition=beam_run,
                     settings=env.settings,
@@ -445,7 +509,7 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                     iteration=0,
                     phase="run",
                     runtime_kwargs={"beam_launch_config": launch_cfg_3},
-                    resolved_inputs=run_inputs_3,
+                    step_inputs=run_inputs_3,
                 )
             assert len(backend.invocations) == exec_before_phase_b
 
@@ -480,9 +544,9 @@ def test_beam_postprocess_cold_scratch_events_parquet_materialization(
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc.coupler,
+                sim_state=_sim_state_from_coupler(sc.coupler),
             )
-            beam_run_res, beam_run_out = execute_step(
+            beam_run_res, beam_run_out = _exec_step(
                 scenario=sc,
                 definition=beam_run,
                 settings=env.settings,
@@ -493,7 +557,7 @@ def test_beam_postprocess_cold_scratch_events_parquet_materialization(
                 iteration=0,
                 phase="run",
                 runtime_kwargs={"beam_launch_config": launch_cfg},
-                resolved_inputs=run_inputs,
+                step_inputs=run_inputs,
             )
             assert beam_run_out is not None
             scratch_events = Path(beam_run_out.raw_outputs["events_parquet_2015_0"])
@@ -513,7 +577,7 @@ def test_beam_postprocess_cold_scratch_events_parquet_materialization(
             assert not scratch_events.exists()
 
             # Now run beam_postprocess on cold scratch
-            _, beam_post_out = execute_step(
+            _, beam_post_out = _exec_step(
                 scenario=sc,
                 definition=beam_postprocess,
                 settings=env.settings,
@@ -551,7 +615,7 @@ def test_urbansim_run_step_lineage_mode_and_cold_scratch_execution(
 
     with ContractValidatingContainerBackend(delegate_through_consist=True) as backend:
         with env.scenario_context("urbansim_lineage_warm") as sc1:
-            _, res1 = execute_step(
+            _, res1 = _exec_step(
                 scenario=sc1,
                 definition=urbansim_run,
                 settings=env.settings,
@@ -585,7 +649,7 @@ def test_urbansim_run_step_lineage_mode_and_cold_scratch_execution(
             store.put("/households", hh_df, format="fixed")
 
         with env.scenario_context("urbansim_lineage_cold_rerun") as sc2:
-            _, res2 = execute_step(
+            _, res2 = _exec_step(
                 scenario=sc2,
                 definition=urbansim_run,
                 settings=env.settings,
@@ -636,7 +700,7 @@ def test_activitysim_omx_mode_with_sharrow_disabled_does_not_require_zarr_cache(
     with ContractValidatingContainerBackend() as backend:
         with env.scenario_context("activitysim_omx_no_sharrow") as sc:
             sc.coupler.pop(ZARR_SKIMS, None)
-            _, asim_pre = execute_step(
+            _, asim_pre = _exec_step(
                 scenario=sc,
                 definition=activitysim_preprocess,
                 settings=env.settings,
@@ -649,7 +713,7 @@ def test_activitysim_omx_mode_with_sharrow_disabled_does_not_require_zarr_cache(
             )
             assert asim_pre is not None
 
-            _, asim_run_out = execute_step(
+            _, asim_run_out = _exec_step(
                 scenario=sc,
                 definition=activitysim_run,
                 settings=env.settings,
@@ -711,7 +775,7 @@ def test_atlas_preprocess_beamac_uses_resolved_beam_skims_omx(
                 sc.coupler.set_from_artifact(FINAL_SKIMS_OMX, omx_art)
 
             atlas_state = AtlasSubState(env.state, 2015)
-            _, atlas_pre = execute_step(
+            _, atlas_pre = _exec_step(
                 scenario=sc,
                 definition=atlas_preprocess,
                 settings=env.settings,
@@ -761,7 +825,7 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
     with ContractValidatingContainerBackend():
         with env.scenario_context("multi_year_datastore_and_replan") as sc:
             # 1. UrbanSim Run & Postprocess (2010 -> 2015)
-            execute_step(
+            _exec_step(
                 scenario=sc,
                 definition=urbansim_run,
                 settings=env.settings,
@@ -772,7 +836,7 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 iteration=0,
                 phase="run",
             )
-            execute_step(
+            _exec_step(
                 scenario=sc,
                 definition=urbansim_postprocess,
                 settings=env.settings,
@@ -798,7 +862,7 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
             atlas_state = AtlasSubState(env.state, 2015)
 
             # 2. ATLAS Preprocess, Run & Postprocess (writes /2015/cars and /cars to datastore)
-            execute_step(
+            _exec_step(
                 scenario=sc,
                 definition=atlas_preprocess,
                 settings=env.settings,
@@ -809,7 +873,7 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 iteration=0,
                 phase="preprocess",
             )
-            execute_step(
+            _exec_step(
                 scenario=sc,
                 definition=atlas_run,
                 settings=env.settings,
@@ -820,7 +884,7 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 iteration=0,
                 phase="run",
             )
-            _, atlas_post_out = execute_step(
+            _, atlas_post_out = _exec_step(
                 scenario=sc,
                 definition=atlas_postprocess,
                 settings=env.settings,
@@ -832,10 +896,9 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 phase="postprocess",
             )
             assert atlas_post_out.usim_datastore_h5 is not None
-            _publish_current_h5_alias(
-                coupler=sc.coupler,
-                fallback_path=atlas_post_out.usim_datastore_h5,
-            )
+            pop_art = sc.coupler.get(USIM_POPULATION_SOURCE_H5)
+            if pop_art is not None:
+                sc.coupler[USIM_DATASTORE_H5] = pop_art
 
             # 3. Iteration 0: ActivitySim + BEAM
             _, launch_cfg_0 = _run_activitysim_and_beam_preprocess(
@@ -845,9 +908,9 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc.coupler,
+                sim_state=_sim_state_from_coupler(sc.coupler),
             )
-            beam_res_0, _ = execute_step(
+            beam_res_0, _ = _exec_step(
                 scenario=sc,
                 definition=beam_run,
                 settings=env.settings,
@@ -858,16 +921,16 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 iteration=0,
                 phase="run",
                 runtime_kwargs={"beam_launch_config": launch_cfg_0},
-                resolved_inputs=run_inputs_0,
+                step_inputs=run_inputs_0,
             )
             post_inputs_0 = beam_postprocess.resolve_inputs(
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc.coupler,
+                sim_state=_sim_state_from_coupler(sc.coupler),
                 beam_run_outputs=beam_res_0.outputs,
             )
-            execute_step(
+            _exec_step(
                 scenario=sc,
                 definition=beam_postprocess,
                 settings=env.settings,
@@ -877,7 +940,7 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 year=2015,
                 iteration=0,
                 phase="postprocess",
-                resolved_inputs=post_inputs_0,
+                step_inputs=post_inputs_0,
             )
 
             # Verify (a) `input_data_for_2015_outputs.h5` was NOT clobbered by ActivitysimPostprocessor
@@ -905,9 +968,9 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc.coupler,
+                sim_state=_sim_state_from_coupler(sc.coupler),
             )
-            beam_res_1, _ = execute_step(
+            beam_res_1, _ = _exec_step(
                 scenario=sc,
                 definition=beam_run,
                 settings=env.settings,
@@ -918,16 +981,16 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 iteration=1,
                 phase="run",
                 runtime_kwargs={"beam_launch_config": launch_cfg_1},
-                resolved_inputs=run_inputs_1,
+                step_inputs=run_inputs_1,
             )
             post_inputs_1 = beam_postprocess.resolve_inputs(
                 settings=env.settings,
                 state=env.state,
                 workspace=env.workspace,
-                coupler=sc.coupler,
+                sim_state=_sim_state_from_coupler(sc.coupler),
                 beam_run_outputs=beam_res_1.outputs,
             )
-            execute_step(
+            _exec_step(
                 scenario=sc,
                 definition=beam_postprocess,
                 settings=env.settings,
@@ -937,7 +1000,7 @@ def test_multi_year_hdf5_datastore_preservation_and_multi_iteration_beam_replan(
                 year=2015,
                 iteration=1,
                 phase="postprocess",
-                resolved_inputs=post_inputs_1,
+                step_inputs=post_inputs_1,
             )
 
 
@@ -1149,8 +1212,9 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
       and finishes `ActivitySim -> BEAM`.
     """
     from pilates.runtime import launcher
+    from pilates.workflows import orchestrator
 
-    real_run_supply_demand_stage = launcher.run_supply_demand_stage
+    real_run_supply_demand_loop = orchestrator._run_supply_demand_loop
 
     # --- Case A: Committed boundary restart at supply_demand_loop ---
     case_a_dir = tmp_path / "case_a"
@@ -1172,7 +1236,9 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
 
     with ContractValidatingContainerBackend() as backend_a:
         monkeypatch.setattr(
-            launcher, "run_supply_demand_stage", _interrupt_at_supply_demand_boundary
+            orchestrator,
+            "_run_supply_demand_loop",
+            _interrupt_at_supply_demand_boundary,
         )
         with pytest.raises(
             RuntimeError,
@@ -1189,7 +1255,7 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
 
         # Restore real supply_demand stage, wipe node-local scratch, and restart
         monkeypatch.setattr(
-            launcher, "run_supply_demand_stage", real_run_supply_demand_stage
+            orchestrator, "_run_supply_demand_loop", real_run_supply_demand_loop
         )
         shutil.rmtree(env_a.paths.scratch_root)
         env_a.paths.scratch_root.mkdir(parents=True, exist_ok=True)
@@ -1221,15 +1287,15 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
     )
 
     def _interrupt_mid_activitysim(**kwargs):
-        ctx = kwargs["context"]
-        ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
-        ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
-        ctx.state.sub_stage_progress = "runner"
+        st = kwargs["state"]
+        st.current_major_stage = st.Stage.supply_demand_loop
+        st.current_sub_stage = st.Stage.activity_demand
+        st.sub_stage_progress = "runner"
         raise RuntimeError("Simulated crash mid-ActivitySim before BEAM checkpoint")
 
     with ContractValidatingContainerBackend() as backend_b:
         monkeypatch.setattr(
-            launcher, "run_supply_demand_stage", _interrupt_mid_activitysim
+            orchestrator, "_run_supply_demand_loop", _interrupt_mid_activitysim
         )
         with pytest.raises(
             RuntimeError,
@@ -1243,7 +1309,7 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
 
         # Restore real supply_demand stage, wipe scratch, and restart with run_dir
         monkeypatch.setattr(
-            launcher, "run_supply_demand_stage", real_run_supply_demand_stage
+            orchestrator, "_run_supply_demand_loop", real_run_supply_demand_loop
         )
         shutil.rmtree(env_b.paths.scratch_root)
         env_b.paths.scratch_root.mkdir(parents=True, exist_ok=True)
@@ -1579,8 +1645,9 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
     - `ActivitySim(2017) -> BEAM(2017) -> Postprocessing(2017)` execute to completion.
     """
     from pilates.runtime import launcher
+    from pilates.workflows import orchestrator
 
-    real_run_supply_demand_stage = launcher.run_supply_demand_stage
+    real_run_supply_demand_loop = orchestrator._run_supply_demand_loop
 
     env = build_micro_world(
         tmp_path,
@@ -1598,18 +1665,18 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
     def _interrupt_mid_activitysim_in_2017(**kwargs):
         year = kwargs["year"]
         if year == 2015:
-            return real_run_supply_demand_stage(**kwargs)
-        ctx = kwargs["context"]
-        ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
-        ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
-        ctx.state.sub_stage_progress = "runner"
+            return real_run_supply_demand_loop(**kwargs)
+        st = kwargs["state"]
+        st.current_major_stage = st.Stage.supply_demand_loop
+        st.current_sub_stage = st.Stage.activity_demand
+        st.sub_stage_progress = "runner"
         raise RuntimeError(
             "Simulated crash mid-ActivitySim in year 2017 after 2017 UrbanSim+ATLAS"
         )
 
     with ContractValidatingContainerBackend() as backend:
         monkeypatch.setattr(
-            launcher, "run_supply_demand_stage", _interrupt_mid_activitysim_in_2017
+            orchestrator, "_run_supply_demand_loop", _interrupt_mid_activitysim_in_2017
         )
         with pytest.raises(
             RuntimeError,
@@ -1637,7 +1704,7 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
 
         # Restore real supply_demand stage, wipe node-local scratch, and restart
         monkeypatch.setattr(
-            launcher, "run_supply_demand_stage", real_run_supply_demand_stage
+            orchestrator, "_run_supply_demand_loop", real_run_supply_demand_loop
         )
         shutil.rmtree(env.paths.scratch_root)
         env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
@@ -1689,8 +1756,9 @@ def test_forecast_year_scenario_fork_reuses_base_year_cache_and_branches_forecas
     """
     from pilates.runtime import launcher
     from pilates.runtime.promote_run_archive import promote_run_to_recovery_roots
+    from pilates.workflows import orchestrator
 
-    real_run_land_use_stage = launcher.run_land_use_stage
+    real_run_land_use_stage = orchestrator.run_land_use_stage
 
     env = build_micro_world(
         tmp_path,
@@ -1746,10 +1814,10 @@ def test_forecast_year_scenario_fork_reuses_base_year_cache_and_branches_forecas
         def _apply_2017_policy_fork(**kwargs):
             year = kwargs["year"]
             if year == 2017:
-                kwargs["context"].settings.beam.replanning_portion = 0.75
+                kwargs["settings"].beam.replanning_portion = 0.75
             return real_run_land_use_stage(**kwargs)
 
-        monkeypatch.setattr(launcher, "run_land_use_stage", _apply_2017_policy_fork)
+        monkeypatch.setattr(orchestrator, "run_land_use_stage", _apply_2017_policy_fork)
         launcher.main(settings=fork_settings)
 
         # Year 2015 (all 4 models) + Year 2017 UrbanSim, ATLAS, and ActivitySim all hit cache;

@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.workspace import Workspace
-from pilates.workflows.stages.postprocessing import run_postprocessing_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from pilates.workflows.orchestrator import (
+    _run_supply_demand_loop as run_supply_demand_stage,
+    run_postprocessing_stage,
+)
+from pilates.workflows.sim_state import SimState
 from tests.conftest import (
     make_conforming_settings,
     make_conforming_workflow_runtime_context,
@@ -16,22 +18,11 @@ from tests.conftest import (
 )
 
 
-def test_workflow_runtime_context_builds_surface_when_missing(monkeypatch) -> None:
+def test_workflow_runtime_context_builds_from_parts() -> None:
     settings = SimpleNamespace()
     state = SimpleNamespace()
-    workspace = SimpleNamespace(on_archive_commit=None, expected_prefix_steps=0)
-    built_surface = SimpleNamespace(profile=SimpleNamespace())
-    captured = {}
-
-    def _fake_build_enabled_workflow_surface(received_settings, *, state):
-        captured["settings"] = received_settings
-        captured["state"] = state
-        return built_surface
-
-    monkeypatch.setattr(
-        "pilates.workflows.surface.build_enabled_workflow_surface",
-        _fake_build_enabled_workflow_surface,
-    )
+    cb = lambda _msg: None
+    workspace = SimpleNamespace(on_archive_commit=cb, expected_prefix_steps=4)
 
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
@@ -39,24 +30,11 @@ def test_workflow_runtime_context_builds_surface_when_missing(monkeypatch) -> No
         workspace=workspace,
     )
 
-    assert context.surface is built_surface
-    assert captured == {"settings": settings, "state": state}
-
-
-def test_workflow_runtime_context_reuses_explicit_surface() -> None:
-    settings = SimpleNamespace()
-    state = SimpleNamespace()
-    workspace = SimpleNamespace(on_archive_commit=None, expected_prefix_steps=0)
-    surface = SimpleNamespace(profile=SimpleNamespace())
-
-    context = WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-
-    assert context.surface is surface
+    assert context.settings is settings
+    assert context.state is state
+    assert context.workspace is workspace
+    assert context.on_archive_commit is cb
+    assert context.expected_prefix_steps == 4
 
 
 def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
@@ -99,42 +77,51 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
     settings = SimpleNamespace(
         run=SimpleNamespace(
             supply_demand_iters=1,
-            models=SimpleNamespace(activity_demand=object()),
+            models=SimpleNamespace(activity_demand=object(), travel="beam"),
         )
     )
     state = _FakeState()
     workspace = make_conforming_workspace(tmp_path)
-    surface = SimpleNamespace(profile=SimpleNamespace())
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
         workspace=workspace,
-        surface=surface,
     )
     seen = {}
 
     monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand._run_activity_demand_phase",
+        "pilates.workflows.orchestrator.run_activity_demand_phase",
         lambda **kwargs: (
-            seen.setdefault("activity_context", kwargs["context"]),
-            None,
-        )[1],
+            seen.setdefault("activity_settings", kwargs["settings"]),
+            seen.setdefault("activity_state", kwargs["state"]),
+            seen.setdefault("activity_workspace", kwargs["workspace"]),
+            kwargs["sim_state"],
+        )[3],
     )
     monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand._run_traffic_assignment_phase",
+        "pilates.workflows.orchestrator.run_traffic_assignment_phase",
         lambda **kwargs: (
-            seen.setdefault("beam_context", kwargs["context"]),
-            None,
-        )[1],
+            seen.setdefault("beam_settings", kwargs["settings"]),
+            seen.setdefault("beam_state", kwargs["state"]),
+            seen.setdefault("beam_workspace", kwargs["workspace"]),
+            kwargs["sim_state"],
+        )[3],
     )
     run_supply_demand_stage(
         scenario=SimpleNamespace(),
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        sim_state=SimState(),
         year=2018,
-        context=context,
     )
 
-    assert seen["activity_context"] is context
-    assert seen["beam_context"] is context
+    assert seen["activity_settings"] is settings
+    assert seen["activity_state"] is state
+    assert seen["activity_workspace"] is workspace
+    assert seen["beam_settings"] is settings
+    assert seen["beam_state"] is state
+    assert seen["beam_workspace"] is workspace
 
 
 def test_supply_demand_snapshots_after_activitysim_before_beam(
@@ -166,85 +153,33 @@ def test_supply_demand_snapshots_after_activitysim_before_beam(
         settings=SimpleNamespace(
             run=SimpleNamespace(
                 supply_demand_iters=1,
-                models=SimpleNamespace(activity_demand="activitysim"),
+                models=SimpleNamespace(activity_demand="activitysim", travel="beam"),
             )
         ),
         state=_FakeState(),
         workspace=make_conforming_workspace(tmp_path),
-        surface=SimpleNamespace(profile=SimpleNamespace()),
     )
     events: list[str] = []
     monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand._run_activity_demand_phase",
-        lambda **_kwargs: events.append("activitysim"),
+        "pilates.workflows.orchestrator.run_activity_demand_phase",
+        lambda **kwargs: (events.append("activitysim"), kwargs["sim_state"])[1],
     )
     monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand._run_traffic_assignment_phase",
-        lambda **_kwargs: events.append("beam"),
+        "pilates.workflows.orchestrator.run_traffic_assignment_phase",
+        lambda **kwargs: (events.append("beam"), kwargs["sim_state"])[1],
     )
 
     run_supply_demand_stage(
         scenario=SimpleNamespace(),
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        sim_state=SimState(),
         year=2018,
         on_activity_demand_boundary=lambda _iteration: events.append("snapshot"),
-        context=context,
     )
 
     assert events[:3] == ["activitysim", "snapshot", "beam"]
-
-
-def test_supply_demand_fails_closed_for_uncommitted_restart_without_handoff(
-    tmp_path: Path,
-) -> None:
-    class _FakeStage:
-        supply_demand_loop = "supply_demand_loop"
-        activity_demand = "activity_demand"
-        traffic_assignment = "traffic_assignment"
-
-    class _FakeState:
-        Stage = _FakeStage
-        iteration = 0
-        current_major_stage = _FakeStage.supply_demand_loop
-        current_sub_stage = _FakeStage.traffic_assignment
-        year = 2018
-        forecast_year = 2018
-        is_restart_run = False
-
-        def should_run(self, major_stage, iteration=None, sub_stage=None):
-            if major_stage != self.Stage.supply_demand_loop:
-                return False
-            if iteration != self.iteration:
-                return False
-            if sub_stage is None:
-                return True
-            return (self.Stage.activity_demand, self.Stage.traffic_assignment).index(
-                self.current_sub_stage
-            ) <= (self.Stage.activity_demand, self.Stage.traffic_assignment).index(
-                sub_stage
-            )
-
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            supply_demand_iters=1,
-            models=SimpleNamespace(activity_demand="activitysim"),
-        )
-    )
-    state = _FakeState()
-    context = WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=make_conforming_workspace(tmp_path),
-        surface=SimpleNamespace(profile=SimpleNamespace()),
-    )
-    with pytest.raises(
-        RuntimeError,
-        match="ActivitySim is skipped outside the committed BEAM checkpoint",
-    ):
-        run_supply_demand_stage(
-            scenario=SimpleNamespace(),
-            year=2018,
-            context=context,
-        )
 
 
 def test_run_postprocessing_stage_uses_runtime_context(
@@ -253,27 +188,31 @@ def test_run_postprocessing_stage_uses_runtime_context(
     settings = SimpleNamespace()
     state = SimpleNamespace(iteration=0)
     workspace = make_conforming_workspace(tmp_path)
-    surface = SimpleNamespace(profile=SimpleNamespace())
     context = WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
         workspace=workspace,
-        surface=surface,
     )
     captured = {}
 
     monkeypatch.setattr(
-        "pilates.workflows.stages.postprocessing.execute_step",
+        "pilates.workflows.orchestrator.execute_step",
         lambda **kwargs: (
             captured.update(kwargs),
-            (SimpleNamespace(), SimpleNamespace()),
+            (
+                SimpleNamespace(outputs={}),
+                {},
+            ),
         )[1],
     )
 
     run_postprocessing_stage(
         scenario="scenario",
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        sim_state=SimState(),
         year=2018,
-        context=context,
     )
 
     assert captured["settings"] is settings
@@ -304,4 +243,3 @@ def test_conforming_workspace_and_context_factory(tmp_path: Path) -> None:
     assert isinstance(context, WorkflowRuntimeContext)
     assert context.workspace is workspace
     assert context.settings is settings
-    assert context.surface is not None

@@ -7,7 +7,6 @@ from pilates.workspace import Workspace
 
 if TYPE_CHECKING:
     from pilates.config.models import PilatesConfig
-    from pilates.workflows.surface import EnabledWorkflowSurface
     from pilates.workflows.state import WorkflowState
 
 
@@ -21,7 +20,6 @@ class WorkflowRuntimeContext:
 
     - validated settings
     - mutable workflow state
-    - enabled workflow surface for the current run shape
     - workspace paths
     - optional archive commit callback
     - expected prefix steps for strict resume
@@ -33,7 +31,6 @@ class WorkflowRuntimeContext:
 
     settings: "PilatesConfig"
     state: "WorkflowState"
-    surface: "EnabledWorkflowSurface"
     workspace: "Workspace"
     on_archive_commit: Optional[Callable[[str], None]] = None
     expected_prefix_steps: int = 0
@@ -45,17 +42,12 @@ class WorkflowRuntimeContext:
         settings: "PilatesConfig",
         state: "WorkflowState",
         workspace: "Workspace",
-        surface: Optional["EnabledWorkflowSurface"] = None,
         on_archive_commit: Optional[Callable[[str], None]] = None,
         expected_prefix_steps: int = 0,
     ) -> "WorkflowRuntimeContext":
         """
-        Build a runtime context with a guaranteed surface/state pairing.
+        Build a runtime context from validated settings, state, and workspace.
         """
-        if surface is None:
-            from pilates.workflows.surface import build_enabled_workflow_surface
-
-            surface = build_enabled_workflow_surface(settings, state=state)
         archive_cb = (
             on_archive_commit
             if on_archive_commit is not None
@@ -69,7 +61,6 @@ class WorkflowRuntimeContext:
         return cls(
             settings=settings,
             state=state,
-            surface=surface,
             workspace=workspace,
             on_archive_commit=archive_cb,
             expected_prefix_steps=prefix_steps,

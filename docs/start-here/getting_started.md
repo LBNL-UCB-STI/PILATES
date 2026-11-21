@@ -59,7 +59,7 @@ Tracked files under `scenarios/` serve as baseline templates that contain machin
 
 ## Run Startup and Outputs
 
-During launch, `run.py` validates the YAML settings, initializes runtime flags, builds the `EnabledWorkflowSurface`, and creates or restores `WorkflowState`. Upon opening the Consist scenario context, the launcher runs preflight admission checks and seeds starting artifact handles into `scenario.coupler` (`seed_bootstrap_artifacts_to_coupler`) before entering the year loop, where each step resolver/preprocessor idempotently prepares its own mutable workspace and config files.
+During launch, `run.py` validates the YAML settings, initializes runtime flags, and creates or restores `WorkflowState`. Upon opening the Consist scenario context, the launcher runs preflight admission checks and seeds starting artifact handles into `scenario.coupler` (`seed_bootstrap_artifacts_to_coupler`) before `pilates/workflows/orchestrator.py` (`run_pilates`) enters the year loop, where `SimState` tracks typed artifact handles and each step resolver/preprocessor idempotently prepares its own mutable workspace and config files (previewable via `pilates/workflows/dry_run.py`).
 
 A completed or in-progress run produces two directories and two state records:
 

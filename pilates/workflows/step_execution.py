@@ -5,79 +5,38 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Mapping, TypeVar, overload
 
 from consist import (
+    BindingResult,
     CacheOptions,
     ExecutionOptions,
     OutputPolicyOptions,
     RunCompletionArchivePolicy,
     RunResult,
-    StepIdentity,
 )
 
 from pilates.utils.archive_paths import ArchiveRunDirLike, workspace_storage_roots
-from pilates.workflows.contracts import StepDefinition
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.state_access import iteration_index
+from pilates.workflows.contracts import StepCallInputs, StepDefinition
+from pilates.workflows.sim_state import ArtifactRef, SimState
+
+if TYPE_CHECKING:
+    from pilates.workflows.dry_run import (
+        DryRunRecorder,
+        SymbolicOutputs,
+        SymbolicRunResult,
+    )
 
 OutputT = TypeVar("OutputT")
 
 CodeIdentityMode = Literal["repo_git", "callable_module", "callable_source"]
+_UNSET_ITERATION: Any = object()
 
 
 class ScenarioDriftError(RuntimeError):
     """Raised when strict resume detects cache drift on a previously completed step."""
-
-
-@runtime_checkable
-class _HasOnArchiveCommit(Protocol):
-    on_archive_commit: Callable[[str], None] | None
-
-
-@runtime_checkable
-class _HasStepExecutionSession(Protocol):
-    step_execution_counter: int
-    expected_prefix_steps: int
-
-
-@runtime_checkable
-class _HasResumePolicy(Protocol):
-    resume_policy: Literal["strict", "recompute"]
-
-
-@runtime_checkable
-class _HasMeta(Protocol):
-    meta: Any
-
-
-@runtime_checkable
-class _RunCodeIdentityConfig(Protocol):
-    consist_code_identity: CodeIdentityMode | None
-
-
-@runtime_checkable
-class _SettingsWithRunCodeIdentity(Protocol):
-    run: _RunCodeIdentityConfig
-
-
-@runtime_checkable
-class _HasEnableArchiveCopy(Protocol):
-    enable_archive_copy: bool
-
-
-@runtime_checkable
-class _HasRunConfig(Protocol):
-    run: Any
-
-
-@runtime_checkable
-class _HasMainForecastYear(Protocol):
-    main_forecast_year: int | None
-
-
-@runtime_checkable
-class _HasCacheHit(Protocol):
-    cache_hit: bool
 
 
 def _is_step_archive_enabled(
@@ -86,18 +45,9 @@ def _is_step_archive_enabled(
     state: Any,
     workspace: Any,
 ) -> bool:
-    if isinstance(settings, Mapping):
-        run_cfg = settings.get("run")
-        if isinstance(run_cfg, Mapping) and isinstance(
-            run_cfg.get("enable_archive_copy"), bool
-        ):
-            return run_cfg["enable_archive_copy"]
-    elif (
-        isinstance(settings, _HasRunConfig)
-        and isinstance(settings.run, _HasEnableArchiveCopy)
-        and isinstance(settings.run.enable_archive_copy, bool)
-    ):
-        return settings.run.enable_archive_copy
+    enable_archive_copy = get_setting(settings, "run.enable_archive_copy")
+    if isinstance(enable_archive_copy, bool):
+        return enable_archive_copy
     return bool(
         (isinstance(workspace, ArchiveRunDirLike) and workspace.archive_run_dir)
         or (isinstance(state, ArchiveRunDirLike) and state.archive_run_dir)
@@ -116,11 +66,9 @@ def _resolve_cache_options(
         if definition.cache_options is not None
         else None
     )
-    configured_code_identity: CodeIdentityMode | None = None
-    if isinstance(settings, _SettingsWithRunCodeIdentity) and isinstance(
-        settings.run, _RunCodeIdentityConfig
-    ):
-        configured_code_identity = settings.run.consist_code_identity
+    configured_code_identity: CodeIdentityMode | None = get_setting(
+        settings, "run.consist_code_identity"
+    )
     if configured_code_identity is None:
         return cache_options
     if cache_options is None:
@@ -157,9 +105,7 @@ def _configured_step_archive_root(
         os.path.normpath(archive_root)
     ):
         return None
-    main_forecast_year = (
-        state.main_forecast_year if isinstance(state, _HasMainForecastYear) else None
-    )
+    main_forecast_year = getattr(state, "main_forecast_year", None)
     parts = [
         definition.name,
         stage,
@@ -176,6 +122,7 @@ def _configured_step_archive_root(
     return (Path(archive_root) / "consist-recovery" / scope).resolve()
 
 
+@overload
 def execute_step(
     *,
     scenario: Any,
@@ -185,12 +132,128 @@ def execute_step(
     workspace: Any,
     stage: str,
     year: int | None,
-    iteration: int | None,
-    phase: str | None,
+    iteration: int | None = _UNSET_ITERATION,
+    phase: str | None = None,
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
     runtime_kwargs: dict[str, Any] | None = None,
-    resolved_inputs: ResolvedStepInputs | None = None,
-) -> tuple[RunResult, OutputT]:
+    step_inputs: StepCallInputs | None = None,
+    plan_recorder: None = None,
+) -> tuple[RunResult, OutputT]: ...
+
+
+@overload
+def execute_step(
+    *,
+    scenario: Any,
+    definition: StepDefinition[OutputT],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    stage: str,
+    year: int | None,
+    iteration: int | None = _UNSET_ITERATION,
+    phase: str | None = None,
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    runtime_kwargs: dict[str, Any] | None = None,
+    step_inputs: StepCallInputs | None = None,
+    plan_recorder: DryRunRecorder,
+) -> tuple[SymbolicRunResult, SymbolicOutputs]: ...
+
+
+def execute_step(
+    *,
+    scenario: Any,
+    definition: StepDefinition[OutputT],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    stage: str,
+    year: int | None,
+    iteration: int | None = _UNSET_ITERATION,
+    phase: str | None = None,
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    runtime_kwargs: dict[str, Any] | None = None,
+    step_inputs: StepCallInputs | None = None,
+    plan_recorder: DryRunRecorder | None = None,
+) -> tuple[RunResult | SymbolicRunResult, OutputT | SymbolicOutputs]:
     """Resolve once, run once, then project persisted ``RunResult.outputs`` once."""
+
+    resolved_iteration: int | None = (
+        iteration_index(state) if iteration is _UNSET_ITERATION else iteration
+    )
+    resolver_kwargs: dict[str, Any] = {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+        "sim_state": sim_state if sim_state is not None else SimState(),
+    }
+    if prior_outputs is not None:
+        resolver_kwargs["prior_outputs"] = prior_outputs
+    resolved_step_inputs = (
+        step_inputs
+        if step_inputs is not None
+        else definition.resolve_inputs(**resolver_kwargs)
+    )
+    resolved_step_inputs.require_complete(definition.name)
+
+    if plan_recorder is not None:
+        from pilates.workflows.dry_run import (
+            SymbolicArtifact,
+            SymbolicOutputs,
+            SymbolicRun,
+            SymbolicRunResult,
+        )
+
+        output_keys: list[str] = []
+        declared_paths: dict[str, Path] = {}
+        output_fn = (
+            definition.outputs
+            if definition.outputs is not None
+            else definition.output_paths
+        )
+        if output_fn is not None:
+            declared = output_fn(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_inputs=resolved_step_inputs,
+            )
+            for key, val in declared.items():
+                output_keys.append(key)
+                if isinstance(val, (Path, str, os.PathLike)):
+                    declared_paths[key] = Path(val)
+        if definition.output_sets is not None:
+            declared_sets = definition.output_sets(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_inputs=resolved_step_inputs,
+            )
+            output_keys.extend(declared_sets.keys())
+        deduped_output_keys = tuple(dict.fromkeys(output_keys))
+
+        step_id = plan_recorder.record_step(
+            step_name=definition.name,
+            year=year if year is not None else 0,
+            iteration=resolved_iteration,
+            inputs=resolved_step_inputs.inputs,
+            output_keys=deduped_output_keys,
+        )
+        symbolic_outputs = {
+            key: SymbolicArtifact(
+                key=key,
+                producer_step=step_id,
+                path=declared_paths.get(key, Path("<symbolic>")),
+            )
+            for key in deduped_output_keys
+        }
+        return (
+            SymbolicRunResult(run=SymbolicRun(id=step_id), outputs=symbolic_outputs),
+            SymbolicOutputs(symbolic_outputs),
+        )
 
     base_runtime_kwargs = {
         **(runtime_kwargs or {}),
@@ -200,19 +263,17 @@ def execute_step(
     }
     # Track execution ordinal and check strict resume drift expectations
     current_ordinal = 0
-    if isinstance(workspace, _HasStepExecutionSession):
+    step_counter = getattr(workspace, "step_execution_counter", None)
+    expected_prefix = getattr(workspace, "expected_prefix_steps", None)
+    if isinstance(step_counter, int) and isinstance(expected_prefix, int):
         workspace.step_execution_counter += 1
         current_ordinal = workspace.step_execution_counter
-        resume_policy = "strict"
-        if isinstance(settings, _HasRunConfig) and isinstance(
-            settings.run, _HasResumePolicy
-        ):
-            resume_policy = settings.run.resume_policy
+        resume_policy = get_setting(settings, "run.resume_policy", "strict")
 
         if (
             resume_policy == "strict"
-            and workspace.expected_prefix_steps > 0
-            and current_ordinal <= workspace.expected_prefix_steps
+            and expected_prefix > 0
+            and current_ordinal <= expected_prefix
         ):
             import functools
             import consist as cr
@@ -224,10 +285,9 @@ def execute_step(
                 explanation = None
                 try:
                     current_run = cr.current_run()
-                    if isinstance(current_run, _HasMeta):
-                        meta = current_run.meta
-                        if isinstance(meta, dict):
-                            explanation = meta.get("cache_miss_explanation")
+                    meta = getattr(current_run, "meta", None)
+                    if isinstance(meta, dict):
+                        explanation = meta.get("cache_miss_explanation")
                 except Exception:
                     pass
                 msg = (
@@ -243,37 +303,13 @@ def execute_step(
             # let's replace it properly.
             definition = replace(definition, function=_drift_guard_wrapper)
 
-    step_identity: StepIdentity | None = None
-    if definition.preflight_identity:
-        preflight_options = ExecutionOptions(
-            input_binding="paths", runtime_kwargs=base_runtime_kwargs
-        )
-        step_identity = scenario.resolve_step_identity(
-            definition.function,
-            year=year,
-            iteration=iteration,
-            phase=phase,
-            stage=stage,
-            execution_options=preflight_options,
-        )
-    resolver_kwargs: dict[str, Any] = {
-        "settings": settings,
-        "state": state,
-        "workspace": workspace,
-        "coupler": scenario.coupler,
-    }
-    if step_identity is not None:
-        resolver_kwargs["step_identity"] = step_identity
-    resolved = (
-        resolved_inputs or definition.resolve_inputs(**resolver_kwargs)
-    ).with_input_contract(definition.input_contract)
-    resolved.require_complete()
+    binding = BindingResult(inputs=dict(resolved_step_inputs.inputs))
     options = (
         definition.execution_options(
             settings=settings,
             state=state,
             workspace=workspace,
-            resolved_inputs=resolved,
+            step_inputs=resolved_step_inputs,
         )
         if definition.execution_options is not None
         else ExecutionOptions(input_binding="paths")
@@ -292,17 +328,23 @@ def execute_step(
         workspace=workspace,
         stage=stage,
         year=year,
-        iteration=iteration,
+        iteration=resolved_iteration,
         phase=phase,
     )
     result = scenario.run(
         fn=definition.function,
-        binding=resolved.binding,
+        binding=binding,
         config_plan_ingest=(
-            definition.name not in ("activitysim_preprocess", "activitysim_postprocess")
+            definition.name
+            not in (
+                "activitysim_preprocess",
+                "activitysim_postprocess",
+                "beam_preprocess",
+                "beam_postprocess",
+            )
         ),
         year=year,
-        iteration=iteration,
+        iteration=resolved_iteration,
         phase=phase,
         stage=stage,
         outputs=(
@@ -310,7 +352,7 @@ def execute_step(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                resolved_inputs=resolved,
+                step_inputs=resolved_step_inputs,
             )
             if definition.outputs is not None
             else None
@@ -320,7 +362,7 @@ def execute_step(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                resolved_inputs=resolved,
+                step_inputs=resolved_step_inputs,
             )
             if definition.outputs is None and definition.output_paths is not None
             else None
@@ -330,7 +372,7 @@ def execute_step(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                resolved_inputs=resolved,
+                step_inputs=resolved_step_inputs,
             )
             if definition.output_sets is not None
             else None
@@ -349,16 +391,18 @@ def execute_step(
             ),
         ),
         execution_options=options,
-        step_identity=step_identity,
     )
-    is_hit = result.cache_hit if isinstance(result, _HasCacheHit) else False
+    is_hit = bool(getattr(result, "cache_hit", False))
+    if not is_hit and isinstance(getattr(workspace, "db_mutation_seq", None), int):
+        workspace.db_mutation_seq += 1
     if step_archive_root is not None and not is_hit:
-        if isinstance(workspace, _HasOnArchiveCommit) and workspace.on_archive_commit:
-            workspace.on_archive_commit(definition.name)
+        on_archive_commit = getattr(workspace, "on_archive_commit", None)
+        if on_archive_commit:
+            on_archive_commit(definition.name)
     return result, definition.project_outputs(
         result.outputs,
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved_step_inputs,
     )

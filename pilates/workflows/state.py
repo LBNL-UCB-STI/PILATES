@@ -3,14 +3,11 @@ from __future__ import annotations
 from bisect import bisect_left
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import logging
 
 from pilates.config import PilatesConfig
 from pilates.workflows._profile import ensure_runtime_flags_initialized
-
-if TYPE_CHECKING:
-    from pilates.workflows.surface import EnabledWorkflowSurface
 
 logger = logging.getLogger(__name__)
 
@@ -258,26 +255,14 @@ class WorkflowState:
     def for_planning(
         cls,
         settings: PilatesConfig,
-        *,
-        surface: Optional["EnabledWorkflowSurface"] = None,
     ) -> "WorkflowState":
         """Construct a fresh, side-effect-free workflow state for static planning."""
-        if surface is not None:
-            land_use_enabled = surface.stage_enabled("land_use")
-            vehicle_ownership_model_enabled = surface.stage_enabled(
-                "vehicle_ownership_model"
-            )
-            activity_demand_enabled = surface.stage_enabled("activity_demand")
-            traffic_assignment_enabled = surface.stage_enabled("traffic_assignment")
-        else:
-            ensure_runtime_flags_initialized(settings)
-            runtime_flags = settings.runtime.flags
-            land_use_enabled = runtime_flags.land_use_enabled
-            vehicle_ownership_model_enabled = (
-                runtime_flags.vehicle_ownership_model_enabled
-            )
-            activity_demand_enabled = runtime_flags.activity_demand_enabled
-            traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
+        ensure_runtime_flags_initialized(settings)
+        runtime_flags = settings.runtime.flags
+        land_use_enabled = runtime_flags.land_use_enabled
+        vehicle_ownership_model_enabled = runtime_flags.vehicle_ownership_model_enabled
+        activity_demand_enabled = runtime_flags.activity_demand_enabled
+        traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
         out = cls(
             settings.run.start_year,
             settings.run.end_year,
@@ -428,16 +413,6 @@ class WorkflowState:
         """Checks if a stage is enabled in settings."""
         return stage in self.enabled_stages
 
-    def should_run(
-        self,
-        target_major: Stage,
-        target_inner_iter: int = 0,
-        target_sub_stage: Optional[Stage] = None,
-    ) -> bool:
-        """Check if the target stage is enabled in settings."""
-        check_stage = target_sub_stage if target_sub_stage is not None else target_major
-        return self.is_enabled(check_stage)
-
     def is_start_year(self):
         return self.year == self.start_year
 
@@ -457,55 +432,6 @@ class WorkflowState:
         if self.current_year is not None and self.current_year <= self.end_year:
             return self.current_year
         raise StopIteration
-
-    def complete_step(
-        self,
-        completed_major: Stage,
-        completed_inner_iter: int = 0,
-        completed_sub: Optional[Stage] = None,
-    ):
-        """No-op: step completion mutation is deleted in Phase 1B."""
-        pass
-
-    def _advance_to_next_major_stage(self):
-        """Move to the next enabled major stage or next year"""
-        if self.current_major_stage is None:
-            # Should not happen if workflow is running, but handle defensively
-            self._advance_to_next_year()
-            return
-
-        try:
-            current_idx = self.major_stage_order.index(self.current_major_stage)
-            next_major = None
-
-            # Find next enabled major stage
-            for i in range(current_idx + 1, len(self.major_stage_order)):
-                if self.major_stage_order[i] in self.enabled_stages:
-                    next_major = self.major_stage_order[i]
-                    break
-
-            if next_major:
-                self.current_major_stage = next_major
-                self.current_inner_iter = 0
-                self.current_sub_stage = None
-                self.sub_stage_progress = None  # new
-
-                # If entering supply-demand loop, set up first substage
-                if next_major == self.Stage.supply_demand_loop and self.loop_substages:
-                    self.current_sub_stage = self.loop_substages[0]
-
-                logger.debug(f"Advanced to next major stage: {next_major.name}")
-            else:
-                # No more stages for this year, advance to next year
-                logger.debug("No more enabled major stages for this year.")
-                self._advance_to_next_year()
-
-        except ValueError:
-            logger.error(
-                f"Current major stage {self.current_major_stage.name} not found in order. State inconsistency."
-            )
-            # Attempt to recover by advancing to next year
-            self._advance_to_next_year()
 
     def _advance_to_next_year(self):
         """Move to the next interval boundary year and reset to first stage"""

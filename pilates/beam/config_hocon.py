@@ -148,11 +148,7 @@ def update_staged_beam_config_value(
         config_path,
         env_overrides=env_overrides,
     )
-    current_value = resolve_beam_config_value(
-        config_path,
-        key=key,
-        env_overrides=env_overrides,
-    )
+    current_value = _lookup_dotted_key(resolution_context, key)
     target_value = _resolve_value_semantics(
         value,
         env_overrides=env_overrides,

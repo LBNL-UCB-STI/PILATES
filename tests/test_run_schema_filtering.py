@@ -7,9 +7,7 @@ from pilates.runtime.launcher import (
     _build_schema_steps,
     _filter_schema_steps_for_enabled_models,
 )
-from pilates.workflows.catalog import enabled_schema_step_models
 from pilates.workflows.steps import STEP_DEFINITIONS
-from pilates.workflows.surface import build_enabled_workflow_surface
 
 
 def _settings(
@@ -38,10 +36,6 @@ def _settings(
     )
 
 
-def _surface(settings):
-    return build_enabled_workflow_surface(settings)
-
-
 def _step_names(steps):
     functions_to_names = {
         definition.function: step_name
@@ -60,7 +54,7 @@ def test_filter_schema_steps_for_activitysim_beam_only_excludes_urbansim_atlas()
     required_steps = _filter_schema_steps_for_enabled_models(
         all_steps,
         include_optional=False,
-        surface=_surface(settings),
+        settings=settings,
     )
 
     assert {
@@ -85,7 +79,7 @@ def test_filter_schema_steps_for_activitysim_beam_only_excludes_urbansim_atlas()
     )
 
 
-def test_filter_schema_steps_matches_catalog_enablement_models():
+def test_filter_schema_steps_matches_enabled_models():
     settings = _settings(
         land_use="urbansim",
         activity_demand="activitysim",
@@ -95,23 +89,19 @@ def test_filter_schema_steps_matches_catalog_enablement_models():
     required_steps = _filter_schema_steps_for_enabled_models(
         all_steps,
         include_optional=False,
-        surface=_surface(settings),
+        settings=settings,
     )
     step_names = _step_names(required_steps)
-    expected = enabled_schema_step_models(
-        settings,
-        is_model_enabled=lambda current_settings, *, flag_attr, model_attr: (
-            bool(getattr(current_settings, flag_attr, None))
-            or bool(
-                getattr(
-                    getattr(getattr(current_settings, "run", None), "models", None),
-                    model_attr,
-                    None,
-                )
-            )
-        ),
-        include_optional=False,
-    )
+    expected = {
+        "urbansim_run",
+        "urbansim_postprocess",
+        "activitysim_preprocess",
+        "activitysim_run",
+        "activitysim_postprocess",
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+    }
     assert step_names == expected
 
 
@@ -121,7 +111,7 @@ def test_filter_schema_steps_all_disabled_returns_empty():
     required_steps = _filter_schema_steps_for_enabled_models(
         all_steps,
         include_optional=False,
-        surface=_surface(settings),
+        settings=settings,
     )
     assert required_steps == []
 
@@ -131,16 +121,19 @@ def test_filter_schema_steps_optional_toggle_controls_beam_full_skim():
         activity_demand="activitysim",
         traffic_assignment="beam",
     )
+    settings.beam = SimpleNamespace(
+        full_skim=SimpleNamespace(run_schedule="after_final_iteration")
+    )
     all_steps = _build_schema_steps()
     with_optional = _filter_schema_steps_for_enabled_models(
         all_steps,
         include_optional=True,
-        surface=_surface(settings),
+        settings=settings,
     )
     without_optional = _filter_schema_steps_for_enabled_models(
         all_steps,
         include_optional=False,
-        surface=_surface(settings),
+        settings=settings,
     )
     assert "beam_full_skim" in _step_names(with_optional)
     assert "beam_full_skim" not in _step_names(without_optional)
@@ -158,7 +151,7 @@ def test_filter_schema_steps_rejects_nonregistry_callable_with_enabled_model_lab
     filtered = _filter_schema_steps_for_enabled_models(
         [*_build_schema_steps(), unrelated_beam_run],
         include_optional=False,
-        surface=_surface(settings),
+        settings=settings,
     )
 
     assert unrelated_beam_run not in filtered
@@ -197,11 +190,10 @@ def test_filter_schema_steps_run_models_shape_uses_catalog_enablement_mapping(
 
     settings = _settings(**models_cfg)
     all_steps = _build_schema_steps()
-    surface = _surface(settings)
     required_steps = _filter_schema_steps_for_enabled_models(
         all_steps,
         include_optional=False,
-        surface=surface,
+        settings=settings,
     )
     step_names = _step_names(required_steps)
 

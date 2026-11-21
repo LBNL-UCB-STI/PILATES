@@ -37,16 +37,16 @@ _MAJOR_STAGE_TO_CATALOG_STAGE: Dict[str, str] = {
 }
 
 _MAJOR_STAGE_TO_STAGE_MODULE: Dict[str, str] = {
-    "land_use": "pilates/workflows/stages/land_use.py",
-    "vehicle_ownership_model": "pilates/workflows/stages/vehicle_ownership.py",
-    "supply_demand_loop": "pilates/workflows/stages/supply_demand.py",
-    "postprocessing": "pilates/workflows/stages/postprocessing.py",
+    "land_use": "pilates/workflows/orchestrator.py",
+    "vehicle_ownership_model": "pilates/workflows/orchestrator.py",
+    "supply_demand_loop": "pilates/workflows/orchestrator.py",
+    "postprocessing": "pilates/workflows/orchestrator.py",
 }
 
 _MAJOR_STAGE_TO_STAGE_FUNCTION: Dict[str, str] = {
     "land_use": "run_land_use_stage",
     "vehicle_ownership_model": "run_vehicle_ownership_stage",
-    "supply_demand_loop": "run_supply_demand_stage",
+    "supply_demand_loop": "_run_supply_demand_loop",
     "postprocessing": "run_postprocessing_stage",
 }
 
@@ -208,7 +208,7 @@ def _resolve_stage_patch_plan_options(
 
     default_target_module = _MAJOR_STAGE_TO_STAGE_MODULE.get(
         major_stage,
-        f"pilates/workflows/stages/{major_stage}.py",
+        "pilates/workflows/orchestrator.py",
     )
     target_module = Path(
         _normalize_optional_arg(stage_target_module_arg) or default_target_module
@@ -349,99 +349,6 @@ def _tuple_literal(values: Sequence[str]) -> str:
         return f'("{values[0]}",)'
     inner = ", ".join(f'"{value}"' for value in values)
     return f"({inner})"
-
-
-def _workflow_spec_optional_lines(
-    catalog_options: CatalogScaffoldOptions,
-    *,
-    provenance_ref: Optional[str],
-) -> str:
-    lines: List[str] = []
-    if catalog_options.enabled_flag_attr is not None:
-        lines.append(
-            f'        enabled_flag_attr="{catalog_options.enabled_flag_attr}",'
-        )
-    if catalog_options.enabled_model_attr is not None:
-        lines.append(
-            f'        enabled_model_attr="{catalog_options.enabled_model_attr}",'
-        )
-    if provenance_ref is not None:
-        lines.append(f"        provenance={provenance_ref},")
-    if not lines:
-        return ""
-    return "\n".join(lines) + "\n"
-
-
-def _upsert_workflow_catalog(
-    repo_root: Path,
-    spec: ScaffoldSpec,
-    *,
-    catalog_options: CatalogScaffoldOptions,
-    dry_run: bool,
-) -> Tuple[Path, bool]:
-    path = repo_root / "pilates/workflows/catalog.py"
-    text = _read_text(path)
-    original = text
-
-    provenance_ref: Optional[str] = None
-    if catalog_options.provenance_builder_key is not None:
-        provenance_ref = spec.provenance_constant_name
-        provenance_block = (
-            f"{provenance_ref} = WorkflowStepProvenanceSpec("
-            f'builder_key="{catalog_options.provenance_builder_key}")\n\n'
-        )
-        text = _insert_once(
-            text,
-            anchor="WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (\n",
-            snippet=provenance_block,
-            dedupe_token=f"{provenance_ref} = WorkflowStepProvenanceSpec(",
-        )
-
-    order_start = (
-        catalog_options.order_start
-        if catalog_options.order_start is not None
-        else _next_catalog_order(text)
-    )
-    optional_lines = _workflow_spec_optional_lines(
-        catalog_options,
-        provenance_ref=provenance_ref,
-    )
-    entry_block = dedent(
-        f"""
-            WorkflowStepSpec(
-                step_name="{spec.preprocess_step_name}",
-                phase="preprocess",
-                stage_name="{catalog_options.stage_name}",
-                order={order_start},
-                depends_on=(),
-{optional_lines}    ),
-            WorkflowStepSpec(
-                step_name="{spec.run_step_name}",
-                phase="run",
-                stage_name="{catalog_options.stage_name}",
-                order={order_start + 10},
-                depends_on={_tuple_literal((spec.preprocess_step_name,))},
-{optional_lines}    ),
-            WorkflowStepSpec(
-                step_name="{spec.postprocess_step_name}",
-                phase="postprocess",
-                stage_name="{catalog_options.stage_name}",
-                order={order_start + 20},
-                depends_on={_tuple_literal((spec.run_step_name,))},
-{optional_lines}    ),
-        """
-    )
-    text = _insert_tuple_entry(
-        text,
-        tuple_anchor="WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (",
-        dedupe_token=f'step_name="{spec.preprocess_step_name}"',
-        entry_block=entry_block,
-    )
-
-    changed = text != original
-    if changed:
-        _write_text(path, text, dry_run=dry_run)
-    return path, changed
 
 
 def _render_preprocessor(spec: ScaffoldSpec) -> str:
@@ -622,7 +529,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
 
         from typing import Any, Mapping
 
-        from consist import BindingResult, define_step
+        from consist import define_step
 
         from pilates.{spec.model}.outputs import (
             {spec.postprocess_output_class},
@@ -631,13 +538,14 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
         )
         from pilates.{spec.model}.preprocessor import {spec.preprocessor_class}
         from pilates.utils.consist_runtime import require_runtime_kwargs
-        from pilates.workflows.resolved_inputs import ResolvedStepInputs
         from pilates.workflows.consist_metadata import consist_step_meta
         from pilates.workflows.contracts import (
             ConfigContract,
             InputContract,
+            StepCallInputs,
             StepDefinition,
         )
+        from pilates.workflows.sim_state import SimState
 
 
         _{spec.model.upper()}_PREPROCESS_INPUT_CONTRACT = InputContract(
@@ -657,17 +565,19 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
         )
 
 
-        def _resolve_{spec.model}_inputs(**_: Any) -> ResolvedStepInputs:
-            """Resolve this model's semantic roles once before execution.
+        def _resolve_{spec.model}_inputs(
+            *, sim_state: SimState | None = None, **_: Any
+        ) -> StepCallInputs:
+            """Resolve this model's semantic roles from ``SimState``.
 
-            Replace the empty role set with explicit required and optional roles,
-            concrete selected artifacts, and deterministic destinations.
+            Replace the empty input map with explicit required and optional keys
+            read from ``sim_state`` and deterministic destinations.
             """
-            return ResolvedStepInputs(
-                step_name="{spec.preprocess_step_name}",
-                binding=BindingResult(),
-                required_roles=(),
-                optional_roles=(),
+            del sim_state
+            return StepCallInputs(
+                inputs={{}},
+                required_keys=(),
+                optional_keys=(),
             )
 
 
@@ -866,11 +776,7 @@ def _render_stage_patch_execution_block(
     if pattern == STAGE_PATTERN_LINEAR:
         return dedent(
             f"""
-            {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                coupler=scenario.coupler,
-            )
-            _, {spec.model}_preprocess_outputs = execute_step(
+            prep_result, {spec.model}_preprocess_outputs = execute_step(
                 scenario=scenario,
                 definition={spec.model}_preprocess,
                 settings=settings,
@@ -880,13 +786,9 @@ def _render_stage_patch_execution_block(
                 year=year,
                 iteration=None,
                 phase="preprocess",
-                resolved_inputs={spec.model}_preprocess_inputs,
+                sim_state=sim_state,
             )
-            {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                coupler=scenario.coupler,
-            )
-            _, {spec.model}_run_outputs = execute_step(
+            run_result, {spec.model}_run_outputs = execute_step(
                 scenario=scenario,
                 definition={spec.model}_run,
                 settings=settings,
@@ -896,13 +798,10 @@ def _render_stage_patch_execution_block(
                 year=year,
                 iteration=None,
                 phase="run",
-                resolved_inputs={spec.model}_run_inputs,
+                sim_state=sim_state,
+                prior_outputs=prep_result.outputs,
             )
-            {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                coupler=scenario.coupler,
-            )
-            _, {spec.model}_postprocess_outputs = execute_step(
+            post_result, {spec.model}_postprocess_outputs = execute_step(
                 scenario=scenario,
                 definition={spec.model}_postprocess,
                 settings=settings,
@@ -912,47 +811,39 @@ def _render_stage_patch_execution_block(
                 year=year,
                 iteration=None,
                 phase="postprocess",
-                resolved_inputs={spec.model}_postprocess_inputs,
+                sim_state=sim_state,
+                prior_outputs=run_result.outputs,
             )
+            # TODO: update sim_state from post_result.outputs / {spec.model}_postprocess_outputs
+            _sync_coupler(scenario, sim_state, last_synced=last_synced)
             """
         ).strip()
     if pattern == STAGE_PATTERN_ITERATIVE:
         return dedent(
             f"""
             for iteration in range(settings.run.supply_demand_iters):
-                {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-                    settings=settings, state=state, workspace=workspace,
-                    coupler=scenario.coupler,
-                )
-                _, {spec.model}_preprocess_outputs = execute_step(
+                prep_result, {spec.model}_preprocess_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_preprocess,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
-                    phase="preprocess",
-                    resolved_inputs={spec.model}_preprocess_inputs,
+                    phase="preprocess", sim_state=sim_state,
                 )
-                {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-                    settings=settings, state=state, workspace=workspace,
-                    coupler=scenario.coupler,
-                )
-                _, {spec.model}_run_outputs = execute_step(
+                run_result, {spec.model}_run_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_run,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
-                    phase="run",
-                    resolved_inputs={spec.model}_run_inputs,
+                    phase="run", sim_state=sim_state,
+                    prior_outputs=prep_result.outputs,
                 )
-                {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-                    settings=settings, state=state, workspace=workspace,
-                    coupler=scenario.coupler,
-                )
-                _, {spec.model}_postprocess_outputs = execute_step(
+                post_result, {spec.model}_postprocess_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_postprocess,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
-                    phase="postprocess",
-                    resolved_inputs={spec.model}_postprocess_inputs,
+                    phase="postprocess", sim_state=sim_state,
+                    prior_outputs=run_result.outputs,
                 )
+                # TODO: update sim_state from post_result.outputs / {spec.model}_postprocess_outputs
+                _sync_coupler(scenario, sim_state, last_synced=last_synced)
             """
         ).strip()
     raise ValueError(f"Unsupported stage patch pattern: {pattern}")
@@ -1094,7 +985,7 @@ def _render_stage_patch_plan(
         f"""
         ## Required Variable Adaptation Checklist
 
-        - [ ] Confirm the stage function has `coupler`, `scenario`, `state`, `settings`, `workspace`, `surface`, and `year`, or adapt the snippet to an existing `WorkflowRuntimeContext`.
+        - [ ] Confirm the stage function has `scenario`, `state`, `settings`, `workspace`, `sim_state`, `year`, and `last_synced`.
         - [ ] Replace placeholder `<stage_name>` and adapt the explicit `execute_step(...)` calls to the target stage.
         - [ ] Complete each generated resolver with the model's semantic roles,
               concrete selected artifacts, and deterministic destinations.
@@ -1123,8 +1014,7 @@ def _render_linear_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> 
             f"""
         # Linear stage template for `{spec.model}`
         #
-        # Copy/adapt this snippet into the target stage module under
-        # pilates/workflows/stages/.
+        # Copy/adapt this snippet into pilates/workflows/orchestrator.py.
 
         from pilates.workflows.step_execution import execute_step
         from pilates.workflows.steps import (
@@ -1133,35 +1023,23 @@ def _render_linear_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> 
             {spec.model}_run,
         )
 
-        {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-            settings=settings, state=state, workspace=workspace,
-            coupler=scenario.coupler,
-        )
         _, {spec.model}_preprocess_outputs = execute_step(
             scenario=scenario, definition={spec.model}_preprocess,
             settings=settings, state=state, workspace=workspace,
             stage="{catalog_stage}", year=year, iteration=None, phase="preprocess",
-            resolved_inputs={spec.model}_preprocess_inputs,
-        )
-        {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-            settings=settings, state=state, workspace=workspace,
-            coupler=scenario.coupler,
+            sim_state=sim_state,
         )
         _, {spec.model}_run_outputs = execute_step(
             scenario=scenario, definition={spec.model}_run,
             settings=settings, state=state, workspace=workspace,
             stage="{catalog_stage}", year=year, iteration=None, phase="run",
-            resolved_inputs={spec.model}_run_inputs,
-        )
-        {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-            settings=settings, state=state, workspace=workspace,
-            coupler=scenario.coupler,
+            sim_state=sim_state,
         )
         _, {spec.model}_postprocess_outputs = execute_step(
             scenario=scenario, definition={spec.model}_postprocess,
             settings=settings, state=state, workspace=workspace,
             stage="{catalog_stage}", year=year, iteration=None, phase="postprocess",
-            resolved_inputs={spec.model}_postprocess_inputs,
+            sim_state=sim_state,
         )
         """
         ).strip()
@@ -1176,7 +1054,8 @@ def _render_iterative_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) 
         # Iterative stage template for `{spec.model}`
         #
         # Use this when the model should run per-iteration (for example within
-        # supply-demand loops). Adjust input resolution to your stage.
+        # _run_supply_demand_loop in pilates/workflows/orchestrator.py, before
+        # or after BEAM).
 
         from pilates.workflows.step_execution import execute_step
         from pilates.workflows.steps import (
@@ -1186,38 +1065,23 @@ def _render_iterative_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) 
         )
 
         for iteration in range(settings.run.supply_demand_iters):
-            {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                coupler=scenario.coupler,
-            )
             _, {spec.model}_preprocess_outputs = execute_step(
                 scenario=scenario, definition={spec.model}_preprocess,
                 settings=settings, state=state, workspace=workspace,
                 stage="{catalog_stage}", year=year, iteration=iteration,
-                phase="preprocess",
-                resolved_inputs={spec.model}_preprocess_inputs,
-            )
-            {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                coupler=scenario.coupler,
+                phase="preprocess", sim_state=sim_state,
             )
             _, {spec.model}_run_outputs = execute_step(
                 scenario=scenario, definition={spec.model}_run,
                 settings=settings, state=state, workspace=workspace,
                 stage="{catalog_stage}", year=year, iteration=iteration,
-                phase="run",
-                resolved_inputs={spec.model}_run_inputs,
-            )
-            {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                coupler=scenario.coupler,
+                phase="run", sim_state=sim_state,
             )
             _, {spec.model}_postprocess_outputs = execute_step(
                 scenario=scenario, definition={spec.model}_postprocess,
                 settings=settings, state=state, workspace=workspace,
                 stage="{catalog_stage}", year=year, iteration=iteration,
-                phase="postprocess",
-                resolved_inputs={spec.model}_postprocess_inputs,
+                phase="postprocess", sim_state=sim_state,
             )
         """
         ).strip()
@@ -1274,14 +1138,13 @@ def _render_checklist(
 
         - [ ] `pilates/workflows/steps/__init__.py`
         - [ ] `pilates/workflows/steps/__init__.py` (`STEP_DEFINITIONS`)
-        - [ ] `pilates/workflows/catalog.py`
 
         ## Required Follow-up Wiring
 
         - [ ] Start from one of the generated stage template snippets and wire
-              the new model into the target stage module under
-              `pilates/workflows/stages/*.py` using explicit `execute_step(...)`
-              calls for preprocess, run, and postprocess.
+              the new model into `pilates/workflows/orchestrator.py` using
+              explicit `execute_step(...)` calls for preprocess, run, and
+              postprocess, updating `SimState` and calling `_sync_coupler`.
         - [ ] If generated, use the stage patch plan artifact in
               `docs/checklists/stage_templates/` to add native imports,
               one resolver call per phase, and explicit `execute_step(...)`
@@ -1292,8 +1155,9 @@ def _render_checklist(
               correct for your model.
         - [ ] Keep model enablement on the surface path. Do not derive run shape
               from raw settings or `WorkflowProfile` inside the model module.
-        - [ ] Keep runtime source precedence and fallback policy in binding, not
-              in stage-local `coupler.get(...)` chains.
+        - [ ] Keep runtime source precedence and fallback policy in `SimState`
+              and `StepDefinition.resolve_inputs`, not in stage-local
+              `coupler.get(...)` chains.
         - [ ] Define semantic input roles once in the resolver, declare output
               schema on `@define_step`, and make the `StepDefinition` projector
               validate and type the persisted Consist outputs.
@@ -1305,8 +1169,8 @@ def _render_checklist(
         - [ ] If this model needs provenance hashing/facets, confirm the generated
               catalog `provenance` metadata and add builder support in
               `pilates/workflows/consist_metadata.py` as needed.
-        - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`.
-        - [ ] Add/extend coupler schema entries in `pilates/workflows/coupler_schema.py`.
+        - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`
+              and `SimState.to_role_map()` in `pilates/workflows/sim_state.py`.
 
         ## Test Plan
 
@@ -1549,14 +1413,6 @@ def main() -> int:
             actions.append(("create", path, changed))
 
         path, changed = _upsert_steps_init(repo_root, spec, dry_run=args.dry_run)
-        actions.append(("update", path, changed))
-
-        path, changed = _upsert_workflow_catalog(
-            repo_root,
-            spec,
-            catalog_options=catalog_options,
-            dry_run=args.dry_run,
-        )
         actions.append(("update", path, changed))
 
     except Exception as exc:

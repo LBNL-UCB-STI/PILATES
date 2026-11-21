@@ -54,7 +54,6 @@ from typing import Any, Callable, Optional  # noqa: E402
 from pilates.config.models import PilatesConfig  # noqa: E402
 from pilates.runtime.context import WorkflowRuntimeContext  # noqa: E402
 from pilates.workflows.state import WorkflowState  # noqa: E402
-from pilates.workflows.surface import EnabledWorkflowSurface  # noqa: E402
 from pilates.workspace import Workspace  # noqa: E402
 
 
@@ -313,7 +312,6 @@ def make_conforming_workflow_runtime_context(
     settings: Optional[PilatesConfig] = None,
     state: Optional[WorkflowState] = None,
     workspace: Optional[Workspace] = None,
-    surface: Optional[EnabledWorkflowSurface] = None,
     on_archive_commit: Optional[Callable[[str], None]] = None,
     expected_prefix_steps: int = 0,
     **workspace_kwargs: Any,
@@ -332,7 +330,6 @@ def make_conforming_workflow_runtime_context(
         settings=settings,
         state=state,
         workspace=workspace,
-        surface=surface,
         on_archive_commit=on_archive_commit,
         expected_prefix_steps=expected_prefix_steps,
     )

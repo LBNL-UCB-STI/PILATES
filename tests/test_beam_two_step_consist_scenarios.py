@@ -41,10 +41,41 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     ZARR_SKIMS,
 )
-from pilates.workflows.stages import supply_demand_beam
-from pilates.workflows.stages.supply_demand_beam import (
-    _run_beam_steps,
+from pilates.workflows import orchestrator as supply_demand_beam
+from pilates.workflows.orchestrator import (
+    run_traffic_assignment_phase as _orchestrator_run_traffic_assignment_phase,
 )
+from pilates.workflows.sim_state import NetworkState, SimState
+
+
+def _run_beam_steps(*, scenario, year, iteration, context):
+    coupler_items = dict(scenario.coupler.items())
+    sim_state = SimState(
+        network=NetworkState(
+            linkstats=coupler_items.get("linkstats"),
+            linkstats_warmstart=coupler_items.get("linkstats_warmstart"),
+            skims_zarr=coupler_items.get("zarr_skims"),
+            skims_omx=coupler_items.get("final_skims_omx"),
+            plans=coupler_items.get("beam_plans"),
+            experienced_plans=coupler_items.get("beam_experienced_plans"),
+            events_parquet=coupler_items.get("beam_events_parquet"),
+            network_csv=coupler_items.get("beam_network_csv"),
+            full_skims=coupler_items.get("beam_full_skims"),
+        ),
+        extras=coupler_items,
+    )
+    _orchestrator_run_traffic_assignment_phase(
+        scenario=scenario,
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        sim_state=sim_state,
+        year=year,
+        iteration=iteration,
+    )
+    return None
+
+
 from pilates.workflows.steps.beam import beam_run
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
@@ -405,7 +436,7 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
     # Monkeypatch 2: Canary fault injection hook after beam_run commits
     with patch.object(BeamRunner, "run_container", tracked_container):
         with patch(
-            "pilates.workflows.stages.supply_demand_beam._maybe_fail_after_beam_run_for_canary",
+            "pilates.workflows.orchestrator._maybe_fail_after_beam_run_for_canary",
             side_effect=fail_after_beam_run,
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
@@ -644,7 +675,7 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
     # Monkeypatch 2: Hook crashing after beam_run commits and archives
     with patch.object(BeamRunner, "run_container", tracked_container):
         with patch(
-            "pilates.workflows.stages.supply_demand_beam._maybe_fail_after_beam_run_for_canary",
+            "pilates.workflows.orchestrator._maybe_fail_after_beam_run_for_canary",
             side_effect=RuntimeError("Simulated crash after beam_run committed"),
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:

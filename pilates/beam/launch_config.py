@@ -199,6 +199,78 @@ def materialize_beam_launch_config(
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
 
 
+def _collect_freight_overrides_and_inputs(
+    *,
+    config_tree: Mapping[str, Any],
+    source_root: Path | None,
+    derived_root: Path | None,
+) -> tuple[dict[str, Any], list[BeamLaunchInput]]:
+    """Resolve and stage freight input paths that are bare-relative or external."""
+    from pilates.beam.config_hocon import _lookup_dotted_key
+
+    freight_enabled = bool(
+        _lookup_dotted_key(config_tree, "beam.agentsim.agents.freight.enabled")
+    )
+    keys = (
+        (
+            "beam.agentsim.agents.freight.plansFilePath",
+            "beam.agentsim.agents.freight.toursFilePath",
+            "beam.agentsim.agents.freight.carriersFilePath",
+            "beam.agentsim.agents.freight.vehicleTypesFilePath",
+            "beam.agentsim.agents.freight.carrierParkingFilePath",
+        )
+        if freight_enabled
+        else (
+            "beam.agentsim.agents.freight.vehicleTypesFilePath",
+            "beam.agentsim.agents.freight.carrierParkingFilePath",
+        )
+    )
+
+    overrides: dict[str, Any] = {}
+    staged: list[BeamLaunchInput] = []
+    resolved_source_root = source_root.resolve() if source_root is not None else None
+
+    for key in keys:
+        raw_val = _lookup_dotted_key(config_tree, key)
+        if not raw_val or not isinstance(raw_val, (str, Path)):
+            continue
+        candidate = Path(str(raw_val))
+        if (
+            not candidate.is_absolute()
+            and resolved_source_root is not None
+            and (resolved_source_root / candidate).exists()
+        ):
+            resolved = (resolved_source_root / candidate).resolve()
+        elif candidate.exists():
+            resolved = candidate.resolve()
+        else:
+            continue
+
+        if resolved_source_root is not None:
+            try:
+                rel = resolved.relative_to(resolved_source_root)
+                # Only override bare-relative paths; ${beam.inputDirectory}/... already resolves.
+                if not candidate.is_absolute():
+                    overrides[key] = (
+                        str(derived_root / rel) if derived_root else str(rel)
+                    )
+                continue
+            except ValueError:
+                pass
+
+        dest = Path(".pilates") / "freight" / resolved.name
+        overrides[key] = str(derived_root / dest) if derived_root else str(dest)
+        staged.append(
+            BeamLaunchInput(
+                key=f"freight_{key.rsplit('.', 1)[-1]}",
+                source=resolved,
+                destination=dest,
+            )
+        )
+
+    return overrides, staged
+
+
 def compute_beam_launch_overrides(
     *,
     settings: Any,
@@ -339,6 +411,13 @@ def compute_beam_launch_overrides(
             )
             overrides["beam.physsim.inputNetworkFilePath"] = str(generated_network)
 
+        freight_overrides, _ = _collect_freight_overrides_and_inputs(
+            config_tree=config_tree,
+            source_root=source_root,
+            derived_root=derived_root,
+        )
+        overrides.update(freight_overrides)
+
     return (
         overrides,
         introduces_missing_format_key,
@@ -441,6 +520,14 @@ def build_beam_launch_config(
                 destination=vehicle_destination,
             )
         )
+
+    if config_tree is not None:
+        _, freight_staged = _collect_freight_overrides_and_inputs(
+            config_tree=config_tree,
+            source_root=source_root,
+            derived_root=output_dir,
+        )
+        staged_inputs.extend(freight_staged)
 
     launch_config = materialize_beam_launch_config(
         settings=settings,

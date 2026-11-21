@@ -7,8 +7,6 @@ from pilates.atlas.static_inputs import (
     atlas_static_input_keys_for_interval,
     atlas_static_input_relpaths,
 )
-from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.steps.atlas import ATLAS_RUN
 
 
 def _settings(
@@ -89,59 +87,6 @@ def test_atlas_static_input_keys_for_interval_filters_adopt_year_suffixes_only()
     assert "adopt/baseline/used_vehicles_2021" not in keys
     # Non-ADOPT year-suffixed key is intentionally preserved.
     assert "accessbility2017" in keys
-
-
-def test_build_coupler_schema_uses_atlas_static_keys():
-    schema = build_coupler_schema([], settings=_settings())
-    assert "adopt/baseline/new_vehicles_biannual_values_2021" in schema
-    assert "adopt/baseline/new_vehicles_biannual_values_2023" in schema
-
-
-def test_build_coupler_schema_expands_runtime_year_scoped_keys():
-    schema = build_coupler_schema([], settings=_settings(start=2017, end=2018, freq=1))
-
-    assert "householdv_2017" in schema
-    assert "vehicles_2017" in schema
-    assert "householdv_2018" in schema
-    assert "vehicles_2018" in schema
-    assert "householdv_2019" in schema
-    assert "vehicles_2019" in schema
-    assert "atlas_continuation_2019" in schema
-    assert "usim_input_archive_2019" in schema
-    assert "usim_input_merged_2019" in schema
-    assert "usim_forecast_output" in schema
-    assert "urbansim/usim_forecast_output" in schema
-    assert "asim_input_skims_omx_archived" in schema
-    assert "raw_od_skims_zarr_2019_0" in schema
-    assert "events_parquet_2019_0" in schema
-
-
-def test_atlas_run_does_not_leak_dynamic_key_templates_into_consist_schema():
-    schema = build_coupler_schema(
-        [ATLAS_RUN.function],
-        settings=_settings(start=2017, end=2018, freq=1),
-    )
-
-    assert "householdv_2017" in schema
-    assert "vehicles_2018" in schema
-    assert "householdv_{year}" not in schema
-    assert "vehicles_{year}" not in schema
-
-
-def test_build_coupler_schema_declares_beam_plans_handoff_alias():
-    schema = build_coupler_schema([], settings=_settings())
-
-    assert "beam_plans_asim_out" in schema
-    assert "beam/beam_plans_asim_out" in schema
-
-
-def test_build_coupler_schema_without_extras_is_empty_for_no_steps():
-    schema = build_coupler_schema(
-        [],
-        settings=_settings(),
-        include_extras=False,
-    )
-    assert schema == {}
 
 
 def test_atlas_run_years_are_biannual_independent_of_vehicle_ownership_freq():

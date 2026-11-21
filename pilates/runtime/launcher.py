@@ -33,7 +33,6 @@ from pilates.workspace import Workspace
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
 from pilates.utils import consist_runtime as cr
-from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
 from pilates.workflows.consist_metadata import (
     build_scenario_consist_kwargs,
 )
@@ -52,7 +51,8 @@ from pilates.urbansim.admission import (
     preflight_bootstrap_urbansim_datastore_admission,
 )
 from pilates.utils.admission_helpers import extract_admission_reports
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
+from pilates.workflows.orchestrator import run_pilates
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime.failure_hints import (
@@ -76,19 +76,7 @@ from pilates.runtime.run_publishers import (
 )
 from pilates.runtime.storage_probe import log_local_storage_info_if_enabled
 from pilates.workflows._profile import ensure_runtime_flags_initialized
-from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.surface import (
-    EnabledWorkflowSurface,
-    build_enabled_workflow_surface,
-)
-from pilates.workflows.stages import (
-    run_land_use_stage,
-    run_postprocessing_stage,
-    run_supply_demand_stage,
-    run_vehicle_ownership_stage,
-)
 from pilates.workflows.state import WorkflowState
-from pilates.workflows.catalog import validate_workflow_step_contracts
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -117,7 +105,6 @@ class PreparedRunContext:
 
     settings: PilatesConfig
     state: WorkflowState
-    surface: EnabledWorkflowSurface
     workspace: Workspace
     runtime_context: WorkflowRuntimeContext
     tracker: Any
@@ -241,7 +228,6 @@ def _build_scenario_runtime_contract(
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
-    surface: EnabledWorkflowSurface,
 ) -> Dict[str, Any]:
     return scenario_runtime.build_scenario_runtime_contract(
         settings=settings,
@@ -251,13 +237,10 @@ def _build_scenario_runtime_contract(
         seed=seed,
         cache_epoch=cache_epoch,
         build_scenario_consist_kwargs_fn=build_scenario_consist_kwargs,
-        build_coupler_schema_fn=build_coupler_schema,
-        validate_workflow_step_contracts_fn=validate_workflow_step_contracts,
         build_schema_steps_fn=_build_schema_steps,
         filter_schema_steps_for_enabled_models_fn=_filter_schema_steps_for_enabled_models,
         merge_epoch_facet_fn=scenario_runtime.merge_epoch_facet,
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
-        surface=surface,
     )
 
 
@@ -291,7 +274,6 @@ def _prepare_run_context(
     ensure_runtime_flags_initialized(settings)
     if state is None:
         state = WorkflowState.from_settings(settings)
-    surface = build_enabled_workflow_surface(settings, state=state)
     set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
@@ -466,14 +448,12 @@ def _prepare_run_context(
         settings=settings,
         state=state,
         workspace=workspace,
-        surface=surface,
         on_archive_commit=on_archive_commit,
         expected_prefix_steps=expected_prefix_steps,
     )
     return PreparedRunContext(
         settings=settings,
         state=state,
-        surface=surface,
         workspace=workspace,
         runtime_context=runtime_context,
         tracker=tracker,
@@ -528,9 +508,7 @@ def main(
     )
     settings = prepared.settings
     state = prepared.state
-    surface = prepared.surface
     workspace = prepared.workspace
-    runtime_context = prepared.runtime_context
     tracker = prepared.tracker
     snapshot_manager = prepared.snapshot_manager
     run_name = prepared.run_name
@@ -581,19 +559,16 @@ def main(
             scenario_id=scenario_id,
             seed=run_seed,
             cache_epoch=cache_epoch,
-            surface=surface,
         )
         scenario_kwargs = scenario_contract["scenario_kwargs"]
         schema_steps_all = scenario_contract["schema_steps_all"]
         schema_steps_enabled = scenario_contract["schema_steps_enabled"]
-        coupler_schema = scenario_contract["coupler_schema"]
         required_output_keys = scenario_contract["required_output_keys"]
 
         preview_count = 25
         logger.info(
-            "Scenario output contract: declared_keys=%d require_outputs=%d "
+            "Scenario output contract: require_outputs=%d "
             "(enabled_steps=%d/%d). Preview: %s",
-            len(coupler_schema),
             len(required_output_keys),
             len(schema_steps_enabled),
             len(schema_steps_all),
@@ -621,12 +596,6 @@ def main(
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            coupler = scenario.coupler
-            coupler.declare_outputs(
-                *coupler_schema.keys(),
-                warn_undefined=True,
-                description=coupler_schema,
-            )
             # ponytail: bootstrap_initialization is retired; admit initial inputs
             # directly on fresh start or restart at the initial workflow boundary.
             if not is_restart_run or _is_at_initial_workflow_boundary(state):
@@ -654,95 +623,20 @@ def main(
                             cr.current_run()
                         ),
                     )
-            seed_bootstrap_artifacts_to_coupler(
+            run_pilates(
+                scenario=cast(ScenarioWithCoupler, scenario),
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                coupler=coupler,
-                scenario=scenario,
+                snapshot_manager=snapshot_manager,
+                on_activity_demand_boundary=(
+                    lambda y, iteration: _snapshot_activitysim_boundary(
+                        snapshot_manager,
+                        year=y,
+                        iteration=iteration,
+                    )
+                ),
             )
-            scenario.capture_coupler_snapshot(phase="init")
-
-            # 7. MAIN WORKFLOW LOOP
-            # Iterates through forecast years. For each year, runs sequential stages:
-            # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
-            #
-            # Each stage executes its declared StepDefinition entries via
-            # StepDefinition.resolve_inputs(...) and execute_step(...) on the active
-            # Consist scenario.
-            #
-            for year in state:
-                formatted_print(f"STARTING YEAR {year}")
-                logger.info(
-                    "[launcher] starting year=%s run_id=%s",
-                    year,
-                    cr.current_run_id(),
-                )
-                if state.should_run(WorkflowState.Stage.land_use):
-                    run_land_use_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        year=year,
-                        context=runtime_context,
-                    )
-                    state.complete_step(WorkflowState.Stage.land_use)
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_land_use_y{year}"
-                    )
-
-                if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-                    formatted_print(
-                        f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
-                    )
-                    run_vehicle_ownership_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        coupler=coupler,
-                        year=year,
-                        context=runtime_context,
-                    )
-                    state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_vehicle_ownership_y{year}"
-                    )
-
-                if state.should_run(WorkflowState.Stage.supply_demand_loop):
-                    run_supply_demand_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        year=year,
-                        on_activity_demand_boundary=(
-                            lambda iteration, y=year: _snapshot_activitysim_boundary(
-                                snapshot_manager,
-                                year=y,
-                                iteration=iteration,
-                            )
-                        ),
-                        on_iteration_boundary=(
-                            lambda iteration, y=year: (
-                                snapshot_manager.on_outer_iteration_boundary(
-                                    year=y,
-                                    iteration=iteration,
-                                )
-                            )
-                        ),
-                        context=runtime_context,
-                    )
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_supply_demand_y{year}"
-                    )
-
-                if state.should_run(WorkflowState.Stage.postprocessing):
-                    formatted_print("POST-PROCESSING")
-                    run_postprocessing_stage(
-                        scenario=cast(ScenarioWithCoupler, scenario),
-                        year=year,
-                        context=runtime_context,
-                    )
-                    state.complete_step(WorkflowState.Stage.postprocessing)
-                    snapshot_manager.maybe_snapshot_interval(
-                        reason=f"after_postprocessing_y{year}"
-                    )
-                snapshot_manager.maybe_snapshot_interval(
-                    reason=f"year_boundary_y{year}"
-                )
 
         formatted_print("SIMULATION COMPLETE")
         logger.info("[Main] Simulation complete.")

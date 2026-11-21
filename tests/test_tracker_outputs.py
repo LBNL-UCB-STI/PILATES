@@ -28,13 +28,6 @@ def test_load_tracker_run_outputs_canonicalizes_and_drops_none(monkeypatch):
     }
 
 
-def test_merge_canonical_output_mappings_prefers_later_mappings():
-    assert tracker_outputs.merge_canonical_output_mappings(
-        {"urbansim/usim_datastore_h5": "/tmp/model_data_a.h5"},
-        {"usim_datastore_h5": "/tmp/model_data_b.h5"},
-    ) == {"usim_datastore_h5": "/tmp/model_data_b.h5"}
-
-
 def test_load_tracker_run_outputs_raises_without_active_tracker(monkeypatch):
     monkeypatch.setattr(tracker_outputs.cr, "current_tracker", lambda: None)
 
