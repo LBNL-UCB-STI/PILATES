@@ -1750,7 +1750,6 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
 
     assert events == [
         "scenario_enter",
-        "declare_outputs",
         "admission",
         "skims_admission",
         "seed",
@@ -1813,7 +1812,7 @@ def test_main_strict_bootstrap_admission_rejects_before_seeding_or_model_executi
     with pytest.raises(RuntimeError, match="strict rejection"):
         run_module.main()
 
-    assert events == ["scenario_enter", "declare_outputs", "scenario_exit"]
+    assert events == ["scenario_enter", "scenario_exit"]
 
 
 def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
@@ -1876,7 +1875,6 @@ def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
 
     assert events == [
         "scenario_enter",
-        "declare_outputs",
         "seed",
         "scenario_exit",
     ]

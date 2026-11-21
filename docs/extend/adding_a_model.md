@@ -10,7 +10,7 @@ Every model integration spans four layers in the repository:
 | --- | --- | --- |
 | Adapter and outputs | `pilates/<model>/{preprocessor,runner,postprocessor,outputs}.py` | Translates typed `SimState` artifacts into simulator inputs, idempotently prepares mutable model workspace configs/static inputs, invokes the container or local process, and packages raw outputs into a `StepOutputsBase` subclass. |
 | Step definition and contracts | `pilates/workflows/steps/<model>.py` | Declares `@define_step` callables, `StepDefinition` metadata, `InputContract` specifications, `StepCallInputs` builders from `SimState`, and `TypedOutputProjector` mappings. |
-| Orchestration and catalog | `pilates/workflows/orchestrator.py`, `pilates/workflows/catalog.py` | Calls `execute_step(...)` inside `run_pilates()` (`land_use`, `vehicle_ownership_model`, `supply_demand_loop`, or `postprocessing`), updates `SimState`, syncs `scenario.coupler`, and registers `WorkflowStepSpec` entries on the static catalog. |
+| Orchestration | `pilates/workflows/orchestrator.py` | Calls `execute_step(...)` inside `run_pilates()` (`land_use`, `vehicle_ownership_model`, `supply_demand_loop`, or `postprocessing`), updates `SimState`, and syncs `scenario.coupler`. |
 | Config, state, and facets | `pilates/config/models.py`, `pilates/workflows/sim_state.py`, `pilates/workflows/consist_metadata.py` | Validates `config.yaml` settings with Pydantic, defines typed `SimState` slots (or `extras`), and builds Consist identity and facet payloads. |
 
 ```mermaid
@@ -42,7 +42,6 @@ The scaffold script writes or updates the following paths:
 - `pilates/my_model/outputs.py`
 - `pilates/workflows/steps/my_model.py`
 - `pilates/workflows/steps/__init__.py`
-- `pilates/workflows/catalog.py`
 - `docs/checklists/add_model_my_model.md`
 
 After scaffolding, register your config block in `pilates/config/models.py` and wire the step/stage call into `pilates/workflows/orchestrator.py` (for example, before or after `run_traffic_assignment_phase` inside `_run_supply_demand_loop`).
@@ -85,7 +84,7 @@ class MyModelRunOutputs(StepOutputsBase):
 
 In `pilates/workflows/steps/<model>.py`, build `StepCallInputs` directly from `SimState` and pair each step with an `InputContract`:
 
-- Select upstream inputs directly from `sim_state` (for example `sim_state.demand.households or sim_state.demand.households_in`) using plain Python conditionals—no `ArtifactBindingRule` is needed; register new coupler keys in `pilates/workflows/artifact_keys.py` and `SimState.to_role_map()` (plus `pilates/workflows/coupler_schema.py` if adding a typed coupler schema field).
+- Select upstream inputs directly from `sim_state` (for example `sim_state.demand.households or sim_state.demand.households_in`) using plain Python conditionals—no `ArtifactBindingRule` is needed; register new coupler keys in `pilates/workflows/artifact_keys.py` and `SimState.to_role_map()`.
 - Set `ConfigContract.adapter("my_model")` when the step hashes a Consist `ConfigAdapter` directory, or `ConfigContract.payload()` when the step hashes config parameters.
 - Start with `status="incomplete"` and a clear `reason` string while scaffolding; promote to `status="complete"` once `resolve_inputs` supplies all artifact bindings and config identity fields required for cache hits and hydration.
 
@@ -125,7 +124,7 @@ def _resolve_my_model_inputs(
 Bind the `@define_step` function, `InputContract`, `resolve_inputs` callback, and `project_outputs` projector into a `StepDefinition`.
 
 - **Orchestrator execution**: Inside `pilates/workflows/orchestrator.py` (for example before/after BEAM in `_run_supply_demand_loop`), invoke `execute_step(..., sim_state=sim_state)` and return the updated `SimState`.
-- **Provenance facets**: Register your model's config and facet builder in `pilates/workflows/consist_metadata.py` and reference its `builder_key` in `pilates/workflows/catalog.py` (`WorkflowStepProvenanceSpec`) so run parameters are indexed in `provenance.duckdb`. See [Queryable Facets in DuckDB](../workflow/artifact_flow.md#queryable-facets-in-duckdb) for how run and artifact facets are structured and queried.
+- **Provenance facets**: Register your model's config and facet builder in `pilates/workflows/consist_metadata.py` so run parameters are indexed in `provenance.duckdb`. See [Queryable Facets in DuckDB](../workflow/artifact_flow.md#queryable-facets-in-duckdb) for how run and artifact facets are structured and queried.
 
 ## Testing Progression
 

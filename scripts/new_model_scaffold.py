@@ -1231,7 +1231,6 @@ def _render_checklist(
 
         - [ ] `pilates/workflows/steps/__init__.py`
         - [ ] `pilates/workflows/steps/__init__.py` (`STEP_DEFINITIONS`)
-        - [ ] `pilates/workflows/catalog.py`
 
         ## Required Follow-up Wiring
 
@@ -1507,14 +1506,6 @@ def main() -> int:
             actions.append(("create", path, changed))
 
         path, changed = _upsert_steps_init(repo_root, spec, dry_run=args.dry_run)
-        actions.append(("update", path, changed))
-
-        path, changed = _upsert_workflow_catalog(
-            repo_root,
-            spec,
-            catalog_options=catalog_options,
-            dry_run=args.dry_run,
-        )
         actions.append(("update", path, changed))
 
     except Exception as exc:

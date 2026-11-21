@@ -12,7 +12,6 @@ ALLOWED_PROFILE_IMPORT_FILES: set[Path] = set()
 ALLOWED_RUNTIME_FLAG_CALL_FILES = {
     Path("pilates/workflows/state.py"),
     Path("pilates/runtime/launcher.py"),
-    Path("pilates/workflows/surface.py"),
 }
 DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "RestartExactRewindContract",

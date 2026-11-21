@@ -157,18 +157,6 @@ def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> 
         "build_standard_step",
     ):
         assert retired_symbol not in step_module_text
-    catalog_text = (tmp_path / "pilates/workflows/catalog.py").read_text(
-        encoding="utf-8"
-    )
-    ast.parse(catalog_text)
-    assert 'step_name="freight_preprocess"' in catalog_text
-    assert 'step_name="freight_run"' in catalog_text
-    assert 'step_name="freight_postprocess"' in catalog_text
-    assert 'stage_name="traffic_assignment"' in catalog_text
-    assert 'enabled_flag_attr="traffic_assignment_enabled"' in catalog_text
-    assert 'enabled_model_attr="travel"' in catalog_text
-    assert 'depends_on=("freight_preprocess",)' in catalog_text
-
     steps_init_text = (tmp_path / "pilates/workflows/steps/__init__.py").read_text(
         encoding="utf-8"
     )
@@ -329,14 +317,6 @@ def test_scaffold_catalog_defaults_apply_enablement_mapping(
         capture_output=True,
         text=True,
     )
-
-    catalog_text = (tmp_path / "pilates/workflows/catalog.py").read_text(
-        encoding="utf-8"
-    )
-    assert f'step_name="{model}_preprocess"' in catalog_text
-    assert f'stage_name="{expected_stage}"' in catalog_text
-    assert f'enabled_flag_attr="{expected_flag}"' in catalog_text
-    assert f'enabled_model_attr="{expected_model}"' in catalog_text
 
 
 def test_scaffold_dry_run_reports_actions_without_writing(tmp_path: Path) -> None:
@@ -568,7 +548,6 @@ def test_scaffold_applies_cleanly_against_real_repo_files(tmp_path: Path) -> Non
 
     for relpath in (
         "pilates/workflows/steps/__init__.py",
-        "pilates/workflows/catalog.py",
         "pilates/workflows/orchestrator.py",
     ):
         src = repo_root / relpath
@@ -597,7 +576,6 @@ def test_scaffold_applies_cleanly_against_real_repo_files(tmp_path: Path) -> Non
         "pilates/freight/outputs.py",
         "pilates/workflows/steps/freight.py",
         "pilates/workflows/steps/__init__.py",
-        "pilates/workflows/catalog.py",
         "docs/checklists/stage_templates/add_model_freight.linear.py.snippet",
         "docs/checklists/stage_templates/add_model_freight.iterative.py.snippet",
     ):
