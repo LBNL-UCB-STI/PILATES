@@ -16,7 +16,7 @@ class DryRunWorkspaceLike(Protocol):
 
 def is_dry_run_workspace(workspace: Any) -> bool:
     """Return True when ``workspace`` is in zero-I/O dry-run mode."""
-    return isinstance(workspace, DryRunWorkspaceLike) and bool(workspace.dry_run)
+    return isinstance(workspace, DryRunWorkspaceLike) and workspace.dry_run is True
 
 
 class Workspace:
