@@ -43,50 +43,6 @@ def _seed_minimal_repo(repo_root: Path) -> None:
         encoding="utf-8",
     )
 
-    (repo_root / "pilates/workflows/catalog.py").write_text(
-        dedent(
-            """
-            from dataclasses import dataclass
-            from typing import Any, Optional, Tuple, Type
-
-            from pilates.existing.outputs import (
-                ExistingPreprocessOutputs,
-            )
-
-
-            @dataclass(frozen=True)
-            class WorkflowStepProvenanceSpec:
-                builder_key: str
-
-
-            @dataclass(frozen=True)
-            class WorkflowStepSpec:
-                step_name: str
-                phase: str
-                stage_name: str
-                order: int
-                outputs_class: Optional[Type[Any]] = None
-                depends_on: Tuple[str, ...] = ()
-                enabled_flag_attr: Optional[str] = None
-                enabled_model_attr: Optional[str] = None
-                provenance: Optional[WorkflowStepProvenanceSpec] = None
-
-
-            WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
-                WorkflowStepSpec(
-                    step_name="existing_preprocess",
-                    phase="preprocess",
-                    stage_name="land_use",
-                    order=10,
-                    outputs_class=ExistingPreprocessOutputs,
-                ),
-            )
-            """
-        ).strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
     (repo_root / "run.py").write_text(
         dedent(
             """
