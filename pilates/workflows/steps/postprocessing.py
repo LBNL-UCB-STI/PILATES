@@ -11,6 +11,7 @@ from consist import (
 
 from pilates.config.models import PilatesConfig
 from pilates.workspace import Workspace
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import current_year, iteration_index
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.contracts import (
@@ -47,7 +48,7 @@ def _postprocessing_output_paths(
 ) -> dict[str, Path]:
     del step_inputs
     out_paths: dict[str, Path] = {}
-    post_cfg = getattr(settings, "postprocessing", None)
+    post_cfg = get_setting(settings, "postprocessing")
     if post_cfg is not None:
         year = resolve_forecast_year(state) or 0
         year_str = str(year)
@@ -92,7 +93,7 @@ def _postprocessing_callable(
     *, settings: PilatesConfig, state: Any, workspace: Workspace, **kwargs: Any
 ) -> None:
     del kwargs
-    if getattr(settings, "postprocessing", None) is not None:
+    if get_setting(settings, "postprocessing") is not None:
         from pilates.postprocessing.postprocessor import (
             copy_outputs_to_mep,
             process_event_file,

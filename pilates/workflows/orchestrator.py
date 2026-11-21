@@ -763,7 +763,7 @@ def _effective_supply_demand_iterations(
     if isinstance(state, WorkflowState):
         return state.effective_supply_demand_iterations(resumed_iteration=iteration)
     configured_iters = int(settings.run.supply_demand_iters)
-    run_models = getattr(settings.run, "models", None)
+    run_models = get_setting(settings, "run.models")
     if (
         run_models is not None
         and run_models.activity_demand is None

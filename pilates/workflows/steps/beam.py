@@ -193,8 +193,7 @@ def _beam_population_input_suffix(settings: Any) -> str:
 def _beam_vehicles_input_suffix(settings: Any) -> str:
     """Return the suffix written by the ATLAS-to-BEAM vehicle staging step."""
 
-    activitysim = getattr(settings, "activitysim", None)
-    preferred_format = getattr(activitysim, "file_format", None)
+    preferred_format = get_setting(settings, "activitysim.file_format")
     return f".{_beam_vehicle_file_format(preferred_format)}"
 
 

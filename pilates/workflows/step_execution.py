@@ -17,6 +17,7 @@ from consist import (
 )
 
 from pilates.utils.archive_paths import ArchiveRunDirLike, workspace_storage_roots
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import iteration_index
 from pilates.workflows.contracts import StepCallInputs, StepDefinition
 from pilates.workflows.sim_state import ArtifactRef, SimState
@@ -37,17 +38,9 @@ def _is_step_archive_enabled(
     state: Any,
     workspace: Any,
 ) -> bool:
-    if isinstance(settings, Mapping):
-        run_cfg = settings.get("run")
-        if isinstance(run_cfg, Mapping) and isinstance(
-            run_cfg.get("enable_archive_copy"), bool
-        ):
-            return run_cfg["enable_archive_copy"]
-    else:
-        run_cfg = getattr(settings, "run", None)
-        enable_archive_copy = getattr(run_cfg, "enable_archive_copy", None)
-        if isinstance(enable_archive_copy, bool):
-            return enable_archive_copy
+    enable_archive_copy = get_setting(settings, "run.enable_archive_copy")
+    if isinstance(enable_archive_copy, bool):
+        return enable_archive_copy
     return bool(
         (isinstance(workspace, ArchiveRunDirLike) and workspace.archive_run_dir)
         or (isinstance(state, ArchiveRunDirLike) and state.archive_run_dir)
@@ -66,9 +59,8 @@ def _resolve_cache_options(
         if definition.cache_options is not None
         else None
     )
-    run_cfg = getattr(settings, "run", None)
-    configured_code_identity: CodeIdentityMode | None = getattr(
-        run_cfg, "consist_code_identity", None
+    configured_code_identity: CodeIdentityMode | None = get_setting(
+        settings, "run.consist_code_identity"
     )
     if configured_code_identity is None:
         return cache_options
@@ -157,8 +149,7 @@ def execute_step(
     if isinstance(step_counter, int) and isinstance(expected_prefix, int):
         workspace.step_execution_counter += 1
         current_ordinal = workspace.step_execution_counter
-        run_cfg = getattr(settings, "run", None)
-        resume_policy = getattr(run_cfg, "resume_policy", "strict")
+        resume_policy = get_setting(settings, "run.resume_policy", "strict")
 
         if (
             resume_policy == "strict"

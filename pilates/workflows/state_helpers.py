@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from pilates.utils.io import get_traffic_assignment_model
+from pilates.utils.settings_helper import get as get_setting
 
 
 def resolve_forecast_year(state: Any) -> Optional[int]:
@@ -39,11 +40,6 @@ def _iteration_value(state: Any) -> int:
     return 0
 
 
-def _start_year_value(settings: Any) -> int | None:
-    run_cfg = getattr(settings, "run", None)
-    return getattr(run_cfg, "start_year", None) if run_cfg is not None else None
-
-
 def requires_prior_beam_skim_handoff(*, settings: Any, state: Any) -> bool:
     """Whether this invocation must consume a prior BEAM-produced OMX skim.
 
@@ -55,7 +51,7 @@ def requires_prior_beam_skim_handoff(*, settings: Any, state: Any) -> bool:
         return False
 
     frontier_year = _frontier_year(state)
-    start_year = _start_year_value(settings)
+    start_year = get_setting(settings, "run.start_year")
     iteration = _iteration_value(state)
     if (
         start_year is not None
@@ -76,11 +72,11 @@ def requires_prior_beam_linkstats_handoff(*, settings: Any, state: Any) -> bool:
     model = get_traffic_assignment_model(settings)
     if model is not None and model != "beam":
         return False
-    if model is None and getattr(settings, "beam", None) is None:
+    if model is None and get_setting(settings, "beam") is None:
         return False
 
     frontier_year = _frontier_year(state)
-    start_year = _start_year_value(settings)
+    start_year = get_setting(settings, "run.start_year")
     iteration = _iteration_value(state)
     if (
         start_year is not None
