@@ -11,7 +11,7 @@ from typing import (
     Sequence,
 )
 
-from pilates.config import PilatesConfig
+from pilates.config import PilatesConfig, SettingsLike
 from pilates.utils.io import (
     compute_model_enabled_flags,
     get_activity_demand_model,
@@ -126,7 +126,7 @@ def build_schema_steps() -> List[Callable[..., Any]]:
 
 
 def _enabled_schema_step_names(
-    settings: Any,
+    settings: SettingsLike,
     *,
     include_optional: bool = True,
 ) -> set[str]:
@@ -181,7 +181,7 @@ def _enabled_schema_step_names(
 def filter_schema_steps_for_enabled_models(
     steps: List[Callable[..., Any]],
     *,
-    settings: Any,
+    settings: SettingsLike,
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
     enabled_step_names = _enabled_schema_step_names(

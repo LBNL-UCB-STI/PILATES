@@ -9,6 +9,7 @@ import openmatrix as omx
 import xarray as xr
 
 import pilates.utils.zone_utils as zone_utils
+from pilates.config.models import SettingsLike
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
@@ -1820,7 +1821,7 @@ def _process_all_tnc_logic(
 
 def _open_partial_beam_skims(
     current_skims_path: str,
-    settings: Any,
+    settings: SettingsLike,
     get_setting_fn: Callable[..., Any] = get_setting,
 ) -> Tuple[str, Optional[xr.Dataset], Optional[Any]]:
     if current_skims_path.endswith(".zarr"):
@@ -1848,7 +1849,7 @@ def _load_and_prepare_master_skims_ds(
     all_skims_path: str,
     partial_skims_ds: Optional[xr.Dataset],
     canonical_order: List[Any],
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
 ) -> Optional[xr.Dataset]:
     try:
@@ -1880,7 +1881,7 @@ def _load_and_prepare_master_skims_ds(
 def _reconstruct_and_postprocess_tnc_from_master_zarr(
     skims_ds: xr.Dataset,
     time_periods: List[str],
-    settings: Any,
+    settings: SettingsLike,
     consolidate_tnc_fleets: bool,
 ) -> None:
     logger.warning(

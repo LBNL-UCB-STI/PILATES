@@ -9,7 +9,7 @@ from consist import (
     require_runtime_kwargs,
 )
 
-from pilates.config.models import PilatesConfig
+from pilates.config.models import PilatesConfig, SettingsLike
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import current_year, iteration_index
@@ -41,7 +41,7 @@ _POSTPROCESSING_INPUT_CONTRACT = InputContract(
 
 def _postprocessing_output_paths(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs | None = None,
@@ -123,7 +123,7 @@ def _postprocessing_callable(
 def _resolve_postprocessing_inputs(
     *,
     sim_state: SimState | None = None,
-    settings: Any = None,
+    settings: SettingsLike | None = None,
     state: Any = None,
     workspace: Any = None,
     **_: Any,
@@ -173,7 +173,7 @@ def _resolve_postprocessing_inputs(
 def _project_postprocessing_outputs(
     outputs: Mapping[str, Any],
     *,
-    settings: Any = None,
+    settings: SettingsLike | None = None,
     state: Any = None,
     workspace: Any = None,
     step_inputs: StepCallInputs | None = None,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from typing import Any, Dict, List, Mapping, Optional, Union
 
-from pilates.config import PilatesConfig
+from pilates.config import PilatesConfig, SettingsLike
 from pilates.beam.outputs import (
     BeamFullSkimOutputs,
     BeamPreprocessOutputs,
@@ -72,7 +72,7 @@ def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     return optimal
 
 
-def _resolve_beam_memory(settings: Any) -> str:
+def _resolve_beam_memory(settings: SettingsLike) -> str:
     """
     Resolve BEAM JVM heap memory string, expanding environment variables
     and falling back to a safe default if an unexpanded template is encountered.
