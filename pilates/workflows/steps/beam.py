@@ -103,7 +103,7 @@ from pilates.workflows.outputs_base import ValidationContext
 from pilates.utils.state_access import is_start_year, iteration_index
 from pilates.workspace import Workspace
 
-from .shared import _path_from_output
+from .shared import _build_step_call_inputs, _path_from_output
 
 logger = logging.getLogger(__name__)
 
@@ -911,7 +911,7 @@ def _sim_state_beam_candidates(sim_state: SimState) -> dict[str, ArtifactRef | N
         ),
     }
     for key, value in sim_state.extras.items():
-        if value is not None:
+        if value is not None and (key not in candidates or candidates[key] is None):
             candidates[key] = value
     return candidates
 
@@ -928,25 +928,22 @@ def _resolved_beam_inputs(
     metadata: Mapping[str, Any] | None = None,
 ) -> StepCallInputs:
     candidates = _sim_state_beam_candidates(sim_state)
-    inputs: dict[str, ArtifactRef] = dict(explicit_inputs or {})
+    if explicit_inputs:
+        candidates.update(explicit_inputs)
     destinations = dict(logical_destinations or {})
     req_tuple = tuple(required_roles)
     opt_tuple = tuple(optional_roles)
     for key in (*req_tuple, *opt_tuple):
-        if key in inputs:
-            continue
-        value = candidates.get(key)
-        if value is None:
-            continue
-        inputs[key] = value
-        destinations.setdefault(
-            key,
-            _input_destination(workspace=workspace, key=key, source=value),
-        )
-    return StepCallInputs(
-        inputs=inputs,
-        required_keys=req_tuple,
-        optional_keys=opt_tuple,
+        if key not in destinations:
+            value = candidates.get(key)
+            if value is not None:
+                destinations[key] = _input_destination(
+                    workspace=workspace, key=key, source=value
+                )
+    return _build_step_call_inputs(
+        candidates=candidates,
+        required_roles=req_tuple,
+        optional_roles=opt_tuple,
         logical_destinations=destinations,
         metadata={"step_name": step_name, **(metadata or {})},
     )
@@ -1244,6 +1241,7 @@ def _resolve_beam_run_inputs(
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
+    beam_preprocess_outputs: Mapping[str, ArtifactRef] | None = None,
     **_: Any,
 ) -> StepCallInputs:
     del state
@@ -1259,6 +1257,7 @@ def _resolve_beam_run_inputs(
             BEAM_PERSONS_IN,
         ),
         optional_roles=(LINKSTATS_WARMSTART,),
+        explicit_inputs=beam_preprocess_outputs,
     )
 
 

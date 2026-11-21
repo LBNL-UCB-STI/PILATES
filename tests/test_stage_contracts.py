@@ -49,8 +49,10 @@ def test_beam_phase_sequences_native_beam_definitions() -> None:
 
 
 def test_full_skim_uses_its_native_definition() -> None:
-    source = _function_source(orchestrator.run_traffic_assignment_phase)
-    assert "definition=beam_full_skim" in source
+    phase_source = _function_source(orchestrator.run_traffic_assignment_phase)
+    helper_source = _function_source(orchestrator._run_beam_full_skim)
+    assert "_run_beam_full_skim(" in phase_source
+    assert "definition=beam_full_skim" in helper_source
 
 
 def test_postprocessing_stage_uses_its_native_definition() -> None:

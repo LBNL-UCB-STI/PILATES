@@ -246,17 +246,6 @@ def _enabled_stage_names(profile: WorkflowProfile) -> FrozenSet[str]:
     return frozenset(stage_names)
 
 
-def _make_input_role_policy(
-    *,
-    rule: Any,
-) -> InputRolePolicy:
-    return InputRolePolicy(
-        explicit_inputs_allowed=bool(rule.allow_explicit),
-        coupler_fallback_allowed=bool(rule.allow_coupler),
-        workspace_archive_fallback_allowed=bool(rule.allow_fallback),
-    )
-
-
 def _build_step_runtime_surface(
     *,
     settings: Any,

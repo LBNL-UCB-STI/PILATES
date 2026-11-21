@@ -869,10 +869,6 @@ def _render_stage_patch_execution_block(
     if pattern == STAGE_PATTERN_LINEAR:
         return dedent(
             f"""
-            {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                coupler=scenario.coupler,
-            )
             _, {spec.model}_preprocess_outputs = execute_step(
                 scenario=scenario,
                 definition={spec.model}_preprocess,
@@ -883,10 +879,6 @@ def _render_stage_patch_execution_block(
                 year=year,
                 iteration=None,
                 phase="preprocess",
-                step_inputs={spec.model}_preprocess_inputs,
-            )
-            {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
                 sim_state=sim_state,
             )
             _, {spec.model}_run_outputs = execute_step(
@@ -900,11 +892,6 @@ def _render_stage_patch_execution_block(
                 iteration=None,
                 phase="run",
                 sim_state=sim_state,
-                step_inputs={spec.model}_run_inputs,
-            )
-            {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                sim_state=sim_state,
             )
             _, {spec.model}_postprocess_outputs = execute_step(
                 scenario=scenario,
@@ -917,7 +904,6 @@ def _render_stage_patch_execution_block(
                 iteration=None,
                 phase="postprocess",
                 sim_state=sim_state,
-                step_inputs={spec.model}_postprocess_inputs,
             )
             """
         ).strip()
@@ -925,38 +911,23 @@ def _render_stage_patch_execution_block(
         return dedent(
             f"""
             for iteration in range(settings.run.supply_demand_iters):
-                {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-                    settings=settings, state=state, workspace=workspace,
-                    sim_state=sim_state,
-                )
                 _, {spec.model}_preprocess_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_preprocess,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
                     phase="preprocess", sim_state=sim_state,
-                    step_inputs={spec.model}_preprocess_inputs,
-                )
-                {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-                    settings=settings, state=state, workspace=workspace,
-                    sim_state=sim_state,
                 )
                 _, {spec.model}_run_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_run,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
                     phase="run", sim_state=sim_state,
-                    step_inputs={spec.model}_run_inputs,
-                )
-                {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-                    settings=settings, state=state, workspace=workspace,
-                    sim_state=sim_state,
                 )
                 _, {spec.model}_postprocess_outputs = execute_step(
                     scenario=scenario, definition={spec.model}_postprocess,
                     settings=settings, state=state, workspace=workspace,
                     stage="<stage_name>", year=year, iteration=iteration,
                     phase="postprocess", sim_state=sim_state,
-                    step_inputs={spec.model}_postprocess_inputs,
                 )
             """
         ).strip()
@@ -1137,35 +1108,23 @@ def _render_linear_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> 
             {spec.model}_run,
         )
 
-        {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-            settings=settings, state=state, workspace=workspace,
-            sim_state=sim_state,
-        )
         _, {spec.model}_preprocess_outputs = execute_step(
             scenario=scenario, definition={spec.model}_preprocess,
             settings=settings, state=state, workspace=workspace,
             stage="{catalog_stage}", year=year, iteration=None, phase="preprocess",
-            sim_state=sim_state, step_inputs={spec.model}_preprocess_inputs,
-        )
-        {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-            settings=settings, state=state, workspace=workspace,
             sim_state=sim_state,
         )
         _, {spec.model}_run_outputs = execute_step(
             scenario=scenario, definition={spec.model}_run,
             settings=settings, state=state, workspace=workspace,
             stage="{catalog_stage}", year=year, iteration=None, phase="run",
-            sim_state=sim_state, step_inputs={spec.model}_run_inputs,
-        )
-        {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-            settings=settings, state=state, workspace=workspace,
             sim_state=sim_state,
         )
         _, {spec.model}_postprocess_outputs = execute_step(
             scenario=scenario, definition={spec.model}_postprocess,
             settings=settings, state=state, workspace=workspace,
             stage="{catalog_stage}", year=year, iteration=None, phase="postprocess",
-            sim_state=sim_state, step_inputs={spec.model}_postprocess_inputs,
+            sim_state=sim_state,
         )
         """
         ).strip()
@@ -1191,38 +1150,23 @@ def _render_iterative_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) 
         )
 
         for iteration in range(settings.run.supply_demand_iters):
-            {spec.model}_preprocess_inputs = {spec.model}_preprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                sim_state=sim_state,
-            )
             _, {spec.model}_preprocess_outputs = execute_step(
                 scenario=scenario, definition={spec.model}_preprocess,
                 settings=settings, state=state, workspace=workspace,
                 stage="{catalog_stage}", year=year, iteration=iteration,
                 phase="preprocess", sim_state=sim_state,
-                step_inputs={spec.model}_preprocess_inputs,
-            )
-            {spec.model}_run_inputs = {spec.model}_run.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                sim_state=sim_state,
             )
             _, {spec.model}_run_outputs = execute_step(
                 scenario=scenario, definition={spec.model}_run,
                 settings=settings, state=state, workspace=workspace,
                 stage="{catalog_stage}", year=year, iteration=iteration,
                 phase="run", sim_state=sim_state,
-                step_inputs={spec.model}_run_inputs,
-            )
-            {spec.model}_postprocess_inputs = {spec.model}_postprocess.resolve_inputs(
-                settings=settings, state=state, workspace=workspace,
-                sim_state=sim_state,
             )
             _, {spec.model}_postprocess_outputs = execute_step(
                 scenario=scenario, definition={spec.model}_postprocess,
                 settings=settings, state=state, workspace=workspace,
                 stage="{catalog_stage}", year=year, iteration=iteration,
                 phase="postprocess", sim_state=sim_state,
-                step_inputs={spec.model}_postprocess_inputs,
             )
         """
         ).strip()

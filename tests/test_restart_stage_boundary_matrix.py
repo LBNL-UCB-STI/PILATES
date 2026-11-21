@@ -86,6 +86,11 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
 
     monkeypatch.setattr(
         beam_stage,
+        "beam_run",
+        SimpleNamespace(resolve_inputs=lambda **_kwargs: run_inputs),
+    )
+    monkeypatch.setattr(
+        beam_stage,
         "beam_postprocess",
         SimpleNamespace(resolve_inputs=lambda **_kwargs: postprocess_inputs),
     )

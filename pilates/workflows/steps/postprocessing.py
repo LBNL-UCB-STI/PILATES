@@ -21,6 +21,7 @@ from pilates.workflows.contracts import (
     StepDefinition,
 )
 from pilates.workflows.sim_state import ArtifactRef, SimState
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.steps.shared import (
     _build_step_call_inputs,
     _native_contract_output_paths,
@@ -41,20 +42,8 @@ from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
-class _HasForecastYear(Protocol):
-    forecast_year: int | None
-
-
-@runtime_checkable
 class _HasPostprocessing(Protocol):
     postprocessing: Any | None
-
-
-def _get_forecast_year(state: Any) -> int | None:
-    if isinstance(state, _HasForecastYear) and state.forecast_year is not None:
-        return int(state.forecast_year)
-    yr = current_year(state)
-    return int(yr) if yr is not None else None
 
 
 def _postprocessing_output_paths(
@@ -68,7 +57,7 @@ def _postprocessing_output_paths(
     out_paths: dict[str, Path] = {}
     if isinstance(settings, _HasPostprocessing) and settings.postprocessing is not None:
         post_cfg = settings.postprocessing
-        year = _get_forecast_year(state) or 0
+        year = resolve_forecast_year(state) or 0
         year_str = str(year)
 
         mep_folder = Path(post_cfg.mep_output_folder)

@@ -152,7 +152,14 @@ class AtlasSubState:
 
 def _sync_coupler(scenario: Any, sim_state: SimState) -> None:
     if isinstance(scenario, _HasCoupler) and scenario.coupler is not None:
-        scenario.coupler.update(sim_state.to_role_map())
+        role_map = sim_state.to_role_map()
+        changed = {
+            key: value
+            for key, value in role_map.items()
+            if scenario.coupler.get(key) is not value
+        }
+        if changed:
+            scenario.coupler.update(changed)
 
 
 def _admit_bootstrap_input(scenario: Any, *, key: str, path: str) -> ArtifactRef:
@@ -182,6 +189,11 @@ def bootstrap_initial_state(
     demand = DemandState()
     network = NetworkState()
     extras: dict[str, ArtifactRef] = {}
+    workspace_root = (
+        Path(str(workspace.full_path))
+        if isinstance(workspace, _WorkspaceRootLike) and workspace.full_path is not None
+        else None
+    )
 
     # 1. UrbanSim initial datastore
     requires_usim = (
@@ -231,17 +243,11 @@ def bootstrap_initial_state(
             resolve_bootstrap_activitysim_skims_path,
         )
 
-        workspace_path = (
-            Path(str(workspace.full_path))
-            if isinstance(workspace, _WorkspaceRootLike)
-            and workspace.full_path is not None
-            else None
-        )
-        if workspace_path is not None:
+        if workspace_root is not None:
             try:
                 candidate = resolve_bootstrap_activitysim_skims_path(
                     settings=settings,
-                    workspace_path=workspace_path,
+                    workspace_path=workspace_root,
                 )
             except Exception:
                 candidate = None
@@ -274,12 +280,7 @@ def bootstrap_initial_state(
             )
             record_store = None
         allowed_keys = {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}
-        base_path = (
-            str(workspace.full_path)
-            if isinstance(workspace, _WorkspaceRootLike)
-            and workspace.full_path is not None
-            else None
-        )
+        base_path = str(workspace_root) if workspace_root is not None else None
         if record_store is not None:
             for record in record_store.all_records():
                 key = record.short_name
@@ -542,7 +543,8 @@ def run_vehicle_ownership_stage(
                 if atlas_year != forecast_year:
                     updated_land_use = replace(
                         updated_land_use,
-                        prior_h5=sim_state.land_use.population_source or pop_ref,
+                        population_source=pop_ref,
+                        prior_h5=pop_ref,
                         current_h5=(
                             forecast_datastore_ref
                             if forecast_datastore_ref is not None
@@ -727,6 +729,20 @@ def _full_skim_run_schedule(settings: PilatesConfig) -> str:
     return skim_cfg.run_schedule
 
 
+def _effective_supply_demand_iterations(
+    settings: PilatesConfig,
+    state: Optional[WorkflowState],
+    iteration: int,
+) -> int:
+    if isinstance(state, WorkflowState):
+        return state.effective_supply_demand_iterations(resumed_iteration=iteration)
+    configured_iters = int(settings.run.supply_demand_iters)
+    models = vars(settings.run).get("models")
+    if models is not None and models.activity_demand is None and configured_iters > 1:
+        return max(1, iteration + 1)
+    return configured_iters
+
+
 def _should_run_full_skim(
     settings: PilatesConfig,
     iteration: int,
@@ -737,21 +753,46 @@ def _should_run_full_skim(
     if schedule in ("standalone", "after_each_iteration"):
         return True
     if schedule == "after_final_iteration":
-        if isinstance(state, WorkflowState):
-            total_iters = state.effective_supply_demand_iterations(
-                resumed_iteration=iteration
-            )
-        else:
-            total_iters = int(settings.run.supply_demand_iters)
-            models = vars(settings.run).get("models")
-            if (
-                models is not None
-                and models.activity_demand is None
-                and total_iters > 1
-            ):
-                total_iters = max(1, iteration + 1)
+        total_iters = _effective_supply_demand_iterations(settings, state, iteration)
         return iteration == total_iters - 1
     return False
+
+
+def _run_beam_full_skim(
+    *,
+    scenario: ScenarioWithCoupler,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    sim_state: SimState,
+    beam_year: int,
+    iteration: int,
+) -> SimState:
+    skim_result, skim_outputs = execute_step(
+        scenario=scenario,
+        definition=beam_full_skim,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="supply_demand",
+        year=beam_year,
+        iteration=iteration,
+        phase="full_skim",
+        sim_state=sim_state,
+    )
+    return replace(
+        sim_state,
+        network=replace(
+            sim_state.network,
+            full_skims=skim_result.outputs.get(
+                BEAM_FULL_SKIMS, skim_outputs.full_skims
+            ),
+            skims_omx=skim_result.outputs.get(
+                FINAL_SKIMS_OMX,
+                skim_outputs.final_skims_omx or sim_state.network.skims_omx,
+            ),
+        ),
+    )
 
 
 def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
@@ -806,30 +847,14 @@ def run_traffic_assignment_phase(
             from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
 
             _prepare_beam_zone_shapefile(workspace, settings)
-        skim_result, skim_outputs = execute_step(
+        sim_state = _run_beam_full_skim(
             scenario=scenario,
-            definition=beam_full_skim,
             settings=settings,
             state=state,
             workspace=workspace,
-            stage="supply_demand",
-            year=beam_year,
-            iteration=iteration,
-            phase="full_skim",
             sim_state=sim_state,
-        )
-        sim_state = replace(
-            sim_state,
-            network=replace(
-                sim_state.network,
-                full_skims=skim_result.outputs.get(
-                    BEAM_FULL_SKIMS, skim_outputs.full_skims
-                ),
-                skims_omx=skim_result.outputs.get(
-                    FINAL_SKIMS_OMX,
-                    skim_outputs.final_skims_omx or sim_state.network.skims_omx,
-                ),
-            ),
+            beam_year=beam_year,
+            iteration=iteration,
         )
         _sync_coupler(scenario, sim_state)
         return sim_state
@@ -846,9 +871,10 @@ def run_traffic_assignment_phase(
         phase="preprocess",
         sim_state=sim_state,
     )
-    prep_extras: dict[str, ArtifactRef] = dict(sim_state.extras)
-    for k, p in prep_outputs.prepared_inputs.items():
-        prep_extras[k] = prep_result.outputs.get(k, p)
+    prep_inputs: dict[str, ArtifactRef] = {
+        k: prep_result.outputs.get(k, p)
+        for k, p in prep_outputs.prepared_inputs.items()
+    }
     sim_for_beam = replace(
         sim_state,
         network=replace(
@@ -860,9 +886,15 @@ def run_traffic_assignment_phase(
                 ),
             ),
         ),
-        extras=prep_extras,
     )
 
+    run_inputs = beam_run.resolve_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=sim_for_beam,
+        beam_preprocess_outputs=prep_inputs,
+    )
     run_result, run_outputs = execute_step(
         scenario=scenario,
         definition=beam_run,
@@ -874,6 +906,7 @@ def run_traffic_assignment_phase(
         iteration=iteration,
         phase="run",
         sim_state=sim_for_beam,
+        step_inputs=run_inputs,
     )
     logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
     _maybe_fail_after_beam_run_for_canary(year=beam_year, iteration=iteration)
@@ -885,7 +918,6 @@ def run_traffic_assignment_phase(
         sim_state=sim_for_beam,
         beam_run_outputs=run_result.outputs,
     )
-    postprocess_inputs.require_complete("beam_postprocess")
 
     post_result, post_outputs = execute_step(
         scenario=scenario,
@@ -901,13 +933,10 @@ def run_traffic_assignment_phase(
         step_inputs=postprocess_inputs,
     )
 
-    events_pq = next(
-        (
-            val
-            for key, val in post_result.outputs.items()
-            if key.startswith("events_parquet_")
-        ),
-        sim_state.network.events_parquet,
+    events_key = f"events_parquet_{beam_year}_{iteration}"
+    events_pq = run_result.outputs.get(
+        events_key,
+        run_outputs.raw_outputs.get(events_key, sim_state.network.events_parquet),
     )
     sim_state = replace(
         sim_state,
@@ -947,34 +976,17 @@ def run_traffic_assignment_phase(
             ),
             events_parquet=events_pq,
         ),
-        extras=prep_extras,
     )
 
     if _should_run_full_skim(settings, iteration, state=state):
-        skim_result, skim_outputs = execute_step(
+        sim_state = _run_beam_full_skim(
             scenario=scenario,
-            definition=beam_full_skim,
             settings=settings,
             state=state,
             workspace=workspace,
-            stage="supply_demand",
-            year=beam_year,
-            iteration=iteration,
-            phase="full_skim",
             sim_state=sim_state,
-        )
-        sim_state = replace(
-            sim_state,
-            network=replace(
-                sim_state.network,
-                full_skims=skim_result.outputs.get(
-                    BEAM_FULL_SKIMS, skim_outputs.full_skims
-                ),
-                skims_omx=skim_result.outputs.get(
-                    FINAL_SKIMS_OMX,
-                    skim_outputs.final_skims_omx or sim_state.network.skims_omx,
-                ),
-            ),
+            beam_year=beam_year,
+            iteration=iteration,
         )
 
     _sync_coupler(scenario, sim_state)
@@ -997,14 +1009,9 @@ def _run_supply_demand_loop(
 
     configured_iters = settings.run.supply_demand_iters
     resumed_iteration = int(state.iteration or 0)
-    if isinstance(state, WorkflowState):
-        total_iters = state.effective_supply_demand_iterations(
-            resumed_iteration=resumed_iteration
-        )
-    elif settings.run.models.activity_demand is None and configured_iters > 1:
-        total_iters = max(1, resumed_iteration + 1)
-    else:
-        total_iters = configured_iters
+    total_iters = _effective_supply_demand_iterations(
+        settings, state, resumed_iteration
+    )
 
     if total_iters != configured_iters:
         logger.warning(
@@ -1105,7 +1112,6 @@ def run_pilates(
         state=state,
         workspace=workspace,
     )
-    scenario.capture_coupler_snapshot(phase="init")
 
     for year in state:
         formatted_print(f"STARTING YEAR {year}")

@@ -12,9 +12,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
-    ASIM_OUTPUT_DIR,
     ASIM_PERSONS_IN,
-    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_FULL_SKIMS,
@@ -41,7 +39,6 @@ class LandUseState:
     prior_h5: ArtifactRef | None = None
     forecast_output: ArtifactRef | None = None
     population_source: ArtifactRef | None = None
-    urbansim_run_dir: ArtifactRef | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,8 +113,6 @@ class SimState:
 
         if self.atlas.hh_cars is not None:
             roles[ATLAS_VEHICLES2_OUTPUT] = self.atlas.hh_cars
-        if self.atlas.output_dir is not None:
-            roles[ATLAS_OUTPUT_DIR] = self.atlas.output_dir
         if self.atlas.last_simulated_year is not None:
             yr = self.atlas.last_simulated_year
             if self.atlas.vehicles is not None:
@@ -147,8 +142,6 @@ class SimState:
             roles["beam_plans_asim_out"] = self.demand.plans
         if self.demand.skims_zarr is not None:
             roles[ZARR_SKIMS] = self.demand.skims_zarr
-        if self.demand.output_dir is not None:
-            roles[ASIM_OUTPUT_DIR] = self.demand.output_dir
 
         if self.network.skims_omx is not None:
             roles[FINAL_SKIMS_OMX] = self.network.skims_omx
