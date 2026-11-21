@@ -15,6 +15,10 @@ atlas:
   scenario: baseline
   adscen: baseline
 
+shared:
+  database:
+    path: /global/home/groups-sw/pc_beamcore/database/provenance_sfbay.duckdb
+
 beam:
   config: scenarios/network-calibration/beam-pilates-run--sfbay--jdeq-calibration-FC07-atlas.conf
   warmstart_linkstats_path: "{router_directory}/init.linkstats.parquet"
