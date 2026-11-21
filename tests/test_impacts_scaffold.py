@@ -9,10 +9,12 @@ from pilates.config.models import ImpactsConfig
 from pilates.impacts import ImpactsPostsimRunner, ImpactsPresimRunner
 from pilates.impacts.settings_bridge import (
     BEAM_INPUT_CONTAINER_DIR,
+    INPUT_CACHE_CONTAINER_DIR,
     WORKSPACE_CONTAINER_DIR,
     _deep_merge,
     _to_container_path,
     build_pilates_bridge_settings,
+    resolve_shared_input_cache_folder,
     resolve_population_override,
 )
 from pilates.workflows.stages.impacts_presim import run_impacts_presim_stage
@@ -46,6 +48,7 @@ def _make_settings(**impacts_kwargs) -> AttrDict:
                 "scenario": "baseline",
                 "start_year": 2020,
                 "output_run_name": "testrun",
+                "output_directory": "/tmp/pilates-test-output",
                 "models": {
                     "land_use": None,
                     "travel": None,
@@ -236,6 +239,15 @@ def test_impacts_presim_runner_run(tmp_path: Path, monkeypatch) -> None:
     assert len(calls) == 2
     assert "derive_settings_from_pilates" in calls[0]["command"]
     assert calls[1]["command"].startswith("presim --config")
+    cache_folder = resolve_shared_input_cache_folder(settings)
+    assert calls[0]["volumes"][str(cache_folder)] == {
+        "bind": INPUT_CACHE_CONTAINER_DIR,
+        "mode": "rw",
+    }
+    assert calls[1]["volumes"][str(cache_folder)] == {
+        "bind": INPUT_CACHE_CONTAINER_DIR,
+        "mode": "rw",
+    }
 
     impacts_output_dir = Path(workspace.get_impacts_output_dir())
     assert outputs.output_dir == impacts_output_dir / "impacts_presim--seattle--testrun_y2025"
@@ -247,6 +259,7 @@ def test_impacts_presim_runner_run(tmp_path: Path, monkeypatch) -> None:
 
     bridge = yaml.safe_load(outputs.bridge_settings_path.read_text(encoding="utf-8"))
     assert bridge["run"]["output_run_name"] == "testrun_y2025"
+    assert bridge["impacts"]["shared_input_cache_dir"] == INPUT_CACHE_CONTAINER_DIR
 
 
 def test_impacts_postsim_runner_run(tmp_path: Path, monkeypatch) -> None:
@@ -295,6 +308,92 @@ def test_impacts_postsim_runner_run(tmp_path: Path, monkeypatch) -> None:
     assert bridge["impacts"]["population"] == {
         "passenger_folder": "/app/workspace/beam/input"
     }
+
+
+def test_impacts_postsim_mounts_isrm_dataset_read_only(tmp_path: Path, monkeypatch) -> None:
+    inmap_data = tmp_path / "inmap"
+    inmap_data.mkdir()
+    (inmap_data / "isrm.zarr").mkdir()
+    cache_folder = tmp_path / "shared-isrm-cache"
+    settings = _make_settings(
+        shared_input_cache_folder=str(cache_folder),
+        local_inmap_data_folder=str(inmap_data),
+        overrides={
+            "dispersions": {"inmap": {"isrm_zarr": "/app/inmap/isrm.zarr"}}
+        },
+    )
+    workspace = _make_workspace(tmp_path / "workspace", settings)
+    state = _make_state(settings, forecast_year=2025)
+    calls = []
+    monkeypatch.setattr(
+        ImpactsPostsimRunner,
+        "run_container",
+        staticmethod(lambda **kwargs: calls.append(kwargs) or True),
+    )
+
+    ImpactsPostsimRunner("impacts_postsim", state).run(None, workspace)
+
+    expected_mount = {
+        "bind": "/app/inmap",
+        "mode": "ro",
+    }
+    assert calls[0]["volumes"][str(inmap_data.resolve())] == expected_mount
+    assert calls[1]["volumes"][str(inmap_data.resolve())] == expected_mount
+    assert calls[0]["volumes"][str(cache_folder.resolve())] == {
+        "bind": INPUT_CACHE_CONTAINER_DIR,
+        "mode": "rw",
+    }
+    assert calls[1]["volumes"][str(cache_folder.resolve())] == {
+        "bind": INPUT_CACHE_CONTAINER_DIR,
+        "mode": "rw",
+    }
+    bridge = yaml.safe_load(
+        Path(workspace.get_impacts_bridge_settings_path("postsim")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        bridge["impacts"]["dispersions"]["inmap"]["isrm_zarr"]
+        == "/app/inmap/isrm.zarr"
+    )
+    assert bridge["impacts"]["shared_input_cache_dir"] == INPUT_CACHE_CONTAINER_DIR
+
+
+def test_impacts_inmap_host_folder_expands_environment_variables(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("TEST_INMAP_DATA_DIR", str(tmp_path / "inmap"))
+    settings = _make_settings(local_inmap_data_folder="$TEST_INMAP_DATA_DIR")
+
+    assert settings.impacts.local_inmap_data_folder == str(tmp_path / "inmap")
+
+
+def test_impacts_postsim_requires_host_folder_for_container_inmap_path(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings(
+        overrides={
+            "dispersions": {"inmap": {"isrm_zarr": "/app/inmap/isrm.zarr"}}
+        }
+    )
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings, forecast_year=2025)
+
+    try:
+        ImpactsPostsimRunner("impacts_postsim", state).run(None, workspace)
+    except ValueError as exc:
+        assert "local_inmap_data_folder" in str(exc)
+    else:
+        raise AssertionError("Expected an error without the host InMAP directory")
+
+
+def test_default_input_cache_is_shared_outside_run_workspace(tmp_path: Path) -> None:
+    settings = _make_settings()
+    settings.run.output_directory = str(tmp_path / "archive")
+
+    assert resolve_shared_input_cache_folder(settings) == (
+        tmp_path / "archive" / ".pilates-cache" / "impacts"
+    )
 
 
 def test_impacts_runner_raises_when_container_fails(tmp_path: Path, monkeypatch) -> None:

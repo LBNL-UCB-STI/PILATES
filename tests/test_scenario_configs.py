@@ -33,6 +33,11 @@ ACTIVE_SCENARIO_PATHS = sorted(
     path for root in ACTIVE_SCENARIO_ROOTS for path in _tracked_yaml_paths(root)
 )
 
+
+@pytest.fixture(autouse=True)
+def _set_inmap_path_for_scenario_config_tests(monkeypatch):
+    monkeypatch.setenv("IMPACTS_INMAP_DATA_DIR", "/tmp/impacts-inmap-test")
+
 SEATTLE_ROUTER_DIRECTORY = "r5/seattle-cbg120-ferry-weakConn-network"
 SFBAY_ROUTER_DIRECTORY = "r5/sfbay-cbg5500-weakConn-network"
 DEFAULT_BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260408"

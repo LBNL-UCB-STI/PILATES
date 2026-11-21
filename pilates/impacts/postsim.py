@@ -10,13 +10,16 @@ from pilates.generic.runner import GenericRunner
 from pilates.impacts.outputs import ImpactsPostsimOutputs
 from pilates.impacts.settings_bridge import (
     BEAM_INPUT_CONTAINER_DIR,
+    INPUT_CACHE_CONTAINER_DIR,
     WORKSPACE_CONTAINER_DIR,
     _to_container_path,
     build_pilates_bridge_settings,
+    resolve_shared_input_cache_folder,
 )
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+INMAP_CONTAINER_DIR = "/app/inmap"
 
 
 class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]):
@@ -34,6 +37,40 @@ class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]
             raise ValueError("Impacts config is missing")
 
         bridge = build_pilates_bridge_settings(settings, self.state, workspace, stage="postsim")
+        volumes = {
+            workspace.get_beam_mutable_data_dir(): {
+                "bind": BEAM_INPUT_CONTAINER_DIR,
+                "mode": "ro",
+            },
+            workspace.full_path: {"bind": WORKSPACE_CONTAINER_DIR, "mode": "rw"},
+        }
+        inmap_settings = bridge["impacts"].get("dispersions", {}).get("inmap", {})
+        isrm_zarr = inmap_settings.get("isrm_zarr")
+        cache_folder = resolve_shared_input_cache_folder(settings)
+        cache_folder.mkdir(parents=True, exist_ok=True)
+        volumes[str(cache_folder)] = {
+            "bind": INPUT_CACHE_CONTAINER_DIR,
+            "mode": "rw",
+        }
+        if cfg.pipeline_postsim.inmap and isrm_zarr:
+            if isrm_zarr.startswith(("s3://", "gs://", "http://", "https://")):
+                pass
+            elif isrm_zarr.startswith(f"{INMAP_CONTAINER_DIR}/"):
+                if not cfg.local_inmap_data_folder:
+                    raise ValueError(
+                        "Set impacts.local_inmap_data_folder to the host directory "
+                        "containing the configured InMAP dataset."
+                    )
+                inmap_data_folder = Path(cfg.local_inmap_data_folder).expanduser().resolve()
+                if not inmap_data_folder.is_dir():
+                    raise FileNotFoundError(
+                        "IMPACTS InMAP host data directory does not exist: "
+                        f"{inmap_data_folder}"
+                    )
+                volumes[str(inmap_data_folder)] = {
+                    "bind": INMAP_CONTAINER_DIR,
+                    "mode": "ro",
+                }
 
         bridge_path = Path(workspace.get_impacts_bridge_settings_path("postsim"))
         settings_path = Path(workspace.get_impacts_settings_path("postsim"))
@@ -53,14 +90,6 @@ class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]
         )
 
         _, image = self.get_model_and_image(settings, "impacts")
-        volumes = {
-            workspace.get_beam_mutable_data_dir(): {
-                "bind": BEAM_INPUT_CONTAINER_DIR,
-                "mode": "ro",
-            },
-            workspace.full_path: {"bind": WORKSPACE_CONTAINER_DIR, "mode": "rw"},
-        }
-
         derive_success = self.run_container(
             client=None,
             settings=settings,

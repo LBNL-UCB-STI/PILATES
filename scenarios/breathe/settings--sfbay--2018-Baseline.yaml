@@ -6,10 +6,10 @@ run:
 infrastructure:
   docker_images:
     beam: haitamlaarabi/beam:1.1-beta-v260424
-    impacts: tbd
+    impacts: ghcr.io/lbnl-ucb-sti/impacts:v0.2.0
   singularity_images:
     beam: docker://haitamlaarabi/beam:1.1-beta-v260424
-    impacts: tbd
+    impacts: docker://ghcr.io/lbnl-ucb-sti/impacts:v0.2.0
 beam:
   config: scenarios/breathe/pilates--sfbay--2018-Baseline.conf
   extra_jvm_args: ${BEAM_EXTRA_JVM_ARGS}
@@ -17,6 +17,7 @@ beam:
 impacts:
   local_input_folder: impacts/impacts_input
   local_output_folder: impacts/impacts_output
+  local_inmap_data_folder: ${IMPACTS_INMAP_DATA_DIR}
   seed: 0
   pipeline_presim:
     activities: true
@@ -136,7 +137,7 @@ impacts:
         medium_heavy_duty: 312.0
     dispersions:
       inmap:
-        isrm_zarr: ~/Workspace/Simulation/sfbay/inmap/isrm_v1.2.1.zarr
+        isrm_zarr: /app/inmap/isrm_v1.2.1.zarr
         isrm_nox_to_no2_ratios_file: vehicle-tech/dispersions/inmap/nox_to_no2_full_isrm_matrix.npz
         isrm_nox_to_no2_ratios_apply_tons_per_year_to_ug_per_s: false
         grid_path: vehicle-tech/dispersions/inmap/isrm_polygon_wgs84.gpkg

@@ -8,6 +8,7 @@ from typing import Any, Dict, Literal
 
 BEAM_INPUT_CONTAINER_DIR = "/app/beam_input"
 WORKSPACE_CONTAINER_DIR = "/app/workspace"
+INPUT_CACHE_CONTAINER_DIR = "/app/impacts_cache"
 
 _PASSENGER_EXCHANGE_EXTENSIONS = (".csv.gz", ".csv", ".parquet")
 
@@ -25,6 +26,18 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 def _to_container_path(container_root: str, host_path: str, host_root: str) -> str:
     relpath = os.path.relpath(host_path, host_root)
     return posixpath.normpath(posixpath.join(container_root, *Path(relpath).parts))
+
+
+def resolve_shared_input_cache_folder(settings: Any) -> Path:
+    cfg = settings.impacts
+    configured = cfg.shared_input_cache_folder
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (
+        Path(settings.run.output_directory).expanduser().resolve()
+        / ".pilates-cache"
+        / "impacts"
+    )
 
 
 def _has_exchange_file(directory: Path, stem: str) -> bool:
@@ -91,6 +104,7 @@ def build_pilates_bridge_settings(
         },
     }
     impacts_section = _deep_merge(impacts_section, deepcopy(cfg.overrides))
+    impacts_section["shared_input_cache_dir"] = INPUT_CACHE_CONTAINER_DIR
 
     if stage == "postsim":
         impacts_section = _deep_merge(

@@ -10,9 +10,11 @@ from pilates.generic.runner import GenericRunner
 from pilates.impacts.outputs import ImpactsPresimOutputs
 from pilates.impacts.settings_bridge import (
     BEAM_INPUT_CONTAINER_DIR,
+    INPUT_CACHE_CONTAINER_DIR,
     WORKSPACE_CONTAINER_DIR,
     _to_container_path,
     build_pilates_bridge_settings,
+    resolve_shared_input_cache_folder,
 )
 from pilates.workspace import Workspace
 
@@ -54,6 +56,12 @@ class ImpactsPresimRunner(GenericRunner[None, ImpactsPresimOutputs, Workspace]):
                 "mode": "ro",
             },
             workspace.full_path: {"bind": WORKSPACE_CONTAINER_DIR, "mode": "rw"},
+        }
+        cache_folder = resolve_shared_input_cache_folder(settings)
+        cache_folder.mkdir(parents=True, exist_ok=True)
+        volumes[str(cache_folder)] = {
+            "bind": INPUT_CACHE_CONTAINER_DIR,
+            "mode": "rw",
         }
 
         derive_success = self.run_container(

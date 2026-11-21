@@ -11,6 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS_DIR = REPO_ROOT / "scenarios"
 
 
+@pytest.fixture(autouse=True)
+def _set_inmap_path_for_config_tests(monkeypatch):
+    monkeypatch.setenv("IMPACTS_INMAP_DATA_DIR", "/tmp/impacts-inmap-test")
+
+
 def _minimal_base_dict() -> dict[str, Any]:
     return {
         "run": {
