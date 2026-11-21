@@ -8,7 +8,7 @@ import numpy as np
 import openmatrix as omx
 import pandas as pd
 
-from pilates.config import PilatesConfig
+from pilates.config import PilatesConfig, SettingsLike
 from pilates.beam.outputs import (
     BeamPostprocessOutputs,
     BeamRunOutputs,
@@ -55,7 +55,7 @@ from pilates.beam.tnc_zarr_pipeline import (
 logger = logging.getLogger(__name__)
 
 
-def _activitysim_skims_target_enabled(settings: Any) -> bool:
+def _activitysim_skims_target_enabled(settings: SettingsLike) -> bool:
     if isinstance(settings, PilatesConfig):
         return settings.run.models.activity_demand == "activitysim"
     activity_demand = get_setting(settings, "run.models.activity_demand", None)

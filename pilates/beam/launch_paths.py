@@ -20,7 +20,7 @@ from pilates.beam.config_hocon import (
     resolve_beam_config_value,
     update_staged_beam_config_value,
 )
-from pilates.config import PilatesConfig
+from pilates.config import PilatesConfig, SettingsLike
 from pilates.workspace import Workspace
 
 
@@ -238,7 +238,7 @@ def validate_staged_linkstats_reference(
 
 
 def resolve_r5_network_reference(
-    *, settings: Any, workspace: Any, config_root: Path | None = None
+    *, settings: SettingsLike, workspace: Any, config_root: Path | None = None
 ) -> R5NetworkLaunchReference:
     """Resolve R5's raw-directory selection from final staged HOCON.
 
@@ -286,7 +286,7 @@ def resolve_r5_network_reference(
 
 def validate_r5_execution_reference(
     *,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
     run_context: Any,
     config_root: Path | None = None,
@@ -346,7 +346,7 @@ def validate_r5_execution_reference(
 
 
 def prepare_r5_raw_rebuild(
-    *, settings: Any, workspace: Any, config_root: Path | None = None
+    *, settings: SettingsLike, workspace: Any, config_root: Path | None = None
 ) -> R5NetworkLaunchReference:
     """Remove derived R5 and PhysSim caches from the mutable launch tree.
 
@@ -386,7 +386,7 @@ def prepare_r5_raw_rebuild(
 
 def _resolve_full_skim_directory2_reference(
     *,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
     config_root: Path | None = None,
 ) -> Optional[BeamLaunchPathReference]:
@@ -427,7 +427,7 @@ def _resolve_full_skim_directory2_reference(
     )
 
 
-def _align_generated_network_paths(*, settings: Any, workspace: Any) -> None:
+def _align_generated_network_paths(*, settings: SettingsLike, workspace: Any) -> None:
     """Make both BEAM consumers of the generated PhysSim network agree.
 
     ``NetworkCoordinator`` creates ``physsim-network.xml`` beside the selected
@@ -486,7 +486,7 @@ def _remove_r5_derived_caches(
 
 def _resolve_hocon_path_reference(
     *,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
     config_key: str,
     required: bool,
@@ -572,7 +572,9 @@ def _is_gtfs_zip(path: Path) -> bool:
         return False
 
 
-def _config_path(settings: Any, *, workspace: Any, config_root: Path | None) -> Path:
+def _config_path(
+    settings: SettingsLike, *, workspace: Any, config_root: Path | None
+) -> Path:
     if config_root is not None:
         return config_root / settings.beam.config
     return beam_primary_config_path(settings, workspace=workspace)

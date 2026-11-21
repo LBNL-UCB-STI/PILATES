@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     Dict,
@@ -12,6 +13,9 @@ from typing import (
     Tuple,
     Union,
 )
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 import json
 from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.artifact_keys import (
@@ -87,7 +91,7 @@ def normalize_asim_output_key(key: str) -> str:
     return ASIM_OUTPUT_KEY_MAP.get(key, key)
 
 
-def configured_asim_output_tables(settings: Any) -> Dict[str, str]:
+def configured_asim_output_tables(settings: SettingsLike) -> Dict[str, str]:
     """Return physical final-pipeline table names indexed by semantic output key.
 
     ``output_tables.tables`` is the execution contract: it determines which
@@ -121,7 +125,7 @@ def configured_asim_output_tables(settings: Any) -> Dict[str, str]:
     return configured
 
 
-def configured_asim_output_keys(settings: Any) -> Tuple[str, ...]:
+def configured_asim_output_keys(settings: SettingsLike) -> Tuple[str, ...]:
     """Return the semantic output keys enabled by the active ActivitySim config."""
 
     return tuple(configured_asim_output_tables(settings))

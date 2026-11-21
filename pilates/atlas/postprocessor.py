@@ -11,7 +11,7 @@ import pandas as pd
 from pilates.atlas.static_inputs import atlas_selected_scenario
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
-from pilates.config import PilatesConfig
+from pilates.config import PilatesConfig, SettingsLike
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.state_access import uses_input_datastore
@@ -89,13 +89,13 @@ def _normalize_lookup_key(value: Any) -> Optional[str]:
     return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
 
 
-def _settings_value(settings: Any, field_name: str) -> Optional[Any]:
+def _settings_value(settings: SettingsLike, field_name: str) -> Optional[Any]:
     if isinstance(settings, dict):
         return settings.get(field_name)
     return getattr(settings, field_name, None)
 
 
-def _normalized_atlas_scenario(settings: Any) -> str:
+def _normalized_atlas_scenario(settings: SettingsLike) -> str:
     scenario = atlas_selected_scenario(settings)
     if scenario is None:
         for field_name in ("atlas_vehicles_scenario", "atlas_scenario"):
@@ -113,7 +113,7 @@ def _normalized_atlas_scenario(settings: Any) -> str:
 
 
 def resolve_atlas_vehicle_type_mapping_path(
-    settings: Any, workspace: Optional[Workspace] = None
+    settings: SettingsLike, workspace: Optional[Workspace] = None
 ) -> Path:
     scenario = _normalized_atlas_scenario(settings)
     mapping_name = _ATLAS_VEHICLE_TYPE_MAPPING_BY_SCENARIO.get(scenario)

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, Optional, Tuple
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.outputs_base import (
@@ -20,13 +23,13 @@ from pilates.workflows.artifact_keys import (
 )
 
 
-def _resolve_model_name(settings: Any, model_name: str) -> Optional[str]:
+def _resolve_model_name(settings: SettingsLike, model_name: str) -> Optional[str]:
     run_cfg = getattr(settings, "run", None)
     model_cfg = getattr(run_cfg, "models", None)
     return getattr(model_cfg, model_name, None)
 
 
-def requires_omx_skim_output(settings: Any) -> bool:
+def requires_omx_skim_output(settings: SettingsLike) -> bool:
     """Return whether a configured downstream model requires BEAM OMX skims."""
     return (
         bool(get_setting(settings, "write_skims_to_omx", False))

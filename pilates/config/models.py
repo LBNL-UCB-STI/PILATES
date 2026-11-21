@@ -16,7 +16,9 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
+    Protocol,
     Sequence,
     Union,
 )
@@ -1012,6 +1014,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return 0
 
 
+class HasRunSettings(Protocol):
+    """Structural protocol for minimal settings stubs exposing a ``run`` section."""
+
+    @property
+    def run(self) -> Any: ...
+
+
+SettingsLike = Union[PilatesConfig, Mapping[str, Any], HasRunSettings]
+
+
 __all__ = [
     "ActivitySimAdmissionConfig",
     "ActivitySimConfig",
@@ -1029,6 +1041,7 @@ __all__ = [
     "DockerConfig",
     "FullSkimsCreatorConfig",
     "GeographyConfig",
+    "HasRunSettings",
     "InfrastructureConfig",
     "ModelSelection",
     "PilatesConfig",
@@ -1038,6 +1051,7 @@ __all__ = [
     "RunConfig",
     "RuntimeFlags",
     "RuntimeOptions",
+    "SettingsLike",
     "SharedConfig",
     "SkimsConfig",
     "UrbanSimAdmissionConfig",

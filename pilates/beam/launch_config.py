@@ -12,7 +12,10 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 import shutil
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 
 from consist.core.identity import IdentityManager
 from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
@@ -117,7 +120,7 @@ class BeamLaunchInput:
 
 def materialize_beam_launch_config(
     *,
-    settings: Any,
+    settings: SettingsLike,
     source_root: Path,
     output_dir: Path,
     identity: IdentityManager,
@@ -273,7 +276,7 @@ def _collect_freight_overrides_and_inputs(
 
 def compute_beam_launch_overrides(
     *,
-    settings: Any,
+    settings: SettingsLike,
     config_tree: dict[str, Any] | None = None,
     env_overrides: Mapping[str, str] | None = None,
     prepared_inputs: Mapping[str, Any] | None = None,
@@ -428,7 +431,7 @@ def compute_beam_launch_overrides(
 
 def build_beam_launch_config(
     *,
-    settings: Any,
+    settings: SettingsLike,
     source_root: Path,
     output_dir: Path,
     identity: IdentityManager,
@@ -733,7 +736,7 @@ def _write_synthetic_parquet_stub(
 
 def _activitysim_skims_file_base_name_override(
     *,
-    settings: Any,
+    settings: SettingsLike,
     config_tree: dict[str, Any],
 ) -> tuple[dict[str, str], bool]:
     """Return the configured BEAM activity-sim skimmer writer base name."""
@@ -764,7 +767,7 @@ def _activitysim_skims_file_base_name_override(
 
 def _full_skim_calculation_timeout_override(
     *,
-    settings: Any,
+    settings: SettingsLike,
     config_tree: dict[str, Any],
 ) -> tuple[dict[str, int], bool]:
     """Return the configured BEAM BackgroundFullSkimsCreator timeout in hours."""
@@ -789,7 +792,7 @@ def _full_skim_calculation_timeout_override(
 
 def _artifact_format_overrides(
     *,
-    settings: Any,
+    settings: SettingsLike,
     config_tree: dict[str, Any],
 ) -> tuple[dict[str, str], bool]:
     """Return typed format policy overrides and report legacy missing keys."""

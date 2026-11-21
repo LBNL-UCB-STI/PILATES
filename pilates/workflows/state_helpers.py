@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.settings_helper import get as get_setting
@@ -40,7 +43,7 @@ def _iteration_value(state: Any) -> int:
     return 0
 
 
-def requires_prior_beam_skim_handoff(*, settings: Any, state: Any) -> bool:
+def requires_prior_beam_skim_handoff(*, settings: SettingsLike, state: Any) -> bool:
     """Whether this invocation must consume a prior BEAM-produced OMX skim.
 
     The start-year, first-iteration invocation is bootstrap: it may use the
@@ -62,7 +65,9 @@ def requires_prior_beam_skim_handoff(*, settings: Any, state: Any) -> bool:
     return iteration > 0
 
 
-def requires_prior_beam_linkstats_handoff(*, settings: Any, state: Any) -> bool:
+def requires_prior_beam_linkstats_handoff(
+    *, settings: SettingsLike, state: Any
+) -> bool:
     """Whether this invocation must consume a prior BEAM-produced linkstats handoff.
 
     The start-year, first-iteration invocation is bootstrap: it may use the
