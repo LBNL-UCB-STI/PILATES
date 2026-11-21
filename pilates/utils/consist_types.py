@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -97,18 +96,3 @@ class CouplerProtocol(Protocol):
     def keys(self) -> Iterable[str]: ...
 
     def update(self, mapping: Mapping[str, Any]) -> None: ...
-
-    def view(self, namespace: str) -> "CouplerProtocol": ...
-
-    def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
-
-    def collect_by_keys(
-        self,
-        artifacts: Dict[str, Any],
-        *keys: str,
-        prefix: str = "",
-    ) -> Dict[str, Any]: ...
-
-    def path(self, key: str) -> Path: ...
-
-    def to_dict(self) -> Dict[str, Any]: ...

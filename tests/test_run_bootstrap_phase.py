@@ -10,7 +10,36 @@ import pytest
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.runtime import launcher as run_module
 from pilates.utils import consist_db_snapshot as snapshot_module
-from pilates.workflows import binding as bootstrap_runtime
+from pilates.workflows import orchestrator as bootstrap_runtime
+
+
+def _seed_bootstrap_artifacts_to_coupler(
+    *,
+    settings,
+    state,
+    workspace,
+    coupler=None,
+    scenario=None,
+):
+    existing_usim = coupler.get("usim_datastore_h5") if coupler is not None else None
+    sim_state = bootstrap_runtime.bootstrap_initial_state(
+        scenario=scenario or SimpleNamespace(coupler=None),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if coupler is not None:
+        role_map = sim_state.to_role_map()
+        if existing_usim is not None:
+            role_map["usim_datastore_h5"] = existing_usim
+        for key, value in role_map.items():
+            if hasattr(coupler, "set_from_artifact") and hasattr(value, "id"):
+                coupler.set_from_artifact(key, value)
+            elif hasattr(coupler, "set"):
+                coupler.set(key, str(value) if isinstance(value, Path) else value)
+    return sim_state
+
+
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -195,7 +224,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -229,7 +258,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_urbansim_roles(
     staged_h5.write_text("bootstrap datastore", encoding="utf-8")
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=_settings(
             local_data_input_folder=workspace.get_usim_mutable_data_dir()
         ),
@@ -261,7 +290,7 @@ def test_seed_bootstrap_artifacts_to_coupler_preserves_current_urbansim_role(
     staged_h5.write_text("bootstrap datastore", encoding="utf-8")
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=_settings(
             local_data_input_folder=workspace.get_usim_mutable_data_dir()
         ),
@@ -318,7 +347,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_current_urbansim_role_onl
     coupler = DummyCoupler()
     coupler.set("usim_datastore_base_h5", str(staged_h5))
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=_settings(
             local_data_input_folder=workspace.get_usim_mutable_data_dir()
         ),
@@ -361,7 +390,7 @@ def test_seed_bootstrap_artifacts_to_coupler_skips_urbansim_roles_without_consum
     )
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=_state(),
         workspace=workspace,
@@ -413,7 +442,7 @@ def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_config_exchange_folde
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -469,7 +498,7 @@ def test_seed_bootstrap_artifacts_to_coupler_prefers_yaml_scenario_folder_when_p
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -521,7 +550,7 @@ def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_csv_formats_when_parq
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -572,7 +601,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_warmstart(tmp_pat
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -618,7 +647,7 @@ def test_seed_bootstrap_artifacts_to_coupler_uses_configured_warmstart_path(tmp_
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -673,7 +702,7 @@ def test_seed_bootstrap_artifacts_to_coupler_expands_router_directory_in_warmsta
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -719,7 +748,7 @@ def test_seed_bootstrap_artifacts_to_coupler_does_not_probe_router_dir_when_warm
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -756,7 +785,7 @@ def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
     warmstart_path.write_text("linkstats", encoding="utf-8")
 
     monkeypatch.setattr(
-        "pilates.workflows.binding.beam_exchange.register_existing_beam_exchange_inputs",
+        "pilates.workflows.orchestrator.beam_exchange.register_existing_beam_exchange_inputs",
         lambda **_kwargs: RecordStore(
             recordList=[
                 FileRecord(file_path=str(path), short_name=key)
@@ -774,17 +803,19 @@ def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
     )
     coupler = Coupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=SimpleNamespace(),
         workspace=DummyWorkspace(full_path=str(tmp_path)),
         coupler=coupler,
     )
 
-    assert coupler.values == {
+    expected = {
         **{key: str(path) for key, path in exchange_paths.items()},
         LINKSTATS_WARMSTART: str(warmstart_path),
     }
+    for key, value in expected.items():
+        assert coupler.values[key] == value
 
 
 def test_seed_bootstrap_artifacts_publishes_warmstart_with_activitysim(
@@ -815,7 +846,7 @@ def test_seed_bootstrap_artifacts_publishes_warmstart_with_activitysim(
     )
     coupler = Coupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=SimpleNamespace(),
         workspace=DummyWorkspace(full_path=str(tmp_path)),
@@ -865,7 +896,7 @@ def test_seed_bootstrap_artifacts_to_coupler_does_not_publish_activitysim_runtim
     state = SimpleNamespace(full_settings=settings)
     coupler = DummyCoupler()
 
-    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+    _seed_bootstrap_artifacts_to_coupler(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -1706,7 +1737,7 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
     )
     monkeypatch.setattr(
         run_module,
-        "seed_bootstrap_artifacts_to_coupler",
+        "run_pilates",
         lambda **_kwargs: events.append("seed"),
     )
     monkeypatch.setattr(
@@ -1719,7 +1750,6 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
 
     assert events == [
         "scenario_enter",
-        "declare_outputs",
         "admission",
         "skims_admission",
         "seed",
@@ -1770,19 +1800,19 @@ def test_main_strict_bootstrap_admission_rejects_before_seeding_or_model_executi
     )
     monkeypatch.setattr(
         run_module,
-        "seed_bootstrap_artifacts_to_coupler",
+        "run_pilates",
         lambda **_kwargs: events.append("seed"),
     )
     monkeypatch.setattr(
         run_module,
-        "run_land_use_stage",
+        "run_pilates",
         lambda **_kwargs: events.append("model_execution"),
     )
 
     with pytest.raises(RuntimeError, match="strict rejection"):
         run_module.main()
 
-    assert events == ["scenario_enter", "declare_outputs", "scenario_exit"]
+    assert events == ["scenario_enter", "scenario_exit"]
 
 
 def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
@@ -1832,7 +1862,7 @@ def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
     )
     monkeypatch.setattr(
         run_module,
-        "seed_bootstrap_artifacts_to_coupler",
+        "run_pilates",
         lambda **_kwargs: events.append("seed"),
     )
     monkeypatch.setattr(
@@ -1845,7 +1875,6 @@ def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
 
     assert events == [
         "scenario_enter",
-        "declare_outputs",
         "seed",
         "scenario_exit",
     ]

@@ -5,7 +5,7 @@ import shutil
 import time
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from typing import Any, Optional, List, Tuple, Union, Dict, TYPE_CHECKING
+from typing import Any, Optional, List, Tuple, Union, Dict
 
 import numpy as np
 import openmatrix as omx
@@ -48,9 +48,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_PERSONS_TABLE,
 )
 from pilates.workflows.state import WorkflowState
-
-if TYPE_CHECKING:
-    from pilates.workspace import Workspace
+from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 _ASIM_ATLAS_DISABLED_VEHICLE_MODEL_NAMES = frozenset(
@@ -2794,6 +2792,11 @@ def ensure_activitysim_mutable_configs(
     else:
         input_dir = mutable_data_rel
 
+    from pilates.workspace import is_dry_run_workspace
+
+    if is_dry_run_workspace(workspace):
+        return Path(input_dir)
+
     configs_dest_dir: Optional[str] = None
     if workspace is not None and folder_path is None:
         try:
@@ -2810,6 +2813,14 @@ def ensure_activitysim_mutable_configs(
         )
     if configs_dest_dir is None:
         return Path(mutable_configs_rel)
+    if (
+        folder_path is None
+        and workspace_root is None
+        and isinstance(workspace, Workspace)
+        and workspace._asim_mutable_staged_dir == configs_dest_dir
+        and os.path.isdir(configs_dest_dir)
+    ):
+        return Path(configs_dest_dir)
 
     region = get_setting(settings, "run.region")
     project_root = find_project_root(start_path=os.path.dirname(__file__))
@@ -2922,6 +2933,12 @@ def ensure_activitysim_mutable_configs(
     elif local_configs_folder:
         os.makedirs(configs_dest_dir, exist_ok=True)
 
+    if (
+        folder_path is None
+        and workspace_root is None
+        and isinstance(workspace, Workspace)
+    ):
+        workspace._asim_mutable_staged_dir = configs_dest_dir
     return Path(configs_dest_dir)
 
 

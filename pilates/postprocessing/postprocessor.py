@@ -66,14 +66,23 @@ dtypes = {
 
 
 def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
-    asim_output_data_dir = settings.activitysim.local_output_folder
-    mep_output_data_dir = os.path.join(
-        settings.postprocessing.mep_output_folder, str(year)
-    )
+    if workspace is not None:
+        asim_output_data_dir = str(workspace.get_asim_output_dir())
+        mep_folder = settings.postprocessing.mep_output_folder
+        if not os.path.isabs(mep_folder):
+            mep_folder = os.path.join(str(workspace.full_path), mep_folder)
+        mep_output_data_dir = os.path.join(mep_folder, str(year))
+        beam_output_base = str(workspace.get_beam_output_dir())
+    else:
+        asim_output_data_dir = settings.activitysim.local_output_folder
+        mep_output_data_dir = os.path.join(
+            settings.postprocessing.mep_output_folder, str(year)
+        )
+        beam_output_base = settings.beam.local_output_folder
     if not os.path.exists(mep_output_data_dir):
         os.makedirs(mep_output_data_dir)
     beam_iter_output_dir = os.path.join(
-        settings.beam.local_output_folder,
+        beam_output_base,
         settings.run.region,
         "year-{0}-iteration-{1}".format(year, iter),
     )
@@ -94,7 +103,11 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
                 f_out.writelines(f_in)
 
     def copy_urbansim_outputs_to_mep():
-        data_dir = settings.urbansim.local_mutable_data_folder
+        data_dir = (
+            str(workspace.get_usim_mutable_data_dir())
+            if workspace is not None
+            else settings.urbansim.local_mutable_data_folder
+        )
         usim_output_store_name = get_usim_datastore_fname(
             settings, io="input", year=year
         )

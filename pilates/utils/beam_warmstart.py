@@ -16,6 +16,11 @@ def resolve_initial_linkstats_path(settings, workspace) -> Optional[str]:
     mutable BEAM region input root, and ``{router_directory}`` is expanded from
     ``beam.router_directory`` when present.
     """
+    from pilates.workspace import is_dry_run_workspace
+
+    if is_dry_run_workspace(workspace):
+        return None
+
     beam_settings = get_setting(settings, "beam")
     run_settings = get_setting(settings, "run")
     if beam_settings is None or run_settings is None:

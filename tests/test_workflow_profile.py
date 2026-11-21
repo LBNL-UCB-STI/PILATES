@@ -7,7 +7,6 @@ from pilates.workflows._profile import (
     ensure_runtime_flags_initialized,
     workflow_profile_from_flags,
 )
-from pilates.workflows.surface import build_enabled_workflow_surface
 
 
 def _settings(
@@ -107,16 +106,3 @@ def test_workflow_profile_respects_initialized_runtime_flags():
     assert profile.land_use_enabled is False
     assert profile.vehicle_ownership_model_enabled is False
     assert profile.activity_demand_enabled is True
-
-
-def test_surface_enabled_schema_step_names_filters_disabled_model_steps():
-    surface = build_enabled_workflow_surface(
-        _settings(land_use=None, vehicle_ownership=None)
-    )
-
-    enabled_steps = surface.enabled_schema_step_names(include_optional=True)
-
-    assert "activitysim_preprocess" in enabled_steps
-    assert "beam_preprocess" in enabled_steps
-    assert "urbansim_preprocess" not in enabled_steps
-    assert "atlas_preprocess" not in enabled_steps

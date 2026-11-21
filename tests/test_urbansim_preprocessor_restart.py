@@ -8,7 +8,7 @@ from pilates.urbansim.preprocessor import (
 )
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 
 
 class _WorkspaceStub:

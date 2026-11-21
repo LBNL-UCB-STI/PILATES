@@ -6,7 +6,6 @@ import pytest
 
 from consist import (
     Artifact,
-    BindingResult,
     Tracker,
     resolve_step_contract,
 )
@@ -31,14 +30,14 @@ from pilates.workflows.steps.beam import (
     _native_beam_run,
     _project_beam_run_outputs,
     _resolve_beam_preprocess_inputs,
-    _resolved_beam_inputs,
     _native_beam_postprocess,
     beam_full_skim,
     beam_postprocess,
     beam_preprocess,
     beam_run,
 )
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.contracts import StepCallInputs
+from pilates.workflows.sim_state import AtlasState, NetworkState, SimState
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import beam as beam_steps
 from pilates.beam import beam_exchange
@@ -47,11 +46,8 @@ from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
 
 
-def _empty_resolved_inputs() -> ResolvedStepInputs:
-    return ResolvedStepInputs(
-        step_name="test",
-        binding=BindingResult(inputs={}),
-    )
+def _empty_resolved_inputs() -> StepCallInputs:
+    return StepCallInputs()
 
 
 def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> None:
@@ -61,15 +57,12 @@ def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> No
         activitysim=SimpleNamespace(file_format="parquet"),
         beam=SimpleNamespace(skim_zone_geoid_col="TAZ"),
     )
-    base = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(
-            inputs={
-                BEAM_PLANS_IN: Path("/workspace-a/plans.parquet"),
-                BEAM_HOUSEHOLDS_IN: Path("/workspace-a/households.parquet"),
-                BEAM_PERSONS_IN: Path("/workspace-a/persons.parquet"),
-            }
-        ),
+    base = StepCallInputs(
+        inputs={
+            BEAM_PLANS_IN: Path("/workspace-a/plans.parquet"),
+            BEAM_HOUSEHOLDS_IN: Path("/workspace-a/households.parquet"),
+            BEAM_PERSONS_IN: Path("/workspace-a/persons.parquet"),
+        },
         logical_destinations={BEAM_PLANS_IN: Path("/workspace-a/output/plans.parquet")},
         metadata={
             "beam_preprocess_context": {
@@ -78,15 +71,12 @@ def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> No
             }
         },
     )
-    equivalent_other_workspace = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(
-            inputs={
-                BEAM_PLANS_IN: Path("/workspace-b/plans.parquet"),
-                BEAM_HOUSEHOLDS_IN: Path("/workspace-b/households.parquet"),
-                BEAM_PERSONS_IN: Path("/workspace-b/persons.parquet"),
-            }
-        ),
+    equivalent_other_workspace = StepCallInputs(
+        inputs={
+            BEAM_PLANS_IN: Path("/workspace-b/plans.parquet"),
+            BEAM_HOUSEHOLDS_IN: Path("/workspace-b/households.parquet"),
+            BEAM_PERSONS_IN: Path("/workspace-b/persons.parquet"),
+        },
         logical_destinations={
             BEAM_PLANS_IN: Path("/workspace-b/other-output/plans.parquet")
         },
@@ -97,30 +87,27 @@ def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> No
             }
         },
     )
-    with_warmstart = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(
-            inputs={
-                **dict(base.binding.inputs or {}),
-                LINKSTATS_WARMSTART: Path("/workspace-a/linkstats.parquet"),
-            }
-        ),
+    with_warmstart = StepCallInputs(
+        inputs={
+            **dict(base.inputs),
+            LINKSTATS_WARMSTART: Path("/workspace-a/linkstats.parquet"),
+        },
     )
 
-    payload = _beam_preprocess_identity_payload(settings=settings, resolved_inputs=base)
+    payload = _beam_preprocess_identity_payload(settings=settings, step_inputs=base)
 
     assert payload == _beam_preprocess_identity_payload(
-        settings=settings, resolved_inputs=equivalent_other_workspace
+        settings=settings, step_inputs=equivalent_other_workspace
     )
     assert payload != _beam_preprocess_identity_payload(
-        settings=settings, resolved_inputs=with_warmstart
+        settings=settings, step_inputs=with_warmstart
     )
     assert payload != _beam_preprocess_identity_payload(
         settings=SimpleNamespace(
             activitysim=SimpleNamespace(file_format="csv"),
             beam=SimpleNamespace(skim_zone_geoid_col="TAZ"),
         ),
-        resolved_inputs=base,
+        step_inputs=base,
     )
     assert "/workspace-a" not in repr(payload)
     assert payload == {
@@ -209,13 +196,6 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
         )
 
     monkeypatch.setattr(BeamPreprocessor, "preprocess", _preprocess)
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
 
     def _settings(*, file_format: str = "parquet") -> SimpleNamespace:
         return SimpleNamespace(
@@ -274,6 +254,23 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
                 year=2030,
                 iteration=0,
                 phase="preprocess",
+                sim_state=SimState(
+                    network=NetworkState(
+                        linkstats_warmstart=(
+                            artifacts[LINKSTATS_WARMSTART]
+                            if include_warmstart
+                            else None
+                        )
+                    ),
+                    extras={
+                        key: artifacts[key]
+                        for key in (
+                            BEAM_PLANS_IN,
+                            BEAM_HOUSEHOLDS_IN,
+                            BEAM_PERSONS_IN,
+                        )
+                    },
+                ),
             )
 
     cold_workspace = _workspace(tmp_path / "cold-workspace")
@@ -366,11 +363,8 @@ def test_beam_preprocess_output_paths_preserve_parquet_warmstart_suffix(
     workspace = SimpleNamespace(
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
     )
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(
-            inputs={LINKSTATS_WARMSTART: tmp_path / "linkstats.parquet"}
-        ),
+    step_inputs = StepCallInputs(
+        inputs={LINKSTATS_WARMSTART: tmp_path / "linkstats.parquet"},
         metadata={"native_output_keys": (LINKSTATS_WARMSTART,)},
     )
 
@@ -378,7 +372,7 @@ def test_beam_preprocess_output_paths_preserve_parquet_warmstart_suffix(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
         workspace=workspace,
-        resolved_inputs=resolved_inputs,
+        step_inputs=step_inputs,
     )
 
     assert outputs[LINKSTATS_WARMSTART] == (
@@ -403,9 +397,8 @@ def test_beam_preprocess_output_paths_match_population_file_format(
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
     )
     settings = SimpleNamespace(activitysim=SimpleNamespace(file_format=file_format))
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(inputs={}),
+    step_inputs = StepCallInputs(
+        inputs={},
         metadata={
             "native_output_keys": (
                 BEAM_PLANS_IN,
@@ -420,14 +413,18 @@ def test_beam_preprocess_output_paths_match_population_file_format(
         settings=settings,
         state=SimpleNamespace(),
         workspace=workspace,
-        resolved_inputs=resolved_inputs,
+        step_inputs=step_inputs,
     )
 
     assert all(
         str(outputs[key]).endswith(expected_suffix)
-        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
+        for key in (
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            "vehicles_beam_in",
+        )
     )
-    assert str(outputs["vehicles_beam_in"]).endswith(".csv")
 
 
 def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> None:
@@ -495,7 +492,7 @@ def test_beam_run_declares_only_exact_region_year_iteration_output_set(
         settings=_beam_settings(),
         state=SimpleNamespace(forecast_year=2030, iteration=2),
         workspace=workspace,
-        resolved_inputs=None,
+        step_inputs=None,
     )
     expected_root = tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
     assert all(
@@ -906,8 +903,6 @@ def test_native_beam_run_skips_initial_linkstats_admission_on_subsequent_iterati
 def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
     tmp_path: Path,
 ) -> None:
-    assert beam_full_skim.preflight_identity is False
-
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
@@ -937,11 +932,17 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            network=NetworkState(linkstats_warmstart=values["linkstats_warmstart"]),
+            extras={
+                key: values[key]
+                for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
+            },
+        ),
     )
 
-    assert isinstance(resolved.binding, BindingResult)
-    assert dict(resolved.binding.inputs or {}) == values
+    assert isinstance(resolved, StepCallInputs)
+    assert dict(resolved.inputs) == values
     assert set(resolved.logical_destinations) == set(values)
 
 
@@ -976,31 +977,26 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
+
+    from pilates.workflows.sim_state import DemandState
 
     resolved = _resolve_beam_preprocess_inputs(
         settings=settings,
         state=SimpleNamespace(year=2030),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            demand=DemandState(
+                plans=activitysim_outputs["beam_plans_asim_out"],
+                households=activitysim_outputs["households_asim_out"],
+                persons=activitysim_outputs["persons_asim_out"],
+            )
+        ),
     )
 
-    inputs = resolved.binding.inputs or {}
+    inputs = resolved.inputs
     assert inputs[BEAM_PLANS_IN] is activitysim_outputs["beam_plans_asim_out"]
     assert inputs[BEAM_HOUSEHOLDS_IN] is activitysim_outputs["households_asim_out"]
     assert inputs[BEAM_PERSONS_IN] is activitysim_outputs["persons_asim_out"]
-    assert resolved.source_by_role[BEAM_PLANS_IN] == "coupler"
-    assert resolved.selected_key_by_role == {
-        BEAM_PLANS_IN: "beam_plans_asim_out",
-        BEAM_HOUSEHOLDS_IN: "households_asim_out",
-        BEAM_PERSONS_IN: "persons_asim_out",
-    }
     assert set(inputs) == {
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
@@ -1043,22 +1039,24 @@ def test_beam_preprocess_ignores_beam_plans_out_in_start_year_iteration_0(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
+
+    from pilates.workflows.sim_state import DemandState
 
     resolved = _resolve_beam_preprocess_inputs(
         settings=settings,
         state=SimpleNamespace(year=2017, start_year=2017, current_inner_iter=0),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            demand=DemandState(
+                plans=activitysim_outputs["beam_plans_asim_out"],
+                households=activitysim_outputs["households_asim_out"],
+                persons=activitysim_outputs["persons_asim_out"],
+            ),
+            network=NetworkState(plans=activitysim_outputs["beam_plans_out"]),
+        ),
     )
 
-    inputs = resolved.binding.inputs or {}
+    inputs = resolved.inputs
     assert BEAM_PLANS_OUT not in inputs
     assert BEAM_PLANS_IN in inputs
 
@@ -1098,22 +1096,24 @@ def test_beam_preprocess_binds_beam_plans_out_in_iteration_1_when_file_exists(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
+
+    from pilates.workflows.sim_state import DemandState
 
     resolved = _resolve_beam_preprocess_inputs(
         settings=settings,
         state=SimpleNamespace(year=2017, start_year=2017, current_inner_iter=1),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            demand=DemandState(
+                plans=activitysim_outputs["beam_plans_asim_out"],
+                households=activitysim_outputs["households_asim_out"],
+                persons=activitysim_outputs["persons_asim_out"],
+            ),
+            network=NetworkState(plans=existing_plans),
+        ),
     )
 
-    inputs = resolved.binding.inputs or {}
+    inputs = resolved.inputs
     assert BEAM_PLANS_OUT in inputs
     assert inputs[BEAM_PLANS_OUT] == existing_plans
 
@@ -1150,24 +1150,24 @@ def test_beam_preprocess_omits_pruned_beam_plans_out_in_iteration_1(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
+
+    from pilates.workflows.sim_state import DemandState
 
     resolved = _resolve_beam_preprocess_inputs(
         settings=settings,
         state=SimpleNamespace(year=2017, start_year=2017, current_inner_iter=1),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            demand=DemandState(
+                plans=activitysim_outputs["beam_plans_asim_out"],
+                households=activitysim_outputs["households_asim_out"],
+                persons=activitysim_outputs["persons_asim_out"],
+            )
+        ),
     )
 
-    inputs = resolved.binding.inputs or {}
+    inputs = resolved.inputs
     assert BEAM_PLANS_OUT not in inputs
-    assert resolved.source_by_role[BEAM_PLANS_OUT] == "missing"
     assert BEAM_PLANS_OUT not in resolved.logical_destinations
 
 
@@ -1196,25 +1196,29 @@ def test_beam_preprocess_preserves_atlas_vehicles_producer_basename(
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=True)
-        ),
-    )
+
+    from pilates.workflows.sim_state import DemandState
 
     resolved = _resolve_beam_preprocess_inputs(
         settings=SimpleNamespace(
             run=SimpleNamespace(
                 region="test-region",
-                models=SimpleNamespace(traffic_assignment=None, travel=None),
+                models=SimpleNamespace(
+                    traffic_assignment=None, travel=None, vehicle_ownership="atlas"
+                ),
             ),
             beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
         ),
         state=SimpleNamespace(year=2017, forecast_year=2019, current_inner_iter=0),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            atlas=AtlasState(hh_cars=inputs[ATLAS_VEHICLES2_OUTPUT]),
+            demand=DemandState(
+                plans=inputs["beam_plans_asim_out"],
+                households=inputs["households_asim_out"],
+                persons=inputs["persons_asim_out"],
+            ),
+        ),
     )
 
     assert resolved.logical_destinations[ATLAS_VEHICLES2_OUTPUT] == (
@@ -1261,19 +1265,14 @@ def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabl
         "_require_primary_beam_config",
         lambda _settings, _workspace: config_path,
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=True)
-        ),
-    )
 
     resolved = _resolve_beam_preprocess_inputs(
         settings=SimpleNamespace(
             run=SimpleNamespace(
                 region="test-region",
-                models=SimpleNamespace(traffic_assignment=None, travel=None),
+                models=SimpleNamespace(
+                    traffic_assignment=None, travel=None, vehicle_ownership="atlas"
+                ),
             ),
             beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
         ),
@@ -1281,11 +1280,17 @@ def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabl
         workspace=SimpleNamespace(
             get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
         ),
-        coupler=Coupler(),
+        sim_state=SimState(
+            extras={
+                BEAM_PLANS_IN: inputs[BEAM_PLANS_IN],
+                BEAM_HOUSEHOLDS_IN: inputs[BEAM_HOUSEHOLDS_IN],
+                BEAM_PERSONS_IN: inputs[BEAM_PERSONS_IN],
+            }
+        ),
     )
 
     with pytest.raises(RuntimeError, match="atlas_vehicles2_output"):
-        resolved.require_complete()
+        resolved.require_complete("beam_preprocess")
 
 
 @pytest.mark.parametrize(
@@ -1337,13 +1342,6 @@ def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned
         beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
         activitysim=SimpleNamespace(file_format="parquet"),
     )
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
     observed_context: dict[str, object] = {}
 
     def _capture_preprocess(*_args, **kwargs):
@@ -1359,9 +1357,17 @@ def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned
         settings=settings,
         state=SimpleNamespace(year=2030, current_inner_iter=0),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            atlas=AtlasState(hh_cars=inputs.get(ATLAS_VEHICLES2_OUTPUT)),
+            network=NetworkState(linkstats_warmstart=inputs.get(LINKSTATS_WARMSTART)),
+            extras={
+                BEAM_PLANS_IN: inputs[BEAM_PLANS_IN],
+                BEAM_HOUSEHOLDS_IN: inputs[BEAM_HOUSEHOLDS_IN],
+                BEAM_PERSONS_IN: inputs[BEAM_PERSONS_IN],
+            },
+        ),
     )
-    resolved.require_complete()
+    resolved.require_complete("beam_preprocess")
     assert (
         resolved.metadata["beam_preprocess_context"]["primary_config"] == primary_config
     )
@@ -1369,7 +1375,7 @@ def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned
         settings=settings,
         state=SimpleNamespace(),
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
     assert execution_options.runtime_kwargs["beam_preprocess_context"] == dict(
         resolved.metadata["beam_preprocess_context"]
@@ -1377,7 +1383,7 @@ def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned
 
     active_mutable_root = tmp_path / "poisoned-beam-input"
     _native_beam_preprocess(
-        **dict(resolved.binding.inputs or {}),
+        **dict(resolved.inputs),
         settings=settings,
         state=SimpleNamespace(full_settings=settings),
         workspace=workspace,
@@ -1436,14 +1442,6 @@ def test_beam_preprocess_resolver_does_not_close_canonical_zone_source(
         def get(self, key: str, default: object = None) -> object:
             return inputs.get(key, default)
 
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
-
     with pytest.raises(FileNotFoundError, match="poisoned-zones.geojson"):
         _resolve_beam_preprocess_inputs(
             settings=settings,
@@ -1451,7 +1449,13 @@ def test_beam_preprocess_resolver_does_not_close_canonical_zone_source(
             workspace=SimpleNamespace(
                 get_beam_mutable_data_dir=lambda: str(mutable_root)
             ),
-            coupler=Coupler(),
+            sim_state=SimState(
+                extras={
+                    BEAM_PLANS_IN: inputs[BEAM_PLANS_IN],
+                    BEAM_HOUSEHOLDS_IN: inputs[BEAM_HOUSEHOLDS_IN],
+                    BEAM_PERSONS_IN: inputs[BEAM_PERSONS_IN],
+                }
+            ),
         )
 
 
@@ -1500,18 +1504,17 @@ def test_beam_preprocess_resolver_does_not_close_exchange_config_read(
         def get(self, key: str, default: object = None) -> object:
             return inputs.get(key, default)
 
-    monkeypatch.setattr(
-        beam_steps,
-        "build_enabled_workflow_surface",
-        lambda _settings: SimpleNamespace(
-            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
-        ),
-    )
     resolved = _resolve_beam_preprocess_inputs(
         settings=settings,
         state=SimpleNamespace(year=2030, current_inner_iter=0),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            extras={
+                BEAM_PLANS_IN: inputs[BEAM_PLANS_IN],
+                BEAM_HOUSEHOLDS_IN: inputs[BEAM_HOUSEHOLDS_IN],
+                BEAM_PERSONS_IN: inputs[BEAM_PERSONS_IN],
+            }
+        ),
     )
     context = resolved.metadata["beam_preprocess_context"]
     observed_exchange_path: list[str] = []
@@ -1575,16 +1578,22 @@ def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(
         settings=SimpleNamespace(activitysim=object()),
         state=state,
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            network=NetworkState(skims_zarr=tmp_path / "source-skims.zarr"),
+            extras={
+                "events_parquet_2030_2": events_path,
+                "raw_od_skims_2030_2": tmp_path / "source-skims.omx",
+            },
+        ),
     )
     options = beam_postprocess.execution_options(
         settings=object(),
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
 
-    assert set(resolved.binding.inputs or {}) == {
+    assert set(resolved.inputs) == {
         "events_parquet_2030_2",
         "raw_od_skims_2030_2",
         ZARR_SKIMS,
@@ -1686,136 +1695,24 @@ def test_beam_postprocess_resolver_uses_completed_beam_outputs_over_coupler_hist
         settings=SimpleNamespace(activitysim=object()),
         state=SimpleNamespace(year=2018, iteration=1),
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            network=NetworkState(skims_zarr=tmp_path / "asim-skims.zarr"),
+            extras={
+                "events_parquet_2018_0": tmp_path / "prior-events.parquet",
+                "raw_od_skims_zarr_2018_0": prior_skims,
+            },
+        ),
         beam_run_outputs={
             "events_parquet_2018_1": events_path,
             "raw_od_skims_zarr_2018_1": current_skims,
         },
     )
 
-    assert set(resolved.binding.inputs or {}) == {
+    assert set(resolved.inputs) == {
         "events_parquet_2018_1",
         "raw_od_skims_zarr_2018_1",
         ZARR_SKIMS,
     }
-    assert resolved.source_by_role["events_parquet_2018_1"] == "explicit"
-    assert resolved.source_by_role["raw_od_skims_zarr_2018_1"] == "explicit"
-
-
-def test_beam_required_roles_do_not_resolve_from_a_namespace_view(
-    tmp_path: Path,
-) -> None:
-    class Coupler:
-        def get(self, key: str, default: object = None) -> object:
-            return default
-
-        def view(self, namespace: str) -> object:
-            assert namespace == "beam"
-            return type(
-                "BeamView",
-                (),
-                {
-                    "get": lambda _self, key, default=None: (
-                        tmp_path / "view-only-plans.csv"
-                    )
-                },
-            )()
-
-    resolved = _resolved_beam_inputs(
-        step_name="beam_run",
-        coupler=Coupler(),
-        workspace=SimpleNamespace(
-            get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input")
-        ),
-        required_roles=(BEAM_PLANS_IN,),
-    )
-
-    assert resolved.binding.inputs == {}
-    assert resolved.source_by_role[BEAM_PLANS_IN] == "missing"
-    assert BEAM_PLANS_IN not in resolved.logical_destinations
-
-
-def test_beam_required_roles_prefer_the_exact_global_storage_value(
-    tmp_path: Path,
-) -> None:
-    global_plans = tmp_path / "global-plans.csv"
-
-    class Coupler:
-        def get(self, key: str, default: object = None) -> object:
-            return {BEAM_PLANS_IN: global_plans}.get(key, default)
-
-        def view(self, namespace: str) -> object:
-            assert namespace == "beam"
-            return type(
-                "BeamView",
-                (),
-                {"get": lambda _self, key, default=None: tmp_path / "view-plans.csv"},
-            )()
-
-    resolved = _resolved_beam_inputs(
-        step_name="beam_run",
-        coupler=Coupler(),
-        workspace=SimpleNamespace(
-            get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input")
-        ),
-        required_roles=(BEAM_PLANS_IN,),
-    )
-
-    assert resolved.binding.inputs == {BEAM_PLANS_IN: global_plans}
-    assert resolved.source_by_role[BEAM_PLANS_IN] == "coupler"
-
-
-def test_beam_postprocess_does_not_admit_view_only_zarr_skims(
-    tmp_path: Path,
-) -> None:
-    events_path = tmp_path / "source-events.parquet"
-    _write_event_types(events_path, ["Event A"])
-
-    class Coupler:
-        def get(self, key: str, default: object = None) -> object:
-            return {
-                "events_parquet_2030_2": events_path,
-                "raw_od_skims_2030_2": tmp_path / "source-skims.omx",
-            }.get(key, default)
-
-        def keys(self):
-            return ("events_parquet_2030_2", "raw_od_skims_2030_2")
-
-        def view(self, namespace: str) -> object:
-            assert namespace == "activitysim"
-            return type(
-                "ActivitySimView",
-                (),
-                {
-                    "get": lambda _self, key, default=None: (
-                        tmp_path / "view-only-skims.zarr"
-                    )
-                },
-            )()
-
-    workspace = SimpleNamespace(
-        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
-        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
-        get_asim_output_dir=lambda: str(tmp_path / "asim-output"),
-    )
-    state = SimpleNamespace(year=2030, iteration=2)
-    resolved = beam_postprocess.resolve_inputs(
-        settings=SimpleNamespace(activitysim=object()),
-        state=state,
-        workspace=workspace,
-        coupler=Coupler(),
-    )
-    options = beam_postprocess.execution_options(
-        settings=object(),
-        state=state,
-        workspace=workspace,
-        resolved_inputs=resolved,
-    )
-
-    assert ZARR_SKIMS not in (resolved.binding.inputs or {})
-    assert ZARR_SKIMS not in resolved.optional_roles
-    assert ZARR_SKIMS not in resolved.logical_destinations
-    assert ZARR_SKIMS not in options.input_paths
 
 
 def test_beam_postprocess_projector_has_fresh_hit_parity_for_closed_split_outputs(
@@ -1850,13 +1747,18 @@ def test_beam_postprocess_projector_has_fresh_hit_parity_for_closed_split_output
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            extras={
+                "events_parquet_2030_2": events_path,
+                "raw_od_skims_2030_2": tmp_path / "source-skims.omx",
+            }
+        ),
     )
     declared = beam_postprocess.output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
     dynamic_paths = resolved.metadata["beam_postprocess_output_paths"]
     assert set(dynamic_paths).issubset(declared)
@@ -1872,7 +1774,7 @@ def test_beam_postprocess_projector_has_fresh_hit_parity_for_closed_split_output
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
     hit = beam_postprocess.project_outputs(
         {
@@ -1882,7 +1784,7 @@ def test_beam_postprocess_projector_has_fresh_hit_parity_for_closed_split_output
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
 
     assert (
@@ -1932,7 +1834,12 @@ def test_beam_postprocess_resolver_refuses_uninspectable_selected_events(
             settings=SimpleNamespace(activitysim=None),
             state=SimpleNamespace(year=2030, iteration=2),
             workspace=workspace,
-            coupler=Coupler(),
+            sim_state=SimState(
+                extras={
+                    "events_parquet_2030_2": tmp_path / "not-present.parquet",
+                    "raw_od_skims_2030_2": tmp_path / "source-skims.omx",
+                }
+            ),
         )
 
 
@@ -1964,7 +1871,12 @@ def test_beam_postprocess_resolver_rejects_sanitized_event_key_collision(
             settings=SimpleNamespace(activitysim=None),
             state=SimpleNamespace(year=2030, iteration=2),
             workspace=workspace,
-            coupler=Coupler(),
+            sim_state=SimState(
+                extras={
+                    "events_parquet_2030_2": events_path,
+                    "raw_od_skims_2030_2": tmp_path / "source-skims.omx",
+                }
+            ),
         )
 
 
@@ -2051,7 +1963,7 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
-        resolved_inputs=None,
+        step_inputs=None,
     )
     paths = {
         key: declared[key]
@@ -2072,7 +1984,7 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
-        resolved_inputs=_empty_resolved_inputs(),
+        step_inputs=StepCallInputs(),
     )
 
     assert projected.prepared_inputs == paths
@@ -2088,7 +2000,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
-        resolved_inputs=None,
+        step_inputs=None,
     )
     paths = {
         key: declared[key]
@@ -2103,7 +2015,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
-        resolved_inputs=_empty_resolved_inputs(),
+        step_inputs=StepCallInputs(),
     )
     hit = beam_preprocess.project_outputs(
         {
@@ -2113,7 +2025,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
-        resolved_inputs=_empty_resolved_inputs(),
+        step_inputs=StepCallInputs(),
     )
 
     assert fresh.prepared_inputs == hit.prepared_inputs == paths
@@ -2129,7 +2041,7 @@ def test_beam_run_declares_closed_individually_keyed_handoff_outputs(
         settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=2),
         workspace=workspace,
-        resolved_inputs=None,
+        step_inputs=None,
     )
 
     assert "beam_output_dir" not in paths
@@ -2233,7 +2145,7 @@ def test_project_beam_run_outputs_uses_direct_logged_zarr_path(tmp_path: Path) -
         settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=2),
         workspace=workspace,
-        resolved_inputs=_empty_resolved_inputs(),
+        step_inputs=StepCallInputs(),
     )
 
     assert projected.raw_outputs == {"raw_od_skims_zarr_2030_2": zarr}
@@ -2266,7 +2178,13 @@ def test_beam_postprocess_dynamic_closure_excludes_non_numeric_suffixes(
             get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
             get_asim_output_dir=lambda: str(tmp_path / "asim-output"),
         ),
-        coupler=Coupler(),
+        sim_state=SimState(
+            extras={
+                "events_parquet_2030_2": selected_events,
+                "events_parquet_2030_2_retry": tmp_path / "retry-events.parquet",
+                "raw_od_skims_2030_2": tmp_path / "source-skims.omx",
+            }
+        ),
     )
     closure = resolved.metadata["beam_postprocess_dynamic_paths"]
 
@@ -2316,7 +2234,7 @@ def test_beam_preprocess_projector_rejects_stale_mount_when_current_destination_
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
-        resolved_inputs=_empty_resolved_inputs(),
+        step_inputs=StepCallInputs(),
     )
     assert BEAM_PLANS_IN in projected.prepared_inputs
 
@@ -2423,9 +2341,8 @@ def test_beam_preprocess_project_outputs_prefers_artifact_meta_over_stale_worksp
         get_beam_mutable_data_dir=lambda: str(beam_input),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(inputs={LINKSTATS_WARMSTART: warmstart_artifact}),
+    resolved_inputs = StepCallInputs(
+        inputs={LINKSTATS_WARMSTART: warmstart_artifact},
         metadata={
             "native_output_keys": (
                 BEAM_PLANS_IN,
@@ -2445,7 +2362,7 @@ def test_beam_preprocess_project_outputs_prefers_artifact_meta_over_stale_worksp
         settings=SimpleNamespace(activitysim=None),
         state=SimpleNamespace(iteration=0),
         workspace=workspace,
-        resolved_inputs=resolved_inputs,
+        step_inputs=resolved_inputs,
     )
 
     assert warmstart_artifact.meta["linkstats_provenance"] == authoritative_prov
@@ -2562,10 +2479,7 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
         shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.zarr")),
     )
     state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_run",
-        binding=BindingResult(inputs={}),
-    )
+    resolved_inputs = StepCallInputs()
 
     with cr.use_tracker(tracker):
         projected = beam_steps._project_beam_run_outputs(
@@ -2575,7 +2489,7 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
             settings=settings,
             state=state,
             workspace=workspace,
-            resolved_inputs=resolved_inputs,
+            step_inputs=resolved_inputs,
         )
 
     assert Path(projected.raw_outputs["raw_od_skims_zarr_2020_0"]).exists()
@@ -2620,10 +2534,7 @@ def test_beam_run_wiped_workspace_replays_zero_copy_without_compiling_launch_con
     monkeypatch.setattr(beam_steps, "_compile_beam_launch_config", _forbid_compile)
     monkeypatch.setattr(beam_steps, "ensure_beam_mutable_workspace", _forbid_mutable)
 
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_run",
-        binding=BindingResult(inputs={}),
-    )
+    resolved_inputs = StepCallInputs()
 
     seen_cache_options: list[object] = []
 
@@ -2649,7 +2560,7 @@ def test_beam_run_wiped_workspace_replays_zero_copy_without_compiling_launch_con
         year=2020,
         iteration=0,
         phase="run",
-        resolved_inputs=resolved_inputs,
+        step_inputs=resolved_inputs,
     )
 
     assert run_result.cache_hit is True
@@ -2657,3 +2568,214 @@ def test_beam_run_wiped_workspace_replays_zero_copy_without_compiling_launch_con
     assert seen_cache_options[0].cache_hydration == "metadata"
     assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == archive_skims
     assert not (ws_root / "beam_data").exists()
+
+
+@pytest.mark.parametrize("suffix", [".parquet", ".csv.gz"])
+def test_beam_run_receives_vehicles_beam_in_with_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    from pilates.workflows.sim_state import NetworkState, SimState
+
+    beam_data_dir = tmp_path / "beam_data"
+    beam_data_dir.mkdir()
+    plans = beam_data_dir / f"plans{suffix}"
+    households = beam_data_dir / f"households{suffix}"
+    persons = beam_data_dir / f"persons{suffix}"
+    vehicles = beam_data_dir / f"vehicles{suffix}"
+    for p in (plans, households, persons, vehicles):
+        p.write_text("stub")
+
+    ws_root = tmp_path / "ws"
+    ws_root.mkdir()
+    conf_dir = ws_root / "beam_conf"
+    conf_dir.mkdir()
+    primary_conf = conf_dir / "beam.conf"
+    primary_conf.write_text("beam {}")
+
+    workspace = SimpleNamespace(
+        full_path=str(ws_root),
+        get_beam_mutable_data_dir=lambda: str(beam_data_dir),
+        get_beam_output_dir=lambda: str(ws_root / "beam_output"),
+        get_beam_config_dir=lambda: str(conf_dir),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(
+            local_input_folder=str(ws_root / "beam_input"),
+            config="beam.conf",
+            linkstats_format="parquet",
+            events_format="parquet",
+            skims_format="zarr",
+            artifact_formats=SimpleNamespace(activitysim_skims="zarr"),
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.zarr")),
+    )
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+
+    monkeypatch.setattr(
+        beam_steps, "ensure_beam_mutable_workspace", lambda *a, **kw: None
+    )
+
+    resolved_from_prior = beam_steps._resolve_beam_run_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        prior_outputs={
+            BEAM_PLANS_IN: plans,
+            BEAM_HOUSEHOLDS_IN: households,
+            BEAM_PERSONS_IN: persons,
+            beam_steps.BEAM_VEHICLES_IN: vehicles,
+        },
+    )
+    assert resolved_from_prior.inputs[beam_steps.BEAM_VEHICLES_IN] == vehicles
+
+    resolved_from_sim_state = beam_steps._resolve_beam_run_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=SimState(network=NetworkState(vehicles_in=vehicles)),
+        prior_outputs={
+            BEAM_PLANS_IN: plans,
+            BEAM_HOUSEHOLDS_IN: households,
+            BEAM_PERSONS_IN: persons,
+        },
+    )
+    assert resolved_from_sim_state.inputs[beam_steps.BEAM_VEHICLES_IN] == vehicles
+
+    captured_prepared: list[dict[str, Path]] = []
+
+    class _FakeRunner:
+        def __init__(self, step_name: str, st: object) -> None:
+            pass
+
+        def run(
+            self,
+            prep: object,
+            ws: object,
+            *,
+            launch_config: object = None,
+        ) -> dict[str, Path]:
+            captured_prepared.append(dict(prep.prepared_inputs))  # type: ignore[attr-defined]
+            return {}
+
+    monkeypatch.setattr(beam_steps, "BeamRunner", _FakeRunner)
+    monkeypatch.setattr(
+        beam_steps, "_preflight_beam_launch_inputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(beam_steps, "_validate_native_outputs", lambda *a, **kw: None)
+    monkeypatch.setattr(beam_steps, "_beam_run_native_sources", lambda produced: {})
+    monkeypatch.setattr(
+        beam_steps, "_materialize_native_outputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_beam_run_native_output_paths",
+        lambda **kw: {},
+    )
+
+    launch_cfg = SimpleNamespace(primary_config=primary_conf)
+    beam_steps._native_beam_run(
+        plans_beam_in=plans,
+        households_beam_in=households,
+        persons_beam_in=persons,
+        vehicles_beam_in=vehicles,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=launch_cfg,
+        _consist_ctx=SimpleNamespace(),
+    )
+
+    assert len(captured_prepared) == 1
+    assert captured_prepared[0][beam_steps.BEAM_VEHICLES_IN] == vehicles
+    assert str(captured_prepared[0][beam_steps.BEAM_VEHICLES_IN]).endswith(suffix)
+
+
+def test_beam_run_succeeds_without_vehicles_beam_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    beam_data_dir = tmp_path / "beam_data"
+    beam_data_dir.mkdir()
+    plans = beam_data_dir / "plans.parquet"
+    households = beam_data_dir / "households.parquet"
+    persons = beam_data_dir / "persons.parquet"
+    for p in (plans, households, persons):
+        p.write_text("stub")
+
+    ws_root = tmp_path / "ws"
+    ws_root.mkdir()
+    conf_dir = ws_root / "beam_conf"
+    conf_dir.mkdir()
+    primary_conf = conf_dir / "beam.conf"
+    primary_conf.write_text("beam {}")
+
+    workspace = SimpleNamespace(
+        full_path=str(ws_root),
+        get_beam_mutable_data_dir=lambda: str(beam_data_dir),
+        get_beam_output_dir=lambda: str(ws_root / "beam_output"),
+        get_beam_config_dir=lambda: str(conf_dir),
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="sfbay"))
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+
+    monkeypatch.setattr(
+        beam_steps, "ensure_beam_mutable_workspace", lambda *a, **kw: None
+    )
+
+    resolved = beam_steps._resolve_beam_run_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        prior_outputs={
+            BEAM_PLANS_IN: plans,
+            BEAM_HOUSEHOLDS_IN: households,
+            BEAM_PERSONS_IN: persons,
+        },
+    )
+    assert beam_steps.BEAM_VEHICLES_IN not in resolved.inputs
+
+    captured_prepared: list[dict[str, Path]] = []
+
+    class _FakeRunner:
+        def __init__(self, step_name: str, st: object) -> None:
+            pass
+
+        def run(
+            self,
+            prep: object,
+            ws: object,
+            *,
+            launch_config: object = None,
+        ) -> dict[str, Path]:
+            captured_prepared.append(dict(prep.prepared_inputs))  # type: ignore[attr-defined]
+            return {}
+
+    monkeypatch.setattr(beam_steps, "BeamRunner", _FakeRunner)
+    monkeypatch.setattr(
+        beam_steps, "_preflight_beam_launch_inputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(beam_steps, "_validate_native_outputs", lambda *a, **kw: None)
+    monkeypatch.setattr(beam_steps, "_beam_run_native_sources", lambda produced: {})
+    monkeypatch.setattr(
+        beam_steps, "_materialize_native_outputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_beam_run_native_output_paths",
+        lambda **kw: {},
+    )
+
+    launch_cfg = SimpleNamespace(primary_config=primary_conf)
+    beam_steps._native_beam_run(
+        plans_beam_in=plans,
+        households_beam_in=households,
+        persons_beam_in=persons,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=launch_cfg,
+        _consist_ctx=SimpleNamespace(),
+    )
+
+    assert len(captured_prepared) == 1
+    assert beam_steps.BEAM_VEHICLES_IN not in captured_prepared[0]

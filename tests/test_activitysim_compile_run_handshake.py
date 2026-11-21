@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import xarray as xr
-from consist import BindingResult, ExecutionOptions, Tracker, define_step
+from consist import ExecutionOptions, Tracker, define_step
 
 from pilates.activitysim import runner as activitysim_runner
 from pilates.activitysim.outputs import (
@@ -28,7 +28,7 @@ from pilates.activitysim.runner import (
 )
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.contracts import InputContract, StepDefinition
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.contracts import StepCallInputs
 from pilates.workflows.step_execution import execute_step
 
 
@@ -334,9 +334,8 @@ def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_contain
     definition = StepDefinition(
         name="activitysim_cache_admission_probe",
         function=native_activitysim_body,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="activitysim_cache_admission_probe",
-            binding=BindingResult(inputs={"source": source}),
+        resolve_inputs=lambda **_: StepCallInputs(
+            inputs={"source": source},
         ),
         project_outputs=lambda outputs, **_: outputs,
         execution_options=lambda **_: ExecutionOptions(
@@ -377,8 +376,7 @@ def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_contain
     epoch_path = warmup_contexts[0].shared_cache_dir
     resolved_inputs = definition.resolve_inputs()
     assert all(
-        str(epoch_path) not in str(value)
-        for value in (resolved_inputs.binding.inputs or {}).values()
+        str(epoch_path) not in str(value) for value in resolved_inputs.inputs.values()
     )
     assert str(epoch_path) not in str(results[0].outputs)
     assert str(epoch_path) not in str(definition.execution_options())

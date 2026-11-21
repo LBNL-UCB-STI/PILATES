@@ -224,11 +224,8 @@ def test_build_beam_launch_config_preserves_warmstart_provenance_sidecar(tmp_pat
 
 
 def test_project_beam_preprocess_outputs_retains_fallback_initial_warmstart(tmp_path):
-    from consist import BindingResult
-    from pilates.workflows.steps.beam import (
-        ResolvedStepInputs,
-        _project_beam_preprocess_outputs,
-    )
+    from pilates.workflows.contracts import StepCallInputs
+    from pilates.workflows.steps.beam import _project_beam_preprocess_outputs
 
     settings = _make_preprocessor().settings
     initial_warmstart_file = tmp_path / "warmstart" / "initial.parquet"
@@ -258,10 +255,8 @@ def test_project_beam_preprocess_outputs_retains_fallback_initial_warmstart(tmp_
     persons_path = tmp_path / "persons.csv.gz"
     persons_path.write_text("persons")
 
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(inputs={}),
-        metadata={"native_output_keys": (LINKSTATS_WARMSTART,)},
+    resolved_inputs = StepCallInputs(
+        metadata={"native_output_keys": (LINKSTATS_WARMSTART,)}
     )
 
     outputs = {
@@ -275,7 +270,7 @@ def test_project_beam_preprocess_outputs_retains_fallback_initial_warmstart(tmp_
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved_inputs,
+        step_inputs=resolved_inputs,
     )
 
     assert LINKSTATS_WARMSTART in projected.prepared_inputs
@@ -286,11 +281,9 @@ def test_project_beam_preprocess_outputs_retains_fallback_initial_warmstart(tmp_
 def test_project_beam_preprocess_outputs_restores_provenance_sidecar_from_artifact_metadata(
     tmp_path,
 ):
-    from consist import Artifact, BindingResult
-    from pilates.workflows.steps.beam import (
-        ResolvedStepInputs,
-        _project_beam_preprocess_outputs,
-    )
+    from consist import Artifact
+    from pilates.workflows.contracts import StepCallInputs
+    from pilates.workflows.steps.beam import _project_beam_preprocess_outputs
 
     settings = _make_preprocessor().settings
     state = SimpleNamespace(iteration=0)
@@ -328,9 +321,8 @@ def test_project_beam_preprocess_outputs_restores_provenance_sidecar_from_artifa
     persons_path = tmp_path / "persons.csv.gz"
     persons_path.write_text("persons")
 
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_preprocess",
-        binding=BindingResult(inputs={LINKSTATS_WARMSTART: artifact}),
+    resolved_inputs = StepCallInputs(
+        inputs={LINKSTATS_WARMSTART: artifact},
         metadata={"native_output_keys": (LINKSTATS_WARMSTART,)},
     )
 
@@ -346,7 +338,7 @@ def test_project_beam_preprocess_outputs_restores_provenance_sidecar_from_artifa
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved_inputs,
+        step_inputs=resolved_inputs,
     )
 
     assert LINKSTATS_WARMSTART in projected.prepared_inputs

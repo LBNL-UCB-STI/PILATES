@@ -327,19 +327,6 @@ When adding or debugging a workflow step, you will primarily interact with four 
     | `selected_key_by_role` | `Mapping[str, str]` | Diagnostic map recording which candidate key won fallback selection. |
     | `logical_destinations` | `Mapping[str, Path]` | Target workspace paths where Consist materializes each bound input before invoking the step. |
 
-=== "`WorkflowStepSpec`"
-
-    Defined in `pilates/workflows/catalog.py` (`WORKFLOW_STEP_SPECS`) to describe static workflow ordering and stage policy.
-
-    | Field | Type | Purpose |
-    | :--- | :--- | :--- |
-    | `step_name` | `str` | Canonical step name matching `StepDefinition.name` in `STEP_DEFINITIONS`. |
-    | `stage_name` & `phase` | `str` | Owning workflow stage (`land_use`, `vehicle_ownership_model`, `activity_demand`, `traffic_assignment`, `postprocessing`) and phase (`preprocess`, `run`, `postprocess`). |
-    | `order` & `depends_on` | `int`, `Tuple[str, ...]` | Deterministic execution index and upstream step dependencies. |
-    | `enabled_flag_attr` & `enabled_model_attr` | `Optional[str]` | Attributes on `WorkflowState` and `PilatesConfig` that gate whether the step runs. |
-    | `provenance` | `Optional[WorkflowStepProvenanceSpec]` | Selects the config builder in `pilates/workflows/consist_metadata.py`. |
-    | `dynamic_input_families` / `dynamic_output_families` | `Tuple[str, ...]` | Parameterized coupler key patterns (e.g., `householdv_{forecast_year}`) expanded at runtime. |
-
 ## Related Documentation
 
 - [Workflow Architecture](architecture.md): High-level control flow, stages, and simulation loop.

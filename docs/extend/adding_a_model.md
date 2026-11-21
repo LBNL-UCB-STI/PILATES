@@ -1,6 +1,6 @@
 # Adding a Model
 
-Integrating a simulator into PILATES connects an external runtime to the workflow planner, the [typed artifact coupler (`scenario.coupler`)](../workflow/artifact_flow.md#what-scenariocoupler-is-and-what-we-rely-on-it-to-do), and Consist provenance tracking.
+Integrating a simulator into PILATES connects an external runtime to the typed `SimState` orchestrator (`pilates/workflows/orchestrator.py`) and Consist provenance tracking.
 
 ## Architecture of a Model Integration
 
@@ -8,20 +8,20 @@ Every model integration spans four layers in the repository:
 
 | Layer | Path | Responsibility |
 | --- | --- | --- |
-| Adapter and outputs | `pilates/<model>/{preprocessor,runner,postprocessor,outputs}.py` | Translates canonical coupler artifacts into simulator inputs, idempotently prepares mutable model workspace configs/static inputs, invokes the container or local process, and packages raw outputs into a `StepOutputsBase` subclass. |
-| Step definition and contracts | `pilates/workflows/steps/<model>.py` | Declares `@define_step` callables, `StepDefinition` metadata, `InputContract` specifications, `ArtifactBindingRule` fallback policies, `ResolvedStepInputs` resolvers, and `TypedOutputProjector` mappings. |
-| Stage orchestration and catalog | `pilates/workflows/stages/<stage>.py`, `pilates/workflows/catalog.py` | Calls `execute_step(...)` inside a stage (`land_use`, `vehicle_ownership_model`, `supply_demand_loop`, or `postprocessing`) and registers `WorkflowStepSpec` entries on the static catalog. |
-| Config, keys, and facets | `pilates/config/models.py`, `pilates/workflows/artifact_keys.py`, `pilates/workflows/consist_metadata.py` | Validates `config.yaml` settings with Pydantic, registers canonical coupler keys, and builds Consist identity and facet payloads. |
+| Adapter and outputs | `pilates/<model>/{preprocessor,runner,postprocessor,outputs}.py` | Translates typed `SimState` artifacts into simulator inputs, idempotently prepares mutable model workspace configs/static inputs, invokes the container or local process, and packages raw outputs into a `StepOutputsBase` subclass. |
+| Step definition and contracts | `pilates/workflows/steps/<model>.py` | Declares `@define_step` callables, `StepDefinition` metadata, `InputContract` specifications, `StepCallInputs` builders from `SimState`, and `TypedOutputProjector` mappings. |
+| Orchestration | `pilates/workflows/orchestrator.py` | Calls `execute_step(...)` inside `run_pilates()` (`land_use`, `vehicle_ownership_model`, `supply_demand_loop`, or `postprocessing`), updates `SimState`, and syncs `scenario.coupler`. |
+| Config, state, and facets | `pilates/config/models.py`, `pilates/workflows/sim_state.py`, `pilates/workflows/consist_metadata.py` | Validates `config.yaml` settings with Pydantic, defines typed `SimState` slots (or `extras`), and builds Consist identity and facet payloads. |
 
 ```mermaid
 flowchart LR
-    Config["Pydantic Config\npilates/config/models.py"] --> Resolver["Input Resolver\npilates/workflows/steps/<model>.py"]
-    Coupler["scenario.coupler\npilates/workflows/artifact_keys.py"] --> Resolver
+    Config["Pydantic Config\npilates/config/models.py"] --> Resolver["Input Builder\npilates/workflows/steps/<model>.py"]
+    SimState["SimState\npilates/workflows/sim_state.py"] --> Resolver
     Resolver --> Exec["execute_step(...)\npilates/workflows/step_execution.py"]
     Exec --> Adapter["Preprocessor / Runner / Postprocessor\npilates/<model>/"]
     Adapter --> Outputs["StepOutputsBase\npilates/<model>/outputs.py"]
     Outputs --> Projector["TypedOutputProjector\npilates/workflows/steps/<model>.py"]
-    Projector --> Coupler
+    Projector --> Orchestrator["orchestrator.py\nupdates SimState & syncs coupler"]
 ```
 
 ## Scaffolding a Model Skeleton
@@ -42,20 +42,18 @@ The scaffold script writes or updates the following paths:
 - `pilates/my_model/outputs.py`
 - `pilates/workflows/steps/my_model.py`
 - `pilates/workflows/steps/__init__.py`
-- `pilates/workflows/catalog.py`
 - `docs/checklists/add_model_my_model.md`
 
-After scaffolding, register your config block in `pilates/config/models.py` and wire the stage call into `pilates/workflows/stages/<stage>.py`.
+After scaffolding, register your config block in `pilates/config/models.py` and wire the step/stage call into `pilates/workflows/orchestrator.py` (for example, before or after `run_traffic_assignment_phase` inside `_run_supply_demand_loop`).
 
 ## Implementing Step Contracts
 
-`pilates/workflows/step_execution.py` runs every workflow step through `execute_step(...)`. The executor resolves inputs once, calls `scenario.run(...)`, archives outputs, publishes updated keys to `scenario.coupler`, and projects typed results. For a side-by-side walkthrough of a complete step implementation, see [Anatomy of a Real Step (`beam_preprocess`)](../workflow/step_contracts.md#anatomy-of-a-real-step-beam_preprocess).
+`pilates/workflows/step_execution.py` runs every workflow step through `execute_step(...)`. The executor resolves `StepCallInputs` from `SimState`, calls `scenario.run(...)`, archives outputs, and projects typed results. `orchestrator.py` then updates `SimState` and syncs `scenario.coupler.update(sim_state.to_role_map())` at stage boundaries.
 
-### 1. Define Semantic Artifact Keys
+### 1. Add Typed Fields to `SimState` (or Use `SimState.extras`)
 
-Add your model's input and output keys to `pilates/workflows/artifact_keys.py` (`ARTIFACT_KEYS` and `ArtifactKeys`) so they can be published and resolved through `scenario.coupler`:
+Add typed `ArtifactRef | None` fields to `pilates/workflows/sim_state.py` (or store model-specific artifacts in `SimState.extras`) so upstream outputs flow explicitly into downstream steps:
 
-- See [What `scenario.coupler` Is and What We Rely On It To Do](../workflow/artifact_flow.md#what-scenariocoupler-is-and-what-we-rely-on-it-to-do) and [The Four-Step Artifact Lifecycle](../workflow/artifact_flow.md#the-four-step-artifact-lifecycle) for how coupler keys decouple upstream producers from downstream consumers across years and iterations.
 - See [Canonical Coupler Keys by Domain](../workflow/artifact_flow.md#canonical-coupler-keys-by-domain) for existing key naming conventions (`usim_*`, `atlas_*`, `*_asim_*`, `*_beam_*`, and `*skims*`).
 
 ### 2. Declare `StepOutputsBase`
@@ -82,47 +80,51 @@ class MyModelRunOutputs(StepOutputsBase):
 1. Path attributes that `StepOutputsBase.validate()` requires to exist on disk after execution or hydration.
 2. Dictionary attributes whose `Path` values are checked for existence on disk. Optional single-path attributes go in `optional_path_fields`, and semantic checks go in `validators` (`OutputValidator` instances).
 
-### 3. Build the Input Resolver, `ArtifactBindingRule`, and `InputContract`
+### 3. Build the `SimState` Input Resolver and `InputContract`
 
-In `pilates/workflows/steps/<model>.py`, declare how your step binds upstream artifacts from `scenario.coupler` and pair each step with an `InputContract`:
+In `pilates/workflows/steps/<model>.py`, build `StepCallInputs` directly from `SimState` and pair each step with an `InputContract`:
 
-- Attach `ArtifactBindingRule` entries to `StepDefinition.binding_rules` so the step can adapt when optional upstream stages (like UrbanSim or ATLAS) are enabled or disabled. See [How Input Binding Adapts to Active Models](../workflow/step_contracts.md#how-input-binding-adapts-to-active-models) for concrete multi-candidate binding patterns.
+- Select upstream inputs directly from `sim_state` (for example `sim_state.demand.households or sim_state.demand.households_in`) using plain Python conditionals—no `ArtifactBindingRule` is needed; register new coupler keys in `pilates/workflows/artifact_keys.py` and `SimState.to_role_map()`.
 - Set `ConfigContract.adapter("my_model")` when the step hashes a Consist `ConfigAdapter` directory, or `ConfigContract.payload()` when the step hashes config parameters.
 - Start with `status="incomplete"` and a clear `reason` string while scaffolding; promote to `status="complete"` once `resolve_inputs` supplies all artifact bindings and config identity fields required for cache hits and hydration.
 
 ```python
-from pilates.workflows.binding import ArtifactBindingRule
+from pathlib import Path
+
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
 )
+from pilates.workflows.sim_state import SimState
 
 _MY_MODEL_RUN_INPUT_CONTRACT = InputContract(
     status="complete",
     config_contract=ConfigContract.adapter("my_model"),
 )
 
-MY_MODEL_BINDING_RULES = (
-    ArtifactBindingRule(
-        semantic_key="households_in",
-        required=True,
-        preferred_keys=(  # (1)!
-            "households_asim_out",
-            "usim_population_households_table",
-        ),
-    ),
-)
+
+def _resolve_my_model_inputs(
+    *, workspace: object, sim_state: SimState | None = None, **_: object
+) -> StepCallInputs:
+    active = sim_state if sim_state is not None else SimState()
+    households = active.demand.households or active.land_use.current_h5
+    return StepCallInputs(
+        inputs={"households_in": households} if households is not None else {},
+        logical_destinations={
+            "households_in": Path(workspace.full_path) / "my_model" / "households.csv"
+        },
+        required_keys=("households_in",),
+    )
 ```
 
-1. Checks `scenario.coupler` from left to right: binds ActivitySim's output households when ActivitySim is enabled, or falls back to UrbanSim's extracted households table.
+### 4. Wire `StepDefinition`, `execute_step`, and `orchestrator.py`
 
-### 4. Wire `StepDefinition`, `execute_step`, and Provenance Facets
+Bind the `@define_step` function, `InputContract`, `resolve_inputs` callback, and `project_outputs` projector into a `StepDefinition`.
 
-Bind the `@define_step` function, `InputContract`, `resolve_inputs` callback, `project_outputs` projector, and `binding_rules` into a `StepDefinition` (see [Core Contract Types Reference](../workflow/step_contracts.md#core-contract-types-reference) for every field on `StepDefinition`, `ArtifactBindingRule`, `ResolvedStepInputs`, and `WorkflowStepSpec`).
-
-- **Stage execution**: Inside `pilates/workflows/stages/<stage>.py`, invoke `execute_step(...)` so the runtime enforces input resolution, Consist caching, optional recovery archive mirroring (`RunCompletionArchivePolicy`), and coupler publication through a single code path. See [Runtime Execution: Fresh Run vs. Cache Hit](../workflow/step_contracts.md#runtime-execution-fresh-run-vs-cache-hit) for how `execute_step(...)` handles both fresh runs and cached hydrations.
-- **Provenance facets**: Register your model's config and facet builder in `pilates/workflows/consist_metadata.py` and reference its `builder_key` in `pilates/workflows/catalog.py` (`WorkflowStepProvenanceSpec`) so run parameters are indexed in `provenance.duckdb`. See [Queryable Facets in DuckDB](../workflow/artifact_flow.md#queryable-facets-in-duckdb) for how run and artifact facets are structured and queried.
+- **Orchestrator execution**: Inside `pilates/workflows/orchestrator.py` (for example before/after BEAM in `_run_supply_demand_loop`), invoke `execute_step(..., sim_state=sim_state)` and return the updated `SimState`.
+- **Provenance facets**: Register your model's config and facet builder in `pilates/workflows/consist_metadata.py` so run parameters are indexed in `provenance.duckdb`. See [Queryable Facets in DuckDB](../workflow/artifact_flow.md#queryable-facets-in-duckdb) for how run and artifact facets are structured and queried.
 
 ## Testing Progression
 
