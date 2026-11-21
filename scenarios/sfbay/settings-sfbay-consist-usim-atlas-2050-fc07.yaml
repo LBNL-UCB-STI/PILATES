@@ -1,0 +1,21 @@
+# PILATES Configuration File (Inherited Format)
+# SFBay Consist UrbanSim + ATLAS Baseline + ActivitySim + BEAM (FC07-atlas, 2017-2050)
+
+base: settings-sfbay-consist-usim-hpc.yaml
+
+run:
+  end_year: 2050
+  output_run_name: consist-sfbay-usim-atlas-2050-fc07
+  land_use_freq: 1
+  travel_model_freq: 6
+  vehicle_ownership_freq: 6
+  supply_demand_iters: 1
+
+atlas:
+  scenario: baseline
+  adscen: baseline
+
+beam:
+  config: scenarios/network-calibration/beam-pilates-run--sfbay--jdeq-calibration-FC07-atlas.conf
+  warmstart_linkstats_path: "{router_directory}/init.linkstats.parquet"
+  memory: 180g
