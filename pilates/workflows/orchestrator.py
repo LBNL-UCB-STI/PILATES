@@ -90,6 +90,7 @@ from pilates.workspace import Workspace
 
 if TYPE_CHECKING:
     from pilates.utils.consist_db_snapshot import ConsistDbSnapshotManager
+    from pilates.workflows.dry_run import DryRunRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,7 @@ class _OrchestratorEnv:
     workspace: Workspace
     snapshot_manager: ConsistDbSnapshotManager | None = None
     on_activity_demand_boundary: Optional[Callable[[int, int], None]] = None
+    plan_recorder: DryRunRecorder | None = None
     last_synced: dict[str, ArtifactRef] = field(default_factory=dict)
     last_snapshotted_seq: int = 0
 
@@ -231,6 +233,7 @@ def bootstrap_initial_state(
     state: Any,
     workspace: Workspace,
     last_synced: dict[str, ArtifactRef] | None = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Resolve initial exogenous artifacts into a typed ``SimState`` and sync coupler."""
     land_use = LandUseState()
@@ -247,6 +250,77 @@ def bootstrap_initial_state(
         or get_activity_demand_model(settings) == "activitysim"
         or get_vehicle_ownership_model(settings) == "atlas"
     )
+    has_skim_consumer = (
+        get_activity_demand_model(settings) == "activitysim"
+        or get_land_use_model(settings) == "urbansim"
+        or get_vehicle_ownership_model(settings) == "atlas"
+        or get_traffic_assignment_model(settings) == "beam"
+    )
+
+    if plan_recorder is not None:
+        from pilates.workflows.dry_run import SymbolicArtifact
+
+        if (
+            uses_input_datastore(state)
+            and requires_usim
+            and get_setting(settings, "urbansim") is not None
+        ):
+            land_use = replace(
+                land_use,
+                prior_h5=SymbolicArtifact(
+                    key=USIM_DATASTORE_BASE_H5, producer_step="bootstrap"
+                ),
+                current_h5=SymbolicArtifact(
+                    key=USIM_DATASTORE_CURRENT_H5, producer_step="bootstrap"
+                ),
+                population_source=(
+                    SymbolicArtifact(
+                        key=USIM_POPULATION_SOURCE_H5, producer_step="bootstrap"
+                    )
+                    if get_land_use_model(settings) != "urbansim"
+                    else None
+                ),
+            )
+        if has_skim_consumer and not requires_prior_beam_skim_handoff(
+            settings=settings, state=state
+        ):
+            demand = replace(
+                demand,
+                skims_omx_in=SymbolicArtifact(
+                    key=ASIM_OMX_SKIMS, producer_step="bootstrap"
+                ),
+            )
+            if get_traffic_assignment_model(settings) is None:
+                network = replace(
+                    network,
+                    skims_omx=SymbolicArtifact(
+                        key=FINAL_SKIMS_OMX, producer_step="bootstrap"
+                    ),
+                )
+        if (
+            get_traffic_assignment_model(settings) == "beam"
+            and get_activity_demand_model(settings) is None
+        ):
+            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+                extras[key] = SymbolicArtifact(key=key, producer_step="bootstrap")
+        if get_traffic_assignment_model(
+            settings
+        ) == "beam" and not requires_prior_beam_linkstats_handoff(
+            settings=settings, state=state
+        ):
+            network = replace(
+                network,
+                linkstats_warmstart=SymbolicArtifact(
+                    key=LINKSTATS_WARMSTART, producer_step="bootstrap"
+                ),
+            )
+        return SimState(
+            land_use=land_use,
+            demand=demand,
+            network=network,
+            extras=extras,
+        )
+
     if (
         uses_input_datastore(state)
         and requires_usim
@@ -285,12 +359,6 @@ def bootstrap_initial_state(
             )
 
     # 2. Initial skims
-    has_skim_consumer = (
-        get_activity_demand_model(settings) == "activitysim"
-        or get_land_use_model(settings) == "urbansim"
-        or get_vehicle_ownership_model(settings) == "atlas"
-        or get_traffic_assignment_model(settings) == "beam"
-    )
     if has_skim_consumer and not requires_prior_beam_skim_handoff(
         settings=settings, state=state
     ):
@@ -393,6 +461,7 @@ def run_land_use_stage(
     sim_state: SimState,
     year: int,
     last_synced: dict[str, ArtifactRef] | None = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Execute UrbanSim run + postprocess and return updated ``SimState``."""
     formatted_print(f"LAND USE MODEL FOR YEAR {year}")
@@ -409,6 +478,7 @@ def run_land_use_stage(
         year=year,
         phase="run",
         sim_state=sim_state,
+        plan_recorder=plan_recorder,
     )
     forecast_h5: ArtifactRef = run_result.outputs.get(
         USIM_DATASTORE_H5, run_outputs.usim_datastore_h5
@@ -433,6 +503,7 @@ def run_land_use_stage(
         year=year,
         phase="postprocess",
         sim_state=sim_state,
+        plan_recorder=plan_recorder,
     )
     archive_key = f"{USIM_INPUT_ARCHIVE_PREFIX}{resolve_forecast_year(state) or year}"
     archived_base = post_result.outputs.get(archive_key, sim_state.land_use.prior_h5)
@@ -505,6 +576,7 @@ def run_vehicle_ownership_stage(
     sim_state: SimState,
     year: int,
     last_synced: dict[str, ArtifactRef] | None = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Execute ATLAS vehicle ownership sub-years and return updated ``SimState``."""
     logger.info(
@@ -544,6 +616,7 @@ def run_vehicle_ownership_stage(
                 iteration=iteration_index(state),
                 phase="preprocess",
                 sim_state=sim_state,
+                plan_recorder=plan_recorder,
             )
 
             run_result, _ = execute_step(
@@ -558,6 +631,7 @@ def run_vehicle_ownership_stage(
                 phase="run",
                 sim_state=sim_state,
                 prior_outputs=prep_result.outputs,
+                plan_recorder=plan_recorder,
             )
             sim_state = replace(
                 sim_state,
@@ -585,6 +659,7 @@ def run_vehicle_ownership_stage(
                 iteration=iteration_index(state),
                 phase="postprocess",
                 sim_state=sim_state,
+                plan_recorder=plan_recorder,
             )
             hh_cars_ref = post_result.outputs.get(ATLAS_VEHICLES2_OUTPUT)
             pop_ref: ArtifactRef | None = post_result.outputs.get(
@@ -616,6 +691,8 @@ def run_vehicle_ownership_stage(
                 atlas=replace(sim_state.atlas, hh_cars=hh_cars_ref),
             )
         except Exception:
+            if plan_recorder is not None:
+                raise
             from pilates.utils.failure_handling import persist_state_on_error
 
             persist_state_on_error(state, f"ATLAS year {atlas_year}")
@@ -647,6 +724,7 @@ def run_activity_demand_phase(
     year: int,
     iteration: int,
     last_synced: dict[str, ArtifactRef] | None = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Execute ActivitySim preprocess, run, and postprocess for one iteration."""
     population_year = _activitysim_population_year(state)
@@ -664,6 +742,7 @@ def run_activity_demand_phase(
         iteration=iteration,
         phase="preprocess",
         sim_state=sim_state,
+        plan_recorder=plan_recorder,
     )
     sim_state = replace(
         sim_state,
@@ -689,6 +768,7 @@ def run_activity_demand_phase(
         iteration=iteration,
         phase="run",
         sim_state=sim_state,
+        plan_recorder=plan_recorder,
     )
     zarr_ref = run_result.outputs.get(ZARR_SKIMS, run_outputs.zarr_skims)
     sim_state = replace(
@@ -718,6 +798,7 @@ def run_activity_demand_phase(
         phase="postprocess",
         sim_state=sim_state,
         prior_outputs=run_result.outputs,
+        plan_recorder=plan_recorder,
     )
     next_h5 = post_result.outputs.get(USIM_DATASTORE_H5)
     updated_land_use = (
@@ -799,6 +880,7 @@ def _run_beam_full_skim(
     iteration: int,
     prior_outputs: Mapping[str, ArtifactRef] | None = None,
     clear_zarr_on_omx: bool = False,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     skim_result, skim_outputs = execute_step(
         scenario=scenario,
@@ -812,6 +894,7 @@ def _run_beam_full_skim(
         phase="full_skim",
         sim_state=sim_state,
         prior_outputs=prior_outputs,
+        plan_recorder=plan_recorder,
     )
     new_skims_omx = skim_result.outputs.get(
         FINAL_SKIMS_OMX, skim_outputs.final_skims_omx
@@ -862,6 +945,7 @@ def run_traffic_assignment_phase(
     year: int,
     iteration: int,
     last_synced: dict[str, ArtifactRef] | None = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Execute BEAM (or standalone full skim) for one iteration."""
     traffic_model = get_traffic_assignment_model(settings)
@@ -878,7 +962,8 @@ def run_traffic_assignment_phase(
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
         if (
-            sim_state.network.linkstats_warmstart is None
+            plan_recorder is None
+            and sim_state.network.linkstats_warmstart is None
             and sim_state.network.linkstats is None
         ):
             resolved_ws = resolve_initial_linkstats_path(settings, workspace)
@@ -898,6 +983,7 @@ def run_traffic_assignment_phase(
             beam_year=beam_year,
             iteration=iteration,
             clear_zarr_on_omx=True,
+            plan_recorder=plan_recorder,
         )
         _sync_coupler(scenario, sim_state, last_synced=last_synced)
         return sim_state
@@ -913,6 +999,7 @@ def run_traffic_assignment_phase(
         iteration=iteration,
         phase="preprocess",
         sim_state=sim_state,
+        plan_recorder=plan_recorder,
     )
     sim_for_beam = replace(
         sim_state,
@@ -939,9 +1026,11 @@ def run_traffic_assignment_phase(
         phase="run",
         sim_state=sim_for_beam,
         prior_outputs=prep_result.outputs,
+        plan_recorder=plan_recorder,
     )
     logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
-    _maybe_fail_after_beam_run_for_canary(year=beam_year, iteration=iteration)
+    if plan_recorder is None:
+        _maybe_fail_after_beam_run_for_canary(year=beam_year, iteration=iteration)
 
     post_result, post_outputs = execute_step(
         scenario=scenario,
@@ -955,6 +1044,7 @@ def run_traffic_assignment_phase(
         phase="postprocess",
         sim_state=sim_for_beam,
         prior_outputs=run_result.outputs,
+        plan_recorder=plan_recorder,
     )
 
     events_key = f"events_parquet_{beam_year}_{iteration}"
@@ -998,6 +1088,7 @@ def run_traffic_assignment_phase(
             beam_year=beam_year,
             iteration=iteration,
             prior_outputs=prep_result.outputs,
+            plan_recorder=plan_recorder,
         )
 
     _sync_coupler(scenario, sim_state, last_synced=last_synced)
@@ -1016,10 +1107,12 @@ def _run_supply_demand_loop(
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
     env: _OrchestratorEnv | None = None,
     last_synced: dict[str, ArtifactRef] | None = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Run the supply-demand loop (ActivitySim + optional pre/post-BEAM + BEAM)."""
     logger.info("[supply_demand] year=%s run_id=%s", year, cr.current_run_id())
 
+    active_recorder = env.plan_recorder if env is not None else plan_recorder
     active_last_synced = env.last_synced if env is not None else last_synced
     configured_iters = settings.run.supply_demand_iters
     resumed_iteration = int(state.iteration or 0)
@@ -1050,6 +1143,7 @@ def _run_supply_demand_loop(
                 year=year,
                 iteration=it,
                 last_synced=active_last_synced,
+                plan_recorder=active_recorder,
             )
             if env is not None:
                 env.maybe_on_activity_demand_boundary(year=year, iteration=it)
@@ -1070,6 +1164,7 @@ def _run_supply_demand_loop(
                 year=year,
                 iteration=it,
                 last_synced=active_last_synced,
+                plan_recorder=active_recorder,
             )
 
         # Optional post-BEAM extension point:
@@ -1093,6 +1188,7 @@ def run_postprocessing_stage(
     sim_state: SimState,
     year: int,
     last_synced: dict[str, ArtifactRef] | None = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Execute global postprocessing and return updated ``SimState``."""
     post_year = resolve_forecast_year(state) or year
@@ -1107,6 +1203,7 @@ def run_postprocessing_stage(
         year=post_year,
         phase="postprocess",
         sim_state=sim_state,
+        plan_recorder=plan_recorder,
     )
     inexus_ref = post_result.outputs.get(
         "inexus_output", post_outputs.get("inexus_output")
@@ -1125,6 +1222,7 @@ def run_pilates(
     workspace: Workspace,
     snapshot_manager: ConsistDbSnapshotManager | None = None,
     on_activity_demand_boundary: Optional[Callable[[int, int], None]] = None,
+    plan_recorder: DryRunRecorder | None = None,
 ) -> SimState:
     """Run the full PILATES forecast-year loop over typed ``SimState``."""
     env = _OrchestratorEnv(
@@ -1134,6 +1232,7 @@ def run_pilates(
         workspace=workspace,
         snapshot_manager=snapshot_manager,
         on_activity_demand_boundary=on_activity_demand_boundary,
+        plan_recorder=plan_recorder,
     )
     sim_state = bootstrap_initial_state(
         scenario=env.scenario,
@@ -1141,6 +1240,7 @@ def run_pilates(
         state=env.state,
         workspace=env.workspace,
         last_synced=env.last_synced,
+        plan_recorder=env.plan_recorder,
     )
 
     for year in env.state:
@@ -1159,6 +1259,7 @@ def run_pilates(
                 sim_state=sim_state,
                 year=year,
                 last_synced=env.last_synced,
+                plan_recorder=env.plan_recorder,
             )
             if env.snapshot_manager is not None:
                 env.snapshot_manager.maybe_snapshot_interval(
@@ -1177,6 +1278,7 @@ def run_pilates(
                 sim_state=sim_state,
                 year=year,
                 last_synced=env.last_synced,
+                plan_recorder=env.plan_recorder,
             )
             if env.snapshot_manager is not None:
                 env.snapshot_manager.maybe_snapshot_interval(
@@ -1211,6 +1313,7 @@ def run_pilates(
                 sim_state=sim_state,
                 year=year,
                 last_synced=env.last_synced,
+                plan_recorder=env.plan_recorder,
             )
             if env.snapshot_manager is not None:
                 env.snapshot_manager.maybe_snapshot_interval(

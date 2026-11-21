@@ -252,6 +252,10 @@ def ensure_beam_mutable_workspace(
 
     region = str(get_setting(settings, "run.region") or "")
     dest_region = os.path.join(dest_base_dir, region) if region else dest_base_dir
+    from pilates.workspace import is_dry_run_workspace
+
+    if is_dry_run_workspace(workspace):
+        return Path(dest_region)
     if (
         output_dir is None
         and isinstance(workspace, Workspace)

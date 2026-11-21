@@ -479,10 +479,12 @@ def _activitysim_run_resolver(
         sim_state=active_sim_state,
     )
 
+    from pilates.workspace import is_dry_run_workspace
+
     zarr_input = resolved.inputs.get(ZARR_SKIMS)
     omx_input = resolved.inputs.get(ASIM_OMX_SKIMS)
     zarr_rejection: str | None = None
-    if zarr_input is not None:
+    if zarr_input is not None and not is_dry_run_workspace(workspace):
         zarr_path = artifact_to_path(zarr_input, workspace=workspace)
         existing_zarr_path = (
             resolve_existing_path(zarr_path, workspace=workspace)

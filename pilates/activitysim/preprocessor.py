@@ -2792,6 +2792,11 @@ def ensure_activitysim_mutable_configs(
     else:
         input_dir = mutable_data_rel
 
+    from pilates.workspace import is_dry_run_workspace
+
+    if is_dry_run_workspace(workspace):
+        return Path(input_dir)
+
     configs_dest_dir: Optional[str] = None
     if workspace is not None and folder_path is None:
         try:

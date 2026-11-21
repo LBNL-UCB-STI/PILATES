@@ -1,10 +1,22 @@
 import os
 import logging
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 from pilates.config import PilatesConfig
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class DryRunWorkspaceLike(Protocol):
+    """Protocol for workspaces that support zero-I/O dry-run planning."""
+
+    dry_run: bool
+
+
+def is_dry_run_workspace(workspace: Any) -> bool:
+    """Return True when ``workspace`` is in zero-I/O dry-run mode."""
+    return isinstance(workspace, DryRunWorkspaceLike) and bool(workspace.dry_run)
 
 
 class Workspace:
@@ -23,10 +35,12 @@ class Workspace:
         archive_run_dir: Optional[str] = None,
         on_archive_commit: Optional[Callable[[str], None]] = None,
         expected_prefix_steps: int = 0,
+        dry_run: bool = False,
     ):
         self.settings = settings
         self.output_path = output_path
         self.folder_name = folder_name
+        self.dry_run = dry_run
         self.archive_run_dir: Optional[str] = (
             os.path.expanduser(archive_run_dir) if archive_run_dir is not None else None
         )
@@ -39,7 +53,8 @@ class Workspace:
         self._beam_mutable_data_dir_override: Optional[str] = None
         self._beam_mutable_staged_dir: Optional[str] = None
         self._asim_mutable_staged_dir: Optional[str] = None
-        self._setup_directories()
+        if not self.dry_run:
+            self._setup_directories()
 
     @property
     def full_path(self) -> str:

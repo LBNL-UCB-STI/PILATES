@@ -128,7 +128,11 @@ def _require_primary_beam_config(
     settings: PilatesConfig,
     workspace: Workspace,
 ) -> Path:
+    from pilates.workspace import is_dry_run_workspace
+
     config_path = _primary_beam_config_path(settings, workspace)
+    if is_dry_run_workspace(workspace):
+        return config_path
     if not config_path.exists():
         raise FileNotFoundError(
             "BEAM primary config file is missing: "
@@ -1272,6 +1276,10 @@ def _beam_postprocess_split_output_paths(
     """
 
     if selected_events_key is None:
+        return {}
+    from pilates.workspace import is_dry_run_workspace
+
+    if is_dry_run_workspace(workspace):
         return {}
     source = inputs.get(selected_events_key)
     event_types: list[str] | None = None

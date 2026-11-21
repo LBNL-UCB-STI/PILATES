@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
-from typing import Any, Literal, Mapping, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Mapping, TypeVar
 
 from consist import (
     BindingResult,
@@ -13,7 +13,6 @@ from consist import (
     ExecutionOptions,
     OutputPolicyOptions,
     RunCompletionArchivePolicy,
-    RunResult,
 )
 
 from pilates.utils.archive_paths import ArchiveRunDirLike, workspace_storage_roots
@@ -21,6 +20,9 @@ from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.state_access import iteration_index
 from pilates.workflows.contracts import StepCallInputs, StepDefinition
 from pilates.workflows.sim_state import ArtifactRef, SimState
+
+if TYPE_CHECKING:
+    from pilates.workflows.dry_run import DryRunRecorder
 
 OutputT = TypeVar("OutputT")
 
@@ -130,12 +132,90 @@ def execute_step(
     prior_outputs: Mapping[str, ArtifactRef] | None = None,
     runtime_kwargs: dict[str, Any] | None = None,
     step_inputs: StepCallInputs | None = None,
-) -> tuple[RunResult, OutputT]:
+    plan_recorder: DryRunRecorder | None = None,
+) -> tuple[Any, Any]:
     """Resolve once, run once, then project persisted ``RunResult.outputs`` once."""
 
     resolved_iteration: int | None = (
         iteration_index(state) if iteration is _UNSET_ITERATION else iteration
     )
+    if plan_recorder is not None:
+        from pilates.workflows.dry_run import (
+            SymbolicArtifact,
+            SymbolicOutputs,
+            SymbolicRun,
+            SymbolicRunResult,
+        )
+
+        resolver_kwargs: dict[str, Any] = {
+            "settings": settings,
+            "state": state,
+            "workspace": workspace,
+            "sim_state": sim_state if sim_state is not None else SimState(),
+        }
+        if prior_outputs is not None:
+            resolver_kwargs["prior_outputs"] = prior_outputs
+        resolved_step_inputs = (
+            step_inputs
+            if step_inputs is not None
+            else definition.resolve_inputs(**resolver_kwargs)
+        )
+        resolved_step_inputs.require_complete(definition.name)
+
+        output_keys: list[str] = []
+        declared_paths: dict[str, Path] = {}
+        if definition.outputs is not None:
+            declared = definition.outputs(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_inputs=resolved_step_inputs,
+            )
+            for key, val in declared.items():
+                output_keys.append(key)
+                if isinstance(val, (Path, str, os.PathLike)):
+                    declared_paths[key] = Path(val)
+        elif definition.output_paths is not None:
+            declared = definition.output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_inputs=resolved_step_inputs,
+            )
+            for key, val in declared.items():
+                output_keys.append(key)
+                if isinstance(val, (Path, str, os.PathLike)):
+                    declared_paths[key] = Path(val)
+        if definition.output_sets is not None:
+            declared_sets = definition.output_sets(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_inputs=resolved_step_inputs,
+            )
+            output_keys.extend(declared_sets.keys())
+        deduped_output_keys = tuple(dict.fromkeys(output_keys))
+
+        step_id = plan_recorder.record_step(
+            step_name=definition.name,
+            year=year if year is not None else 0,
+            iteration=resolved_iteration,
+            inputs=resolved_step_inputs.inputs,
+            output_keys=deduped_output_keys,
+        )
+        symbolic_outputs = {
+            key: SymbolicArtifact(
+                key=key,
+                producer_step=step_id,
+                path=declared_paths.get(key, Path("<symbolic>")),
+            )
+            for key in deduped_output_keys
+        }
+        return (
+            SymbolicRunResult(run=SymbolicRun(id=step_id), outputs=symbolic_outputs),
+            SymbolicOutputs(symbolic_outputs),
+        )
+
     base_runtime_kwargs = {
         **(runtime_kwargs or {}),
         "settings": settings,
