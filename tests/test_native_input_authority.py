@@ -12,7 +12,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.stages.vehicle_ownership import AtlasSubState
 from pilates.workflows.input_authority import (
     requires_prior_beam_linkstats_handoff,
     requires_prior_beam_skim_handoff,
@@ -22,6 +22,7 @@ from pilates.workflows.steps import activitysim, atlas, urbansim
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.urbansim.runner import UrbanSimLaunchContext
 from pilates.beam.beam_input_staging import copy_vehicles_from_atlas
+from tests.conftest import make_conforming_workspace
 
 
 def _settings(*, traffic_assignment: str | None = "beam") -> SimpleNamespace:
@@ -141,10 +142,11 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     )
     state = _state(current_year=2022)
     state.forecast_year = 2022
-    workspace = SimpleNamespace(
+    workspace = make_conforming_workspace(
+        ".",
         full_path=".",
-        get_usim_mutable_data_dir=lambda: "urbansim/data",
-        get_atlas_mutable_input_dir=lambda: "atlas/input",
+        usim_mutable_data_dir="urbansim/data",
+        atlas_mutable_input_dir="atlas/input",
     )
     captured: dict[str, tuple[str, ...]] = {}
 
@@ -244,12 +246,13 @@ def test_activitysim_uses_zarr_only_after_beam_bootstrap(
         staticmethod(lambda *_args: {}),
     )
     state = _state(current_year=2020, iteration=1)
-    workspace = SimpleNamespace(
+    workspace = make_conforming_workspace(
+        "/workspace",
         full_path="/workspace",
-        get_asim_mutable_data_dir=lambda: "/workspace/activitysim/data",
-        get_asim_output_dir=lambda: "/workspace/activitysim/output",
-        get_asim_mutable_configs_dir=lambda: "/workspace/activitysim/configs",
-        get_asim_runtime_cache_dir=lambda: "/workspace/activitysim/output/cache",
+        asim_mutable_data_dir="/workspace/activitysim/data",
+        asim_output_dir="/workspace/activitysim/output",
+        asim_mutable_configs_dir="/workspace/activitysim/configs",
+        asim_runtime_cache_dir="/workspace/activitysim/output/cache",
     )
 
     activitysim._activitysim_preprocess_resolver(
@@ -285,12 +288,29 @@ def test_activitysim_uses_zarr_only_after_beam_bootstrap(
 
 def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
+    settings = _settings()
+    state = _state(current_year=2020, iteration=1)
+    workspace = make_conforming_workspace(
+        tmp_path,
+        asim_mutable_data_dir=str(tmp_path / "asim_data"),
+    )
 
     class _Preprocessor:
         def preprocess(self, _workspace, **kwargs):
             captured.update(kwargs)
+            from consist import OutputArtifactSpec
+
+            for spec in activitysim.activitysim_preprocess_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ).values():
+                out = Path(spec.path if isinstance(spec, OutputArtifactSpec) else spec)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.touch()
 
     monkeypatch.setattr(
         activitysim,
@@ -299,9 +319,9 @@ def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
     )
     activitysim._activitysim_preprocess_callable(
         Path("/bound/population.h5"),
-        settings=_settings(),
-        state=_state(current_year=2020, iteration=1),
-        workspace=SimpleNamespace(),
+        settings=settings,
+        state=state,
+        workspace=workspace,
     )
 
     assert captured["prepare_omx_skims"] is False
@@ -312,7 +332,9 @@ def test_activitysim_preprocess_does_not_declare_stale_omx_after_bootstrap() -> 
     declared = activitysim.activitysim_preprocess_output_paths(
         settings=_settings(),
         state=_state(current_year=2020, iteration=1),
-        workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: "activitysim/data"),
+        workspace=make_conforming_workspace(
+            ".", asim_mutable_data_dir="activitysim/data"
+        ),
     )
 
     assert "omx_skims" not in declared
@@ -345,7 +367,7 @@ def test_activitysim_population_source_cannot_fall_back_after_land_use(
     activitysim._activitysim_preprocess_resolver(
         settings=_settings(),
         state=state,
-        workspace=SimpleNamespace(full_path="."),
+        workspace=make_conforming_workspace(".", full_path="."),
         coupler=object(),
     )
 
@@ -357,15 +379,35 @@ def test_activitysim_population_source_cannot_fall_back_after_land_use(
 
 def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
+    from consist import OutputArtifactSpec
+
     settings = _settings()
+    settings.urbansim = SimpleNamespace(output_file_template="output_{year}.h5")
     state = _state(current_year=2022)
-    workspace = SimpleNamespace()
+    state.forecast_year = 2022
+    state.year = 2022
+    workspace = make_conforming_workspace(
+        tmp_path,
+        full_path=str(tmp_path),
+        asim_mutable_data_dir=str(tmp_path / "asim_data"),
+        atlas_output_dir=str(tmp_path / "atlas_output"),
+        usim_mutable_data_dir=str(tmp_path / "usim_data"),
+    )
     captured: dict[str, dict[str, object]] = {}
 
     class _ActivitysimPreprocessor:
         def preprocess(self, _workspace, **kwargs):
             captured["activitysim"] = kwargs
+            for spec in activitysim.activitysim_preprocess_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ).values():
+                out = Path(spec.path if isinstance(spec, OutputArtifactSpec) else spec)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.touch()
 
     class _UrbansimRunner:
         def __init__(self, *_args):
@@ -376,6 +418,12 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
                 "inputs": inputs,
                 "launch_context": launch_context,
             }
+            for target in (
+                launch_context.output_datastore,
+                Path(workspace.get_usim_mutable_data_dir()) / "output_2022.h5",
+            ):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
 
     class _AtlasPreprocessor:
         def __init__(self, *_args):
@@ -395,8 +443,8 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
     population = Path("/bound/population.h5")
     skims = Path("/bound/final-skims.omx")
     urbansim_launch_context = UrbanSimLaunchContext(
-        mutable_data_dir=Path("/resolved/urbansim"),
-        output_datastore=Path("/resolved/urbansim/output_2022.h5"),
+        mutable_data_dir=tmp_path / "urbansim",
+        output_datastore=tmp_path / "urbansim" / "output_2022.h5",
     )
     staged = UrbanSimPreprocessOutputs(
         usim_mutable_data_dir=urbansim_launch_context.mutable_data_dir,
@@ -457,7 +505,7 @@ def test_direct_beam_vehicle_staging_rejects_wrong_forecast_year(
 
     with pytest.raises(ValueError, match="forecast_year=2019.*parsed_source_year=2018"):
         copy_vehicles_from_atlas(
-            workspace=SimpleNamespace(full_path=str(tmp_path)),
+            workspace=make_conforming_workspace(tmp_path, full_path=str(tmp_path)),
             state=SimpleNamespace(forecast_year=2019),
             resolve_beam_exchange_scenario_folder_fn=lambda _workspace: str(
                 tmp_path / "beam-input"

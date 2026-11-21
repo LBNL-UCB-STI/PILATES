@@ -93,17 +93,20 @@ def mirror_consist_db_to_archive(
         return
 
     if tracker is not None:
-        db = getattr(tracker, "db", None)
-        engine = getattr(db, "engine", None)
-        if engine is not None and hasattr(engine, "begin"):
-            try:
-                with engine.begin() as conn:
-                    conn.exec_driver_sql("CHECKPOINT")
-                logger.info(
-                    "Successfully checkpointed DuckDB before mirroring: %s", local_real
-                )
-            except Exception as exc:
-                logger.debug("Could not checkpoint DuckDB before mirror: %s", exc)
+        try:
+            tracker.snapshot_db(archive_real, checkpoint=True)
+            logger.info(
+                "Mirrored Consist DB snapshot via tracker: %s -> %s",
+                local_real,
+                archive_real,
+            )
+            return
+        except (AttributeError, TypeError):
+            pass
+        except Exception as exc:
+            logger.warning(
+                "Tracker DB snapshot failed, falling back to file copy: %s", exc
+            )
 
     try:
         os.makedirs(os.path.dirname(archive_real), exist_ok=True)
@@ -463,10 +466,20 @@ class ConsistDbSnapshotManager:
         tracker: Any,
         local_db_path: Optional[str],
         archive_run_dir: str,
+        archive_db_path: Optional[str] = None,
     ) -> None:
         self.settings = settings
         self.tracker = tracker
         self.local_db_path = local_db_path
+        self.archive_run_dir = archive_run_dir
+        if archive_db_path:
+            self.archive_db_path = archive_db_path
+        elif local_db_path:
+            self.archive_db_path = os.path.join(
+                archive_run_dir, ".consist", Path(local_db_path).name
+            )
+        else:
+            self.archive_db_path = None
         self.snapshot_enabled = (
             bool(local_db_path)
             and bool(tracker)
@@ -514,6 +527,36 @@ class ConsistDbSnapshotManager:
     def final_snapshot(self) -> bool:
         """Attempt a final forced checkpoint snapshot during shutdown."""
         return self.snapshot(reason="finalize", checkpoint=True, force=True)
+
+    def snapshot_after_archive_step(self, step_name: str) -> bool:
+        """
+        Force an immediate checkpoint snapshot and mirror to archive after an archived step.
+
+        Closes SIGKILL skew without interval throttling.
+        """
+        reason = f"after_archive_step_{step_name}"
+        ok = self.snapshot(reason=reason, checkpoint=True, force=True)
+        if self.local_db_path and self.archive_db_path:
+            latest_db = self.latest_dir / self.db_filename
+            if latest_db.exists():
+                try:
+                    os.makedirs(os.path.dirname(self.archive_db_path), exist_ok=True)
+                    temp_dest = f"{self.archive_db_path}.tmp.{os.getpid()}"
+                    shutil.copy2(latest_db, temp_dest)
+                    os.replace(temp_dest, self.archive_db_path)
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to copy snapshot to archive DB path %s: %s",
+                        self.archive_db_path,
+                        exc,
+                    )
+            else:
+                mirror_consist_db_to_archive(
+                    self.local_db_path,
+                    self.archive_db_path,
+                    tracker=self.tracker,
+                )
+        return ok
 
     def snapshot(self, *, reason: str, checkpoint: bool, force: bool = False) -> bool:
         """Create one snapshot in history and atomically publish it to latest."""

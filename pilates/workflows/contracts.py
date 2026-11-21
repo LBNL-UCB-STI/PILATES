@@ -78,6 +78,7 @@ class StepDefinition(Generic[OutputT]):
     resolve_inputs: Callable[..., ResolvedStepInputs]
     project_outputs: TypedOutputProjector[OutputT]
     input_contract: InputContract
+    outputs: Callable[..., Mapping[str, Any]] | None = None
     output_paths: Callable[..., Mapping[str, Any]] | None = None
     output_sets: Callable[..., Mapping[str, OutputSet]] | None = None
     execution_options: Callable[..., ExecutionOptions] | None = None
@@ -86,6 +87,12 @@ class StepDefinition(Generic[OutputT]):
     optional_output_keys: tuple[str, ...] = ()
     preflight_identity: bool = False
     archive_outputs: bool = True
+
+    def __post_init__(self) -> None:
+        if self.outputs is not None and self.output_paths is not None:
+            raise ValueError(
+                f"StepDefinition {self.name!r} cannot specify both outputs and output_paths."
+            )
 
 
 @dataclass(frozen=True)

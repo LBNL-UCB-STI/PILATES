@@ -159,6 +159,12 @@ class DummyPreprocessor:
         self._state = state
 
     def preprocess(self, workspace, previous_records=None, **kwargs):
+        if self.model_name == "activitysim":
+            asim_dir = Path(workspace.get_asim_mutable_data_dir())
+            for fname in ("land_use.csv", "households.csv", "persons.csv", "skims.omx"):
+                target = asim_dir / fname
+                if target.exists():
+                    target.touch()
         return self._record_builder(
             self.model_name,
             "preprocess",
@@ -931,36 +937,32 @@ def golden_stub_env(tmp_path, monkeypatch):
         project_root=str(Path.cwd()),
     )
 
-    cr.set_enabled(True)
-    try:
-        with cr.use_tracker(tracker):
-            with cr.scenario(
-                name="golden_stub_workflow",
-                tracker=tracker,
-                tags=["golden_stub_workflow"],
-                model="test_orchestrator",
-            ) as scenario:
-                yield {
-                    "settings": settings,
-                    "workspace": workspace,
-                    "state": state,
-                    "context": build_runtime_context(
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                    ),
-                    "scenario": scenario,
-                    "coupler": scenario.coupler,
-                    "tracker": tracker,
-                    "usim_input_path": str(usim_input_path),
-                    "usim_merged_path": str(usim_merged_path),
-                    "zarr_path": str(zarr_path),
-                    "sharrow_cache_dir": str(sharrow_cache_dir),
-                    "promoted_linkstats": str(promoted_linkstats),
-                    "promoted_plans": str(promoted_plans),
-                }
-    finally:
-        cr.set_enabled(None)
+    with cr.use_tracker(tracker):
+        with cr.scenario(
+            name="golden_stub_workflow",
+            tracker=tracker,
+            tags=["golden_stub_workflow"],
+            model="test_orchestrator",
+        ) as scenario:
+            yield {
+                "settings": settings,
+                "workspace": workspace,
+                "state": state,
+                "context": build_runtime_context(
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                ),
+                "scenario": scenario,
+                "coupler": scenario.coupler,
+                "tracker": tracker,
+                "usim_input_path": str(usim_input_path),
+                "usim_merged_path": str(usim_merged_path),
+                "zarr_path": str(zarr_path),
+                "sharrow_cache_dir": str(sharrow_cache_dir),
+                "promoted_linkstats": str(promoted_linkstats),
+                "promoted_plans": str(promoted_plans),
+            }
 
 
 @pytest.mark.slow_ci
@@ -1315,7 +1317,7 @@ def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
             iteration=state.current_inner_iter,
             phase="preprocess",
             stage="supply_demand",
-            output_paths=activitysim_preprocess.output_paths(
+            outputs=activitysim_preprocess.outputs(
                 settings=settings,
                 state=state,
                 workspace=native_workspace,
@@ -1357,8 +1359,8 @@ def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
     assert first.cache_hit is False
     assert second.cache_hit is True
     assert first_outputs.land_use_table.exists()
-    assert {key: artifact.hash for key, artifact in second.outputs.items()} == {
-        key: artifact.hash for key, artifact in first.outputs.items()
+    assert {key: artifact.digest for key, artifact in second.outputs.items()} == {
+        key: artifact.digest for key, artifact in first.outputs.items()
     }
 
     for result in (first, second):

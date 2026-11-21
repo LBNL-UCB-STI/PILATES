@@ -4,6 +4,7 @@ import logging
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.utils.state_access import iteration_index
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import postprocessing
 
@@ -52,7 +53,7 @@ def run_postprocessing_stage(
         workspace=workspace,
         stage="postprocessing",
         year=year,
-        iteration=getattr(state, "iteration", None),
+        iteration=iteration_index(state),
         phase="postprocess",
     )
     del outputs

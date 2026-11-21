@@ -572,7 +572,7 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
 
         from dataclasses import dataclass, field
         from pathlib import Path
-        from typing import ClassVar, Dict, Iterable, Tuple
+        from typing import ClassVar, Dict, Tuple
 
         from pilates.workflows.outputs_base import StepOutputsBase
 
@@ -581,51 +581,33 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
         class {spec.preprocess_output_class}(StepOutputsBase):
             """Typed outputs from {spec.class_prefix} preprocess."""
 
-            primary_output_attr: ClassVar[str] = "output_root"
-            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
 
             output_root: Path
             prepared_inputs: Dict[str, Path] = field(default_factory=dict)
 
-            def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-                for key, path in self.prepared_inputs.items():
-                    yield key, path, f"{spec.class_prefix} prepared input: {{key}}"
-
 
         @dataclass
         class {spec.run_output_class}(StepOutputsBase):
             """Typed outputs from {spec.class_prefix} run."""
 
-            primary_output_attr: ClassVar[str] = "output_root"
-            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
 
             output_root: Path
             raw_outputs: Dict[str, Path] = field(default_factory=dict)
 
-            def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-                for key, path in self.raw_outputs.items():
-                    yield key, path, f"{spec.class_prefix} raw output: {{key}}"
-
 
         @dataclass
         class {spec.postprocess_output_class}(StepOutputsBase):
             """Typed outputs from {spec.class_prefix} postprocess."""
 
-            primary_output_attr: ClassVar[str] = "output_root"
-            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
 
             output_root: Path
             processed_outputs: Dict[str, Path] = field(default_factory=dict)
-
-            def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-                for key, path in self.processed_outputs.items():
-                    yield key, path, f"{spec.class_prefix} postprocess output: {{key}}"
         '''
         ).strip()
         + "\n"

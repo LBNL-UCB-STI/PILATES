@@ -55,6 +55,7 @@ from consist import Tracker
 
 from pilates.beam.skim_provenance import (
     compute_omx_logical_matrices_sha256,
+    normalize_logical_matrices_identity,
     read_skim_provenance_sidecar,
     skim_provenance_sidecar_path,
     write_skim_provenance_sidecar,
@@ -1539,6 +1540,14 @@ def run_tracked_full_skim_conversion(
             identity = prov_payload.get("identity")
             if isinstance(identity, str) and identity.startswith("sha256:file:"):
                 sidecar_meta["admission_file_identity"] = identity
+            logical_val = prov_payload.get("skim_metadata", {}).get(
+                "logical_matrices_sha256"
+            ) or prov_payload.get("logical_matrices_sha256")
+            if isinstance(logical_val, str) and logical_val.strip():
+                norm_logical = normalize_logical_matrices_identity(logical_val)
+                if norm_logical:
+                    sidecar_meta["logical_identity"] = norm_logical
+                    sidecar_meta["logical_profile"] = "float32_matrices_v1"
 
         cr.log_artifact(
             str(out_path),

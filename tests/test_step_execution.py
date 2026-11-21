@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 import shutil
@@ -66,7 +67,7 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     )
     archived_outputs = {
         "bundle": Artifact(
-            key="bundle", container_uri="workspace://archived/bundle", driver="other"
+            key="bundle", uri="workspace://archived/bundle", driver="other"
         )
     }
     run_result = RunResult(run=run, outputs=archived_outputs, cache_hit=cache_hit)
@@ -135,9 +136,7 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         git_hash=None,
     )
     outputs = {
-        "result": Artifact(
-            key="result", container_uri="workspace://result", driver="other"
-        )
+        "result": Artifact(key="result", uri="workspace://result", driver="other")
     }
     result = RunResult(run=run, outputs=outputs)
     seen: dict[str, object] = {}
@@ -200,7 +199,7 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
         outputs={
             "staging_root": Artifact(
                 key="staging_root",
-                container_uri="workspace://staging",
+                uri="workspace://staging",
                 driver="unknown",
             )
         },
@@ -268,7 +267,9 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
             config_hash=None,
             git_hash=None,
         ),
-        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+        outputs={
+            "result": Artifact(key="result", uri="workspace://result", driver="other")
+        },
     )
     seen: dict[str, object] = {}
     scenario = SimpleNamespace(
@@ -329,7 +330,9 @@ def test_execute_step_enable_archive_copy_false_authoritatively_disables_archiva
             config_hash=None,
             git_hash=None,
         ),
-        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+        outputs={
+            "result": Artifact(key="result", uri="workspace://result", driver="other")
+        },
     )
     seen: dict[str, object] = {}
     scenario = SimpleNamespace(
@@ -395,7 +398,7 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
     archived_outputs = {
         key: Artifact(
             key=key,
-            container_uri=f"workspace://archived/{forecast_h5.name}",
+            uri=f"workspace://archived/{forecast_h5.name}",
             driver="other",
         )
         for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
@@ -645,7 +648,11 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
             pass
 
         def postprocess(self, *_args: object, **_kwargs: object) -> None:
-            pass
+            for declared_path in urbansim._urbansim_postprocess_native_output_paths(
+                settings=settings, state=state, workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     population_source = (
@@ -674,7 +681,6 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
     source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
     assert source == population_source
     assert result.outputs[USIM_POPULATION_SOURCE_H5].recovery_roots == [
-        str(workspace_root.resolve()),
         str(
             (
                 archive_root
@@ -1208,9 +1214,17 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
 
     assert expected_archive_file.read_text(encoding="utf-8") == "v2-modified\n"
     expected_root = str(expected_archive_file.parent.parent.resolve())
-    assert expected_root in art_2.meta.get("recovery_roots", [])
+    art_2_roots = art_2.recovery_roots or (
+        art_2.meta.get("recovery_roots", []) if isinstance(art_2.meta, Mapping) else []
+    )
+    assert expected_root in art_2_roots
     refreshed_art_1 = tracker.get_run_outputs(str(art_1.run_id))["result"]
-    assert expected_root not in refreshed_art_1.meta.get("recovery_roots", [])
+    refreshed_roots = refreshed_art_1.recovery_roots or (
+        refreshed_art_1.meta.get("recovery_roots", [])
+        if isinstance(refreshed_art_1.meta, Mapping)
+        else []
+    )
+    assert expected_root not in refreshed_roots
 
 
 def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postprocess() -> (
@@ -1258,3 +1272,124 @@ def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postpr
         "activitysim_run": True,
         "activitysim_postprocess": False,
     }
+
+
+def test_snapshot_after_archive_step_checkpoints_and_replaces_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pilates.utils.consist_db_snapshot import ConsistDbSnapshotManager
+
+    local_db = tmp_path / "local" / ".consist" / "provenance.duckdb"
+    archive_run_dir = tmp_path / "archive" / "run_1"
+    archive_db = archive_run_dir / ".consist" / "provenance.duckdb"
+    local_db.parent.mkdir(parents=True, exist_ok=True)
+    archive_db.parent.mkdir(parents=True, exist_ok=True)
+    local_db.write_bytes(b"local-db")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            consist_db_snapshot_enabled=True,
+            consist_db_local_run=True,
+            consist_db_snapshot_interval_seconds=60.0,
+            consist_db_snapshot_on_outer_iteration=True,
+            consist_db_snapshot_keep_last=3,
+        )
+    )
+    manager = ConsistDbSnapshotManager(
+        settings=settings,
+        tracker=object(),
+        local_db_path=str(local_db),
+        archive_run_dir=str(archive_run_dir),
+        archive_db_path=str(archive_db),
+    )
+
+    snapshot_calls: list[dict[str, object]] = []
+    replace_calls: list[tuple[Path, Path]] = []
+
+    def _fake_snapshot(
+        *, reason: str, checkpoint: bool = True, force: bool = False
+    ) -> bool:
+        snapshot_calls.append(
+            {"reason": reason, "checkpoint": checkpoint, "force": force}
+        )
+        latest_db = manager.latest_dir / "provenance.duckdb"
+        latest_db.write_bytes(b"snapshotted-db")
+        return True
+
+    orig_replace = shutil.os.replace
+
+    def _recording_replace(src: str | Path, dst: str | Path) -> None:
+        replace_calls.append((Path(src), Path(dst)))
+        orig_replace(src, dst)
+
+    monkeypatch.setattr(manager, "snapshot", _fake_snapshot)
+    monkeypatch.setattr(shutil.os, "replace", _recording_replace)
+
+    assert manager.snapshot_after_archive_step("beam_run") is True
+    assert snapshot_calls == [
+        {
+            "reason": "after_archive_step_beam_run",
+            "checkpoint": True,
+            "force": True,
+        }
+    ]
+    assert archive_db.read_bytes() == b"snapshotted-db"
+    assert any(dst == archive_db and src != archive_db for src, dst in replace_calls)
+
+
+def test_execute_step_strict_resume_raises_scenario_drift_error_on_prefix_miss(
+    tmp_path: Path,
+) -> None:
+    from pilates.workflows.step_execution import ScenarioDriftError
+
+    body_called = False
+
+    def _step_body(**_: object) -> dict[str, object]:
+        nonlocal body_called
+        body_called = True
+        return {"result": "ran"}
+
+    definition = StepDefinition(
+        name="drift_test_step",
+        function=_step_body,
+        resolve_inputs=lambda **_: supplied,
+        cache_options=lambda **_: CacheOptions(cache_hydration="metadata"),
+        outputs=lambda **_: {},
+        project_outputs=lambda outputs, **_: outputs["result"],
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+    supplied = ResolvedStepInputs(
+        step_name="drift_test_step",
+        binding=BindingResult(inputs={}),
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(resume_policy="strict"))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        step_execution_counter=0,
+        expected_prefix_steps=1,
+    )
+
+    def _simulate_cache_miss(**kwargs: object) -> SimpleNamespace:
+        fn = kwargs["fn"]
+        fn()
+        return SimpleNamespace(outputs={"result": "unexpected"})
+
+    scenario = SimpleNamespace(
+        coupler="coupler", tracker=None, run=_simulate_cache_miss
+    )
+
+    with pytest.raises(ScenarioDriftError, match="Strict-resume drift detected"):
+        execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings=settings,
+            state="state",
+            workspace=workspace,
+            stage="stage",
+            year=None,
+            iteration=None,
+            phase=None,
+            resolved_inputs=supplied,
+        )
+
+    assert body_called is False

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
-from typing import Any, Literal, Mapping, Protocol, TypeVar, runtime_checkable
+from typing import Any, Callable, Literal, Mapping, Protocol, TypeVar, runtime_checkable
 
 from consist import (
     CacheOptions,
@@ -23,6 +23,31 @@ from pilates.workflows.resolved_inputs import ResolvedStepInputs
 OutputT = TypeVar("OutputT")
 
 CodeIdentityMode = Literal["repo_git", "callable_module", "callable_source"]
+
+
+class ScenarioDriftError(RuntimeError):
+    """Raised when strict resume detects cache drift on a previously completed step."""
+
+
+@runtime_checkable
+class _HasOnArchiveCommit(Protocol):
+    on_archive_commit: Callable[[str], None] | None
+
+
+@runtime_checkable
+class _HasStepExecutionSession(Protocol):
+    step_execution_counter: int
+    expected_prefix_steps: int
+
+
+@runtime_checkable
+class _HasResumePolicy(Protocol):
+    resume_policy: Literal["strict", "recompute"]
+
+
+@runtime_checkable
+class _HasMeta(Protocol):
+    meta: Any
 
 
 @runtime_checkable
@@ -48,6 +73,11 @@ class _HasRunConfig(Protocol):
 @runtime_checkable
 class _HasMainForecastYear(Protocol):
     main_forecast_year: int | None
+
+
+@runtime_checkable
+class _HasCacheHit(Protocol):
+    cache_hit: bool
 
 
 def _is_step_archive_enabled(
@@ -168,6 +198,51 @@ def execute_step(
         "state": state,
         "workspace": workspace,
     }
+    # Track execution ordinal and check strict resume drift expectations
+    current_ordinal = 0
+    if isinstance(workspace, _HasStepExecutionSession):
+        workspace.step_execution_counter += 1
+        current_ordinal = workspace.step_execution_counter
+        resume_policy = "strict"
+        if isinstance(settings, _HasRunConfig) and isinstance(
+            settings.run, _HasResumePolicy
+        ):
+            resume_policy = settings.run.resume_policy
+
+        if (
+            resume_policy == "strict"
+            and workspace.expected_prefix_steps > 0
+            and current_ordinal <= workspace.expected_prefix_steps
+        ):
+            import functools
+            import consist as cr
+
+            original_func = definition.function
+
+            @functools.wraps(original_func)
+            def _drift_guard_wrapper(*args, **kwargs):
+                explanation = None
+                try:
+                    current_run = cr.current_run()
+                    if isinstance(current_run, _HasMeta):
+                        meta = current_run.meta
+                        if isinstance(meta, dict):
+                            explanation = meta.get("cache_miss_explanation")
+                except Exception:
+                    pass
+                msg = (
+                    f"Strict-resume drift detected in step '{definition.name}': expected a cache hit "
+                    f"for previously completed step run, but got a cache miss."
+                )
+                if explanation:
+                    msg += f" Miss explanation: {explanation}"
+                raise ScenarioDriftError(msg)
+
+            # Using dataclasses.replace to update definition if it's a dataclass,
+            # or just creating a new instance if needed. Since definition is a StepDefinition
+            # let's replace it properly.
+            definition = replace(definition, function=_drift_guard_wrapper)
+
     step_identity: StepIdentity | None = None
     if definition.preflight_identity:
         preflight_options = ExecutionOptions(
@@ -210,6 +285,16 @@ def execute_step(
             **base_runtime_kwargs,
         },
     )
+    step_archive_root = _configured_step_archive_root(
+        definition=definition,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage=stage,
+        year=year,
+        iteration=iteration,
+        phase=phase,
+    )
     result = scenario.run(
         fn=definition.function,
         binding=resolved.binding,
@@ -220,6 +305,16 @@ def execute_step(
         iteration=iteration,
         phase=phase,
         stage=stage,
+        outputs=(
+            definition.outputs(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                resolved_inputs=resolved,
+            )
+            if definition.outputs is not None
+            else None
+        ),
         output_paths=(
             definition.output_paths(
                 settings=settings,
@@ -227,7 +322,7 @@ def execute_step(
                 workspace=workspace,
                 resolved_inputs=resolved,
             )
-            if definition.output_paths is not None
+            if definition.outputs is None and definition.output_paths is not None
             else None
         ),
         output_sets=(
@@ -248,26 +343,18 @@ def execute_step(
         ),
         output_policy=OutputPolicyOptions(
             run_completion_archive=(
-                RunCompletionArchivePolicy(archive_root=archive_root, mode="copy")
-                if (
-                    archive_root := _configured_step_archive_root(
-                        definition=definition,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        stage=stage,
-                        year=year,
-                        iteration=iteration,
-                        phase=phase,
-                    )
-                )
-                is not None
+                RunCompletionArchivePolicy(archive_root=step_archive_root, mode="copy")
+                if step_archive_root is not None
                 else None
             ),
         ),
         execution_options=options,
         step_identity=step_identity,
     )
+    is_hit = result.cache_hit if isinstance(result, _HasCacheHit) else False
+    if step_archive_root is not None and not is_hit:
+        if isinstance(workspace, _HasOnArchiveCommit) and workspace.on_archive_commit:
+            workspace.on_archive_commit(definition.name)
     return result, definition.project_outputs(
         result.outputs,
         settings=settings,

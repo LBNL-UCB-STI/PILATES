@@ -90,24 +90,24 @@ python -m pilates.config.models path/to/scenario.yaml --validate
 
 ## `shared` Section
 
-- `geography`: Regional `FIPS` map, `local_crs` projection string, primary `zones` definition (`zone_type`, `source`), and optional `alternative_zones` map.
-- `skims`: Skim filenames (`skims_fname`, `taz_skims_fname`, `beam_Wait_skims_fname`), `skims_zone_type`, highway and transit path labels, and time `periods`.
-- `database`: Shared provenance catalog configuration (`enabled: bool`, `path: str`, `strict_Read: bool`). The loader expands environment variables in `database.path`.
+- `geography`: Regional `FIPS` map, `local_crs` projection string, primary `zones` definition (`zone_type`, `source_file`, `canonical_id_col`), and optional `alternative_zones` map.
+- `skims`: Skim filenames (`fname`, `origin_fname`), `hwy_paths`, `transit_paths`, and time `periods`.
+- `database`: Shared provenance catalog configuration (`enabled: bool`, `type: str`, `path: str`, `snapshot_path: str | null`). The loader expands environment variables in `database.path`.
 
 ## `infrastructure` Section
 
 - `container_manager`: Container runtime (`docker` or `singularity`).
 - `docker_images`: Map of model names (`urbansim`, `atlas`, `activitysim`, `beam`, `polaris`) to Docker image tags.
 - `singularity_images`: Map of model names to Singularity/Apptainer `.sif` paths or URIs.
-- `docker_config`: Controls `enable_logging` (`true`) and `pull_latest` (`false`).
+- `docker_config`: Controls `stdout` (`false`) and `pull_latest` (`false`).
 
 ## Model Sections (`models`)
 
 - `urbansim`: Land-use container settings, data directories (`local_data_input_folder`, `local_mutable_data_folder`, `local_output_folder`), `form_to_btype`, and optional `admission.initial_datastore` validation policy.
-- `atlas`: Vehicle-ownership container settings (`host_input_folder`, `host_mutable_input_folder`, `host_output_folder`, `beamac`, `num_processes`, `nsample`). Setting `beamac > 0` requires `run.region: sfbay` and `shared.skims.skims_zone_type: taz`.
-- `activitysim`: Demand model folders (`local_input_folder`, `local_configs_folder`, `local_mutable_data_folder`, `local_mutable_configs_folder`, `local_output_folder`), `households_sample_size`, `chunk_size`, `num_processes`, `replan_hh_samp_size`, `canonical_zones_source`, and optional `admission.initial_skims` validation policy.
+- `atlas`: Vehicle-ownership container settings (`host_input_folder`, `host_mutable_input_folder`, `host_output_folder`, `beamac`, `num_processes`, `sample_size`). Setting `beamac > 0` requires `run.region: sfbay` and `shared.geography.zones.zone_type: taz`.
+- `activitysim`: Demand model folders (`local_input_folder`, `local_configs_folder`, `local_mutable_data_folder`, `local_mutable_configs_folder`, `local_output_folder`), `household_sample_size`, `chunk_size`, `num_processes`, `replan_hh_samp_size`, `canonical_zones_source`, and optional `admission.initial_skims` validation policy.
 - `beam`: Travel simulation configuration (`local_input_folder`, `local_mutable_data_folder`, `local_output_folder`, `memory`, `warmstart_linkstats`, `able_to_replan`, `max_iters`), optional `admission.linkstats` policy, and `artifact_formats` for derived BEAM outputs (defaults: `activitysim_skims: zarr`, `exchange: parquet`, `events: parquet`, `linkstats: parquet`). When UrbanSim or ATLAS requires OMX skims, PILATES derives an OMX skim file alongside the Zarr skims store.
-- `postprocessing`: Output validation settings (`enabled`, `fail_on_error`, `local_output_folder`, `validation_output_subfolder`).
+- `postprocessing`: Output and validation configuration (`output_folder`, `mep_output_folder`, `scenario_definitions`, `validation_metrics`).
 
 ## Related Pages
 

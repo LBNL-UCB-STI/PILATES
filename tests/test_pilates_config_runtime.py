@@ -70,15 +70,15 @@ def test_runtime_properties_forward_to_typed_runtime_container():
 
     settings.land_use_enabled = True
     settings.activity_demand_enabled = False
-    settings.state_file_loc = "/tmp/state.yaml"
+    settings.run_dir = "/tmp/run"
     settings.settings_file = "settings.yaml"
-    settings.allow_rewind_resume = True
+    settings.timestamp = True
 
     assert settings.runtime.flags.land_use_enabled is True
     assert settings.runtime.flags.activity_demand_enabled is False
-    assert settings.runtime.options.state_file_loc == "/tmp/state.yaml"
+    assert settings.runtime.options.run_dir == "/tmp/run"
     assert settings.runtime.options.settings_file == "settings.yaml"
-    assert settings.runtime.options.allow_rewind_resume is True
+    assert settings.runtime.options.timestamp is True
 
 
 def test_runtime_flags_derive_live_and_preserve_explicit_overrides():
@@ -126,13 +126,13 @@ def test_max_year_intervals_is_part_of_initialization_identity():
 def test_runtime_values_are_excluded_from_model_dump():
     settings = PilatesConfig(**_minimal_config())
     settings.land_use_enabled = True
-    settings.state_file_loc = "/tmp/state.yaml"
+    settings.run_dir = "/tmp/run"
 
     dumped = settings.model_dump()
 
     assert "runtime" not in dumped
     assert "land_use_enabled" not in dumped
-    assert "state_file_loc" not in dumped
+    assert "run_dir" not in dumped
 
 
 def test_workflow_rejects_retired_manifest_recovery_config():
@@ -162,16 +162,16 @@ def test_recovery_archive_roots_expand_environment_variables(monkeypatch):
 def test_model_copy_isolates_runtime_flags_and_options():
     settings = PilatesConfig(**_minimal_config())
     settings.land_use_enabled = False
-    settings.state_file_loc = "/tmp/original_state.yaml"
+    settings.run_dir = "/tmp/original_run"
 
     copied = settings.model_copy()
     copied.land_use_enabled = True
-    copied.state_file_loc = "/tmp/copied_state.yaml"
+    copied.run_dir = "/tmp/copied_run"
 
     assert settings.land_use_enabled is False
-    assert settings.state_file_loc == "/tmp/original_state.yaml"
+    assert settings.run_dir == "/tmp/original_run"
     assert copied.land_use_enabled is True
-    assert copied.state_file_loc == "/tmp/copied_state.yaml"
+    assert copied.run_dir == "/tmp/copied_run"
     assert settings._runtime is not copied._runtime
     assert settings._runtime.flags is not copied._runtime.flags
     assert settings._runtime.options is not copied._runtime.options

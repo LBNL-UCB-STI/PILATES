@@ -169,35 +169,6 @@ class ResolvedCouplerValue:
     namespace: Optional[str] = None
 
 
-def _is_noop_artifact_placeholder(value: Any) -> bool:
-    if value is None:
-        return False
-    value_type = type(value)
-    name = getattr(value_type, "__name__", "").lower()
-    module = getattr(value_type, "__module__", "").lower()
-    return "noopartifact" in name or ".noop" in module
-
-
-def _log_ignored_noop_artifact(
-    *,
-    requested_key: str,
-    storage_key: str,
-    lookup_source: str,
-    value: Any,
-) -> None:
-    logger.warning(
-        "Ignoring NoopArtifact placeholder for coupler key '%s' (storage_key='%s', "
-        "lookup_source=%s, type=%s, path=%s, container_uri=%s); falling back to "
-        "other input sources.",
-        requested_key,
-        storage_key,
-        lookup_source,
-        type(value).__name__,
-        getattr(value, "path", None),
-        getattr(value, "container_uri", None),
-    )
-
-
 def resolve_coupler_value(
     coupler: Optional[CouplerProtocol], key: str
 ) -> ResolvedCouplerValue:
@@ -227,14 +198,7 @@ def resolve_coupler_value(
             view_get = getattr(namespaced_view, "get", None)
             if callable(view_get):
                 value = view_get(local_key)
-                if value is not None and _is_noop_artifact_placeholder(value):
-                    _log_ignored_noop_artifact(
-                        requested_key=key,
-                        storage_key=qualify_key(namespace, local_key),
-                        lookup_source="namespaced_view",
-                        value=value,
-                    )
-                if value is not None and not _is_noop_artifact_placeholder(value):
+                if value is not None:
                     return ResolvedCouplerValue(
                         requested_key=key,
                         canonical_key=canonical_key,
@@ -259,14 +223,7 @@ def resolve_coupler_value(
         )
 
     value = get_value(key)
-    if value is not None and _is_noop_artifact_placeholder(value):
-        _log_ignored_noop_artifact(
-            requested_key=key,
-            storage_key=key,
-            lookup_source="legacy",
-            value=value,
-        )
-    if value is not None and not _is_noop_artifact_placeholder(value):
+    if value is not None:
         return ResolvedCouplerValue(
             requested_key=key,
             canonical_key=canonical_key,
@@ -279,14 +236,7 @@ def resolve_coupler_value(
 
     if canonical_key != key:
         value = get_value(canonical_key)
-        if value is not None and _is_noop_artifact_placeholder(value):
-            _log_ignored_noop_artifact(
-                requested_key=key,
-                storage_key=canonical_key,
-                lookup_source="canonical",
-                value=value,
-            )
-        if value is not None and not _is_noop_artifact_placeholder(value):
+        if value is not None:
             return ResolvedCouplerValue(
                 requested_key=key,
                 canonical_key=canonical_key,
@@ -300,14 +250,7 @@ def resolve_coupler_value(
     alias = namespaced_alias_for_key(key)
     if alias is not None:
         value = get_value(alias)
-        if value is not None and _is_noop_artifact_placeholder(value):
-            _log_ignored_noop_artifact(
-                requested_key=key,
-                storage_key=alias,
-                lookup_source="alias",
-                value=value,
-            )
-        if value is not None and not _is_noop_artifact_placeholder(value):
+        if value is not None:
             return ResolvedCouplerValue(
                 requested_key=key,
                 canonical_key=canonical_key,
@@ -413,16 +356,10 @@ def set_coupler_from_artifact(
     if artifact is None and fallback is None:
         return
     canonical_key = canonical_artifact_key_from_raw_key(key)
-    value = artifact
-    if _is_noop_artifact_placeholder(value) and fallback is not None:
-        value = fallback
-    elif value is None:
-        value = fallback
+    value = artifact if artifact is not None else fallback
 
     def _preserve_artifact_identity(candidate: Any) -> bool:
         if candidate is None or isinstance(candidate, (str, os.PathLike)):
-            return False
-        if _is_noop_artifact_placeholder(candidate):
             return False
         if isinstance(candidate, ArtifactLike):
             return True
@@ -437,12 +374,7 @@ def set_coupler_from_artifact(
         except AttributeError:
             pass
         try:
-            if candidate.container_uri is not None:
-                return True
-        except AttributeError:
-            pass
-        try:
-            if candidate.hash is not None:
+            if candidate.digest is not None:
                 return True
         except AttributeError:
             pass

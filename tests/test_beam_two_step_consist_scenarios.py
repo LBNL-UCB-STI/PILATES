@@ -10,6 +10,7 @@ Per the BEAM Two-Step Spike v2 Brief:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import gzip
 import json
 import shutil
@@ -681,14 +682,14 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
             assert res is None
             assert scenario.coupler.require(LINKSTATS) is not None
 
-    # Verify no second container run (cache hit) and outputs restored to scratch
+    # Verify no second container run (cache hit) and archived outputs resolved zero-copy
     assert run_counts["container"] == 1
     assert beam_out.exists()
     restored_parquet = (
         beam_out
         / "test-region/year-2020-iteration-0/.pilates-consist-outputs/beam_run/events_parquet_2020_0.parquet"
     )
-    assert restored_parquet.exists()
+    assert not restored_parquet.exists()
 
 
 def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_skims_for_iteration_1(
@@ -731,8 +732,11 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 )
                 assert res0 is None
                 iter0_zarr_art = scenario.coupler.require(ZARR_SKIMS)
-                assert isinstance(iter0_zarr_art.meta, dict)
-                recovery_roots = iter0_zarr_art.meta.get("recovery_roots")
+                assert isinstance(iter0_zarr_art.meta, (dict, Mapping))
+                recovery_roots = (
+                    iter0_zarr_art.recovery_roots
+                    or iter0_zarr_art.meta.get("recovery_roots")
+                )
                 assert recovery_roots
                 assert any(
                     str((archive_dir / "consist-recovery").resolve()) in str(root)
@@ -768,7 +772,7 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 assert res0_restart is None
                 assert run_counts["container"] == 1
                 assert run_counts["postprocess"] == 1
-                assert iter0_output_skims.exists()
+                assert not iter0_output_skims.exists()
 
                 # Simulate ActivitySim Iteration 1 publishing fresh plans/hh/persons
                 # while keeping ZARR_SKIMS from Iteration 0's hydrated postprocess.
@@ -916,7 +920,7 @@ def test_scenario_6_two_committed_runs_same_identity_exposes_recency_gap(
     # Run 1 linkstats had "1,100" while Run 2 linkstats had "1,200"
     out1 = env["tracker"].get_run_outputs(run1.id)["linkstats"]
     out2 = env["tracker"].get_run_outputs(run2.id)["linkstats"]
-    assert out1.hash != out2.hash
+    assert out1.digest != out2.digest
 
 
 # ==============================================================================

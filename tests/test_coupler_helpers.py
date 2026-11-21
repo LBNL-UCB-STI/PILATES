@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+from consist import Artifact, MaterializedArtifact, Tracker
+
 from pilates.utils import coupler_helpers
 from pilates.workflows.coupler_namespace import set_coupler_from_artifact
 
@@ -52,10 +54,16 @@ class CouplerWithNamespaceView(CouplerWithSetFromArtifact):
 
 
 class HistoricalArtifact:
-    def __init__(self, *, container_uri: str, path: Path) -> None:
+    def __init__(self, *, uri: str, path: Path) -> None:
         self.id = "artifact-1"
         self.key = "households_asim_out"
-        self.container_uri = container_uri
+        self.uri = uri
+        self.driver = "parquet"
+        self.member = None
+        self.meta = {}
+        self.digest = None
+        self.abs_path = None
+        self.run_id = None
         self._path = path
 
     @property
@@ -132,38 +140,54 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
     rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
     expected_local = current_local / rel_path
     artifact = HistoricalArtifact(
-        container_uri=f"workspace://{rel_path}",
+        uri=f"workspace://{rel_path}",
         path=tmp_path / "historical-run" / rel_path,
     )
     materialized_calls = []
 
-    def _materialize_artifact(
-        requested_artifact,
-        *,
-        target_root,
-        source_root,
-        preserve_existing,
-        on_missing,
-        validate_content_hash,
-    ):
-        materialized_calls.append(
-            {
-                "artifact": requested_artifact,
-                "target_root": Path(target_root),
-                "source_root": source_root,
-                "preserve_existing": preserve_existing,
-                "on_missing": on_missing,
-                "validate_content_hash": validate_content_hash,
-            }
-        )
-        expected_local.parent.mkdir(parents=True)
-        expected_local.write_text("households", encoding="utf-8")
-        return SimpleNamespace(path=expected_local, resolvable=True)
+    class _MaterializingTracker(Tracker):
+        def materialize_artifact(
+            self,
+            requested_artifact,
+            *,
+            target_root,
+            source_root=None,
+            preserve_existing=True,
+            on_missing="warn",
+            validate_content_hash="if-present",
+            **_kwargs,
+        ):
+            materialized_calls.append(
+                {
+                    "artifact": requested_artifact,
+                    "target_root": Path(target_root),
+                    "source_root": source_root,
+                    "preserve_existing": preserve_existing,
+                    "on_missing": on_missing,
+                    "validate_content_hash": validate_content_hash,
+                }
+            )
+            expected_local.parent.mkdir(parents=True)
+            expected_local.write_text("households", encoding="utf-8")
+            return MaterializedArtifact(
+                artifact=Artifact(
+                    key=artifact.key,
+                    uri=artifact.uri,
+                    driver=artifact.driver,
+                ),
+                key=artifact.key,
+                path=expected_local,
+                source_path=artifact.path,
+                target_path=expected_local,
+                status="materialized_from_historical_root",
+                resolvable=True,
+            )
 
+    tracker = _MaterializingTracker(run_dir=tmp_path / "tracker")
     monkeypatch.setattr(
         coupler_helpers.cr,
         "current_tracker",
-        lambda: SimpleNamespace(materialize_artifact=_materialize_artifact),
+        lambda: tracker,
     )
 
     resolved = coupler_helpers.artifact_to_existing_path(
@@ -188,18 +212,19 @@ def test_artifact_to_existing_path_materializes_missing_artifact_with_tracker(
 def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tracker_inactive(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from consist import Artifact
-    from consist.models.artifact import set_tracker_ref
-
     current_local = tmp_path / "run-current"
     current_local.mkdir()
     expected_local = current_local / "beam" / "output" / "0.events.parquet"
+    missing_run = tmp_path / "missing-run"
+    artifact = Artifact(
+        key="events_parquet_2015_0",
+        uri="workspace://beam/output/0.events.parquet",
+        driver="parquet",
+        run_id="beam_run_1",
+        meta={},
+    )
 
-    class _TrackerStub:
-        def resolve_uri(self, uri: str) -> str:
-            rel_path = uri.removeprefix("workspace://")
-            return str(tmp_path / "missing-run" / rel_path)
-
+    class _MaterializingTracker(Tracker):
         def materialize_artifact(
             self,
             requested_artifact: object,
@@ -210,24 +235,34 @@ def test_artifact_to_existing_path_uses_artifact_tracker_weakref_when_current_tr
             on_missing: str = "warn",
             allow_external_paths: bool | None = None,
             validate_content_hash: str = "if-present",
-        ) -> object:
+            **_kwargs: object,
+        ) -> MaterializedArtifact:
+            del (
+                requested_artifact,
+                target_root,
+                source_root,
+                preserve_existing,
+                on_missing,
+                allow_external_paths,
+                validate_content_hash,
+            )
             expected_local.parent.mkdir(parents=True, exist_ok=True)
             expected_local.write_text("events", encoding="utf-8")
-            return SimpleNamespace(
+            return MaterializedArtifact(
+                artifact=artifact.with_abs_path(expected_local),
+                key=artifact.key,
                 path=expected_local,
+                source_path=missing_run / "beam" / "output" / "0.events.parquet",
+                target_path=expected_local,
                 status="materialized_from_recovery_root",
                 resolvable=True,
             )
 
-    tracker_stub = _TrackerStub()
-    artifact = Artifact(
-        key="events_parquet_2015_0",
-        container_uri="workspace://beam/output/0.events.parquet",
-        driver="parquet",
-        run_id="beam_run_1",
-        meta={},
+    tracker_stub = _MaterializingTracker(
+        run_dir=missing_run,
+        mounts={"workspace": str(missing_run)},
     )
-    set_tracker_ref(artifact, tracker_stub)
+    artifact = artifact.with_resolver(tracker_stub)
 
     monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: None)
 

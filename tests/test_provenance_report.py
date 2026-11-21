@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+
+from consist import Artifact, Run
+from consist.models.run import RunArtifacts
 
 from pilates.utils.provenance_report import (
     build_provenance_report,
@@ -11,7 +13,7 @@ from pilates.utils.provenance_report import (
 
 class _FakeTracker:
     def __init__(self) -> None:
-        self._run = SimpleNamespace(
+        self._run = Run(
             id="scenario-1",
             status="completed",
             model_name="orchestrator",
@@ -23,27 +25,35 @@ class _FakeTracker:
             },
         )
         self._artifacts = {
-            "step-a": SimpleNamespace(
+            "step-a": RunArtifacts(
                 inputs={
-                    "usim_datastore_h5": SimpleNamespace(
-                        key="usim_datastore_h5", path="/tmp/usim.h5"
+                    "usim_datastore_h5": Artifact(
+                        key="usim_datastore_h5",
+                        uri="/tmp/usim.h5",
+                        driver="h5",
                     )
                 },
                 outputs={
-                    "households_asim_in": SimpleNamespace(
-                        key="households_asim_in", path="/tmp/households.csv"
+                    "households_asim_in": Artifact(
+                        key="households_asim_in",
+                        uri="/tmp/households.csv",
+                        driver="csv",
                     )
                 },
             ),
-            "step-b": SimpleNamespace(
+            "step-b": RunArtifacts(
                 inputs={
-                    "households_asim_in": SimpleNamespace(
-                        key="households_asim_in", path="/tmp/households.csv"
+                    "households_asim_in": Artifact(
+                        key="households_asim_in",
+                        uri="/tmp/households.csv",
+                        driver="csv",
                     )
                 },
                 outputs={
-                    "zarr_skims": SimpleNamespace(
-                        key="zarr_skims", path="/tmp/skims.zarr"
+                    "zarr_skims": Artifact(
+                        key="zarr_skims",
+                        uri="/tmp/skims.zarr",
+                        driver="zarr",
                     )
                 },
             ),

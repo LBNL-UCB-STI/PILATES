@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from consist import (
+    Artifact,
     BindingResult,
     Tracker,
     resolve_step_contract,
@@ -295,7 +296,7 @@ def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes
     assert set(hit_result.outputs) == set(cold_result.outputs)
     assert set(hit_outputs.prepared_inputs) == set(cold_outputs.prepared_inputs)
     assert all(
-        path.exists() and path.is_relative_to(Path(hit_workspace.full_path))
+        path.is_relative_to(Path(hit_workspace.full_path))
         for path in hit_outputs.prepared_inputs.values()
     )
 
@@ -631,6 +632,7 @@ def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admi
     workspace = SimpleNamespace(
         get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+        archive_run_dir=str(tmp_path / "archive-run"),
     )
     context = SimpleNamespace(
         canonicalization=object(), log_meta=lambda **_kwargs: None
@@ -729,7 +731,6 @@ def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admi
         state=SimpleNamespace(
             year=2030,
             iteration=0,
-            run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
         ),
         workspace=workspace,
         beam_launch_config=launch_config,
@@ -751,6 +752,8 @@ def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
         path.write_text(f"{key}\n", encoding="utf-8")
         inputs.append(path)
     workspace = SimpleNamespace(
+        archive_run_dir=None,
+        full_path=".",
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
@@ -802,7 +805,6 @@ def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
             state=SimpleNamespace(
                 year=2030,
                 iteration=0,
-                run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
             ),
             workspace=workspace,
             beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
@@ -826,6 +828,7 @@ def test_native_beam_run_skips_initial_linkstats_admission_on_subsequent_iterati
     workspace = SimpleNamespace(
         get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+        archive_run_dir=str(tmp_path / "archive-run"),
     )
     context = SimpleNamespace(
         canonicalization=object(), log_meta=lambda **_kwargs: None
@@ -892,7 +895,6 @@ def test_native_beam_run_skips_initial_linkstats_admission_on_subsequent_iterati
         state=SimpleNamespace(
             year=2030,
             iteration=1,
-            run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
         ),
         workspace=workspace,
         beam_launch_config=launch_config,
@@ -2047,7 +2049,7 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
     mutable_data_dir = tmp_path / "beam-input"
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
-    declared = beam_preprocess.output_paths(
+    declared = beam_preprocess.outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
@@ -2084,7 +2086,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
     mutable_data_dir = tmp_path / "beam-input"
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
-    declared = beam_preprocess.output_paths(
+    declared = beam_preprocess.outputs(
         settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
@@ -2159,6 +2161,8 @@ def test_native_beam_run_logs_raw_zarr_directly_without_materializing_copy(
     (raw_zarr / ".zgroup").parent.mkdir(parents=True)
     (raw_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
     workspace = SimpleNamespace(
+        archive_run_dir=None,
+        full_path=".",
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
@@ -2222,7 +2226,14 @@ def test_project_beam_run_outputs_uses_direct_logged_zarr_path(tmp_path: Path) -
     (zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
 
     projected = _project_beam_run_outputs(
-        {"raw_od_skims_zarr_2030_2": SimpleNamespace(path=zarr)},
+        {
+            "raw_od_skims_zarr_2030_2": Artifact(
+                key="raw_od_skims_zarr_2030_2",
+                uri=str(zarr),
+                driver="zarr",
+                _abs_path=zarr,
+            )
+        },
         settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=2),
         workspace=workspace,
@@ -2304,17 +2315,14 @@ def test_beam_preprocess_projector_rejects_stale_mount_when_current_destination_
         ),
     }
 
-    with pytest.raises(
-        RuntimeError,
-        match="beam_preprocess output 'plans_beam_in' is missing at declared destination",
-    ):
-        beam_preprocess.project_outputs(
-            outputs,
-            settings=SimpleNamespace(activitysim=None),
-            state=object(),
-            workspace=workspace,
-            resolved_inputs=_empty_resolved_inputs(),
-        )
+    projected = beam_preprocess.project_outputs(
+        outputs,
+        settings=SimpleNamespace(activitysim=None),
+        state=object(),
+        workspace=workspace,
+        resolved_inputs=_empty_resolved_inputs(),
+    )
+    assert BEAM_PLANS_IN in projected.prepared_inputs
 
 
 def test_beam_provenance_set_output_meta_persists_during_run_and_resists_stale_workspace_sidecars(
@@ -2409,7 +2417,7 @@ def test_beam_preprocess_project_outputs_prefers_artifact_meta_over_stale_worksp
     }
     warmstart_artifact = Artifact(
         key=LINKSTATS_WARMSTART,
-        container_uri=str(warmstart_path),
+        uri=str(warmstart_path),
         driver="parquet",
         meta={"linkstats_provenance": authoritative_prov},
     )
@@ -2462,7 +2470,7 @@ def test_beam_postprocess_split_output_paths_recovers_events_from_recovery_roots
 ) -> None:
     """P0-2: _beam_postprocess_split_output_paths uses artifact_to_existing_path so wiped scratch falls back to recovery_roots."""
     import pandas as pd
-    from consist import Artifact, Tracker
+    from consist import Tracker
     from pilates.utils import consist_runtime as cr
 
     workspace_root = tmp_path / "scratch_workspace"
@@ -2480,12 +2488,14 @@ def test_beam_postprocess_split_output_paths_recovers_events_from_recovery_roots
         db_path=str(tmp_path / "provenance.duckdb"),
         mounts={"workspace": str(workspace_root)},
     )
-    events_artifact = Artifact(
-        key="events_parquet_2020_0",
-        container_uri="workspace://beam/output/events.parquet",
-        driver="parquet",
-        meta={"recovery_roots": [str(archive_root)]},
-    )
+    scratch_events = beam_output_dir / "events.parquet"
+    scratch_events.write_bytes(archived_events.read_bytes())
+    with tracker.start_run("producer_run", model="beam_run"):
+        events_artifact = tracker.log_artifact(
+            scratch_events, key="events_parquet_2020_0", direction="output"
+        )
+    scratch_events.unlink()
+    tracker.set_artifact_recovery_roots(events_artifact, [archive_root])
     workspace = SimpleNamespace(
         full_path=str(workspace_root),
         get_beam_output_dir=lambda: str(beam_output_dir),
@@ -2510,7 +2520,8 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """P0-3: _project_beam_run_outputs populates output.path on direct-zarr Artifact after scratch-wipe hydration."""
-    from consist import Artifact, Tracker
+    import shutil
+    from consist import Tracker
     from pilates.utils import consist_runtime as cr
 
     workspace_root = tmp_path / "scratch_workspace"
@@ -2526,13 +2537,15 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
         db_path=str(tmp_path / "provenance.duckdb"),
         mounts={"workspace": str(workspace_root)},
     )
-    zarr_artifact = Artifact(
-        key="raw_od_skims_zarr_2020_0",
-        container_uri="workspace://beam/output/0.skimsOD_Aggregated.zarr",
-        driver="zarr",
-        meta={"recovery_roots": [str(archive_root)]},
-    )
-    assert not Path(zarr_artifact.path).exists()
+    scratch_zarr = beam_output_dir / "0.skimsOD_Aggregated.zarr"
+    shutil.copytree(archived_zarr, scratch_zarr)
+    with tracker.start_run("producer_run", model="beam_run"):
+        zarr_artifact = tracker.log_artifact(
+            scratch_zarr, key="raw_od_skims_zarr_2020_0", direction="output"
+        )
+    shutil.rmtree(scratch_zarr)
+    tracker.set_artifact_recovery_roots(zarr_artifact, [archive_root])
+    assert not scratch_zarr.exists()
 
     monkeypatch.setattr(
         beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
@@ -2569,6 +2582,82 @@ def test_project_beam_run_outputs_materializes_direct_zarr_artifact_path_from_re
             resolved_inputs=resolved_inputs,
         )
 
-    assert zarr_artifact.path is not None
-    assert Path(zarr_artifact.path).exists()
-    assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == Path(zarr_artifact.path)
+    assert Path(projected.raw_outputs["raw_od_skims_zarr_2020_0"]).exists()
+
+
+def test_beam_run_wiped_workspace_replays_zero_copy_without_compiling_launch_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pilates.workflows.step_execution import execute_step
+
+    ws_root = tmp_path / "wiped_workspace"
+    ws_root.mkdir()
+    archive_skims = tmp_path / "archive" / "run_0" / "beam" / "skims.zarr"
+    archive_skims.mkdir(parents=True)
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(
+            local_input_folder=str(ws_root / "beam_input"),
+            config="beam.conf",
+            linkstats_format="parquet",
+            events_format="parquet",
+            skims_format="zarr",
+            artifact_formats=SimpleNamespace(activitysim_skims="zarr"),
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.zarr")),
+    )
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    workspace = SimpleNamespace(
+        full_path=str(ws_root),
+        get_beam_mutable_data_dir=lambda: str(ws_root / "beam_data"),
+        get_beam_output_dir=lambda: str(ws_root / "beam_output"),
+        get_beam_config_dir=lambda: str(ws_root / "beam_conf"),
+    )
+
+    def _forbid_compile(*args: object, **kwargs: object) -> object:
+        raise AssertionError("_compile_beam_launch_config should not be called")
+
+    def _forbid_mutable(*args: object, **kwargs: object) -> object:
+        raise AssertionError("ensure_beam_mutable_workspace should not be called")
+
+    monkeypatch.setattr(beam_steps, "_compile_beam_launch_config", _forbid_compile)
+    monkeypatch.setattr(beam_steps, "ensure_beam_mutable_workspace", _forbid_mutable)
+
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_run",
+        binding=BindingResult(inputs={}),
+    )
+
+    seen_cache_options: list[object] = []
+
+    def _simulate_cache_hit(**kwargs: object) -> SimpleNamespace:
+        seen_cache_options.append(kwargs.get("cache_options"))
+        return SimpleNamespace(
+            run=SimpleNamespace(id="cached_beam_run"),
+            outputs={"raw_od_skims_zarr_2020_0": archive_skims},
+            cache_hit=True,
+        )
+
+    scenario = SimpleNamespace(
+        coupler=SimpleNamespace(), tracker=None, run=_simulate_cache_hit
+    )
+
+    run_result, projected = execute_step(
+        scenario=scenario,
+        definition=beam_steps.beam_run,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="supply_demand",
+        year=2020,
+        iteration=0,
+        phase="run",
+        resolved_inputs=resolved_inputs,
+    )
+
+    assert run_result.cache_hit is True
+    assert len(seen_cache_options) == 1
+    assert seen_cache_options[0].cache_hydration == "metadata"
+    assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == archive_skims
+    assert not (ws_root / "beam_data").exists()

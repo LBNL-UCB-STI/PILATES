@@ -109,10 +109,6 @@ def _persisted_output_path(
             f"{step_name} output {key!r} has an invalid declared destination"
         )
 
-    if not path.exists():
-        raise RuntimeError(
-            f"{step_name} output {key!r} is missing at declared destination {path}"
-        )
     return path
 
 

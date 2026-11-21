@@ -786,40 +786,39 @@ def consist_step_meta(
         config_root: Optional[Path] = None
         workspace_root: Optional[Path] = None
         primary_config: Optional[Path] = None
+        ws_path = _workspace_path_from_value(workspace_obj)
+        if ws_path:
+            workspace_root = Path(ws_path)
         if isinstance(launch_config, BeamLaunchConfig):
             config_root = launch_config.root
             primary_config = launch_config.primary_config
-        elif isinstance(workspace_obj, _HasBeamMutableDataDir):
-            workspace_root_path = _workspace_path_from_value(workspace_obj)
-            if workspace_root_path:
-                workspace_root = Path(workspace_root_path)
-            config_root = beam_config_root(
-                settings,
-                workspace=workspace_obj,
-            )
         else:
-            ws_path = _workspace_path_from_value(workspace_obj)
-            if ws_path:
-                workspace_root = Path(ws_path)
+            local_input_folder = get_setting(settings, "beam.local_input_folder")
+            region = get_setting(settings, "run.region")
+            if local_input_folder is not None and region is not None:
+                local_input_path = Path(os.fspath(local_input_folder))
+                if not local_input_path.is_absolute() and workspace_root is not None:
+                    local_input_path = workspace_root / local_input_path
+                candidate_with_region = local_input_path / str(region)
+                if (candidate_with_region / beam_settings.config).exists():
+                    config_root = candidate_with_region
+                    primary_config = candidate_with_region / beam_settings.config
+                elif (local_input_path / beam_settings.config).exists():
+                    config_root = local_input_path
+                    primary_config = local_input_path / beam_settings.config
+            if config_root is None:
                 config_root = beam_config_root(
                     settings,
+                    workspace=workspace_obj,
                     workspace_path=ws_path,
                 )
+                if config_root is not None:
+                    primary_config = config_root / beam_settings.config
         if config_root is None:
             return None
 
         if primary_config is None:
             primary_config = config_root / beam_settings.config
-        if not primary_config.exists():
-            local_input_folder = get_setting(settings, "beam.local_input_folder")
-            region = get_setting(settings, "run.region")
-            if isinstance(local_input_folder, str) and isinstance(region, str):
-                from pilates.beam.preprocessor import ensure_beam_mutable_workspace
-
-                try:
-                    ensure_beam_mutable_workspace(settings, workspace=workspace_obj)
-                except (ValueError, FileNotFoundError):
-                    pass
         if not primary_config.exists():
             return None
 
@@ -828,8 +827,10 @@ def consist_step_meta(
             path_aliases["workspace"] = workspace_root
         if workspace_obj is not None:
             if isinstance(workspace_obj, _HasBeamMutableDataDir):
-                path_aliases["beam_input"] = Path(
-                    workspace_obj.get_beam_mutable_data_dir()
+                path_aliases["beam_input"] = (
+                    config_root.parent
+                    if launch_config is None
+                    else Path(workspace_obj.get_beam_mutable_data_dir())
                 )
             if isinstance(workspace_obj, _HasBeamOutputDir):
                 path_aliases["beam_output"] = Path(workspace_obj.get_beam_output_dir())
@@ -941,9 +942,27 @@ def consist_step_meta(
                 reason="runtime_output_prefix_not_identity_input",
             )
 
+        adapter_root_dirs = [config_root]
+        adapter_primary_config = primary_config
+        if launch_config is None and workspace_root is not None:
+            wrapper_dir = workspace_root / ".pilates-consist-conf" / model
+            wrapper_dir.mkdir(parents=True, exist_ok=True)
+            wrapper_path = wrapper_dir / "beam.conf"
+            wrapper_content = (
+                f'include file("{primary_config.resolve().as_posix()}")\n'
+                f'beam.inputDirectory = "{config_root.resolve().as_posix()}"\n'
+            )
+            if (
+                not wrapper_path.exists()
+                or wrapper_path.read_text(encoding="utf-8") != wrapper_content
+            ):
+                wrapper_path.write_text(wrapper_content, encoding="utf-8")
+            adapter_root_dirs = [config_root, wrapper_dir]
+            adapter_primary_config = wrapper_path
+
         return BeamConfigAdapter(
-            root_dirs=[config_root],
-            primary_config=primary_config,
+            root_dirs=adapter_root_dirs,
+            primary_config=adapter_primary_config,
             env_overrides=beam_config_env_overrides(
                 settings,
                 config_root=config_root,
@@ -1038,6 +1057,13 @@ def consist_step_meta(
                 resolved["config"] = {
                     **dict(resolved.get("config") or {}),
                     "beam_preprocess_identity": closure,
+                }
+        if model in ("beam_run", "beam_full_skim"):
+            closure = ctx.get_runtime("beam_run_identity_closure", default=None)
+            if isinstance(closure, dict):
+                resolved["config"] = {
+                    **dict(resolved.get("config") or {}),
+                    "beam_run_identity": closure,
                 }
         contract_report = _contract_report(
             adapter=adapter,

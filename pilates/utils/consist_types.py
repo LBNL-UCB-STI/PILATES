@@ -1,26 +1,31 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Dict,
     Iterable,
+    Iterator,
     Mapping,
     Optional,
-    Protocol,
-    runtime_checkable,
 )
+from typing_extensions import Protocol, runtime_checkable
 
 from consist.protocols import (
-    ArtifactLike as ConsistArtifactLike,
+    ArtifactRecordLike,
     ScenarioLike as ConsistScenarioLike,
     TrackerLike as ConsistTrackerLike,
 )
-from consist.core.identity import IdentityManager
+
+if TYPE_CHECKING:
+    from consist.core.identity import IdentityManager
 
 
 @runtime_checkable
-class ArtifactLike(ConsistArtifactLike, Protocol):
-    pass
+class ArtifactLike(ArtifactRecordLike, Protocol):
+    @property
+    def run_id(self) -> Optional[str]: ...
 
 
 @runtime_checkable
@@ -36,6 +41,8 @@ class ScenarioLike(ConsistScenarioLike, Protocol):
 @runtime_checkable
 class TrackerLike(ConsistTrackerLike, Protocol):
     identity: IdentityManager
+
+    def close(self) -> None: ...
 
     def log_h5_container(
         self,
@@ -73,6 +80,16 @@ class CouplerProtocol(Protocol):
     Protocol for artifact registry used to pass inputs/outputs between steps.
     """
 
+    def __getitem__(self, key: str) -> Any: ...
+
+    def __setitem__(self, key: str, value: Any) -> None: ...
+
+    def __delitem__(self, key: str) -> None: ...
+
+    def __iter__(self) -> Iterator[str]: ...
+
+    def __len__(self) -> int: ...
+
     def set(self, key: str, value: Any) -> None: ...
 
     def get(self, key: str, default: Optional[Any] = None) -> Any: ...
@@ -91,3 +108,7 @@ class CouplerProtocol(Protocol):
         *keys: str,
         prefix: str = "",
     ) -> Dict[str, Any]: ...
+
+    def path(self, key: str) -> Path: ...
+
+    def to_dict(self) -> Dict[str, Any]: ...

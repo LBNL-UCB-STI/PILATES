@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import consist
 import pytest
 import pandas as pd
 
@@ -59,8 +60,10 @@ def test_resolve_atlas_usim_datastore_path_accepts_artifact_like_explicit_value(
         get_usim_mutable_data_dir=lambda: str(usim_dir),
     )
     state = SimpleNamespace(
-        atlas_usim_datastore_h5=SimpleNamespace(
-            path="urbansim/data/artifact_current.h5"
+        atlas_usim_datastore_h5=consist.Artifact(
+            key="usim_datastore_h5",
+            uri="workspace://urbansim/data/artifact_current.h5",
+            driver="h5",
         ),
         forecast_year=2029,
         is_start_year=lambda: False,

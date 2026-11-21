@@ -60,7 +60,7 @@ Add your model's input and output keys to `pilates/workflows/artifact_keys.py` (
 
 ### 2. Declare `StepOutputsBase`
 
-Subclass `StepOutputsBase` (`pilates/workflows/outputs_base.py`) inside `pilates/<model>/outputs.py`. Declare the canonical output keys to publish to `scenario.coupler` and the workspace path fields that `StepOutputsBase.validate()` checks after execution or cache hydration:
+Subclass `StepOutputsBase` (`pilates/workflows/outputs_base.py`) inside `pilates/<model>/outputs.py`. Declare the path fields that `StepOutputsBase.validate()` checks after execution or cache hydration:
 
 ```python
 from dataclasses import dataclass, field
@@ -72,30 +72,22 @@ from pilates.workflows.outputs_base import StepOutputsBase
 
 @dataclass
 class MyModelRunOutputs(StepOutputsBase):
-    primary_output_attr: ClassVar[str] = "output_root"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (  # (1)!
-        "my_model_primary_output",
-        "my_model_optional_summary",
-    )
-    required_outputs: ClassVar[Tuple[str, ...]] = (  # (2)!
-        "my_model_primary_output",
-    )
-    required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
-    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)  # (1)!
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)  # (2)!
 
     output_root: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
 ```
 
-1. All canonical keys that `execute_step(...)` archives and publishes to `scenario.coupler` when present.
-2. Keys that must exist on every completed run (`my_model_optional_summary` may be omitted when optional features are disabled).
+1. Path attributes that `StepOutputsBase.validate()` requires to exist on disk after execution or hydration.
+2. Dictionary attributes whose `Path` values are checked for existence on disk. Optional single-path attributes go in `optional_path_fields`, and semantic checks go in `validators` (`OutputValidator` instances).
 
 ### 3. Build the Input Resolver, `ArtifactBindingRule`, and `InputContract`
 
 In `pilates/workflows/steps/<model>.py`, declare how your step binds upstream artifacts from `scenario.coupler` and pair each step with an `InputContract`:
 
 - Attach `ArtifactBindingRule` entries to `StepDefinition.binding_rules` so the step can adapt when optional upstream stages (like UrbanSim or ATLAS) are enabled or disabled. See [How Input Binding Adapts to Active Models](../workflow/step_contracts.md#how-input-binding-adapts-to-active-models) for concrete multi-candidate binding patterns.
-- Set `ConfigContract.adapter("my_model")` when the step hashes a Consist `ConfigAdapter` directory, or `ConfigContract.payload()` when the step hashes config parameters directly.
+- Set `ConfigContract.adapter("my_model")` when the step hashes a Consist `ConfigAdapter` directory, or `ConfigContract.payload()` when the step hashes config parameters.
 - Start with `status="incomplete"` and a clear `reason` string while scaffolding; promote to `status="complete"` once `resolve_inputs` supplies all artifact bindings and config identity fields required for cache hits and hydration.
 
 ```python
@@ -180,4 +172,4 @@ PRESERVE_TEST_OUTPUT=1 pytest tests/test_golden_stub_workflow.py -v
 PRESERVE_TEST_OUTPUT=/tmp/my_model_debug pytest tests/test_golden_stub_workflow.py -v
 ```
 
-Setting `PRESERVE_TEST_OUTPUT` on a test that uses the `preserve_test_output` fixture (in `tests/conftest.py`) causes pytest to print the destination path at teardown so you can inspect intermediate files and `provenance/provenance.duckdb` records.
+Setting `PRESERVE_TEST_OUTPUT` on a test that uses the `preserve_test_output` fixture (in `tests/conftest.py`) prints the destination path at teardown so you can inspect intermediate files and `.consist/provenance.duckdb` records.

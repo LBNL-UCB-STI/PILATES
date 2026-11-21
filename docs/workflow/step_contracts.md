@@ -1,8 +1,8 @@
 # Step Contracts & Execution
 
-In PILATES, models never hardcode relative paths into another model's output directory. Instead, every step runs through a declarative **step contract** backed by Consist (`consist.ScenarioContext`).
+In PILATES, models bind inputs and outputs through declarative **step contracts** backed by Consist (`consist.ScenarioContext`) instead of hardcoding paths into another model's output directory.
 
-A step contract answers three practical questions before and after a model runs:
+A step contract answers three questions before and after a model runs:
 
 1. **Where do my input files come from?** The step asks for inputs by logical role (such as `plans_beam_in` or `usim_datastore_h5`). PILATES resolves each role from `scenario.coupler` based on which upstream models are enabled and stages the file into the step's working directory.
 2. **Do I need to run, or can I reuse a cached result?** Consist hashes the resolved input artifacts, step parameters, and mutable config files to decide whether to run the step function or restore cached outputs.
@@ -36,7 +36,9 @@ Every step in `pilates/workflows/steps/` combines three pieces: a **`StepDefinit
         resolve_inputs=_resolve_beam_preprocess_inputs,  # (2)!
         project_outputs=_project_beam_preprocess_outputs,  # (3)!
         input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT,
-        output_paths=_beam_preprocess_native_output_paths,
+        outputs=_beam_preprocess_native_output_paths,
+        execution_options=_native_execution_options,
+        cache_options=_beam_preprocess_output_cache,
         binding_rules=(
             ArtifactBindingRule(
                 semantic_key="plans_beam_in",
@@ -67,7 +69,7 @@ Every step in `pilates/workflows/steps/` combines three pieces: a **`StepDefinit
     2. Inspects `scenario.coupler` and returns a frozen `ResolvedStepInputs` snapshot before the step starts.
     3. Converts Consist's persisted `RunResult.outputs` into a validated `BeamPreprocessOutputs` dataclass.
     4. Ordered fallback candidates: prefers ActivitySim's `beam_plans_asim_out` when ActivitySim is enabled, or falls back to initial coupler-seeded `plans_beam_in` in traffic-assignment-only runs.
-    5. Optional upstream handoff: bound when ATLAS (`vehicle_ownership`) is enabled, and cleanly omitted when ATLAS is disabled.
+    5. Optional upstream handoff: bound when ATLAS (`vehicle_ownership`) is enabled, and omitted when ATLAS is disabled.
 
 === "2. Run the Step Body (`@define_step`)"
 
@@ -143,29 +145,16 @@ Every step in `pilates/workflows/steps/` combines three pieces: a **`StepDefinit
     ```python
     @dataclass
     class BeamPreprocessOutputs(StepOutputsBase):
-        primary_output_attr: ClassVar[str] = "beam_mutable_data_dir"
-        declared_outputs: ClassVar[Tuple[str, ...]] = (  # (1)!
-            "plans_beam_in",
-            "households_beam_in",
-            "persons_beam_in",
-            "linkstats_warmstart",
-            "vehicles_beam_in",
-        )
-        required_outputs: ClassVar[Tuple[str, ...]] = (  # (2)!
-            "plans_beam_in",
-            "households_beam_in",
-            "persons_beam_in",
-        )
-        required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)
-        dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)  # (3)!
+        required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)  # (1)!
+        dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)  # (2)!
 
         beam_mutable_data_dir: Path
         prepared_inputs: Dict[str, Path] = field(default_factory=dict)
+        prepared_input_metadata: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     ```
 
-    1. Canonical output keys published to `scenario.coupler` for downstream steps (`beam_run`).
-    2. Outputs that must be present on every run. `vehicles_beam_in` and `linkstats_warmstart` are optional because they depend on whether ATLAS or warmstart linkstats are active.
-    3. `StepOutputsBase.validate()` verifies that `beam_mutable_data_dir` and every `Path` inside `prepared_inputs` exist on disk before returning control to the stage runner.
+    1. Path fields checked on disk by `StepOutputsBase.validate()` before returning control to the stage runner.
+    2. Dictionary of prepared input paths (`plans_beam_in`, `households_beam_in`, `persons_beam_in`, and optional `linkstats_warmstart` / `vehicles_beam_in`) published to `scenario.coupler` and checked on disk.
 
 ---
 
@@ -230,7 +219,7 @@ Because PILATES supports modular workflows (for example, running ActivitySim + B
     2. Resolves the base-year HDF5 datastore when running in travel-model-only mode (`land_use: null`).
     3. Resolves the post-ATLAS population snapshot (`usim_population_source_h5`) when ATLAS modified household vehicles earlier in the year.
 
-If a required role has no matching key in `scenario.coupler` and no permitted fallback, `resolved_inputs.require_complete()` fails immediately—before launching any container—and reports the step name, missing role, and candidate keys checked.
+If a required role has no matching key in `scenario.coupler` and no permitted fallback, `resolved_inputs.require_complete()` fails before launching any container and reports the step name, missing role, and candidate keys checked.
 
 ---
 
@@ -277,8 +266,8 @@ Once Consist compares the step signature (inputs + `config` + `identity_inputs` 
     When `scenario.cache_mode == "reuse"` and the input/config digests match a prior completed run:
 
     1. **Skip step function**: Consist does **not** invoke `definition.function` or launch the model container.
-    2. **Hydrate outputs to workspace**: Consist restores the cached output files directly into the step's requested workspace destination paths (`cache_hydration="outputs-requested"`), and optionally mirrors them via `RunCompletionArchivePolicy` when `enable_archive_copy` is enabled.
-       - *Safety fallback*: If an archived file from the prior run is missing or unreadable on disk, `cache_hydration_failure="miss"` automatically falls back to a fresh execution.
+    2. **Hydrate outputs to workspace**: Consist restores the cached output files into the step's requested workspace destination paths (`cache_hydration="outputs-requested"`), and optionally mirrors them via `RunCompletionArchivePolicy` when `enable_archive_copy` is enabled.
+       - *Safety fallback*: If an archived file from the prior run is missing or unreadable on disk, `cache_hydration_failure="miss"` falls back to a fresh execution.
     3. **Publish to coupler**: `execute_step()` updates `scenario.coupler` with the hydrated artifacts just like a fresh run.
     4. **Project & validate**: `definition.project_outputs()` constructs and validates the exact same `StepOutputsBase` dataclass.
 
@@ -302,8 +291,11 @@ When adding or debugging a workflow step, you will primarily interact with four 
     | `resolve_inputs` | `Callable[..., ResolvedStepInputs]` | Resolves coupler artifacts and workspace destinations before execution. |
     | `project_outputs` | `TypedOutputProjector[OutputT]` | Builds and validates the step's `StepOutputsBase` dataclass from `RunResult.outputs`. |
     | `input_contract` | `InputContract` | Declares cache-eligibility status (`complete` or `incomplete`) and `ConfigContract` mode. |
-    | `output_paths` | `Callable[..., Mapping[str, Any]] \| None` | Maps canonical output keys to expected workspace file paths. |
+    | `outputs` | `Callable[..., Mapping[str, Any]] \| None` | Maps canonical output keys to expected workspace file paths (preferred over `output_paths`). |
+    | `output_paths` | `Callable[..., Mapping[str, Any]] \| None` | Legacy output path mapping (mutually exclusive with `outputs`). |
     | `output_sets` | `Callable[..., Mapping[str, OutputSet]] \| None` | Declares multi-file directory output sets (such as ATLAS `.RData` continuation files). |
+    | `execution_options` | `Callable[..., ExecutionOptions] \| None` | Optional callback returning Consist `ExecutionOptions` for step execution. |
+    | `cache_options` | `Callable[..., CacheOptions] \| None` | Optional callback returning Consist `CacheOptions` for step caching. |
     | `binding_rules` | `tuple[ArtifactBindingRule, ...]` | Step-owned rules mapping semantic roles to candidate coupler keys. |
     | `optional_output_keys` | `tuple[str, ...]` | Output keys that may be omitted when optional model features are inactive. |
     | `preflight_identity` | `bool` | When `True`, resolves `StepIdentity` before calling `resolve_inputs`. |

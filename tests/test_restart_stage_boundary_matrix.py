@@ -4,6 +4,7 @@ Whole-stage and whole-year execution are exercised through the native golden
 workflow.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -66,7 +67,6 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         state=SimpleNamespace(
             is_restart_run=False,
             sub_stage_progress=None,
-            run_info_path=None,
             archive_run_dir=None,
             set_sub_stage_progress=lambda _: None,
         ),
@@ -94,9 +94,6 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         return run_inputs
 
     monkeypatch.setattr(
-        beam_stage, "_compile_beam_launch_config", lambda **_: launch_config
-    )
-    monkeypatch.setattr(
         beam_stage, "beam_run", SimpleNamespace(resolve_inputs=resolve_run_inputs)
     )
     monkeypatch.setattr(
@@ -117,7 +114,7 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
     )
 
     assert observed["resolved"] is run_inputs
-    assert observed["runtime"] == {"beam_launch_config": launch_config}
+    assert observed["runtime"] is None
 
 
 def test_native_archive_is_called_with_verify_before_canary_failpoint(
@@ -172,7 +169,6 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
         state=SimpleNamespace(
             is_restart_run=False,
             sub_stage_progress=None,
-            run_info_path=None,
             archive_run_dir=str(archive_root),
             set_sub_stage_progress=lambda _: None,
         ),
@@ -189,13 +185,6 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
 
     monkeypatch.setattr(
         beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_kwargs: SimpleNamespace(
-            root=tmp_path / "launch", primary_config=tmp_path / "launch" / "beam.conf"
-        ),
-    )
-    monkeypatch.setattr(
-        beam_stage,
         "beam_preprocess",
         replace(
             beam_stage.beam_preprocess,
@@ -203,6 +192,7 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
                 "beam_preprocess", BindingResult(inputs={})
             ),
             project_outputs=lambda *_args, **_kwargs: SimpleNamespace(),
+            outputs=None,
             output_paths=None,
             output_sets=None,
             execution_options=None,
@@ -282,7 +272,7 @@ def test_run_completion_archive_handles_nested_scalar_and_enclosing_directory_ar
         ),
     )
 
-    expected_roots = {str(workspace_root.resolve()), str(recovery_root.resolve())}
+    expected_roots = {str(recovery_root.resolve())}
     for key, expected_path in (
         ("beam_skims_raw", raw_skim),
         ("final_skims_omx", final_omx),
@@ -291,7 +281,18 @@ def test_run_completion_archive_handles_nested_scalar_and_enclosing_directory_ar
     ):
         art = run_result.outputs[key]
         assert Path(art.abs_path).resolve() == expected_path.resolve()
-        roots = {str(Path(r).resolve()) for r in (art.meta.get("recovery_roots") or [])}
+        roots = {
+            str(Path(r).resolve())
+            for r in (
+                art.recovery_roots
+                or (
+                    art.meta.get("recovery_roots")
+                    if isinstance(art.meta, Mapping)
+                    else []
+                )
+                or []
+            )
+        }
         assert expected_roots.issubset(roots)
     assert (
         recovery_root
@@ -325,7 +326,6 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
         state=SimpleNamespace(
             is_restart_run=True,
             sub_stage_progress="postprocessor",
-            run_info_path=None,
             archive_run_dir=None,
             set_sub_stage_progress=lambda _: None,
         ),
@@ -346,11 +346,6 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
             return SimpleNamespace(), SimpleNamespace()
         pytest.fail(f"unexpected phase {phase}")
 
-    monkeypatch.setattr(
-        beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_: SimpleNamespace(root=launch_root, primary_config=launch_primary),
-    )
     monkeypatch.setattr(
         beam_stage,
         "beam_run",

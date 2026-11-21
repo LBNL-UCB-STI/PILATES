@@ -16,16 +16,19 @@ from pathlib import Path
 import re
 import shutil
 from types import MappingProxyType
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Protocol, runtime_checkable
 
 import consist as cr
 from consist import (
     Artifact,
+    ArtifactLike,
     BindingResult,
     CacheOptions,
     ExecutionOptions,
     define_step,
 )
+
+from pilates.utils.archive_paths import resolve_archive_run_dir
 
 from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
@@ -60,6 +63,7 @@ from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.beam.preprocessor import ensure_beam_mutable_workspace
 from pilates.beam.runner import BeamRunner
 from pilates.beam.skim_provenance import (
+    normalize_logical_matrices_identity,
     skim_provenance_sidecar_path,
     write_skim_provenance_sidecar,
 )
@@ -180,7 +184,10 @@ def _linkstats_warmstart_suffix(
 def _beam_population_input_suffix(settings: Any) -> str:
     """Return the suffix written by the ActivitySim-to-BEAM staging step."""
 
-    activitysim = settings.activitysim
+    try:
+        activitysim = settings.activitysim
+    except AttributeError:
+        activitysim = None
     file_format = activitysim.file_format if activitysim is not None else "csv"
     if file_format == "parquet":
         return ".parquet"
@@ -244,6 +251,27 @@ def _beam_preprocess_native_output_paths(
     }
 
 
+@runtime_checkable
+class _HasEffectiveSupplyDemandIterations(Protocol):
+    def effective_supply_demand_iterations(
+        self, *, resumed_iteration: int | None = None
+    ) -> int: ...
+
+
+def _is_final_beam_iteration(*, settings: Any, state: Any, iteration: int) -> bool:
+    if isinstance(state, _HasEffectiveSupplyDemandIterations):
+        total = state.effective_supply_demand_iterations(resumed_iteration=iteration)
+    else:
+        run_cfg = settings.run if hasattr(settings, "run") else None
+        raw_total = (
+            run_cfg.supply_demand_iters
+            if run_cfg is not None and hasattr(run_cfg, "supply_demand_iters")
+            else 1
+        )
+        total = int(raw_total) if raw_total is not None else 1
+    return iteration >= total - 1
+
+
 def _beam_run_native_output_paths(
     *,
     settings: Any,
@@ -256,14 +284,15 @@ def _beam_run_native_output_paths(
     if year is None:
         raise RuntimeError("beam_run requires a resolved forecast year.")
     iteration = int(state.iteration)
+    is_final = _is_final_beam_iteration(
+        settings=settings, state=state, iteration=iteration
+    )
     keys_and_suffixes = {
-        # BEAM emits either compressed CSV or Parquet linkstats.  Keep the
-        # durable semantic artifact format-neutral; the launch compiler names
-        # its staged copy from the actual bytes before BEAM selects a reader.
         LINKSTATS: "",
         BEAM_PLANS_OUT: ".csv.gz",
-        f"events_parquet_{year}_{iteration}": ".parquet",
     }
+    if is_final:
+        keys_and_suffixes[f"events_parquet_{year}_{iteration}"] = ".parquet"
     if settings.beam.artifact_formats.activitysim_skims != "zarr":
         keys_and_suffixes[f"raw_od_skims_{year}_{iteration}"] = ".omx"
     root = _beam_run_output_root(settings=settings, state=state, workspace=workspace)
@@ -374,6 +403,7 @@ def _materialize_native_outputs(
             )
         resolved = source.resolve()
         if resolved == destination.resolve():
+            destination.touch()
             copy_linkstats_provenance_sidecar(
                 resolved, destination, fallback_source_path=source
             )
@@ -472,7 +502,9 @@ def _project_beam_preprocess_outputs(
     )
     prepared = {}
     for key in (
-        *BeamPreprocessOutputs.required_output_keys(),
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
         "vehicles_beam_in",
         LINKSTATS_WARMSTART,
     ):
@@ -490,14 +522,27 @@ def _project_beam_preprocess_outputs(
             and declared_outputs[key].exists()
         ):
             prepared[key] = declared_outputs[key]
+        elif key == "vehicles_beam_in":
+            root = Path(workspace.get_beam_mutable_data_dir())
+            dest = _native_output_destination(
+                root=root,
+                step_name="beam_preprocess",
+                key="vehicles_beam_in",
+                suffix=".csv",
+            )
+            if dest.exists():
+                prepared[key] = dest
 
+    sidecar_payload: dict[str, Any] | None = None
     if LINKSTATS_WARMSTART in prepared:
         prepared_linkstats = prepared[LINKSTATS_WARMSTART]
         sidecar_path = linkstats_provenance_sidecar_path(prepared_linkstats)
         artifact = outputs.get(LINKSTATS_WARMSTART)
-        try:
-            meta = artifact.meta if artifact is not None else None
-        except AttributeError:
+        if isinstance(artifact, Artifact):
+            meta = artifact.meta_dict()
+        elif isinstance(artifact, ArtifactLike):
+            meta = dict(artifact.meta) if isinstance(artifact.meta, Mapping) else None
+        else:
             meta = None
         cached_prov = (
             meta.get("linkstats_provenance") if isinstance(meta, Mapping) else None
@@ -520,48 +565,42 @@ def _project_beam_preprocess_outputs(
                 if source_path:
                     copy_linkstats_provenance_sidecar(source_path, prepared_linkstats)
 
-            if sidecar_path.is_file() and isinstance(artifact, Artifact):
+            if sidecar_path.is_file():
                 try:
-                    payload = read_linkstats_provenance_sidecar(sidecar_path)
+                    sidecar_payload = read_linkstats_provenance_sidecar(sidecar_path)
                 except Exception as exc:
                     logger.debug(
                         "Unable to read linkstats provenance sidecar from %s: %s",
                         sidecar_path,
                         exc,
                     )
-                    payload = None
-                if payload is not None:
-                    current_meta = (
-                        dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
-                    )
-                    if current_meta.get("linkstats_provenance") != payload:
-                        current_meta["linkstats_provenance"] = payload
-                        artifact.meta = current_meta
+                    sidecar_payload = None
 
     prepared_metadata: dict[str, dict[str, Any]] = {}
     if LINKSTATS_WARMSTART in prepared:
         linkstats_artifact = outputs.get(LINKSTATS_WARMSTART)
-        meta = (
-            linkstats_artifact.meta
-            if isinstance(linkstats_artifact, Artifact)
-            else get_setting(linkstats_artifact, "meta")
-        )
+        if isinstance(linkstats_artifact, Artifact):
+            meta = linkstats_artifact.meta
+        elif isinstance(linkstats_artifact, ArtifactLike):
+            meta = linkstats_artifact.meta
+        else:
+            meta = None
         if isinstance(meta, Mapping) and "linkstats_provenance" in meta:
+            prov = meta["linkstats_provenance"]
             prepared_metadata[LINKSTATS_WARMSTART] = {
-                "linkstats_provenance": meta["linkstats_provenance"]
+                "linkstats_provenance": dict(prov)
+                if isinstance(prov, Mapping)
+                else prov
+            }
+        elif sidecar_payload is not None:
+            prepared_metadata[LINKSTATS_WARMSTART] = {
+                "linkstats_provenance": sidecar_payload
             }
 
     projected = BeamPreprocessOutputs(
         beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
         prepared_inputs=prepared,
         prepared_input_metadata=prepared_metadata,
-    )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_preprocess",
-        settings=settings,
-        state=state,
-        workspace=workspace,
     )
     return projected
 
@@ -594,19 +633,10 @@ def _project_beam_run_outputs(
                     f"beam_run direct Zarr output {key!r} could not be materialized."
                 )
             resolved_path = Path(path)
-            if isinstance(output, Artifact):
-                output.abs_path = str(resolved_path)
             raw_outputs[key] = resolved_path
     projected = BeamRunOutputs(
         beam_output_dir=Path(workspace.get_beam_output_dir()),
         raw_outputs=raw_outputs,
-    )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_run",
-        settings=settings,
-        state=state,
-        workspace=workspace,
     )
     return projected
 
@@ -667,6 +697,14 @@ def _emit_skim_provenance_sidecars(
             identity = payload.get("identity")
             if isinstance(identity, str) and identity.startswith("sha256:file:"):
                 meta_updates["admission_file_identity"] = identity
+            logical_val = payload.get("skim_metadata", {}).get(
+                "logical_matrices_sha256"
+            ) or payload.get("logical_matrices_sha256")
+            if isinstance(logical_val, str) and logical_val.strip():
+                norm_logical = normalize_logical_matrices_identity(logical_val)
+                if norm_logical:
+                    meta_updates["logical_identity"] = norm_logical
+                    meta_updates["logical_profile"] = "float32_matrices_v1"
             cr.set_output_meta(key, meta_updates, merge=True)
             if (
                 source_path is not None
@@ -774,13 +812,6 @@ def _project_beam_postprocess_outputs(
             if key in declared_outputs and key.startswith("path_traversal_links_")
         },
     )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_postprocess",
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
     return projected
 
 
@@ -816,21 +847,23 @@ def _project_beam_full_skim_outputs(
             else None
         ),
     )
-    _validate_native_outputs(
-        projected,
-        step_name="beam_full_skim",
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
     return projected
+
+
+@runtime_checkable
+class _HasFullPath(Protocol):
+    full_path: str | Path
 
 
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
     if key in {ZARR_SKIMS, LINKSTATS_WARMSTART}:
         existing = artifact_to_existing_path(source, workspace=workspace)
         if existing is not None:
-            return Path(existing)
+            existing_path = Path(existing).resolve()
+            if not isinstance(workspace, _HasFullPath) or existing_path.is_relative_to(
+                Path(workspace.full_path).resolve()
+            ):
+                return existing_path
     source_path = artifact_to_path(source, workspace=workspace)
     if key == ATLAS_VEHICLES2_OUTPUT:
         source_name = Path(source_path).name if source_path is not None else ""
@@ -891,6 +924,33 @@ def _resolved_beam_inputs(
     )
 
 
+def _beam_run_identity_payload(*, settings: Any) -> dict[str, Any]:
+    from pilates.beam.launch_config import compute_beam_launch_overrides
+    from pilates.beam.config_hocon import (
+        beam_config_env_overrides,
+        load_resolved_beam_config_tree,
+    )
+    from pathlib import Path
+
+    source_root = Path(settings.beam.local_input_folder) / settings.run.region
+    source_primary = source_root / settings.beam.config
+
+    if not source_primary.is_file():
+        return {}
+
+    env_overrides = beam_config_env_overrides(settings, config_root=source_root)
+    config_tree = load_resolved_beam_config_tree(
+        source_primary, env_overrides=env_overrides
+    )
+    overrides, _, _, _ = compute_beam_launch_overrides(
+        settings=settings,
+        config_tree=config_tree,
+        env_overrides=env_overrides,
+        source_root=source_root,
+    )
+    return overrides
+
+
 def _native_execution_options(
     *,
     settings: Any,
@@ -910,6 +970,11 @@ def _native_execution_options(
                 resolved_inputs=resolved_inputs,
             )
         )
+    if resolved_inputs.step_name in ("beam_run", "beam_full_skim"):
+        runtime_kwargs["beam_run_identity_closure"] = _beam_run_identity_payload(
+            settings=settings
+        )
+
     if "beam_postprocess_dynamic_paths" in resolved_inputs.metadata:
         runtime_kwargs["beam_run_dynamic_paths"] = dict(
             resolved_inputs.metadata["beam_postprocess_dynamic_paths"]
@@ -946,8 +1011,8 @@ def _strict_requested_output_cache(
 ) -> CacheOptions:
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
+        validate_cached_outputs="lazy",
+        cache_hydration="metadata",
     )
 
 
@@ -958,9 +1023,8 @@ def _beam_run_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
-        validate_cached_outputs="eager",
+        validate_cached_outputs="lazy",
+        cache_hydration="metadata",
         cache_version=1,
     )
 
@@ -972,8 +1036,8 @@ def _beam_postprocess_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
+        validate_cached_outputs="lazy",
+        cache_hydration="metadata",
         cache_version=1,
     )
 
@@ -985,8 +1049,8 @@ def _beam_preprocess_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
+        validate_cached_outputs="lazy",
+        cache_hydration="metadata",
         cache_version=3,
     )
 
@@ -1147,6 +1211,7 @@ def _resolve_beam_preprocess_inputs(
                     )
                     or (
                         key == "vehicles_beam_in"
+                        and current_iter == 0
                         and ATLAS_VEHICLES2_OUTPUT in (resolved.binding.inputs or {})
                     )
                 )
@@ -1173,7 +1238,7 @@ def _resolve_beam_run_inputs(
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
-        optional_roles=(LINKSTATS_WARMSTART, ZARR_SKIMS),
+        optional_roles=(LINKSTATS_WARMSTART,),
     )
 
 
@@ -1372,8 +1437,16 @@ def _resolve_beam_postprocess_inputs(
     zarr_artifact = coupler_storage_value(coupler, ZARR_SKIMS)
     if _activitysim_skims_target_enabled(settings) and zarr_artifact is not None:
         zarr_existing = artifact_to_existing_path(zarr_artifact, workspace=workspace)
-        if zarr_existing is not None:
-            destinations[ZARR_SKIMS] = Path(zarr_existing)
+        zarr_existing_in_workspace = (
+            Path(zarr_existing).resolve()
+            if zarr_existing is not None
+            and Path(zarr_existing)
+            .resolve()
+            .is_relative_to(Path(workspace.full_path).resolve())
+            else None
+        )
+        if zarr_existing_in_workspace is not None:
+            destinations[ZARR_SKIMS] = zarr_existing_in_workspace
         else:
             destinations[ZARR_SKIMS] = (
                 Path(workspace.get_beam_output_dir())
@@ -1499,6 +1572,8 @@ _BEAM_FULL_SKIM_INPUT_CONTRACT = InputContract(
 @define_step(
     model="beam_preprocess",
     name_template="beam_preprocess__y{year}__i{iteration}__phase_{phase}",
+    cache_hydration="metadata",
+    validate_cached_outputs="lazy",
     inputs={
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
@@ -1512,7 +1587,7 @@ _BEAM_FULL_SKIM_INPUT_CONTRACT = InputContract(
         LINKSTATS_WARMSTART,
         "vehicles_beam_in",
     ],
-    output_paths=_native_contract_output_paths(_beam_preprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_beam_preprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "beam_preprocess", input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT
@@ -1617,13 +1692,23 @@ def _preflight_beam_launch_inputs(
     workspace: Workspace,
     beam_launch_config: BeamLaunchConfig,
     run_context: Any,
+    expected_warmstart_path: Path | None = None,
 ) -> None:
-    launch_reference = validate_staged_linkstats_reference(
-        settings=settings,
-        workspace=workspace,
-        run_context=run_context,
-        config_root=beam_launch_config.root,
+    report_dir_path = (
+        workspace.archive_run_dir
+        if workspace.archive_run_dir is not None
+        else workspace.full_path
     )
+
+    validate_kwargs: dict[str, Any] = {
+        "settings": settings,
+        "workspace": workspace,
+        "run_context": run_context,
+        "config_root": beam_launch_config.root,
+    }
+    if expected_warmstart_path is not None:
+        validate_kwargs["expected_warmstart_path"] = expected_warmstart_path
+    launch_reference = validate_staged_linkstats_reference(**validate_kwargs)
     if launch_reference is None:
         if not requires_prior_beam_linkstats_handoff(settings=settings, state=state):
             reject_or_warn_for_missing_staged_linkstats(settings=settings)
@@ -1649,7 +1734,7 @@ def _preflight_beam_launch_inputs(
             existing_admission_reports=existing_admission_reports,
             settings=settings,
             launch_reference=launch_reference,
-            report_dir=Path(state.run_info_path).parent,
+            report_dir=Path(report_dir_path),
         )
     validate_r5_execution_reference(
         settings=settings,
@@ -1659,16 +1744,110 @@ def _preflight_beam_launch_inputs(
     )
 
 
+def _compile_beam_launch_config(
+    *,
+    identity: Any,
+    settings: Any,
+    workspace: Any,
+    year: int,
+    iteration: int,
+    prepared_inputs: dict[str, Path],
+    archive_run_dir: str | Path | None = None,
+) -> BeamLaunchConfig:
+    import shutil
+    from pilates.beam.preprocessor import (
+        _prepare_beam_zone_shapefile,
+        ensure_beam_mutable_workspace,
+    )
+    from pilates.beam.config_hocon import beam_config_root
+    from pilates.beam.launch_config import build_beam_launch_config
+    from pilates.beam.launch_paths import prepare_r5_raw_rebuild
+    from pilates.utils.settings_helper import get as get_setting
+
+    ensure_beam_mutable_workspace(settings, workspace)
+    source_root = beam_config_root(settings, workspace=workspace)
+    if (
+        get_setting(settings, "shared.geography.zones") is not None
+        and not (source_root / "shape" / "canonical_zones_sorted.geojson").exists()
+    ):
+        _prepare_beam_zone_shapefile(workspace, settings)
+    output_dir = (
+        Path(workspace.full_path)
+        / ".pilates-beam-launch-config"
+        / f"y{year}"
+        / f"i{iteration}"
+    )
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=output_dir,
+        identity=identity,
+        prepared_inputs=prepared_inputs,
+    )
+    prepare_r5_raw_rebuild(
+        settings=settings,
+        workspace=workspace,
+        config_root=launch_config.root,
+    )
+    if archive_run_dir is not None:
+        _archive_beam_launch_config(
+            launch_config.root,
+            year=year,
+            iteration=iteration,
+            targets=[Path(archive_run_dir)],
+        )
+    return launch_config
+
+
+def _archive_beam_launch_config(
+    launch_config_dir: Path,
+    *,
+    year: int,
+    iteration: int,
+    targets: list[Path],
+) -> None:
+    import shutil
+    import logging
+
+    logger = logging.getLogger(__name__)
+    if not launch_config_dir.exists():
+        return
+    launch_config_resolved = launch_config_dir.resolve()
+    for target in targets:
+        if target is None:
+            continue
+        dest_root = Path(target).expanduser().resolve()
+        dest_dir = (
+            dest_root / ".pilates-beam-launch-config" / f"y{year}" / f"i{iteration}"
+        )
+        if dest_dir.resolve() == launch_config_resolved:
+            continue
+        dest_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            launch_config_dir,
+            dest_dir,
+            dirs_exist_ok=True,
+            ignore_dangling_symlinks=True,
+        )
+        logger.debug(
+            "[beam] archived launch config to %s",
+            dest_dir,
+        )
+
+
 @define_step(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
-    cache_hydration="outputs-requested",
+    cache_hydration="metadata",
+    validate_cached_outputs="lazy",
     inputs={
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
     },
-    optional_input_keys=(LINKSTATS_WARMSTART, ZARR_SKIMS),
+    optional_input_keys=(LINKSTATS_WARMSTART,),
     schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
@@ -1679,14 +1858,34 @@ def _native_beam_run(
     households_beam_in: Path,
     persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
-    zarr_skims: Path | None = None,
     *,
     settings: Any,
     state: Any,
     workspace: Workspace,
-    beam_launch_config: BeamLaunchConfig,
+    beam_launch_config: BeamLaunchConfig | None = None,
+    beam_run_identity_closure: Any = None,
     _consist_ctx: Any,
 ) -> None:
+    prepared: dict[str, Path] = {
+        BEAM_PLANS_IN: plans_beam_in,
+        BEAM_HOUSEHOLDS_IN: households_beam_in,
+        BEAM_PERSONS_IN: persons_beam_in,
+    }
+    if linkstats_warmstart is not None:
+        prepared[LINKSTATS_WARMSTART] = linkstats_warmstart
+    if beam_launch_config is None:
+        year = resolve_forecast_year(state) or int(state.year)
+        iteration = int(state.iteration)
+        tracker = cr.current_tracker()
+        beam_launch_config = _compile_beam_launch_config(
+            identity=tracker.identity,
+            settings=settings,
+            workspace=workspace,
+            year=year,
+            iteration=iteration,
+            prepared_inputs=prepared,
+            archive_run_dir=resolve_archive_run_dir(workspace=workspace, state=state),
+        )
     if not beam_launch_config.primary_config.exists():
         raise FileNotFoundError(
             f"beam_run config is missing: {beam_launch_config.primary_config}"
@@ -1697,14 +1896,8 @@ def _native_beam_run(
         workspace=workspace,
         beam_launch_config=beam_launch_config,
         run_context=_consist_ctx,
+        expected_warmstart_path=prepared.get(LINKSTATS_WARMSTART),
     )
-    prepared = {
-        BEAM_PLANS_IN: plans_beam_in,
-        BEAM_HOUSEHOLDS_IN: households_beam_in,
-        BEAM_PERSONS_IN: persons_beam_in,
-    }
-    if linkstats_warmstart is not None:
-        prepared[LINKSTATS_WARMSTART] = linkstats_warmstart
     produced = BeamRunner("beam_run", state).run(
         BeamPreprocessOutputs(
             beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
@@ -1712,7 +1905,6 @@ def _native_beam_run(
         ),
         workspace,
         launch_config=beam_launch_config,
-        extra_inputs={ZARR_SKIMS: zarr_skims} if zarr_skims is not None else None,
     )
     _validate_native_outputs(
         produced,
@@ -1739,7 +1931,8 @@ def _native_beam_run(
 @define_step(
     model="beam_postprocess",
     name_template="beam_postprocess__y{year}__i{iteration}__phase_{phase}",
-    cache_hydration="outputs-requested",
+    cache_hydration="metadata",
+    validate_cached_outputs="lazy",
     optional_input_keys=(ZARR_SKIMS,),
     schema_outputs=[ZARR_SKIMS, "final_skims_omx"],
     output_paths=_native_contract_output_paths(_beam_postprocess_native_output_paths),
@@ -1825,6 +2018,8 @@ def _native_beam_postprocess(
 @define_step(
     model="beam_full_skim",
     name_template="beam_full_skim__y{year}__i{iteration}__phase_{phase}",
+    cache_hydration="metadata",
+    validate_cached_outputs="lazy",
     inputs={},
     optional_input_keys=(
         BEAM_PLANS_IN,
@@ -1834,7 +2029,7 @@ def _native_beam_postprocess(
         LINKSTATS,
     ),
     schema_outputs=[BEAM_FULL_SKIMS, FINAL_SKIMS_OMX],
-    output_paths=_native_contract_output_paths(_beam_full_skim_native_output_paths),
+    outputs=_native_contract_output_paths(_beam_full_skim_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "beam_full_skim", input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT
@@ -1850,20 +2045,10 @@ def _native_beam_full_skim(
     settings: Any,
     state: Any,
     workspace: Workspace,
-    beam_launch_config: BeamLaunchConfig,
+    beam_launch_config: BeamLaunchConfig | None = None,
+    beam_run_identity_closure: Any = None,
     _consist_ctx: Any,
 ) -> None:
-    if not beam_launch_config.primary_config.exists():
-        raise FileNotFoundError(
-            f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
-        )
-    _preflight_beam_launch_inputs(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        beam_launch_config=beam_launch_config,
-        run_context=_consist_ctx,
-    )
     prepared: dict[str, Path] = {}
     if plans_beam_in is not None:
         prepared[BEAM_PLANS_IN] = plans_beam_in
@@ -1875,6 +2060,28 @@ def _native_beam_full_skim(
         prepared[LINKSTATS_WARMSTART] = linkstats_warmstart
     elif linkstats is not None:
         prepared[LINKSTATS_WARMSTART] = linkstats
+    if beam_launch_config is None:
+        beam_launch_config = _compile_beam_launch_config(
+            identity=_consist_ctx.identity,
+            settings=settings,
+            workspace=workspace,
+            year=state.year,
+            iteration=state.iteration,
+            prepared_inputs=prepared,
+            archive_run_dir=resolve_archive_run_dir(workspace=workspace, state=state),
+        )
+    if not beam_launch_config.primary_config.exists():
+        raise FileNotFoundError(
+            f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
+        )
+    _preflight_beam_launch_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=beam_launch_config,
+        run_context=_consist_ctx,
+        expected_warmstart_path=prepared.get(LINKSTATS_WARMSTART),
+    )
     from pilates.beam.runner import BeamFullSkimRunner
 
     produced = BeamFullSkimRunner("beam_full_skim", state).run(
@@ -1976,7 +2183,7 @@ beam_preprocess = StepDefinition(
     resolve_inputs=_resolve_beam_preprocess_inputs,
     project_outputs=_project_beam_preprocess_outputs,
     input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT,
-    output_paths=_beam_preprocess_native_output_paths,
+    outputs=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_beam_preprocess_output_cache,
     binding_rules=(
@@ -2041,7 +2248,7 @@ beam_full_skim = StepDefinition(
     resolve_inputs=_resolve_beam_full_skim_inputs,
     project_outputs=_project_beam_full_skim_outputs,
     input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT,
-    output_paths=_beam_full_skim_native_output_paths,
+    outputs=_beam_full_skim_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache,
     optional_output_keys=(FINAL_SKIMS_OMX,),

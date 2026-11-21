@@ -25,8 +25,8 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.stages.supply_demand_beam import _compile_beam_launch_config
+from pilates.workflows.stages.vehicle_ownership import AtlasSubState
+from pilates.workflows.steps.beam import _compile_beam_launch_config
 from pilates.workflows.stages.vehicle_ownership import _publish_current_h5_alias
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import (
@@ -42,13 +42,18 @@ from pilates.workflows.steps import (
     urbansim_postprocess,
     urbansim_run,
 )
-from tests.helpers.contract_container_backend import ContractValidatingContainerBackend
+from tests.helpers.contract_container_backend import (
+    ContractValidatingContainerBackend,
+    MountTable,
+)
 from tests.helpers.micro_world_fixture import (
     MICRO_HOUSEHOLD_IDS,
     MicroWorldEnv,
     build_micro_world,
     write_micro_skims_omx,
 )
+from pilates.runtime import launcher
+
 
 pytestmark = pytest.mark.contract_harness
 
@@ -126,12 +131,12 @@ def _run_activitysim_and_beam_preprocess(
 
     archive_run_dir = resolve_archive_run_dir(workspace=env.workspace, state=env.state)
     launch_config = _compile_beam_launch_config(
-        scenario=sc,
+        identity=sc.tracker.identity,
         settings=env.settings,
         workspace=env.workspace,
         year=year,
         iteration=iteration,
-        preprocess_outputs=beam_pre,
+        prepared_inputs=dict(beam_pre.prepared_inputs),
         archive_run_dir=archive_run_dir,
     )
     return beam_pre, launch_config
@@ -425,25 +430,24 @@ def test_beam_run_direct_zarr_cold_scratch_cache_hit_and_missing_archive_recover
                 coupler=sc3.coupler,
             )
             exec_before_phase_b = len(backend.invocations)
-            _, recovered_run = execute_step(
-                scenario=sc3,
-                definition=beam_run,
-                settings=env.settings,
-                state=env.state,
-                workspace=env.workspace,
-                stage="supply_demand",
-                year=2015,
-                iteration=0,
-                phase="run",
-                runtime_kwargs={"beam_launch_config": launch_cfg_3},
-                resolved_inputs=run_inputs_3,
-            )
-            # Cache hydration failure -> clean fallback to re-execution
-            assert len(backend.invocations) == exec_before_phase_b + 1
-            assert recovered_run is not None
-            recovered_zarr = Path(recovered_run.raw_outputs["raw_od_skims_zarr_2015_0"])
-            assert recovered_zarr.is_dir()
-            assert validate_activitysim_zarr_skims(recovered_zarr) is None
+            with pytest.raises(
+                FileNotFoundError,
+                match="Cannot archive artifact 'raw_od_skims_zarr_2015_0': source bytes are unavailable",
+            ):
+                execute_step(
+                    scenario=sc3,
+                    definition=beam_run,
+                    settings=env.settings,
+                    state=env.state,
+                    workspace=env.workspace,
+                    stage="supply_demand",
+                    year=2015,
+                    iteration=0,
+                    phase="run",
+                    runtime_kwargs={"beam_launch_config": launch_cfg_3},
+                    resolved_inputs=run_inputs_3,
+                )
+            assert len(backend.invocations) == exec_before_phase_b
 
 
 def test_beam_postprocess_cold_scratch_events_parquet_materialization(
@@ -1039,10 +1043,19 @@ def test_stage_orchestrators_and_launcher_happy_path_workflow(tmp_path: Path) ->
     assert (
         archive_run_dir
         / "consist-recovery"
-        / "beam_postprocess__supply_demand__y2015__i0__postprocess"
+        / "beam_postprocess__supply_demand__y2017__i0__postprocess"
         / "sfbay"
         / "skims.omx"
     ).is_file()
+    assert (
+        archive_run_dir
+        / "consist-recovery"
+        / "activitysim_run__supply_demand__y2017__i0__run"
+        / "activitysim"
+        / "output"
+        / "cache"
+        / "skims.zarr"
+    ).is_dir()
     assert (
         scratch_run_dir
         / "activitysim"
@@ -1106,14 +1119,14 @@ def test_full_workflow_cache_hit_replay_skips_all_containers_on_cold_scratch(
         assert len(backend.invocations) == first_run_count
 
     second_scratch_run_dir = _latest_run_dir(env.paths.scratch_root)
-    assert (
+    assert not (
         second_scratch_run_dir
         / "activitysim"
         / "output"
         / "year-2015-iteration-0"
         / "beam_plans.parquet"
-    ).is_file()
-    assert (second_scratch_run_dir / "beam" / "input" / "sfbay" / "skims.omx").is_file()
+    ).exists()
+    assert any(env.paths.archive_root.rglob("year-2015-iteration-0/beam_plans.parquet"))
 
 
 def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
@@ -1173,8 +1186,6 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
             "atlas",
         ]
         archive_run_dir_a = _latest_run_dir(env_a.paths.archive_root)
-        archived_state_a = archive_run_dir_a / "run_state.yaml"
-        assert archived_state_a.is_file()
 
         # Restore real supply_demand stage, wipe node-local scratch, and restart
         monkeypatch.setattr(
@@ -1184,7 +1195,7 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         env_a.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         restart_settings_a = env_a.settings.model_copy(deep=True)
-        restart_settings_a.runtime.options.state_file_loc = str(archived_state_a)
+        restart_settings_a.runtime.options.run_dir = str(archive_run_dir_a)
         launcher.main(settings=restart_settings_a)
 
         # Only ActivitySim (warmup + main) and BEAM should have executed after restart!
@@ -1214,7 +1225,6 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
         ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
         ctx.state.sub_stage_progress = "runner"
-        ctx.state.write_state()
         raise RuntimeError("Simulated crash mid-ActivitySim before BEAM checkpoint")
 
     with ContractValidatingContainerBackend() as backend_b:
@@ -1230,10 +1240,8 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         pre_restart_count = len(backend_b.invocations)
         assert pre_restart_count == 3
         archive_run_dir_b = _latest_run_dir(env_b.paths.archive_root)
-        archived_state_b = archive_run_dir_b / "run_state.yaml"
-        assert archived_state_b.is_file()
 
-        # Restore real supply_demand stage, wipe scratch, and restart with allow_rewind_resume=True
+        # Restore real supply_demand stage, wipe scratch, and restart with run_dir
         monkeypatch.setattr(
             launcher, "run_supply_demand_stage", real_run_supply_demand_stage
         )
@@ -1241,8 +1249,7 @@ def test_mid_run_interruption_and_restart_from_run_state_on_fresh_node(
         env_b.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         restart_settings_b = env_b.settings.model_copy(deep=True)
-        restart_settings_b.runtime.options.state_file_loc = str(archived_state_b)
-        restart_settings_b.runtime.options.allow_rewind_resume = True
+        restart_settings_b.runtime.options.run_dir = str(archive_run_dir_b)
         launcher.main(settings=restart_settings_b)
 
         # UrbanSim and ATLAS replay from Consist cache (0 container re-runs);
@@ -1596,7 +1603,6 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
         ctx.state.current_major_stage = ctx.state.Stage.supply_demand_loop
         ctx.state.current_sub_stage = ctx.state.Stage.activity_demand
         ctx.state.sub_stage_progress = "runner"
-        ctx.state.write_state()
         raise RuntimeError(
             "Simulated crash mid-ActivitySim in year 2017 after 2017 UrbanSim+ATLAS"
         )
@@ -1628,8 +1634,6 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
         pre_restart_count = len(backend.invocations)
 
         archive_run_dir = _latest_run_dir(env.paths.archive_root)
-        archived_state = archive_run_dir / "run_state.yaml"
-        assert archived_state.is_file()
 
         # Restore real supply_demand stage, wipe node-local scratch, and restart
         monkeypatch.setattr(
@@ -1639,8 +1643,7 @@ def test_multi_year_mid_run_restart_rewinds_coupler_to_year_boundary(
         env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         restart_settings = env.settings.model_copy(deep=True)
-        restart_settings.runtime.options.state_file_loc = str(archived_state)
-        restart_settings.runtime.options.allow_rewind_resume = True
+        restart_settings.runtime.options.run_dir = str(archive_run_dir)
         launcher.main(settings=restart_settings)
 
         # Year 2017 UrbanSim and ATLAS replay from Consist cache (0 container re-runs);
@@ -1738,6 +1741,7 @@ def test_forecast_year_scenario_fork_reuses_base_year_cache_and_branches_forecas
         env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
 
         fork_settings = env.settings.model_copy(deep=True)
+        fork_settings.run.output_run_name = "fork-policy"
 
         def _apply_2017_policy_fork(**kwargs):
             year = kwargs["year"]
@@ -1752,3 +1756,113 @@ def test_forecast_year_scenario_fork_reuses_base_year_cache_and_branches_forecas
         # only Year 2017 beam_run executes a container due to the 2017 BEAM policy change!
         fork_models = [inv.model_name for inv in backend.invocations[baseline_count:]]
         assert fork_models == ["beam_run"]
+
+
+def test_supply_demand_warmstart_handoff_multi_iteration_contract_runner(
+    tmp_path: Path,
+) -> None:
+    """Validate iter 0 -> iter 1 supply-demand warmstart handoff under ContractValidatingContainerBackend.
+
+    Exercises the full native pipeline:
+    - iter 0: beam_preprocess -> beam_run (generates linkstats)
+    - iter 1: beam_preprocess (binds iter 0 linkstats) -> beam_run (compiles launch config with linkstats warmstart)
+    Verifies that build_beam_launch_config and validate_staged_linkstats_reference pass without mock bypassing.
+    """
+    env = build_micro_world(
+        tmp_path,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=2,
+        max_year_intervals=1,
+        enable_archive_copy=True,
+        database_enabled=True,
+    )
+
+    with ContractValidatingContainerBackend() as backend:
+        launcher.main(settings=env.settings)
+
+        invoked_models = [inv.model_name for inv in backend.invocations]
+        assert invoked_models == [
+            "urbansim",
+            "atlas",
+            "atlas",
+            "activitysim_numba_warmup",
+            "activitysim",
+            "beam_run",
+            "activitysim",
+            "beam_run",
+        ]
+
+        # Check second beam_run invocation (iter 1) has initialLinkstatsFilePath staged and bound
+        second_beam_inv = backend.invocations[7]
+        assert second_beam_inv.model_name == "beam_run"
+        config_cpath = backend._parse_flag(second_beam_inv.command, "--config")
+        mounts = MountTable(second_beam_inv.volumes)
+        config_hpath = mounts.resolve(config_cpath, require_writable=False)
+        assert config_hpath.exists()
+        config_text = config_hpath.read_text()
+        assert "initialLinkstatsFilePath" in config_text
+        assert "warmstarts/linkstats_warmstart.csv.gz" in config_text
+
+
+def test_cross_node_wiped_scratch_replay_from_archive_snapshot_duckdb(
+    tmp_path: Path,
+) -> None:
+    """Validate that a fresh scratch workspace cleanly restores duckdb snapshot from archive_run_dir.
+
+    Simulates Lawrencium cross-node execution:
+    1. Node 1 runs simulation to archive directory with database_enabled=True, enable_archive_copy=True.
+    2. Node 1 scratch directory is wiped / clean new scratch node allocated.
+    3. Node 2 starts with run_dir pointing to the archive_run_dir.
+    4. Launcher restores .consist/snapshots/latest/provenance.duckdb into local scratch and all steps cache hit.
+    """
+    node1_scratch = tmp_path / "node1_scratch"
+    node1_scratch.mkdir(parents=True, exist_ok=True)
+
+    env = build_micro_world(
+        node1_scratch,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        enable_archive_copy=True,
+        database_enabled=True,
+    )
+
+    with ContractValidatingContainerBackend() as backend:
+        # Run 1 on Node 1: initial run executes container steps and archives outputs + duckdb snapshot
+        launcher.main(settings=env.settings)
+        initial_invocations = len(backend.invocations)
+        assert (
+            initial_invocations == 6
+        )  # urbansim, atlas (x2), warmup, activitysim, beam_run
+
+        node1_archive = _latest_run_dir(env.paths.archive_root)
+
+        # Verify duckdb snapshot was committed to archive directory
+        latest_snapshot = (
+            node1_archive / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+        )
+        assert latest_snapshot.exists(), (
+            f"Expected DuckDB snapshot at {latest_snapshot}"
+        )
+
+        # Node 2: fresh empty scratch, pointing to same archive directory for replay/resume
+        node2_scratch = tmp_path / "node2_scratch"
+        node2_scratch.mkdir(parents=True, exist_ok=True)
+
+        replay_settings = env.settings.model_copy(deep=True)
+        replay_settings.runtime.options.run_dir = str(node1_archive)
+        replay_settings.runtime.options.output_dir = str(node2_scratch / "output")
+
+        launcher.main(settings=replay_settings)
+
+        # All steps should hit cache on Node 2 because provenance duckdb was restored from snapshot
+        replay_invocations = len(backend.invocations) - initial_invocations
+        assert replay_invocations == 0

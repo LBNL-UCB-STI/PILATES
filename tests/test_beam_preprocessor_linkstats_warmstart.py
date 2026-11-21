@@ -315,7 +315,8 @@ def test_project_beam_preprocess_outputs_restores_provenance_sidecar_from_artifa
 
     prov_metadata = {"source": "prior_run", "run_id": "test-123"}
     artifact = Artifact(
-        container_uri=str(warmstart_path),
+        key="linkstats_warmstart",
+        uri=str(warmstart_path),
         driver="parquet",
         meta={"linkstats_provenance": prov_metadata},
     )

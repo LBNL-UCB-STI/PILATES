@@ -62,7 +62,7 @@ To set up a new run or adapt a template to your machine, start with `run`:
 - `run.start_year`, `run.end_year`, and `run.supply_demand_iters` for simulation horizon and iteration count.
 - `run.models` (`land_use`, `vehicle_ownership`, `activity_demand`, `travel`) to enable or disable individual models.
 
-The loader expands environment variables (such as `${USER}` and `${SLURM_JOB_ID}`) in `run.output_directory`, `run.local_workspace_root`, `run.recovery_archive_roots`, and `shared.database.path`. It also enforces `end_year >= start_year`, requires `consist_db_filename` to be a basename without path separators, and restricts `atlas.beamac > 0` to `sfbay` runs with `skims_zone_type: taz`.
+The loader expands environment variables (such as `${USER}` and `${SLURM_JOB_ID}`) in `run.output_directory`, `run.local_workspace_root`, `run.recovery_archive_roots`, and `shared.database.path`. It also enforces `end_year >= start_year`, requires `consist_db_filename` to be a basename without path separators, and restricts `atlas.beamac > 0` to `sfbay` runs with `shared.geography.zones.zone_type: taz`.
 
 ## Next Steps
 

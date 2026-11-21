@@ -59,7 +59,6 @@ from .shared import (
     _persisted_output_path,
     _resolve_native_inputs,
     _strict_requested_output_cache_options,
-    _validation_context,
 )
 from .urbansim import (
     _urbansim_population_source_path,
@@ -535,7 +534,7 @@ _ATLAS_POSTPROCESS_INPUT_CONTRACT = InputContract(
         "atlas_grave_csv",
         "atlas_accessibility_csv",
     ],
-    output_paths=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "atlas_preprocess", input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT
@@ -744,7 +743,7 @@ def _native_atlas_run(
         USIM_DATASTORE_H5: None,
     },
     schema_outputs=[USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT],
-    output_paths=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "atlas_postprocess", input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT
@@ -796,6 +795,16 @@ def _native_atlas_postprocess(
         destination_h5=destination_h5,
         year=state.forecast_year,
     )
+    if not state.is_start_year():
+        from pilates.workflows.stages.vehicle_ownership import (
+            _validate_population_h5_for_activitysim_year,
+        )
+
+        _validate_population_h5_for_activitysim_year(
+            path=destination_h5,
+            year=state.forecast_year,
+            context=f"ATLAS postprocess local output y{state.forecast_year}",
+        )
 
 
 def _project_atlas_preprocess(
@@ -823,14 +832,6 @@ def _project_atlas_preprocess(
         atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
         prepared_inputs=prepared_inputs,
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_preprocess",
-        )
-    )
     return projected
 
 
@@ -857,14 +858,6 @@ def _project_atlas_run(
             )
             for key in declared_outputs
         },
-    )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_run",
-        )
     )
     return projected
 
@@ -899,14 +892,6 @@ def _project_atlas_postprocess(
             )
         },
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_postprocess",
-        )
-    )
     return projected
 
 
@@ -916,7 +901,7 @@ ATLAS_PREPROCESS = StepDefinition(
     resolve_inputs=_resolve_atlas_preprocess_inputs,
     project_outputs=_project_atlas_preprocess,
     input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT,
-    output_paths=_atlas_preprocess_native_output_paths,
+    outputs=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
     binding_rules=(
@@ -963,7 +948,7 @@ ATLAS_POSTPROCESS = StepDefinition(
     resolve_inputs=_resolve_atlas_postprocess_inputs,
     project_outputs=_project_atlas_postprocess,
     input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT,
-    output_paths=_atlas_postprocess_native_output_paths,
+    outputs=_atlas_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
 )

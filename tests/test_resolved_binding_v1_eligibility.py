@@ -258,6 +258,10 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
 
     def capture_container(**kwargs: object) -> bool:
         captured["mounts"] = kwargs["volumes"]
+        for table in ("households", "persons", "land_use"):
+            target = output_root / "final_pipeline" / table / "final.parquet"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.touch()
         return True
 
     monkeypatch.setattr(

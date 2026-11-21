@@ -122,6 +122,7 @@ _URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
 _ATLAS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="atlas")
 _ACTIVITYSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="activitysim")
 _BEAM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="beam")
+_POSTPROCESSING_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="postprocessing")
 
 
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
@@ -283,8 +284,13 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="postprocess",
         stage_name="postprocessing",
         order=150,
-        tracked=False,
-        include_in_schema=False,
+        optional=True,
+        dynamic_input_families=("events_parquet_{year}_{iteration}",),
+        dynamic_output_families=(
+            "inexus_output",
+            "mep_outputs",
+        ),
+        provenance=_POSTPROCESSING_PROVENANCE,
     ),
 )
 
@@ -626,7 +632,7 @@ def validate_workflow_step_contracts(
                 "Native definitions missing from declared steps: "
                 + ", ".join(sorted(missing))
             )
-    allowed = {"postprocessing"} | set(allow_untracked_declared or ())
+    allowed = set(allow_untracked_declared or ())
     unexpected = declared_names - expected_names - allowed
     if unexpected:
         errors.append("Undeclared native step models: " + ", ".join(sorted(unexpected)))

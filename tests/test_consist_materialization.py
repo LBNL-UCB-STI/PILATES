@@ -31,7 +31,7 @@ def test_outside_mounted_artifact_materializes_with_relative_layout(
             direction="output",
         )
 
-    assert artifact.container_uri == "beam_input://beam/input/year_2025/config.xml"
+    assert artifact.uri == "beam_input://beam/input/year_2025/config.xml"
     assert not source_file.resolve().is_relative_to(historical_run_dir.resolve())
 
     consumer = consist.Tracker(run_dir=fresh_workspace, db_path=str(db_path))

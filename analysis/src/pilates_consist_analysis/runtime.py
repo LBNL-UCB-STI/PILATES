@@ -113,7 +113,7 @@ def create_analysis_tracker(
 
         return consist.Tracker(**tracker_kwargs)
 
-    tracker = cr.create_tracker(enabled=True, **tracker_kwargs)
+    tracker = cr.create_tracker(**tracker_kwargs)
     if tracker is None:
         raise RuntimeError("Consist tracker creation returned None.")
     return tracker
