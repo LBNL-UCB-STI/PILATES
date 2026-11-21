@@ -38,14 +38,6 @@ _POSTPROCESSING_INPUT_CONTRACT = InputContract(
 )
 
 
-from typing import Protocol, runtime_checkable
-
-
-@runtime_checkable
-class _HasPostprocessing(Protocol):
-    postprocessing: Any | None
-
-
 def _postprocessing_output_paths(
     *,
     settings: Any,
@@ -55,8 +47,8 @@ def _postprocessing_output_paths(
 ) -> dict[str, Path]:
     del step_inputs
     out_paths: dict[str, Path] = {}
-    if isinstance(settings, _HasPostprocessing) and settings.postprocessing is not None:
-        post_cfg = settings.postprocessing
+    post_cfg = getattr(settings, "postprocessing", None)
+    if post_cfg is not None:
         year = resolve_forecast_year(state) or 0
         year_str = str(year)
 
@@ -100,7 +92,7 @@ def _postprocessing_callable(
     *, settings: PilatesConfig, state: Any, workspace: Workspace, **kwargs: Any
 ) -> None:
     del kwargs
-    if isinstance(settings, _HasPostprocessing) and settings.postprocessing is not None:
+    if getattr(settings, "postprocessing", None) is not None:
         from pilates.postprocessing.postprocessor import (
             copy_outputs_to_mep,
             process_event_file,

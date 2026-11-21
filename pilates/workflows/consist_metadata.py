@@ -20,9 +20,7 @@ from typing import (
     List,
     Mapping,
     Optional,
-    Protocol,
     Tuple,
-    runtime_checkable,
 )
 
 from consist.core.step_context import StepContext
@@ -67,36 +65,6 @@ def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
     )
 
     return _catalog_provenance_builder_key(step_name)
-
-
-@runtime_checkable
-class _HasFullPath(Protocol):
-    full_path: str | Path
-
-
-@runtime_checkable
-class _HasAsimMutableConfigsDir(Protocol):
-    def get_asim_mutable_configs_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasBeamMutableDataDir(Protocol):
-    def get_beam_mutable_data_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasBeamOutputDir(Protocol):
-    def get_beam_output_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasAsimOutputDir(Protocol):
-    def get_asim_output_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasModelDump(Protocol):
-    def model_dump(self) -> Dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -451,17 +419,19 @@ def build_urbansim_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
 
 def build_urbansim_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.urbansim
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
 def build_atlas_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.atlas
-    if not isinstance(cfg, _HasModelDump):
+    model_dump = getattr(cfg, "model_dump", None)
+    if not callable(model_dump):
         return {}
     return _only_keys(
-        cfg.model_dump(),
+        model_dump(),
         [
             "max_retries",
             "sample_size",
@@ -480,8 +450,9 @@ def build_atlas_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
 
 def build_atlas_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.atlas
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
@@ -491,8 +462,9 @@ def build_postprocessing_identity_config(settings: PilatesConfig) -> Dict[str, A
         if isinstance(settings, PilatesConfig)
         else vars(settings).get("postprocessing")
     )
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
@@ -627,8 +599,9 @@ def consist_step_meta(
     def _workspace_path_from_value(value: Any) -> Optional[str]:
         if value is None:
             return None
-        if isinstance(value, _HasFullPath) and isinstance(value.full_path, (Path, str)):
-            return str(value.full_path)
+        full_path = getattr(value, "full_path", None)
+        if isinstance(full_path, (Path, str)):
+            return str(full_path)
         if isinstance(value, (Path, str)):
             return str(value)
         return None
@@ -652,8 +625,11 @@ def consist_step_meta(
 
         workspace_obj = ctx.get_runtime("workspace", default=None)
         mutable_configs_root: Optional[Path] = None
-        if isinstance(workspace_obj, _HasAsimMutableConfigsDir):
-            mutable_configs_root = Path(workspace_obj.get_asim_mutable_configs_dir())
+        get_asim_mutable_configs_dir = getattr(
+            workspace_obj, "get_asim_mutable_configs_dir", None
+        )
+        if callable(get_asim_mutable_configs_dir):
+            mutable_configs_root = Path(get_asim_mutable_configs_dir())
         else:
             ws_path = _workspace_path_from_value(workspace_obj)
             if ws_path:
@@ -781,20 +757,21 @@ def consist_step_meta(
         if workspace_root is not None:
             path_aliases["workspace"] = workspace_root
         if workspace_obj is not None:
-            if isinstance(workspace_obj, _HasBeamMutableDataDir):
+            get_beam_mutable_data_dir = getattr(
+                workspace_obj, "get_beam_mutable_data_dir", None
+            )
+            if callable(get_beam_mutable_data_dir):
                 path_aliases["beam_input"] = (
                     config_root.parent
                     if launch_config is None
-                    else Path(workspace_obj.get_beam_mutable_data_dir())
+                    else Path(get_beam_mutable_data_dir())
                 )
-            if isinstance(workspace_obj, _HasBeamOutputDir):
-                path_aliases["beam_output"] = Path(workspace_obj.get_beam_output_dir())
-            if settings.activitysim is not None and isinstance(
-                workspace_obj, _HasAsimOutputDir
-            ):
-                path_aliases["activitysim_output"] = Path(
-                    workspace_obj.get_asim_output_dir()
-                )
+            get_beam_output_dir = getattr(workspace_obj, "get_beam_output_dir", None)
+            if callable(get_beam_output_dir):
+                path_aliases["beam_output"] = Path(get_beam_output_dir())
+            get_asim_output_dir = getattr(workspace_obj, "get_asim_output_dir", None)
+            if settings.activitysim is not None and callable(get_asim_output_dir):
+                path_aliases["activitysim_output"] = Path(get_asim_output_dir())
         path_aliases["beam_region_input"] = config_root
 
         vehicle_file_policy = BeamReferencePolicy(

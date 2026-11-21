@@ -16,7 +16,7 @@ from pathlib import Path
 import re
 import shutil
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping, Protocol, runtime_checkable
+from typing import Any, Iterable, Mapping
 
 import consist as cr
 from consist import (
@@ -29,6 +29,7 @@ from consist import (
 from pilates.utils.archive_paths import resolve_archive_run_dir
 
 from pilates.beam import beam_exchange
+from pilates.beam.beam_input_staging import _beam_vehicle_file_format
 from pilates.beam.config_hocon import (
     beam_primary_config_path,
 )
@@ -189,6 +190,14 @@ def _beam_population_input_suffix(settings: Any) -> str:
     )
 
 
+def _beam_vehicles_input_suffix(settings: Any) -> str:
+    """Return the suffix written by the ATLAS-to-BEAM vehicle staging step."""
+
+    activitysim = getattr(settings, "activitysim", None)
+    preferred_format = getattr(activitysim, "file_format", None)
+    return f".{_beam_vehicle_file_format(preferred_format)}"
+
+
 def _beam_preprocess_native_output_paths(
     *,
     settings: Any,
@@ -227,7 +236,7 @@ def _beam_preprocess_native_output_paths(
             step_inputs=step_inputs,
             settings=settings,
         ),
-        "vehicles_beam_in": ".csv",
+        BEAM_VEHICLES_IN: _beam_vehicles_input_suffix(settings),
     }
     root = Path(workspace.get_beam_mutable_data_dir())
     return {
@@ -241,16 +250,10 @@ def _beam_preprocess_native_output_paths(
     }
 
 
-@runtime_checkable
-class _HasEffectiveSupplyDemandIterations(Protocol):
-    def effective_supply_demand_iterations(
-        self, *, resumed_iteration: int | None = None
-    ) -> int: ...
-
-
 def _is_final_beam_iteration(*, settings: Any, state: Any, iteration: int) -> bool:
-    if isinstance(state, _HasEffectiveSupplyDemandIterations):
-        total = state.effective_supply_demand_iterations(resumed_iteration=iteration)
+    effective_iters_fn = getattr(state, "effective_supply_demand_iterations", None)
+    if callable(effective_iters_fn):
+        total = effective_iters_fn(resumed_iteration=iteration)
     else:
         run_cfg = settings.run if hasattr(settings, "run") else None
         raw_total = (
@@ -512,13 +515,13 @@ def _project_beam_preprocess_outputs(
             and declared_outputs[key].exists()
         ):
             prepared[key] = declared_outputs[key]
-        elif key == "vehicles_beam_in":
+        elif key == BEAM_VEHICLES_IN:
             root = Path(workspace.get_beam_mutable_data_dir())
             dest = _native_output_destination(
                 root=root,
                 step_name="beam_preprocess",
-                key="vehicles_beam_in",
-                suffix=".csv",
+                key=BEAM_VEHICLES_IN,
+                suffix=_beam_vehicles_input_suffix(settings),
             )
             if dest.exists():
                 prepared[key] = dest
@@ -841,16 +844,6 @@ def _project_beam_full_skim_outputs(
     return projected
 
 
-@runtime_checkable
-class _HasFullPath(Protocol):
-    full_path: str | Path
-
-
-@runtime_checkable
-class _HasArchiveRunDir(Protocol):
-    archive_run_dir: str | Path | None
-
-
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
     source_path = artifact_to_path(source, workspace=workspace)
     if key in {ZARR_SKIMS, LINKSTATS_WARMSTART}:
@@ -861,8 +854,9 @@ def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
         )
         if existing is not None:
             existing_path = Path(existing).resolve()
-            if not isinstance(workspace, _HasFullPath) or existing_path.is_relative_to(
-                Path(workspace.full_path).resolve()
+            ws_full_path = getattr(workspace, "full_path", None)
+            if ws_full_path is None or existing_path.is_relative_to(
+                Path(ws_full_path).resolve()
             ):
                 return existing_path
     if key == ATLAS_VEHICLES2_OUTPUT:
@@ -898,6 +892,7 @@ def _sim_state_beam_candidates(sim_state: SimState) -> dict[str, ArtifactRef | N
             else sim_state.demand.persons_in
         ),
         ATLAS_VEHICLES2_OUTPUT: sim_state.atlas.hh_cars,
+        BEAM_VEHICLES_IN: sim_state.network.vehicles_in,
         LINKSTATS: sim_state.network.linkstats,
         LINKSTATS_WARMSTART: (
             sim_state.network.linkstats
@@ -1198,7 +1193,7 @@ def _resolve_beam_run_inputs(
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
-        optional_roles=(LINKSTATS_WARMSTART,),
+        optional_roles=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
         explicit_inputs=explicit_inputs,
     )
 
@@ -1683,13 +1678,9 @@ def _preflight_beam_launch_inputs(
     run_context: Any,
     expected_warmstart_path: Path | None = None,
 ) -> None:
-    report_dir_path = (
-        workspace.archive_run_dir if isinstance(workspace, _HasArchiveRunDir) else None
-    )
+    report_dir_path = getattr(workspace, "archive_run_dir", None)
     if report_dir_path is None:
-        report_dir_path = (
-            workspace.full_path if isinstance(workspace, _HasFullPath) else Path(".")
-        )
+        report_dir_path = getattr(workspace, "full_path", Path("."))
 
     validate_kwargs: dict[str, Any] = {
         "settings": settings,
@@ -1838,7 +1829,7 @@ def _archive_beam_launch_config(
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
     },
-    optional_input_keys=(LINKSTATS_WARMSTART,),
+    optional_input_keys=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
     schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
@@ -1849,6 +1840,7 @@ def _native_beam_run(
     households_beam_in: Path,
     persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
+    vehicles_beam_in: Artifact | Path | None = None,
     *,
     settings: Any,
     state: Any,
@@ -1864,6 +1856,14 @@ def _native_beam_run(
     }
     if linkstats_warmstart is not None:
         prepared[LINKSTATS_WARMSTART] = linkstats_warmstart
+    if vehicles_beam_in is not None:
+        resolved_vehicles = (
+            vehicles_beam_in
+            if isinstance(vehicles_beam_in, Path)
+            else artifact_to_path(vehicles_beam_in, workspace=workspace)
+        )
+        if resolved_vehicles is not None:
+            prepared[BEAM_VEHICLES_IN] = Path(resolved_vehicles)
     if beam_launch_config is None:
         year = resolve_forecast_year(state) or int(state.year)
         iteration = int(state.iteration)

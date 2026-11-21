@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping, Protocol, TypeVar, runtime_checkable
+from typing import Any, Literal, Mapping, TypeVar
 
 from consist import (
     BindingResult,
@@ -31,62 +31,6 @@ class ScenarioDriftError(RuntimeError):
     """Raised when strict resume detects cache drift on a previously completed step."""
 
 
-@runtime_checkable
-class _HasOnArchiveCommit(Protocol):
-    on_archive_commit: Callable[[str], None] | None
-
-
-@runtime_checkable
-class _HasStepExecutionSession(Protocol):
-    step_execution_counter: int
-    expected_prefix_steps: int
-
-
-@runtime_checkable
-class _HasResumePolicy(Protocol):
-    resume_policy: Literal["strict", "recompute"]
-
-
-@runtime_checkable
-class _HasMeta(Protocol):
-    meta: Any
-
-
-@runtime_checkable
-class _RunCodeIdentityConfig(Protocol):
-    consist_code_identity: CodeIdentityMode | None
-
-
-@runtime_checkable
-class _SettingsWithRunCodeIdentity(Protocol):
-    run: _RunCodeIdentityConfig
-
-
-@runtime_checkable
-class _HasEnableArchiveCopy(Protocol):
-    enable_archive_copy: bool
-
-
-@runtime_checkable
-class _HasRunConfig(Protocol):
-    run: Any
-
-
-@runtime_checkable
-class _HasMainForecastYear(Protocol):
-    main_forecast_year: int | None
-
-
-@runtime_checkable
-class _HasCacheHit(Protocol):
-    cache_hit: bool
-
-
-@runtime_checkable
-class _HasDbMutationSeq(Protocol):
-    db_mutation_seq: int
-
-
 def _is_step_archive_enabled(
     *,
     settings: Any,
@@ -99,12 +43,11 @@ def _is_step_archive_enabled(
             run_cfg.get("enable_archive_copy"), bool
         ):
             return run_cfg["enable_archive_copy"]
-    elif (
-        isinstance(settings, _HasRunConfig)
-        and isinstance(settings.run, _HasEnableArchiveCopy)
-        and isinstance(settings.run.enable_archive_copy, bool)
-    ):
-        return settings.run.enable_archive_copy
+    else:
+        run_cfg = getattr(settings, "run", None)
+        enable_archive_copy = getattr(run_cfg, "enable_archive_copy", None)
+        if isinstance(enable_archive_copy, bool):
+            return enable_archive_copy
     return bool(
         (isinstance(workspace, ArchiveRunDirLike) and workspace.archive_run_dir)
         or (isinstance(state, ArchiveRunDirLike) and state.archive_run_dir)
@@ -123,11 +66,10 @@ def _resolve_cache_options(
         if definition.cache_options is not None
         else None
     )
-    configured_code_identity: CodeIdentityMode | None = None
-    if isinstance(settings, _SettingsWithRunCodeIdentity) and isinstance(
-        settings.run, _RunCodeIdentityConfig
-    ):
-        configured_code_identity = settings.run.consist_code_identity
+    run_cfg = getattr(settings, "run", None)
+    configured_code_identity: CodeIdentityMode | None = getattr(
+        run_cfg, "consist_code_identity", None
+    )
     if configured_code_identity is None:
         return cache_options
     if cache_options is None:
@@ -164,9 +106,7 @@ def _configured_step_archive_root(
         os.path.normpath(archive_root)
     ):
         return None
-    main_forecast_year = (
-        state.main_forecast_year if isinstance(state, _HasMainForecastYear) else None
-    )
+    main_forecast_year = getattr(state, "main_forecast_year", None)
     parts = [
         definition.name,
         stage,
@@ -212,19 +152,18 @@ def execute_step(
     }
     # Track execution ordinal and check strict resume drift expectations
     current_ordinal = 0
-    if isinstance(workspace, _HasStepExecutionSession):
+    step_counter = getattr(workspace, "step_execution_counter", None)
+    expected_prefix = getattr(workspace, "expected_prefix_steps", None)
+    if isinstance(step_counter, int) and isinstance(expected_prefix, int):
         workspace.step_execution_counter += 1
         current_ordinal = workspace.step_execution_counter
-        resume_policy = "strict"
-        if isinstance(settings, _HasRunConfig) and isinstance(
-            settings.run, _HasResumePolicy
-        ):
-            resume_policy = settings.run.resume_policy
+        run_cfg = getattr(settings, "run", None)
+        resume_policy = getattr(run_cfg, "resume_policy", "strict")
 
         if (
             resume_policy == "strict"
-            and workspace.expected_prefix_steps > 0
-            and current_ordinal <= workspace.expected_prefix_steps
+            and expected_prefix > 0
+            and current_ordinal <= expected_prefix
         ):
             import functools
             import consist as cr
@@ -236,10 +175,9 @@ def execute_step(
                 explanation = None
                 try:
                     current_run = cr.current_run()
-                    if isinstance(current_run, _HasMeta):
-                        meta = current_run.meta
-                        if isinstance(meta, dict):
-                            explanation = meta.get("cache_miss_explanation")
+                    meta = getattr(current_run, "meta", None)
+                    if isinstance(meta, dict):
+                        explanation = meta.get("cache_miss_explanation")
                 except Exception:
                     pass
                 msg = (
@@ -358,12 +296,13 @@ def execute_step(
         ),
         execution_options=options,
     )
-    is_hit = result.cache_hit if isinstance(result, _HasCacheHit) else False
-    if not is_hit and isinstance(workspace, _HasDbMutationSeq):
+    is_hit = bool(getattr(result, "cache_hit", False))
+    if not is_hit and isinstance(getattr(workspace, "db_mutation_seq", None), int):
         workspace.db_mutation_seq += 1
     if step_archive_root is not None and not is_hit:
-        if isinstance(workspace, _HasOnArchiveCommit) and workspace.on_archive_commit:
-            workspace.on_archive_commit(definition.name)
+        on_archive_commit = getattr(workspace, "on_archive_commit", None)
+        if on_archive_commit:
+            on_archive_commit(definition.name)
     return result, definition.project_outputs(
         result.outputs,
         settings=settings,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Mapping, Protocol, runtime_checkable
+from typing import Any, Dict, Mapping
 
 from consist import (
     Artifact,
@@ -451,11 +451,6 @@ def _activitysim_preprocess_resolver(
     )
 
 
-@runtime_checkable
-class _AsimMutableConfigsWorkspaceLike(Protocol):
-    def get_asim_mutable_configs_dir(self) -> str: ...
-
-
 def _activitysim_run_resolver(
     *,
     settings: PilatesConfig,
@@ -521,9 +516,12 @@ def _activitysim_run_resolver(
                 zarr_rejection,
                 ASIM_OMX_SKIMS,
             )
+        get_asim_mutable_configs_dir = getattr(
+            workspace, "get_asim_mutable_configs_dir", None
+        )
         configs_root = (
-            workspace.get_asim_mutable_configs_dir()
-            if isinstance(workspace, _AsimMutableConfigsWorkspaceLike)
+            get_asim_mutable_configs_dir()
+            if callable(get_asim_mutable_configs_dir)
             else None
         )
         produces_zarr = activitysim_persists_zarr_skims(

@@ -36,11 +36,7 @@ DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "restart_exact_rewind_contract",
     "urbansim_datastore_selection_rules",
 }
-ZERO_GETATTR_MODULES = (
-    Path("pilates/workflows/sim_state.py"),
-    Path("pilates/workflows/orchestrator.py"),
-    Path("pilates/workflows/state_helpers.py"),
-)
+ZERO_GETATTR_MODULES = (Path("pilates/workflows/sim_state.py"),)
 
 
 def _production_python_files() -> Iterable[Path]:

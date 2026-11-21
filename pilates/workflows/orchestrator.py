@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 import sys
-from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
 from consist import Artifact
 
@@ -44,6 +44,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
+    BEAM_VEHICLES_IN,
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -67,7 +68,7 @@ from pilates.workflows.state_helpers import (
     requires_prior_beam_skim_handoff,
     resolve_forecast_year,
 )
-from pilates.workflows.step_execution import _HasDbMutationSeq, execute_step
+from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import (
     activitysim_postprocess,
     activitysim_preprocess,
@@ -87,46 +88,18 @@ from pilates.workflows.steps.postprocessing import (
 )
 from pilates.workspace import Workspace
 
+if TYPE_CHECKING:
+    from pilates.utils.consist_db_snapshot import ConsistDbSnapshotManager
+
 logger = logging.getLogger(__name__)
 
 _FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
 
 
-@runtime_checkable
-class _WorkspaceRootLike(Protocol):
-    full_path: str | Path | None
-
-
-@runtime_checkable
-class _HasCoupler(Protocol):
-    coupler: Any
-
-
-@runtime_checkable
-class _HasRunModels(Protocol):
-    models: Any
-
-
-@runtime_checkable
-class _SnapshotManagerLike(Protocol):
-    def maybe_snapshot_interval(self, *, reason: str) -> Any: ...
-    def on_outer_iteration_boundary(self, *, year: int, iteration: int) -> Any: ...
-
-
-@runtime_checkable
-class _AtlasParentState(Protocol):
-    year: int | None
-    forecast_year: int | None
-    start_year: int | None
-    full_settings: Any | None
-    iteration: int | None
-    __dict__: dict[str, Any]
-
-
 class AtlasSubState:
     """Workflow state for a single ATLAS sub-year within a forecast interval."""
 
-    def __init__(self, parent_state: _AtlasParentState, year: int) -> None:
+    def __init__(self, parent_state: WorkflowState, year: int) -> None:
         interval_start_year = parent_state.year
         if interval_start_year is None:
             raise RuntimeError(
@@ -163,7 +136,7 @@ class _OrchestratorEnv:
     settings: PilatesConfig
     state: WorkflowState
     workspace: Workspace
-    snapshot_manager: _SnapshotManagerLike | None = None
+    snapshot_manager: ConsistDbSnapshotManager | None = None
     on_activity_demand_boundary: Optional[Callable[[int, int], None]] = None
     last_synced: dict[str, ArtifactRef] = field(default_factory=dict)
     last_snapshotted_seq: int = 0
@@ -171,8 +144,8 @@ class _OrchestratorEnv:
     def maybe_on_activity_demand_boundary(self, *, year: int, iteration: int) -> None:
         if self.on_activity_demand_boundary is None:
             return
-        if isinstance(self.workspace, _HasDbMutationSeq):
-            seq = self.workspace.db_mutation_seq
+        seq = getattr(self.workspace, "db_mutation_seq", None)
+        if isinstance(seq, int):
             if seq == self.last_snapshotted_seq:
                 return
             self.on_activity_demand_boundary(year, iteration)
@@ -183,8 +156,8 @@ class _OrchestratorEnv:
     def maybe_on_outer_iteration_boundary(self, *, year: int, iteration: int) -> None:
         if self.snapshot_manager is None:
             return
-        if isinstance(self.workspace, _HasDbMutationSeq):
-            seq = self.workspace.db_mutation_seq
+        seq = getattr(self.workspace, "db_mutation_seq", None)
+        if isinstance(seq, int):
             if seq == self.last_snapshotted_seq:
                 return
             self.snapshot_manager.on_outer_iteration_boundary(
@@ -204,7 +177,8 @@ def _sync_coupler(
     sim_state: SimState,
     last_synced: dict[str, ArtifactRef] | None = None,
 ) -> None:
-    if isinstance(scenario, _HasCoupler) and scenario.coupler is not None:
+    coupler = getattr(scenario, "coupler", None)
+    if coupler is not None:
         role_map = sim_state.to_role_map()
         if last_synced is not None:
             changed = {
@@ -213,10 +187,10 @@ def _sync_coupler(
                 if last_synced.get(key) is not value
             }
             if changed:
-                scenario.coupler.update(changed)
+                coupler.update(changed)
                 last_synced.update(changed)
         elif role_map:
-            scenario.coupler.update(role_map)
+            coupler.update(role_map)
 
 
 def _admit_bootstrap_input(
@@ -264,11 +238,8 @@ def bootstrap_initial_state(
     network = NetworkState()
     extras: dict[str, ArtifactRef] = {}
     admitted_cache: dict[str, ArtifactRef] = {}
-    workspace_root = (
-        Path(str(workspace.full_path))
-        if isinstance(workspace, _WorkspaceRootLike) and workspace.full_path is not None
-        else None
-    )
+    raw_full_path = getattr(workspace, "full_path", None)
+    workspace_root = Path(str(raw_full_path)) if raw_full_path is not None else None
 
     # 1. UrbanSim initial datastore
     requires_usim = (
@@ -792,10 +763,10 @@ def _effective_supply_demand_iterations(
     if isinstance(state, WorkflowState):
         return state.effective_supply_demand_iterations(resumed_iteration=iteration)
     configured_iters = int(settings.run.supply_demand_iters)
+    run_models = getattr(settings.run, "models", None)
     if (
-        isinstance(settings.run, _HasRunModels)
-        and settings.run.models is not None
-        and settings.run.models.activity_demand is None
+        run_models is not None
+        and run_models.activity_demand is None
         and configured_iters > 1
     ):
         return max(1, iteration + 1)
@@ -950,6 +921,9 @@ def run_traffic_assignment_phase(
             linkstats_warmstart=prep_result.outputs.get(
                 LINKSTATS_WARMSTART, sim_state.network.linkstats_warmstart
             ),
+            vehicles_in=prep_result.outputs.get(
+                BEAM_VEHICLES_IN, sim_state.network.vehicles_in
+            ),
         ),
     )
 
@@ -1001,6 +975,7 @@ def run_traffic_assignment_phase(
                 LINKSTATS,
                 run_result.outputs.get(LINKSTATS, sim_state.network.linkstats),
             ),
+            vehicles_in=sim_for_beam.network.vehicles_in,
             skims_omx=post_result.outputs.get(
                 FINAL_SKIMS_OMX,
                 post_outputs.final_skims_omx or sim_state.network.skims_omx,
@@ -1148,7 +1123,7 @@ def run_pilates(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    snapshot_manager: _SnapshotManagerLike | None = None,
+    snapshot_manager: ConsistDbSnapshotManager | None = None,
     on_activity_demand_boundary: Optional[Callable[[int, int], None]] = None,
 ) -> SimState:
     """Run the full PILATES forecast-year loop over typed ``SimState``."""

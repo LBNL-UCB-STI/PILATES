@@ -418,9 +418,13 @@ def test_beam_preprocess_output_paths_match_population_file_format(
 
     assert all(
         str(outputs[key]).endswith(expected_suffix)
-        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
+        for key in (
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            "vehicles_beam_in",
+        )
     )
-    assert str(outputs["vehicles_beam_in"]).endswith(".csv")
 
 
 def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> None:
@@ -2564,3 +2568,214 @@ def test_beam_run_wiped_workspace_replays_zero_copy_without_compiling_launch_con
     assert seen_cache_options[0].cache_hydration == "metadata"
     assert projected.raw_outputs["raw_od_skims_zarr_2020_0"] == archive_skims
     assert not (ws_root / "beam_data").exists()
+
+
+@pytest.mark.parametrize("suffix", [".parquet", ".csv.gz"])
+def test_beam_run_receives_vehicles_beam_in_with_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    from pilates.workflows.sim_state import NetworkState, SimState
+
+    beam_data_dir = tmp_path / "beam_data"
+    beam_data_dir.mkdir()
+    plans = beam_data_dir / f"plans{suffix}"
+    households = beam_data_dir / f"households{suffix}"
+    persons = beam_data_dir / f"persons{suffix}"
+    vehicles = beam_data_dir / f"vehicles{suffix}"
+    for p in (plans, households, persons, vehicles):
+        p.write_text("stub")
+
+    ws_root = tmp_path / "ws"
+    ws_root.mkdir()
+    conf_dir = ws_root / "beam_conf"
+    conf_dir.mkdir()
+    primary_conf = conf_dir / "beam.conf"
+    primary_conf.write_text("beam {}")
+
+    workspace = SimpleNamespace(
+        full_path=str(ws_root),
+        get_beam_mutable_data_dir=lambda: str(beam_data_dir),
+        get_beam_output_dir=lambda: str(ws_root / "beam_output"),
+        get_beam_config_dir=lambda: str(conf_dir),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(
+            local_input_folder=str(ws_root / "beam_input"),
+            config="beam.conf",
+            linkstats_format="parquet",
+            events_format="parquet",
+            skims_format="zarr",
+            artifact_formats=SimpleNamespace(activitysim_skims="zarr"),
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.zarr")),
+    )
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+
+    monkeypatch.setattr(
+        beam_steps, "ensure_beam_mutable_workspace", lambda *a, **kw: None
+    )
+
+    resolved_from_prior = beam_steps._resolve_beam_run_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        prior_outputs={
+            BEAM_PLANS_IN: plans,
+            BEAM_HOUSEHOLDS_IN: households,
+            BEAM_PERSONS_IN: persons,
+            beam_steps.BEAM_VEHICLES_IN: vehicles,
+        },
+    )
+    assert resolved_from_prior.inputs[beam_steps.BEAM_VEHICLES_IN] == vehicles
+
+    resolved_from_sim_state = beam_steps._resolve_beam_run_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=SimState(network=NetworkState(vehicles_in=vehicles)),
+        prior_outputs={
+            BEAM_PLANS_IN: plans,
+            BEAM_HOUSEHOLDS_IN: households,
+            BEAM_PERSONS_IN: persons,
+        },
+    )
+    assert resolved_from_sim_state.inputs[beam_steps.BEAM_VEHICLES_IN] == vehicles
+
+    captured_prepared: list[dict[str, Path]] = []
+
+    class _FakeRunner:
+        def __init__(self, step_name: str, st: object) -> None:
+            pass
+
+        def run(
+            self,
+            prep: object,
+            ws: object,
+            *,
+            launch_config: object = None,
+        ) -> dict[str, Path]:
+            captured_prepared.append(dict(prep.prepared_inputs))  # type: ignore[attr-defined]
+            return {}
+
+    monkeypatch.setattr(beam_steps, "BeamRunner", _FakeRunner)
+    monkeypatch.setattr(
+        beam_steps, "_preflight_beam_launch_inputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(beam_steps, "_validate_native_outputs", lambda *a, **kw: None)
+    monkeypatch.setattr(beam_steps, "_beam_run_native_sources", lambda produced: {})
+    monkeypatch.setattr(
+        beam_steps, "_materialize_native_outputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_beam_run_native_output_paths",
+        lambda **kw: {},
+    )
+
+    launch_cfg = SimpleNamespace(primary_config=primary_conf)
+    beam_steps._native_beam_run(
+        plans_beam_in=plans,
+        households_beam_in=households,
+        persons_beam_in=persons,
+        vehicles_beam_in=vehicles,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=launch_cfg,
+        _consist_ctx=SimpleNamespace(),
+    )
+
+    assert len(captured_prepared) == 1
+    assert captured_prepared[0][beam_steps.BEAM_VEHICLES_IN] == vehicles
+    assert str(captured_prepared[0][beam_steps.BEAM_VEHICLES_IN]).endswith(suffix)
+
+
+def test_beam_run_succeeds_without_vehicles_beam_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    beam_data_dir = tmp_path / "beam_data"
+    beam_data_dir.mkdir()
+    plans = beam_data_dir / "plans.parquet"
+    households = beam_data_dir / "households.parquet"
+    persons = beam_data_dir / "persons.parquet"
+    for p in (plans, households, persons):
+        p.write_text("stub")
+
+    ws_root = tmp_path / "ws"
+    ws_root.mkdir()
+    conf_dir = ws_root / "beam_conf"
+    conf_dir.mkdir()
+    primary_conf = conf_dir / "beam.conf"
+    primary_conf.write_text("beam {}")
+
+    workspace = SimpleNamespace(
+        full_path=str(ws_root),
+        get_beam_mutable_data_dir=lambda: str(beam_data_dir),
+        get_beam_output_dir=lambda: str(ws_root / "beam_output"),
+        get_beam_config_dir=lambda: str(conf_dir),
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="sfbay"))
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+
+    monkeypatch.setattr(
+        beam_steps, "ensure_beam_mutable_workspace", lambda *a, **kw: None
+    )
+
+    resolved = beam_steps._resolve_beam_run_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        prior_outputs={
+            BEAM_PLANS_IN: plans,
+            BEAM_HOUSEHOLDS_IN: households,
+            BEAM_PERSONS_IN: persons,
+        },
+    )
+    assert beam_steps.BEAM_VEHICLES_IN not in resolved.inputs
+
+    captured_prepared: list[dict[str, Path]] = []
+
+    class _FakeRunner:
+        def __init__(self, step_name: str, st: object) -> None:
+            pass
+
+        def run(
+            self,
+            prep: object,
+            ws: object,
+            *,
+            launch_config: object = None,
+        ) -> dict[str, Path]:
+            captured_prepared.append(dict(prep.prepared_inputs))  # type: ignore[attr-defined]
+            return {}
+
+    monkeypatch.setattr(beam_steps, "BeamRunner", _FakeRunner)
+    monkeypatch.setattr(
+        beam_steps, "_preflight_beam_launch_inputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(beam_steps, "_validate_native_outputs", lambda *a, **kw: None)
+    monkeypatch.setattr(beam_steps, "_beam_run_native_sources", lambda produced: {})
+    monkeypatch.setattr(
+        beam_steps, "_materialize_native_outputs", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_beam_run_native_output_paths",
+        lambda **kw: {},
+    )
+
+    launch_cfg = SimpleNamespace(primary_config=primary_conf)
+    beam_steps._native_beam_run(
+        plans_beam_in=plans,
+        households_beam_in=households,
+        persons_beam_in=persons,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=launch_cfg,
+        _consist_ctx=SimpleNamespace(),
+    )
+
+    assert len(captured_prepared) == 1
+    assert beam_steps.BEAM_VEHICLES_IN not in captured_prepared[0]

@@ -17,6 +17,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_FULL_SKIMS,
     BEAM_PLANS_OUT,
+    BEAM_VEHICLES_IN,
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -76,6 +77,7 @@ class NetworkState:
     skims_zarr: ArtifactRef | None = None
     linkstats: ArtifactRef | None = None
     linkstats_warmstart: ArtifactRef | None = None
+    vehicles_in: ArtifactRef | None = None
     plans: ArtifactRef | None = None
     experienced_plans: ArtifactRef | None = None
     events_parquet: ArtifactRef | None = None
@@ -149,6 +151,8 @@ class SimState:
             roles[LINKSTATS] = self.network.linkstats
         if self.network.linkstats_warmstart is not None:
             roles[LINKSTATS_WARMSTART] = self.network.linkstats_warmstart
+        if self.network.vehicles_in is not None:
+            roles[BEAM_VEHICLES_IN] = self.network.vehicles_in
         if self.network.plans is not None:
             roles[BEAM_PLANS_OUT] = self.network.plans
         if self.network.experienced_plans is not None:

@@ -2,54 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Optional
 
 from pilates.utils.io import get_traffic_assignment_model
-
-
-@runtime_checkable
-class _HasForecastYear(Protocol):
-    forecast_year: int | None
-
-
-@runtime_checkable
-class _HasYear(Protocol):
-    year: int | None
-
-
-@runtime_checkable
-class _HasCurrentYear(Protocol):
-    current_year: int | None
-
-
-@runtime_checkable
-class _HasAtlasIntervalStartYear(Protocol):
-    atlas_interval_start_year: int | None
-
-
-@runtime_checkable
-class _HasIteration(Protocol):
-    iteration: int | None
-
-
-@runtime_checkable
-class _HasCurrentInnerIter(Protocol):
-    current_inner_iter: int | None
-
-
-@runtime_checkable
-class _HasRunStartYear(Protocol):
-    start_year: int | None
-
-
-@runtime_checkable
-class _HasRun(Protocol):
-    run: Any
-
-
-@runtime_checkable
-class _HasBeam(Protocol):
-    beam: Any
 
 
 def resolve_forecast_year(state: Any) -> Optional[int]:
@@ -58,35 +13,35 @@ def resolve_forecast_year(state: Any) -> Optional[int]:
     The fallback supports restart paths where ``forecast_year`` may not yet be
     populated. Normal forward execution should have ``forecast_year`` set.
     """
-    if isinstance(state, _HasForecastYear) and state.forecast_year is not None:
-        return state.forecast_year
-    if isinstance(state, _HasYear):
-        return state.year
-    return None
+    forecast_year = getattr(state, "forecast_year", None)
+    if forecast_year is not None:
+        return forecast_year
+    return getattr(state, "year", None)
 
 
 def _frontier_year(state: Any) -> int | None:
-    if isinstance(state, _HasAtlasIntervalStartYear):
-        return state.atlas_interval_start_year
-    if isinstance(state, _HasCurrentYear) and state.current_year is not None:
-        return state.current_year
-    if isinstance(state, _HasYear):
-        return state.year
-    return None
+    atlas_start = getattr(state, "atlas_interval_start_year", None)
+    if atlas_start is not None:
+        return atlas_start
+    current_yr = getattr(state, "current_year", None)
+    if current_yr is not None:
+        return current_yr
+    return getattr(state, "year", None)
 
 
 def _iteration_value(state: Any) -> int:
-    if isinstance(state, _HasIteration) and state.iteration is not None:
-        return int(state.iteration)
-    if isinstance(state, _HasCurrentInnerIter) and state.current_inner_iter is not None:
-        return int(state.current_inner_iter)
+    iteration = getattr(state, "iteration", None)
+    if iteration is not None:
+        return int(iteration)
+    inner_iter = getattr(state, "current_inner_iter", None)
+    if inner_iter is not None:
+        return int(inner_iter)
     return 0
 
 
 def _start_year_value(settings: Any) -> int | None:
-    if isinstance(settings, _HasRun) and isinstance(settings.run, _HasRunStartYear):
-        return settings.run.start_year
-    return None
+    run_cfg = getattr(settings, "run", None)
+    return getattr(run_cfg, "start_year", None) if run_cfg is not None else None
 
 
 def requires_prior_beam_skim_handoff(*, settings: Any, state: Any) -> bool:
@@ -121,7 +76,7 @@ def requires_prior_beam_linkstats_handoff(*, settings: Any, state: Any) -> bool:
     model = get_traffic_assignment_model(settings)
     if model is not None and model != "beam":
         return False
-    if model is None and (not isinstance(settings, _HasBeam) or settings.beam is None):
+    if model is None and getattr(settings, "beam", None) is None:
         return False
 
     frontier_year = _frontier_year(state)

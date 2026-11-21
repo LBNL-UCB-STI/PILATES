@@ -15,9 +15,7 @@ from typing import (
     Callable,
     Dict,
     Mapping,
-    Protocol,
     Sequence,
-    runtime_checkable,
 )
 
 from consist import (
@@ -39,11 +37,6 @@ from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.sim_state import ArtifactRef
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
-
-
-@runtime_checkable
-class _HasPathAttr(Protocol):
-    path: Any
 
 
 def _persisted_output_path(
@@ -69,9 +62,7 @@ def _persisted_output_path(
             f"{step_name} output {key!r} has no declared destination"
         ) from exc
 
-    declared_path = (
-        output_spec.path if isinstance(output_spec, _HasPathAttr) else output_spec
-    )
+    declared_path = getattr(output_spec, "path", output_spec)
     if isinstance(declared_path, os.PathLike):
         path = Path(declared_path)
     elif isinstance(declared_path, str):
