@@ -103,6 +103,7 @@ _MY_MODEL_RUN_INPUT_CONTRACT = InputContract(
     config_contract=ConfigContract.adapter("my_model"),
 )
 
+
 def _resolve_my_model_inputs(
     *, sim_state: SimState | None = None, **_: object
 ) -> StepCallInputs:
