@@ -1948,6 +1948,9 @@ def _native_beam_run(
     )
     sources = _beam_run_native_sources(produced)
     _log_direct_beam_zarr_outputs(sources=sources, context=_consist_ctx)
+    for key, path in sources.items():
+        if key.startswith("skims_emissions") and path.is_file():
+            _consist_ctx.log_output(path, key=key)
     _materialize_native_outputs(
         source_paths={
             key: path
