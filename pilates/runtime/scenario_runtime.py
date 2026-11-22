@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -10,6 +11,9 @@ from typing import (
     Optional,
     Sequence,
 )
+
+if TYPE_CHECKING:
+    from pilates.workflows.state import WorkflowState
 
 from pilates.config import PilatesConfig, SettingsLike
 from pilates.utils.io import (
@@ -199,7 +203,7 @@ def filter_schema_steps_for_enabled_models(
 def build_scenario_runtime_contract(
     *,
     settings: PilatesConfig,
-    state: Any,
+    state: "WorkflowState",
     workspace: Any,
     scenario_id: str,
     seed: Optional[int],

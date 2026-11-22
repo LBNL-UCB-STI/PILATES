@@ -30,7 +30,9 @@ def _artifact_key(artifact: Any) -> str:
     return "unknown"
 
 
-def _resolve_via_tracker(tracker: Any, value: str) -> Optional[str]:
+def _resolve_via_tracker(
+    tracker: Optional[Tracker | ArtifactResolver], value: str
+) -> Optional[str]:
     if not isinstance(tracker, (Tracker, ArtifactResolver)):
         return None
     try:
@@ -39,7 +41,9 @@ def _resolve_via_tracker(tracker: Any, value: str) -> Optional[str]:
         return None
 
 
-def _artifact_path(artifact: Any, tracker: Any = None) -> str:
+def _artifact_path(
+    artifact: Any, tracker: Optional[Tracker | ArtifactResolver] = None
+) -> str:
     if isinstance(artifact, (str, Path)):
         text = str(artifact)
         if "://" in text:
@@ -110,7 +114,9 @@ def _step_name(step: Any) -> str:
     return "unknown_step"
 
 
-def _summarize_artifacts(artifacts: list[Any], tracker: Any = None) -> list[str]:
+def _summarize_artifacts(
+    artifacts: list[Any], tracker: Optional[Tracker | ArtifactResolver] = None
+) -> list[str]:
     rows = []
     for artifact in artifacts:
         key = _artifact_key(artifact)
@@ -122,7 +128,7 @@ def _summarize_artifacts(artifacts: list[Any], tracker: Any = None) -> list[str]
     return rows
 
 
-def build_provenance_report(tracker: Any, run_id: str) -> str:
+def build_provenance_report(tracker: Tracker, run_id: str) -> str:
     """
     Build a Markdown provenance report for a run, including a Mermaid DAG.
     """
@@ -249,7 +255,7 @@ def build_provenance_report(tracker: Any, run_id: str) -> str:
 
 
 def write_provenance_report(
-    tracker: Any,
+    tracker: Tracker,
     run_id: str,
     output_path: Path,
 ) -> str:

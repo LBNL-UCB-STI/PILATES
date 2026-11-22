@@ -7,6 +7,7 @@ from typing import Any, Dict, Mapping
 from consist import (
     ExecutionOptions,
     OutputSet,
+    Tracker,
     define_step,
 )
 
@@ -526,7 +527,7 @@ def _native_atlas_preprocess(
 
 def hydrate_atlas_subyear_continuation_outputs(
     *,
-    tracker: Any,
+    tracker: Tracker,
     settings: PilatesConfig,
     workspace: Workspace,
     prior_year: int,

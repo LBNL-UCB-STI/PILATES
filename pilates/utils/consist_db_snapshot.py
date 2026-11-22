@@ -346,7 +346,7 @@ def _sanitize_snapshot_reason(reason: str) -> str:
 
 def _snapshot_tracker_db(
     *,
-    tracker: Any,
+    tracker: object,
     local_db_path: Optional[str],
     dest_db_path: Path,
     checkpoint: bool,
@@ -463,7 +463,7 @@ class ConsistDbSnapshotManager:
         self,
         *,
         settings: PilatesConfig,
-        tracker: Any,
+        tracker: object,
         local_db_path: Optional[str],
         archive_run_dir: str,
         archive_db_path: Optional[str] = None,

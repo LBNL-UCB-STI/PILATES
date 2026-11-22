@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from pilates.config.models import SettingsLike
@@ -11,7 +11,7 @@ from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.settings_helper import get as get_setting
 
 
-def resolve_forecast_year(state: Any) -> Optional[int]:
+def resolve_forecast_year(state: object) -> Optional[int]:
     """Return ``state.forecast_year``, falling back to ``state.year``.
 
     The fallback supports restart paths where ``forecast_year`` may not yet be
@@ -23,7 +23,7 @@ def resolve_forecast_year(state: Any) -> Optional[int]:
     return getattr(state, "year", None)
 
 
-def _frontier_year(state: Any) -> int | None:
+def _frontier_year(state: object) -> int | None:
     atlas_start = getattr(state, "atlas_interval_start_year", None)
     if atlas_start is not None:
         return atlas_start
@@ -33,7 +33,7 @@ def _frontier_year(state: Any) -> int | None:
     return getattr(state, "year", None)
 
 
-def _iteration_value(state: Any) -> int:
+def _iteration_value(state: object) -> int:
     iteration = getattr(state, "iteration", None)
     if iteration is not None:
         return int(iteration)
@@ -43,7 +43,7 @@ def _iteration_value(state: Any) -> int:
     return 0
 
 
-def requires_prior_beam_skim_handoff(*, settings: SettingsLike, state: Any) -> bool:
+def requires_prior_beam_skim_handoff(*, settings: SettingsLike, state: object) -> bool:
     """Whether this invocation must consume a prior BEAM-produced OMX skim.
 
     The start-year, first-iteration invocation is bootstrap: it may use the
@@ -66,7 +66,7 @@ def requires_prior_beam_skim_handoff(*, settings: SettingsLike, state: Any) -> b
 
 
 def requires_prior_beam_linkstats_handoff(
-    *, settings: SettingsLike, state: Any
+    *, settings: SettingsLike, state: object
 ) -> bool:
     """Whether this invocation must consume a prior BEAM-produced linkstats handoff.
 

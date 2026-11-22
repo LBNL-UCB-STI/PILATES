@@ -19,6 +19,7 @@ from consist import Artifact, CacheOptions, ExecutionOptions, OutputSet
 
 if TYPE_CHECKING:
     from pilates.config.models import SettingsLike
+    from pilates.utils.state_access import YearStateLike
 
 OutputT = TypeVar("OutputT")
 
@@ -51,7 +52,7 @@ class TypedOutputProjector(Protocol, Generic[OutputT]):
         outputs: Mapping[str, Artifact],
         *,
         settings: SettingsLike,
-        state: Any,
+        state: YearStateLike,
         workspace: Any,
         step_inputs: StepCallInputs | None = None,
     ) -> OutputT: ...
