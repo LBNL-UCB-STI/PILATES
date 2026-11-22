@@ -327,7 +327,7 @@ def _retry_merge_shard_path(source_run_dir: Path, root_run_id: str) -> Path:
     )
 
 
-def _all_runs(tracker: Any) -> list[Any]:
+def _all_runs(tracker: Tracker) -> list[Any]:
     return list(tracker.find_runs(limit=100_000))
 
 
@@ -426,7 +426,7 @@ def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
 
 
 def _resolve_root_run_id(
-    tracker: Any,
+    tracker: Tracker,
     *,
     root_run_id: Optional[str] = None,
     main_db_path: Optional[str | os.PathLike[str]] = None,
@@ -565,14 +565,14 @@ def _sync_marker_to_destinations(
         shutil.copy2(marker_path, target)
 
 
-def _dispose_tracker(tracker: Any) -> None:
+def _dispose_tracker(tracker: object) -> None:
     if isinstance(tracker, TrackerLike):
         tracker.close()
 
 
 def _merge_scoped_run_db(
     *,
-    source_tracker: Any,
+    source_tracker: Tracker,
     source_run_dir: Path,
     root_run_id: str,
     main_db_path: str | os.PathLike[str],
@@ -716,7 +716,7 @@ def _merge_scoped_run_db(
 def _merge_scoped_run_db_with_retry(
     *,
     settings: PilatesConfig,
-    source_tracker: Any,
+    source_tracker: Tracker,
     source_run_dir: Path,
     root_run_id: str,
     main_db_path: str | os.PathLike[str],
@@ -787,7 +787,7 @@ def _merge_scoped_run_db_with_retry(
 def promote_run_to_recovery_roots(
     settings: PilatesConfig,
     archive_run_dir: Optional[str | os.PathLike[str]] = None,
-    tracker: Any = None,
+    tracker: Optional[Tracker] = None,
     roots: Optional[Iterable[str | os.PathLike[str]]] = None,
     verify: bool = True,
     root_run_id: Optional[str] = None,

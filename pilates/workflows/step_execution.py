@@ -24,6 +24,7 @@ from pilates.workflows.sim_state import ArtifactRef, SimState
 
 if TYPE_CHECKING:
     from pilates.config.models import SettingsLike
+    from pilates.utils.state_access import YearStateLike
     from pilates.workflows.dry_run import (
         DryRunRecorder,
         SymbolicOutputs,
@@ -43,7 +44,7 @@ class ScenarioDriftError(RuntimeError):
 def _is_step_archive_enabled(
     *,
     settings: SettingsLike,
-    state: Any,
+    state: YearStateLike,
     workspace: Any,
 ) -> bool:
     enable_archive_copy = get_setting(settings, "run.enable_archive_copy")
@@ -59,7 +60,7 @@ def _resolve_cache_options(
     *,
     definition: StepDefinition[Any],
     settings: SettingsLike,
-    state: Any,
+    state: YearStateLike,
     workspace: Any,
 ) -> CacheOptions | None:
     cache_options = (
@@ -83,7 +84,7 @@ def _configured_step_archive_root(
     *,
     definition: StepDefinition[Any],
     settings: SettingsLike,
-    state: Any,
+    state: YearStateLike,
     workspace: Any,
     stage: str,
     year: int | None,
@@ -129,7 +130,7 @@ def execute_step(
     scenario: Any,
     definition: StepDefinition[OutputT],
     settings: SettingsLike,
-    state: Any,
+    state: YearStateLike,
     workspace: Any,
     stage: str,
     year: int | None,
@@ -149,7 +150,7 @@ def execute_step(
     scenario: Any,
     definition: StepDefinition[OutputT],
     settings: SettingsLike,
-    state: Any,
+    state: YearStateLike,
     workspace: Any,
     stage: str,
     year: int | None,
@@ -168,7 +169,7 @@ def execute_step(
     scenario: Any,
     definition: StepDefinition[OutputT],
     settings: SettingsLike,
-    state: Any,
+    state: YearStateLike,
     workspace: Any,
     stage: str,
     year: int | None,

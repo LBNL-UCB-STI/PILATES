@@ -1659,6 +1659,9 @@ class _OuterAdmissionState:
     def complete_step(self, _stage) -> None:
         return None
 
+    def is_start_year(self) -> bool:
+        return False
+
 
 def _prepared_outer_admission_run(
     tmp_path: Path,

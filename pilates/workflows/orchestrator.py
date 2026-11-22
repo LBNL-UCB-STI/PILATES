@@ -235,7 +235,7 @@ def bootstrap_initial_state(
     *,
     scenario: Any,
     settings: PilatesConfig,
-    state: Any,
+    state: WorkflowState,
     workspace: Workspace,
     last_synced: dict[str, ArtifactRef] | None = None,
     plan_recorder: DryRunRecorder | None = None,

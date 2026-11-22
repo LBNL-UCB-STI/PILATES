@@ -22,11 +22,10 @@ from typing import (
     Any,
     Dict,
     Optional,
-    Protocol,
     cast,
-    runtime_checkable,
 )
 
+from consist import Tracker
 from consist.models.run import Run
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
@@ -107,7 +106,7 @@ class PreparedRunContext:
     state: WorkflowState
     workspace: Workspace
     runtime_context: WorkflowRuntimeContext
-    tracker: Any
+    tracker: Tracker
     snapshot_manager: ConsistDbSnapshotManager
     run_name: str
     scenario_id: str
@@ -122,19 +121,11 @@ class PreparedRunContext:
     run_publisher: Optional[ConsistRunPublisher]
 
 
-@runtime_checkable
-class _TrackerWithDb(Protocol):
-    db: Any
-
-
-def query_expected_prefix_steps(tracker: Any, scenario_name: str) -> int:
+def query_expected_prefix_steps(tracker: Optional[Tracker], scenario_name: str) -> int:
     """
     Query tracker DB for the count of completed child step runs from the latest run of scenario_name.
     """
     if tracker is None:
-        return 0
-
-    if not isinstance(tracker, _TrackerWithDb):
         return 0
 
     db = tracker.db
@@ -244,10 +235,8 @@ def _build_scenario_runtime_contract(
     )
 
 
-def _is_at_initial_workflow_boundary(state: Any) -> bool:
+def _is_at_initial_workflow_boundary(state: WorkflowState) -> bool:
     """Return True when state is positioned at the first enabled major stage of start_year."""
-    if not isinstance(state, WorkflowState):
-        return False
     if not state.is_start_year() or int(state.iteration or 0) != 0:
         return False
     first_enabled = next(

@@ -62,7 +62,7 @@ def _materialize_artifact_to_existing_path(
     if target_root is None:
         return None
     try:
-        tracker: Any = cr.current_tracker()
+        tracker: object = cr.current_tracker()
     except Exception:
         tracker = None
     if tracker is None and isinstance(value, Artifact):
