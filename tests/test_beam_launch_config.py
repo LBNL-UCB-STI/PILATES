@@ -1157,3 +1157,39 @@ def test_beam_consist_metadata_registers_freight_reference_policies(
             assert plans_policy.required is False
         assert vtypes_policy.identity_policy == "content_hash"
         assert vtypes_policy.required is False
+
+
+def test_build_beam_launch_config_allows_missing_vehicles_file_path_in_base_conf(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.config_hocon import (
+        beam_config_env_overrides,
+        resolve_beam_config_value,
+    )
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam_input" / "seattle"
+    _write_base_config(source_root)
+
+    vehicles_src = tmp_path / "vehicles.parquet"
+    vehicles_src.write_bytes(b"vehicles")
+
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={"vehicles_beam_in": vehicles_src},
+    )
+
+    env = beam_config_env_overrides(settings, config_root=launch_config.root)
+    assert resolve_beam_config_value(
+        launch_config.primary_config,
+        key="beam.agentsim.agents.vehicles.vehiclesFilePath",
+        env_overrides=env,
+    ) == str(launch_config.root / "scenario" / "vehicles.parquet")

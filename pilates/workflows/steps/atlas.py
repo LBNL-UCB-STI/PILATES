@@ -259,13 +259,8 @@ def _select_atlas_datastore_from_sim_state(
     else:
         forecast_candidate = sim_state.land_use.forecast_output
         current_candidate = sim_state.land_use.current_h5
-        forecast_name = os.path.basename(artifact_to_path(forecast_candidate) or "")
         current_name = os.path.basename(artifact_to_path(current_candidate) or "")
-        if (
-            forecast_candidate is not None
-            and forecast_name == expected_filename
-            and current_name != expected_filename
-        ):
+        if forecast_candidate is not None and current_name != expected_filename:
             return forecast_candidate
         pop_candidate = sim_state.land_use.population_source
         pop_name = os.path.basename(artifact_to_path(pop_candidate) or "")
