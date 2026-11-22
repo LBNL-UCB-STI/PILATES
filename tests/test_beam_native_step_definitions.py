@@ -749,6 +749,8 @@ def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
         path.write_text(f"{key}\n", encoding="utf-8")
         inputs.append(path)
     workspace = SimpleNamespace(
+        archive_run_dir=None,
+        full_path=".",
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
@@ -2071,6 +2073,8 @@ def test_native_beam_run_logs_raw_zarr_directly_without_materializing_copy(
     (raw_zarr / ".zgroup").parent.mkdir(parents=True)
     (raw_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
     workspace = SimpleNamespace(
+        archive_run_dir=None,
+        full_path=".",
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )

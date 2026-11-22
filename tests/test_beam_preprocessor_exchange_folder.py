@@ -1,9 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 import pandas as pd
+
+from tests.conftest import make_conforming_workspace
 
 from pilates.beam.beam_input_staging import (
     BeamDataHelper,
@@ -72,10 +73,11 @@ def _make_preprocessor(
 
 
 def _make_workspace(tmp_path: Path):
-    workspace = MagicMock()
-    workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam" / "input")
-    workspace.full_path = str(tmp_path)
-    return workspace
+    return make_conforming_workspace(
+        tmp_path,
+        full_path=str(tmp_path),
+        beam_mutable_data_dir=str(tmp_path / "beam" / "input"),
+    )
 
 
 @pytest.fixture(autouse=True)

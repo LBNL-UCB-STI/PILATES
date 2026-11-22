@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Tuple
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 
 from pilates.activitysim.outputs import configured_asim_output_keys
 from pilates.beam.outputs import requires_omx_skim_output
@@ -128,7 +131,7 @@ def resolve_runtime_input_output_overrides(
 def resolve_runtime_output_overrides(
     *,
     step_name: str,
-    settings: Any,
+    settings: SettingsLike,
     required_outputs: Tuple[str, ...],
     optional_outputs: Tuple[str, ...],
 ) -> tuple[Tuple[str, ...], Tuple[str, ...]]:

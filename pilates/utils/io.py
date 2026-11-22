@@ -10,16 +10,16 @@ import argparse
 import logging
 import os
 import pandas as pd
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from pilates.utils.settings_helper import get as get_setting
-from pilates.config.models import load_config, PilatesConfig
+from pilates.config.models import load_config, PilatesConfig, SettingsLike
 
 logger = logging.getLogger(__name__)
 
 
 def _apply_runtime_options(
-    settings: Any,
+    settings: SettingsLike,
     *,
     settings_file: str,
     run_dir: Optional[str] = None,
@@ -36,7 +36,7 @@ def _apply_runtime_options(
     settings.timestamp = timestamp
 
 
-def apply_runtime_flags(settings: Any, enabled_flags: Dict[str, bool]) -> None:
+def apply_runtime_flags(settings: SettingsLike, enabled_flags: Dict[str, bool]) -> None:
     if isinstance(settings, PilatesConfig):
         settings.runtime.flags.land_use_enabled = enabled_flags["land_use_enabled"]
         settings.runtime.flags.vehicle_ownership_model_enabled = enabled_flags[
@@ -56,14 +56,14 @@ def apply_runtime_flags(settings: Any, enabled_flags: Dict[str, bool]) -> None:
         setattr(settings, attr, value)
 
 
-def get_land_use_model(settings: Any) -> Optional[str]:
+def get_land_use_model(settings: SettingsLike) -> Optional[str]:
     """Resolve the configured land-use model across legacy/new schemas."""
     return get_setting(
         settings, "run.models.land_use", default=get_setting(settings, "land_use_model")
     )
 
 
-def get_vehicle_ownership_model(settings: Any) -> Optional[str]:
+def get_vehicle_ownership_model(settings: SettingsLike) -> Optional[str]:
     """Resolve the configured vehicle-ownership model across legacy/new schemas."""
     return get_setting(
         settings,
@@ -72,7 +72,7 @@ def get_vehicle_ownership_model(settings: Any) -> Optional[str]:
     )
 
 
-def get_activity_demand_model(settings: Any) -> Optional[str]:
+def get_activity_demand_model(settings: SettingsLike) -> Optional[str]:
     """Resolve the configured activity-demand model across legacy/new schemas."""
     return get_setting(
         settings,
@@ -81,7 +81,7 @@ def get_activity_demand_model(settings: Any) -> Optional[str]:
     )
 
 
-def get_traffic_assignment_model(settings: Any) -> Optional[str]:
+def get_traffic_assignment_model(settings: SettingsLike) -> Optional[str]:
     """
     Resolve the configured traffic-assignment model across legacy/new schemas.
     """
@@ -93,7 +93,7 @@ def get_traffic_assignment_model(settings: Any) -> Optional[str]:
     )
 
 
-def is_land_use_enabled(settings: Any) -> bool:
+def is_land_use_enabled(settings: SettingsLike) -> bool:
     """
     Resolve whether land use is enabled using attached runtime flags when present.
     """
@@ -108,7 +108,7 @@ def is_land_use_enabled(settings: Any) -> bool:
     return get_land_use_model(settings) == "urbansim"
 
 
-def is_activity_demand_enabled(settings: Any) -> bool:
+def is_activity_demand_enabled(settings: SettingsLike) -> bool:
     """
     Resolve whether activity demand is enabled using attached runtime flags when present.
     """
@@ -130,7 +130,7 @@ def is_activity_demand_enabled(settings: Any) -> bool:
     return get_setting(settings, "activitysim") is not None
 
 
-def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
+def compute_model_enabled_flags(settings: SettingsLike) -> Dict[str, bool]:
     """
     Compute which models are enabled based on the provided settings configuration.
 
@@ -294,7 +294,7 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
 
 
 def read_datastore(
-    settings: Any,
+    settings: SettingsLike,
     year: Optional[int] = None,
     warm_start: bool = False,
     mutable_data_dir: Optional[str] = None,

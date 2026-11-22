@@ -29,7 +29,7 @@ from typing import (
 
 from consist.models.run import Run
 from pilates.config import PilatesConfig
-from pilates.workspace import Workspace, Workspace as _RealWorkspace
+from pilates.workspace import Workspace
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
 from pilates.utils import consist_runtime as cr
@@ -426,15 +426,7 @@ def _prepare_run_context(
         query_expected_prefix_steps(tracker, run_name) if is_restart_run else 0
     )
 
-    @runtime_checkable
-    class _HasArchiveStepSnapshot(Protocol):
-        def snapshot_after_archive_step(self, step_name: str) -> bool: ...
-
-    on_archive_commit = (
-        snapshot_manager.snapshot_after_archive_step
-        if isinstance(snapshot_manager, _HasArchiveStepSnapshot)
-        else None
-    )
+    on_archive_commit = snapshot_manager.snapshot_after_archive_step
 
     with tracker.trace(
         name="workspace_setup",
@@ -446,8 +438,10 @@ def _prepare_run_context(
             local_root,
             folder_name=run_name,
             archive_run_dir=archive_run_dir,
+            on_archive_commit=on_archive_commit,
+            expected_prefix_steps=expected_prefix_steps,
         )
-        if isinstance(workspace, _RealWorkspace):
+        if isinstance(workspace, Workspace):
             workspace.on_archive_commit = on_archive_commit
             workspace.expected_prefix_steps = expected_prefix_steps
     runtime_context = WorkflowRuntimeContext.from_parts(

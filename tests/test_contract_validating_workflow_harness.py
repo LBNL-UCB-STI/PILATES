@@ -48,13 +48,18 @@ from pilates.workflows.steps import (
     urbansim_postprocess,
     urbansim_run,
 )
-from tests.helpers.contract_container_backend import ContractValidatingContainerBackend
+from tests.helpers.contract_container_backend import (
+    ContractValidatingContainerBackend,
+    MountTable,
+)
 from tests.helpers.micro_world_fixture import (
     MICRO_HOUSEHOLD_IDS,
     MicroWorldEnv,
     build_micro_world,
     write_micro_skims_omx,
 )
+from pilates.runtime import launcher
+
 
 pytestmark = pytest.mark.contract_harness
 
@@ -1819,3 +1824,113 @@ def test_forecast_year_scenario_fork_reuses_base_year_cache_and_branches_forecas
         # only Year 2017 beam_run executes a container due to the 2017 BEAM policy change!
         fork_models = [inv.model_name for inv in backend.invocations[baseline_count:]]
         assert fork_models == ["beam_run"]
+
+
+def test_supply_demand_warmstart_handoff_multi_iteration_contract_runner(
+    tmp_path: Path,
+) -> None:
+    """Validate iter 0 -> iter 1 supply-demand warmstart handoff under ContractValidatingContainerBackend.
+
+    Exercises the full native pipeline:
+    - iter 0: beam_preprocess -> beam_run (generates linkstats)
+    - iter 1: beam_preprocess (binds iter 0 linkstats) -> beam_run (compiles launch config with linkstats warmstart)
+    Verifies that build_beam_launch_config and validate_staged_linkstats_reference pass without mock bypassing.
+    """
+    env = build_micro_world(
+        tmp_path,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=2,
+        max_year_intervals=1,
+        enable_archive_copy=True,
+        database_enabled=True,
+    )
+
+    with ContractValidatingContainerBackend() as backend:
+        launcher.main(settings=env.settings)
+
+        invoked_models = [inv.model_name for inv in backend.invocations]
+        assert invoked_models == [
+            "urbansim",
+            "atlas",
+            "atlas",
+            "activitysim_numba_warmup",
+            "activitysim",
+            "beam_run",
+            "activitysim",
+            "beam_run",
+        ]
+
+        # Check second beam_run invocation (iter 1) has initialLinkstatsFilePath staged and bound
+        second_beam_inv = backend.invocations[7]
+        assert second_beam_inv.model_name == "beam_run"
+        config_cpath = backend._parse_flag(second_beam_inv.command, "--config")
+        mounts = MountTable(second_beam_inv.volumes)
+        config_hpath = mounts.resolve(config_cpath, require_writable=False)
+        assert config_hpath.exists()
+        config_text = config_hpath.read_text()
+        assert "initialLinkstatsFilePath" in config_text
+        assert "warmstarts/linkstats_warmstart.csv.gz" in config_text
+
+
+def test_cross_node_wiped_scratch_replay_from_archive_snapshot_duckdb(
+    tmp_path: Path,
+) -> None:
+    """Validate that a fresh scratch workspace cleanly restores duckdb snapshot from archive_run_dir.
+
+    Simulates Lawrencium cross-node execution:
+    1. Node 1 runs simulation to archive directory with database_enabled=True, enable_archive_copy=True.
+    2. Node 1 scratch directory is wiped / clean new scratch node allocated.
+    3. Node 2 starts with run_dir pointing to the archive_run_dir.
+    4. Launcher restores .consist/snapshots/latest/provenance.duckdb into local scratch and all steps cache hit.
+    """
+    node1_scratch = tmp_path / "node1_scratch"
+    node1_scratch.mkdir(parents=True, exist_ok=True)
+
+    env = build_micro_world(
+        node1_scratch,
+        start_year=2015,
+        end_year=2017,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=1,
+        enable_archive_copy=True,
+        database_enabled=True,
+    )
+
+    with ContractValidatingContainerBackend() as backend:
+        # Run 1 on Node 1: initial run executes container steps and archives outputs + duckdb snapshot
+        launcher.main(settings=env.settings)
+        initial_invocations = len(backend.invocations)
+        assert (
+            initial_invocations == 6
+        )  # urbansim, atlas (x2), warmup, activitysim, beam_run
+
+        node1_archive = _latest_run_dir(env.paths.archive_root)
+
+        # Verify duckdb snapshot was committed to archive directory
+        latest_snapshot = (
+            node1_archive / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+        )
+        assert latest_snapshot.exists(), (
+            f"Expected DuckDB snapshot at {latest_snapshot}"
+        )
+
+        # Node 2: fresh empty scratch, pointing to same archive directory for replay/resume
+        node2_scratch = tmp_path / "node2_scratch"
+        node2_scratch.mkdir(parents=True, exist_ok=True)
+
+        replay_settings = env.settings.model_copy(deep=True)
+        replay_settings.runtime.options.run_dir = str(node1_archive)
+        replay_settings.runtime.options.output_dir = str(node2_scratch / "output")
+
+        launcher.main(settings=replay_settings)
+
+        # All steps should hit cache on Node 2 because provenance duckdb was restored from snapshot
+        replay_invocations = len(backend.invocations) - initial_invocations
+        assert replay_invocations == 0

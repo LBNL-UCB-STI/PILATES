@@ -16,6 +16,7 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
     resolve_beam_config_value,
 )
+from pilates.config.models import SettingsLike
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.coupler_helpers import resolve_existing_path
@@ -319,7 +320,7 @@ def _source_year_from_vehicles2_path(path: str) -> Optional[int]:
 def validate_population_consistency(
     *,
     workspace: Any,
-    settings: Any,
+    settings: SettingsLike,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     state: Any = None,
 ) -> None:
@@ -435,7 +436,7 @@ def validate_population_consistency(
 def filter_vehicles_to_staged_households(
     *,
     workspace: Any,
-    settings: Any,
+    settings: SettingsLike,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     state: Any = None,
 ) -> Dict[str, Any]:
@@ -727,7 +728,7 @@ def summarize_vehicle_category_consistency(
     *,
     households: pd.DataFrame,
     vehicles: pd.DataFrame,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
 ) -> Dict[str, Any]:
     vehicle_types_path = _resolve_beam_vehicle_types_path(
@@ -881,7 +882,9 @@ def _synthesize_namespaced_vehicle_ids(
     return base_ids.astype(str)
 
 
-def _resolve_beam_vehicle_types_path(*, settings: Any, workspace: Any) -> Optional[str]:
+def _resolve_beam_vehicle_types_path(
+    *, settings: SettingsLike, workspace: Any
+) -> Optional[str]:
     try:
         config_path = beam_primary_config_path(settings, workspace=workspace)
     except Exception:
@@ -1042,7 +1045,9 @@ class _PlanMemoryConfig:
     replan_hh_samp_size: int
 
 
-def _resolve_plan_memory_config(settings: Any, state: Any) -> _PlanMemoryConfig:
+def _resolve_plan_memory_config(
+    settings: SettingsLike, state: Any
+) -> _PlanMemoryConfig:
     raw_max_memory = (
         get_setting(settings, "beam.max_plans_memory", 5) if settings is not None else 5
     )
@@ -1564,7 +1569,7 @@ def merge_replanned_asim_files(
     workspace: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     format_specific_output_records_fn: Callable[..., List[FileRecord]],
-    settings: Any = None,
+    settings: SettingsLike | None = None,
     state: Any = None,
 ) -> List[FileRecord]:
     logger.info("Merging asim outputs with existing beam input scenario files.")
@@ -1633,7 +1638,7 @@ def copy_plans_from_asim(
     input_records: RecordStore,
     workspace: Any,
     state: Any,
-    settings: Any,
+    settings: SettingsLike,
     required_input_data: List[str],
     copy_initial_asim_files_fn: Callable[..., List[FileRecord]],
     merge_replanned_asim_files_fn: Callable[..., List[FileRecord]],
@@ -1726,7 +1731,7 @@ def handle_linkstats(
     previous_beam_records: Sequence[FileRecord],
     store: RecordStore,
     state: Any,
-    settings: Any,
+    settings: SettingsLike,
 ) -> None:
     """
     Ensure a single explicit warm-start linkstats record is present.

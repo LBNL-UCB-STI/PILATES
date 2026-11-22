@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Generic,
@@ -15,6 +16,9 @@ from typing import (
 )
 
 from consist import Artifact, CacheOptions, ExecutionOptions, OutputSet
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 
 OutputT = TypeVar("OutputT")
 
@@ -46,7 +50,7 @@ class TypedOutputProjector(Protocol, Generic[OutputT]):
         self,
         outputs: Mapping[str, Artifact],
         *,
-        settings: Any,
+        settings: SettingsLike,
         state: Any,
         workspace: Any,
         step_inputs: StepCallInputs | None = None,

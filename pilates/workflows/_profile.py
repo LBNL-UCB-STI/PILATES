@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict
+from typing import Dict
 
-from pilates.config.models import PilatesConfig
+from pilates.config.models import PilatesConfig, SettingsLike
 from pilates.utils.io import apply_runtime_flags, compute_model_enabled_flags
 
 
@@ -45,7 +45,7 @@ def workflow_profile_from_flags(enabled_flags: Dict[str, bool]) -> WorkflowProfi
     )
 
 
-def ensure_runtime_flags_initialized(settings: Any) -> Dict[str, bool]:
+def ensure_runtime_flags_initialized(settings: SettingsLike) -> Dict[str, bool]:
     """Ensure runtime enablement flags exist on ``settings`` and return them."""
     if isinstance(settings, PilatesConfig):
         return {

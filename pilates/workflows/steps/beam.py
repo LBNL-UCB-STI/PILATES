@@ -16,7 +16,10 @@ from pathlib import Path
 import re
 import shutil
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 
 import consist as cr
 from consist import (
@@ -163,7 +166,7 @@ def _linkstats_warmstart_suffix(
     *,
     workspace: Any,
     step_inputs: StepCallInputs | None,
-    settings: Any = None,
+    settings: SettingsLike | None = None,
 ) -> str:
     """Preserve the selected warm-start file format in its logged output path."""
     source_path = None
@@ -176,7 +179,7 @@ def _linkstats_warmstart_suffix(
     return suffixes or ".csv.gz"
 
 
-def _beam_population_input_suffix(settings: Any) -> str:
+def _beam_population_input_suffix(settings: SettingsLike) -> str:
     """Return the suffix written by the ActivitySim-to-BEAM staging step."""
 
     try:
@@ -194,7 +197,7 @@ def _beam_population_input_suffix(settings: Any) -> str:
     )
 
 
-def _beam_vehicles_input_suffix(settings: Any) -> str:
+def _beam_vehicles_input_suffix(settings: SettingsLike) -> str:
     """Return the suffix written by the ATLAS-to-BEAM vehicle staging step."""
 
     preferred_format = get_setting(settings, "activitysim.file_format")
@@ -203,7 +206,7 @@ def _beam_vehicles_input_suffix(settings: Any) -> str:
 
 def _beam_preprocess_native_output_paths(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs | None = None,
@@ -253,7 +256,9 @@ def _beam_preprocess_native_output_paths(
     }
 
 
-def _is_final_beam_iteration(*, settings: Any, state: Any, iteration: int) -> bool:
+def _is_final_beam_iteration(
+    *, settings: SettingsLike, state: Any, iteration: int
+) -> bool:
     effective_iters_fn = getattr(state, "effective_supply_demand_iterations", None)
     if callable(effective_iters_fn):
         total = effective_iters_fn(resumed_iteration=iteration)
@@ -270,7 +275,7 @@ def _is_final_beam_iteration(*, settings: Any, state: Any, iteration: int) -> bo
 
 def _beam_run_native_output_paths(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs | None = None,
@@ -303,7 +308,9 @@ def _beam_run_native_output_paths(
     }
 
 
-def _beam_run_output_root(*, settings: Any, state: Any, workspace: Any) -> Path:
+def _beam_run_output_root(
+    *, settings: SettingsLike, state: Any, workspace: Any
+) -> Path:
     """Return the one BEAM run tree owned by this region/year/iteration."""
 
     year = resolve_forecast_year(state)
@@ -318,7 +325,7 @@ def _beam_run_output_root(*, settings: Any, state: Any, workspace: Any) -> Path:
 
 def _beam_postprocess_native_output_paths(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs | None = None,
@@ -369,7 +376,7 @@ def _beam_postprocess_native_output_paths(
 
 def _beam_full_skim_native_output_paths(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs | None = None,
@@ -465,7 +472,7 @@ def _validate_native_outputs(
     outputs: Any,
     *,
     step_name: str,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
 ) -> None:
@@ -482,7 +489,7 @@ def _validate_native_outputs(
 def _project_beam_preprocess_outputs(
     outputs: Mapping[str, Any],
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs,
@@ -604,7 +611,7 @@ def _project_beam_preprocess_outputs(
 def _project_beam_run_outputs(
     outputs: Mapping[str, Any],
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs | None = None,
@@ -643,7 +650,7 @@ def _emit_skim_provenance_sidecars(
     step_name: str,
     declared_outputs: Mapping[str, Path],
     source_paths: Mapping[str, Path],
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     context: Any,
     skim_keys: Iterable[str],
@@ -728,7 +735,7 @@ def _emit_skim_provenance_sidecars(
 def _project_beam_postprocess_outputs(
     outputs: Mapping[str, Any],
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs,
@@ -815,7 +822,7 @@ def _project_beam_postprocess_outputs(
 def _project_beam_full_skim_outputs(
     outputs: Mapping[str, Any],
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs,
@@ -950,7 +957,7 @@ def _resolved_beam_inputs(
     )
 
 
-def _beam_run_identity_payload(*, settings: Any) -> dict[str, Any]:
+def _beam_run_identity_payload(*, settings: SettingsLike) -> dict[str, Any]:
     from pilates.beam.launch_config import compute_beam_launch_overrides
     from pilates.beam.config_hocon import (
         beam_config_env_overrides,
@@ -979,7 +986,7 @@ def _beam_run_identity_payload(*, settings: Any) -> dict[str, Any]:
 
 def _native_execution_options(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     step_inputs: StepCallInputs,
@@ -1019,7 +1026,7 @@ def _native_execution_options(
 
 
 def _beam_preprocess_identity_payload(
-    *, settings: Any, step_inputs: StepCallInputs
+    *, settings: SettingsLike, step_inputs: StepCallInputs
 ) -> dict[str, Any]:
     """Return BEAM-preprocess's portable, resolver-owned identity closure.
 
@@ -1075,7 +1082,7 @@ def _beam_preprocess_identity_payload(
 
 def _resolve_beam_preprocess_inputs(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
@@ -1197,7 +1204,7 @@ def _resolve_beam_preprocess_inputs(
 
 def _resolve_beam_run_inputs(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
@@ -1394,7 +1401,7 @@ def _postprocess_destination(*, key: str, workspace: Any, iteration: int) -> Pat
 
 def _resolve_beam_postprocess_inputs(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
@@ -1514,7 +1521,7 @@ def _resolve_beam_postprocess_inputs(
 
 def _resolve_beam_full_skim_inputs(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     sim_state: SimState | None = None,
@@ -1619,7 +1626,7 @@ def _native_beam_preprocess(
     atlas_vehicles2_output: Path | None = None,
     beam_plans_out: Path | None = None,
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Workspace,
     _consist_ctx: Any,
@@ -1704,16 +1711,18 @@ def _native_beam_preprocess(
 
 def _preflight_beam_launch_inputs(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Workspace,
     beam_launch_config: BeamLaunchConfig,
     run_context: Any,
     expected_warmstart_path: Path | None = None,
 ) -> None:
-    report_dir_path = getattr(workspace, "archive_run_dir", None)
-    if report_dir_path is None:
-        report_dir_path = getattr(workspace, "full_path", Path("."))
+    report_dir_path = (
+        workspace.archive_run_dir
+        if workspace.archive_run_dir is not None
+        else workspace.full_path
+    )
 
     validate_kwargs: dict[str, Any] = {
         "settings": settings,
@@ -1762,7 +1771,7 @@ def _preflight_beam_launch_inputs(
 def _compile_beam_launch_config(
     *,
     identity: Any,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
     year: int,
     iteration: int,
@@ -1875,7 +1884,7 @@ def _native_beam_run(
     linkstats_warmstart: Path | None = None,
     vehicles_beam_in: Artifact | Path | None = None,
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Workspace,
     beam_launch_config: BeamLaunchConfig | None = None,
@@ -1989,7 +1998,7 @@ def _native_beam_postprocess(
     *,
     beam_run_dynamic_paths: Mapping[str, Path],
     beam_postprocess_output_paths: Mapping[str, Path],
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Workspace,
     _consist_ctx: Any,
@@ -2085,7 +2094,7 @@ def _native_beam_full_skim(
     linkstats_warmstart: Path | None = None,
     linkstats: Path | None = None,
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Workspace,
     beam_launch_config: BeamLaunchConfig | None = None,

@@ -23,6 +23,7 @@ from pilates.workflows.contracts import StepCallInputs, StepDefinition
 from pilates.workflows.sim_state import ArtifactRef, SimState
 
 if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
     from pilates.workflows.dry_run import (
         DryRunRecorder,
         SymbolicOutputs,
@@ -41,7 +42,7 @@ class ScenarioDriftError(RuntimeError):
 
 def _is_step_archive_enabled(
     *,
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
 ) -> bool:
@@ -57,7 +58,7 @@ def _is_step_archive_enabled(
 def _resolve_cache_options(
     *,
     definition: StepDefinition[Any],
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
 ) -> CacheOptions | None:
@@ -81,7 +82,7 @@ def _resolve_cache_options(
 def _configured_step_archive_root(
     *,
     definition: StepDefinition[Any],
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     stage: str,
@@ -127,7 +128,7 @@ def execute_step(
     *,
     scenario: Any,
     definition: StepDefinition[OutputT],
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     stage: str,
@@ -147,7 +148,7 @@ def execute_step(
     *,
     scenario: Any,
     definition: StepDefinition[OutputT],
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     stage: str,
@@ -166,7 +167,7 @@ def execute_step(
     *,
     scenario: Any,
     definition: StepDefinition[OutputT],
-    settings: Any,
+    settings: SettingsLike,
     state: Any,
     workspace: Any,
     stage: str,
