@@ -50,6 +50,7 @@ _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY = (
 )
 _POLICY_OVERRIDE_KEYS: tuple[str, ...] = (
     "beam.inputDirectory",
+    "beam.agentsim.agents.vehicles.vehiclesFilePath",
     _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
     _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
     *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
@@ -543,6 +544,7 @@ def build_beam_launch_config(
             introduces_missing_format_key
             or introduces_missing_skim_name_key
             or introduces_missing_full_skim_timeout_key
+            or vehicle_source is not None
         ),
     )
     if overrides.get("beam.exchange.scenario.fileFormat") == "parquet":
