@@ -747,9 +747,9 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                     r for r in atlas_runs if getattr(r, "status", None) == "completed"
                 ]
                 target_atlas = (
-                    completed_atlas[-1]
+                    completed_atlas[0]
                     if completed_atlas
-                    else (atlas_runs[-1] if atlas_runs else None)
+                    else (atlas_runs[0] if atlas_runs else None)
                 )
                 if target_atlas is not None:
                     atlas_run_id = str(target_atlas.id)
@@ -767,9 +767,9 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                     if getattr(r, "status", None) == "completed"
                 ]
                 target_preprocess = (
-                    completed_preprocess[-1]
+                    completed_preprocess[0]
                     if completed_preprocess
-                    else (preprocess_runs[-1] if preprocess_runs else None)
+                    else (preprocess_runs[0] if preprocess_runs else None)
                 )
                 if target_preprocess is not None:
                     preprocess_run_id = str(target_preprocess.id)
