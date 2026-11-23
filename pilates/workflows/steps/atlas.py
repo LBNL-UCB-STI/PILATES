@@ -527,7 +527,6 @@ def _native_atlas_preprocess(
 def _recover_prior_atlas_subyear_files(
     *,
     workspace: Workspace,
-    settings: PilatesConfig,
     state: WorkflowState | None,
     tracker: Tracker | None,
     prior_year: int,
@@ -554,8 +553,13 @@ def _recover_prior_atlas_subyear_files(
             resolved_outputs = resolved_runs.get(str(run_id), {})
             for fname in list(missing):
                 for src_path in resolved_outputs.values():
-                    if src_path.name == fname and src_path.is_file():
-                        shutil.copy2(src_path, target_dir / fname)
+                    candidate = (
+                        src_path
+                        if src_path.name == fname
+                        else (src_path / fname if src_path.is_dir() else None)
+                    )
+                    if candidate is not None and candidate.is_file():
+                        shutil.copy2(candidate, target_dir / fname)
                         missing.remove(fname)
                         break
         except Exception as exc:
@@ -586,8 +590,10 @@ def _recover_prior_atlas_subyear_files(
             candidate_roots.append(tr_run_dir)
 
     try:
-        atlas_rel_folder = Path(workspace.get_atlas_mutable_input_dir()).relative_to(
-            Path(workspace.full_path)
+        atlas_rel_folder = (
+            Path(workspace.get_atlas_mutable_input_dir())
+            .resolve()
+            .relative_to(Path(workspace.full_path).resolve())
         )
     except Exception:
         atlas_rel_folder = Path("atlas/atlas_input")
@@ -597,7 +603,7 @@ def _recover_prior_atlas_subyear_files(
             break
 
         # Check direct path under archived atlas input directory
-        for rel_dir in (atlas_rel_folder, Path("atlas/atlas_input")):
+        for rel_dir in dict.fromkeys([atlas_rel_folder, Path("atlas/atlas_input")]):
             archived_year_dir = root / rel_dir / f"year{prior_year}"
             if archived_year_dir.is_dir():
                 for fname in list(missing):
@@ -627,19 +633,11 @@ def _recover_prior_atlas_subyear_files(
                         / f"year{prior_year}"
                         / fname,
                     )
-                    found = False
                     for c in candidates:
                         if c.is_file():
                             shutil.copy2(c, target_dir / fname)
                             missing.remove(fname)
-                            found = True
                             break
-                    if not found and scope_dir.is_dir():
-                        for match in scope_dir.rglob(fname):
-                            if match.is_file():
-                                shutil.copy2(match, target_dir / fname)
-                                missing.remove(fname)
-                                break
 
     return missing
 
@@ -675,7 +673,6 @@ def hydrate_atlas_subyear_continuation_outputs(
         # Recover individual continuation files if they were omitted.
         _recover_prior_atlas_subyear_files(
             workspace=workspace,
-            settings=settings,
             state=state,
             tracker=tracker,
             prior_year=prior_year,
@@ -699,7 +696,6 @@ def hydrate_atlas_subyear_continuation_outputs(
         )
         _recover_prior_atlas_subyear_files(
             workspace=workspace,
-            settings=settings,
             state=state,
             tracker=tracker,
             prior_year=prior_year,
@@ -736,6 +732,7 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
     tracker = cr.current_tracker()
     atlas_run_id: str | None = None
     preprocess_run_id: str | None = None
+    hydration_attempted = False
 
     if tracker is not None:
         try:
@@ -745,15 +742,17 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                     model="atlas_run",
                     stage="vehicle_ownership",
                     phase="run",
-                    status="completed",
-                ) or tracker.find_runs(
-                    year=prior_year,
-                    model="atlas_run",
-                    stage="vehicle_ownership",
-                    phase="run",
                 )
-                if atlas_runs:
-                    atlas_run_id = str(atlas_runs[-1].id)
+                completed_atlas = [
+                    r for r in atlas_runs if getattr(r, "status", None) == "completed"
+                ]
+                target_atlas = (
+                    completed_atlas[-1]
+                    if completed_atlas
+                    else (atlas_runs[-1] if atlas_runs else None)
+                )
+                if target_atlas is not None:
+                    atlas_run_id = str(target_atlas.id)
 
             if not has_households:
                 preprocess_runs = tracker.find_runs(
@@ -761,15 +760,19 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                     model="atlas_preprocess",
                     stage="vehicle_ownership",
                     phase="preprocess",
-                    status="completed",
-                ) or tracker.find_runs(
-                    year=prior_year,
-                    model="atlas_preprocess",
-                    stage="vehicle_ownership",
-                    phase="preprocess",
                 )
-                if preprocess_runs:
-                    preprocess_run_id = str(preprocess_runs[-1].id)
+                completed_preprocess = [
+                    r
+                    for r in preprocess_runs
+                    if getattr(r, "status", None) == "completed"
+                ]
+                target_preprocess = (
+                    completed_preprocess[-1]
+                    if completed_preprocess
+                    else (preprocess_runs[-1] if preprocess_runs else None)
+                )
+                if target_preprocess is not None:
+                    preprocess_run_id = str(target_preprocess.id)
 
             if atlas_run_id is not None or preprocess_run_id is not None:
                 hydrate_atlas_subyear_continuation_outputs(
@@ -784,6 +787,7 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                     preserve_existing=True,
                     on_missing="warn",
                 )
+                hydration_attempted = True
         except Exception as exc:
             logger.warning(
                 "Encountered error during ATLAS subyear %s continuation hydration: %s",
@@ -791,36 +795,35 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
                 exc,
             )
 
-    # In case tracker hydration still left files missing, attempt recovery directly
-    if (
-        not (prior_dir / "vehicles_output.RData").is_file()
-        or not (prior_dir / "households_output.RData").is_file()
-    ):
-        _recover_prior_atlas_subyear_files(
-            workspace=workspace,
-            settings=settings,
-            state=state,
-            tracker=tracker,
-            prior_year=prior_year,
-            target_dir=prior_dir,
-            expected_files=("vehicles_output.RData", "households_output.RData"),
-            run_id=atlas_run_id,
-        )
+    # If tracker hydration was not run (e.g. tracker is None or finding runs failed), attempt direct archive recovery
+    if not hydration_attempted:
+        if (
+            not (prior_dir / "vehicles_output.RData").is_file()
+            or not (prior_dir / "households_output.RData").is_file()
+        ):
+            _recover_prior_atlas_subyear_files(
+                workspace=workspace,
+                state=state,
+                tracker=tracker,
+                prior_year=prior_year,
+                target_dir=prior_dir,
+                expected_files=("vehicles_output.RData", "households_output.RData"),
+                run_id=atlas_run_id,
+            )
 
-    if not (prior_dir / "households.csv").is_file():
-        _recover_prior_atlas_subyear_files(
-            workspace=workspace,
-            settings=settings,
-            state=state,
-            tracker=tracker,
-            prior_year=prior_year,
-            target_dir=prior_dir,
-            expected_files=("households.csv",),
-            run_id=preprocess_run_id,
-        )
+        if not (prior_dir / "households.csv").is_file():
+            _recover_prior_atlas_subyear_files(
+                workspace=workspace,
+                state=state,
+                tracker=tracker,
+                prior_year=prior_year,
+                target_dir=prior_dir,
+                expected_files=("households.csv",),
+                run_id=preprocess_run_id,
+            )
 
-    # If prior subyear runs were recorded, fail fast if their outputs couldn't be recovered
-    missing_required = []
+    # If prior subyear runs were recorded in provenance, fail fast if their outputs couldn't be recovered
+    missing_required: list[str] = []
     if atlas_run_id is not None:
         if not (prior_dir / "vehicles_output.RData").is_file():
             missing_required.append("vehicles_output.RData")
