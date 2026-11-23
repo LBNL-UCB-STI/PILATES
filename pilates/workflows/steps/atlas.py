@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
+import logging
 import os
-from typing import Any, Dict, Mapping
+from pathlib import Path
+import shutil
+from typing import Any, Dict, Mapping, Sequence
 
 from consist import (
     ExecutionOptions,
@@ -22,6 +24,7 @@ from pilates.atlas.runner import AtlasLaunchContext, AtlasRunner
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils import consist_runtime as cr
+from pilates.utils.archive_paths import resolve_archive_run_dir
 from pilates.utils.consist_runtime import require_runtime_kwargs
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import get_land_use_model
@@ -59,6 +62,7 @@ from .urbansim import (
     _urbansim_run_native_output_paths,
 )
 
+logger = logging.getLogger(__name__)
 
 # Native Consist step definitions.
 
@@ -520,6 +524,126 @@ def _native_atlas_preprocess(
     )
 
 
+def _recover_prior_atlas_subyear_files(
+    *,
+    workspace: Workspace,
+    settings: PilatesConfig,
+    state: WorkflowState | None,
+    tracker: Tracker | None,
+    prior_year: int,
+    target_dir: Path,
+    expected_files: Sequence[str],
+    run_id: str | None = None,
+) -> list[str]:
+    """Recover missing prior-subyear files from resolved tracker outputs or archive locations.
+
+    Returns the list of filenames that are still missing after all recovery attempts.
+    """
+    missing = [f for f in expected_files if not (target_dir / f).is_file()]
+    if not missing:
+        return []
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Attempt recovery from tracker resolved output paths
+    if tracker is not None and run_id is not None:
+        try:
+            resolved_runs = tracker.resolve_run_output_paths(
+                [str(run_id)], existing_only=True
+            )
+            resolved_outputs = resolved_runs.get(str(run_id), {})
+            for fname in list(missing):
+                for src_path in resolved_outputs.values():
+                    if src_path.name == fname and src_path.is_file():
+                        shutil.copy2(src_path, target_dir / fname)
+                        missing.remove(fname)
+                        break
+        except Exception as exc:
+            logger.debug(
+                "Failed resolving run output paths for run %s: %s", run_id, exc
+            )
+
+    if not missing:
+        return []
+
+    # 2. Inspect candidate archive roots
+    candidate_roots: list[Path] = []
+    archive_dir = resolve_archive_run_dir(workspace=workspace, state=state)
+    if archive_dir is not None and archive_dir.is_dir():
+        candidate_roots.append(archive_dir)
+
+    ws_archive = resolve_archive_run_dir(workspace=workspace)
+    if (
+        ws_archive is not None
+        and ws_archive.is_dir()
+        and ws_archive not in candidate_roots
+    ):
+        candidate_roots.append(ws_archive)
+
+    if isinstance(tracker, Tracker) and tracker.run_dir is not None:
+        tr_run_dir = Path(tracker.run_dir).expanduser().resolve()
+        if tr_run_dir.is_dir() and tr_run_dir not in candidate_roots:
+            candidate_roots.append(tr_run_dir)
+
+    try:
+        atlas_rel_folder = Path(workspace.get_atlas_mutable_input_dir()).relative_to(
+            Path(workspace.full_path)
+        )
+    except Exception:
+        atlas_rel_folder = Path("atlas/atlas_input")
+
+    for root in candidate_roots:
+        if not missing:
+            break
+
+        # Check direct path under archived atlas input directory
+        for rel_dir in (atlas_rel_folder, Path("atlas/atlas_input")):
+            archived_year_dir = root / rel_dir / f"year{prior_year}"
+            if archived_year_dir.is_dir():
+                for fname in list(missing):
+                    candidate_file = archived_year_dir / fname
+                    if candidate_file.is_file():
+                        shutil.copy2(candidate_file, target_dir / fname)
+                        missing.remove(fname)
+
+        if not missing:
+            break
+
+        # Check consist-recovery scopes
+        recovery_root = root / "consist-recovery"
+        if recovery_root.is_dir():
+            for scope_dir in sorted(recovery_root.glob(f"*atlas*y{prior_year}*")):
+                if not scope_dir.is_dir():
+                    continue
+                for fname in list(missing):
+                    candidates = (
+                        scope_dir / fname,
+                        scope_dir / f"atlas_continuation_{prior_year}" / fname,
+                        scope_dir / f"year{prior_year}" / fname,
+                        scope_dir / atlas_rel_folder / f"year{prior_year}" / fname,
+                        scope_dir
+                        / "atlas"
+                        / "atlas_input"
+                        / f"year{prior_year}"
+                        / fname,
+                    )
+                    found = False
+                    for c in candidates:
+                        if c.is_file():
+                            shutil.copy2(c, target_dir / fname)
+                            missing.remove(fname)
+                            found = True
+                            break
+                    if not found and scope_dir.is_dir():
+                        for match in scope_dir.rglob(fname):
+                            if match.is_file():
+                                shutil.copy2(match, target_dir / fname)
+                                missing.remove(fname)
+                                break
+
+    return missing
+
+
 def hydrate_atlas_subyear_continuation_outputs(
     *,
     tracker: Tracker,
@@ -527,12 +651,18 @@ def hydrate_atlas_subyear_continuation_outputs(
     workspace: Workspace,
     prior_year: int,
     start_year: int,
+    state: WorkflowState | None = None,
     atlas_run_id: str | None = None,
     preprocess_run_id: str | None = None,
     preserve_existing: bool,
     on_missing: str,
 ) -> None:
     # ponytail: shared prior-subyear ATLAS continuation hydration used by both restart and native execution
+    continuation_dir = (
+        Path(workspace.get_atlas_mutable_input_dir()) / f"year{prior_year}"
+    )
+    continuation_dir.mkdir(parents=True, exist_ok=True)
+
     if atlas_run_id is not None:
         tracker.hydrate_run_outputs(
             str(atlas_run_id),
@@ -541,6 +671,19 @@ def hydrate_atlas_subyear_continuation_outputs(
             preserve_existing=preserve_existing,
             on_missing=on_missing,
         )
+        # Consist skips directory artifacts if target directory exists and preserve_existing=True.
+        # Recover individual continuation files if they were omitted.
+        _recover_prior_atlas_subyear_files(
+            workspace=workspace,
+            settings=settings,
+            state=state,
+            tracker=tracker,
+            prior_year=prior_year,
+            target_dir=continuation_dir,
+            expected_files=("vehicles_output.RData", "households_output.RData"),
+            run_id=atlas_run_id,
+        )
+
     if preprocess_run_id is not None:
         prepared_destinations = _atlas_prepared_input_paths_for_year(
             settings=settings,
@@ -553,6 +696,16 @@ def hydrate_atlas_subyear_continuation_outputs(
             destinations_by_key=prepared_destinations,
             preserve_existing=preserve_existing,
             on_missing=on_missing,
+        )
+        _recover_prior_atlas_subyear_files(
+            workspace=workspace,
+            settings=settings,
+            state=state,
+            tracker=tracker,
+            prior_year=prior_year,
+            target_dir=continuation_dir,
+            expected_files=[p.name for p in prepared_destinations.values()],
+            run_id=preprocess_run_id,
         )
 
 
@@ -581,47 +734,108 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
         return
 
     tracker = cr.current_tracker()
-    if tracker is None:
-        return
+    atlas_run_id: str | None = None
+    preprocess_run_id: str | None = None
 
-    try:
-        atlas_run_id: str | None = None
-        if not has_rdata:
-            atlas_runs = tracker.find_runs(
-                year=prior_year,
-                model="atlas_run",
-                stage="vehicle_ownership",
-                phase="run",
-                status="completed",
+    if tracker is not None:
+        try:
+            if not has_rdata:
+                atlas_runs = tracker.find_runs(
+                    year=prior_year,
+                    model="atlas_run",
+                    stage="vehicle_ownership",
+                    phase="run",
+                    status="completed",
+                ) or tracker.find_runs(
+                    year=prior_year,
+                    model="atlas_run",
+                    stage="vehicle_ownership",
+                    phase="run",
+                )
+                if atlas_runs:
+                    atlas_run_id = str(atlas_runs[-1].id)
+
+            if not has_households:
+                preprocess_runs = tracker.find_runs(
+                    year=prior_year,
+                    model="atlas_preprocess",
+                    stage="vehicle_ownership",
+                    phase="preprocess",
+                    status="completed",
+                ) or tracker.find_runs(
+                    year=prior_year,
+                    model="atlas_preprocess",
+                    stage="vehicle_ownership",
+                    phase="preprocess",
+                )
+                if preprocess_runs:
+                    preprocess_run_id = str(preprocess_runs[-1].id)
+
+            if atlas_run_id is not None or preprocess_run_id is not None:
+                hydrate_atlas_subyear_continuation_outputs(
+                    tracker=tracker,
+                    settings=settings,
+                    workspace=workspace,
+                    prior_year=prior_year,
+                    start_year=start_year,
+                    state=state,
+                    atlas_run_id=atlas_run_id,
+                    preprocess_run_id=preprocess_run_id,
+                    preserve_existing=True,
+                    on_missing="warn",
+                )
+        except Exception as exc:
+            logger.warning(
+                "Encountered error during ATLAS subyear %s continuation hydration: %s",
+                prior_year,
+                exc,
             )
-            if atlas_runs:
-                atlas_run_id = str(atlas_runs[-1].id)
 
-        preprocess_run_id: str | None = None
-        if not has_households:
-            preprocess_runs = tracker.find_runs(
-                year=prior_year,
-                model="atlas_preprocess",
-                stage="vehicle_ownership",
-                phase="preprocess",
-                status="completed",
-            )
-            if preprocess_runs:
-                preprocess_run_id = str(preprocess_runs[-1].id)
-
-        hydrate_atlas_subyear_continuation_outputs(
-            tracker=tracker,
-            settings=settings,
+    # In case tracker hydration still left files missing, attempt recovery directly
+    if (
+        not (prior_dir / "vehicles_output.RData").is_file()
+        or not (prior_dir / "households_output.RData").is_file()
+    ):
+        _recover_prior_atlas_subyear_files(
             workspace=workspace,
+            settings=settings,
+            state=state,
+            tracker=tracker,
             prior_year=prior_year,
-            start_year=start_year,
-            atlas_run_id=atlas_run_id,
-            preprocess_run_id=preprocess_run_id,
-            preserve_existing=True,
-            on_missing="warn",
+            target_dir=prior_dir,
+            expected_files=("vehicles_output.RData", "households_output.RData"),
+            run_id=atlas_run_id,
         )
-    except AttributeError:
-        return
+
+    if not (prior_dir / "households.csv").is_file():
+        _recover_prior_atlas_subyear_files(
+            workspace=workspace,
+            settings=settings,
+            state=state,
+            tracker=tracker,
+            prior_year=prior_year,
+            target_dir=prior_dir,
+            expected_files=("households.csv",),
+            run_id=preprocess_run_id,
+        )
+
+    # If prior subyear runs were recorded, fail fast if their outputs couldn't be recovered
+    missing_required = []
+    if atlas_run_id is not None:
+        if not (prior_dir / "vehicles_output.RData").is_file():
+            missing_required.append("vehicles_output.RData")
+        if not (prior_dir / "households_output.RData").is_file():
+            missing_required.append("households_output.RData")
+    if preprocess_run_id is not None:
+        if not (prior_dir / "households.csv").is_file():
+            missing_required.append("households.csv")
+
+    if missing_required:
+        raise RuntimeError(
+            f"Cannot start ATLAS for forecast year {forecast_year}: prior subyear {prior_year} "
+            f"continuation input(s) missing in {prior_dir}: {', '.join(missing_required)}. "
+            f"(resolved atlas_run_id={atlas_run_id}, preprocess_run_id={preprocess_run_id})"
+        )
 
 
 @define_step(
