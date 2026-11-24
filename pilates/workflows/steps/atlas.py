@@ -659,7 +659,6 @@ def hydrate_atlas_subyear_continuation_outputs(
     continuation_dir = (
         Path(workspace.get_atlas_mutable_input_dir()) / f"year{prior_year}"
     )
-    continuation_dir.mkdir(parents=True, exist_ok=True)
 
     if atlas_run_id is not None:
         tracker.hydrate_run_outputs(
@@ -669,8 +668,9 @@ def hydrate_atlas_subyear_continuation_outputs(
             preserve_existing=preserve_existing,
             on_missing=on_missing,
         )
-        # Consist skips directory artifacts if target directory exists and preserve_existing=True.
-        # Recover individual continuation files if they were omitted.
+        # If the target directory already existed prior to hydration, Consist skips
+        # directory extraction under preserve_existing=True. Recover individual
+        # continuation files if omitted.
         _recover_prior_atlas_subyear_files(
             workspace=workspace,
             state=state,
