@@ -160,6 +160,7 @@ def _compile_beam_launch_config(
     iteration: int,
     preprocess_outputs: Any,
     archive_run_dir: Optional[Path] = None,
+    forecast_year: int | None = None,
 ) -> BeamLaunchConfig:
     """Create the one derived config tree consumed by the next BEAM process."""
 
@@ -183,12 +184,23 @@ def _compile_beam_launch_config(
     )
     if output_dir.exists():
         shutil.rmtree(output_dir)
+    fleet_manifest = None
+    if getattr(getattr(settings, "impacts", None), "use_generated_fleet", False):
+        from pilates.impacts.settings_bridge import presim_fleet_manifest_path
+
+        fleet_manifest = presim_fleet_manifest_path(
+            settings, workspace, forecast_year or year
+        )
     launch_config = build_beam_launch_config(
         settings=settings,
         source_root=source_root,
         output_dir=output_dir,
         identity=scenario.tracker.identity,
         prepared_inputs=preprocess_outputs.prepared_inputs,
+        impacts_fleet_manifest=fleet_manifest,
+        workspace_root=Path(workspace.full_path)
+        if fleet_manifest is not None
+        else None,
     )
     prepare_r5_raw_rebuild(
         settings=settings,
@@ -241,6 +253,7 @@ def _run_beam_steps(
         iteration=iteration,
         preprocess_outputs=preprocess_outputs,
         archive_run_dir=archive_run_dir,
+        forecast_year=state.forecast_year,
     )
     run_inputs = beam_run.resolve_inputs(
         settings=settings,
@@ -434,6 +447,7 @@ def _run_traffic_assignment_phase(
             iteration=inputs.iteration,
             preprocess_outputs=preprocess_outputs,
             archive_run_dir=archive_run_dir,
+            forecast_year=state.forecast_year,
         )
         _run_beam_full_skim_step(
             scenario=scenario,

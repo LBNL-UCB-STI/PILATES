@@ -23,6 +23,10 @@ def run_impacts_presim_stage(
     settings = context.settings
     if not getattr(getattr(getattr(settings, "run", None), "models", None), "impacts", None):
         return
+    if getattr(settings.impacts, "use_generated_fleet", False):
+        from pilates.beam.preprocessor import ensure_beam_mutable_workspace
+
+        ensure_beam_mutable_workspace(settings, context.workspace)
     state = context.state
     logger.info("[impacts_presim] year=%s run_id=%s", year, cr.current_run_id())
     _, outputs = execute_step(

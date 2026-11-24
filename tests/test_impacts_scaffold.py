@@ -14,6 +14,7 @@ from pilates.impacts.settings_bridge import (
     _deep_merge,
     _to_container_path,
     build_pilates_bridge_settings,
+    presim_fleet_manifest_path,
     resolve_shared_input_cache_folder,
     resolve_population_override,
 )
@@ -99,6 +100,35 @@ def test_deep_merge_recurses_nested_dicts() -> None:
     assert merged == {"a": 1, "b": {"c": 2, "d": 30, "e": 40}, "f": 50}
     # base is left untouched
     assert base == {"a": 1, "b": {"c": 2, "d": 3}}
+
+
+def test_generated_fleet_postsim_uses_current_year_beam_and_forecast_fleet(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings(use_generated_fleet=True, pipeline_presim={"fleet": True})
+    state = _make_state(settings, forecast_year=2021)
+    state.current_year = 2020
+    workspace = _make_workspace(tmp_path, settings)
+    manifest = presim_fleet_manifest_path(settings, workspace, 2021)
+    manifest.parent.mkdir(parents=True)
+    manifest.touch()
+    beam_root = Path(workspace.get_beam_output_dir()) / settings.run.region
+    for name in (
+        "year-2020-iteration-2",
+        "year-2020-iteration-10",
+        "year-2020-iteration-10_1",
+        "year-2021-iteration-11",
+    ):
+        (beam_root / name / "ITERS").mkdir(parents=True)
+    presim = build_pilates_bridge_settings(settings, state, workspace, stage="presim")
+    postsim = build_pilates_bridge_settings(settings, state, workspace, stage="postsim")
+    assert presim["impacts"]["local_input_folder"].endswith("/presim/testrun_y2021")
+    assert postsim["impacts"]["presim_fleet_manifest"].endswith(
+        "/impacts_presim--seattle--testrun_y2021/activities/fleet_manifest.yaml"
+    )
+    assert postsim["beam"]["local_output_folder"] == (
+        "/app/workspace/beam/output/seattle/year-2020-iteration-10"
+    )
 
 
 def test_to_container_path_translates_relative_to_workspace_root(tmp_path: Path) -> None:

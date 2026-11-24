@@ -753,7 +753,7 @@ def main(
 
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_impacts_presim_stage(
-                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
+                        scenario=cast(ScenarioWithCoupler, scenario),
                         coupler=coupler,
                         year=year,
                         context=runtime_context,

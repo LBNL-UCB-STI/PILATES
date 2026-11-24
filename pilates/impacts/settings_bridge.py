@@ -40,6 +40,16 @@ def resolve_shared_input_cache_folder(settings: Any) -> Path:
     )
 
 
+def presim_fleet_manifest_path(settings: Any, workspace: Any, year: int) -> Path:
+    label = f"{settings.run.output_run_name}_y{year}"
+    return (
+        Path(workspace.get_impacts_output_dir())
+        / f"impacts_presim--{settings.run.region}--{label}"
+        / "activities"
+        / "fleet_manifest.yaml"
+    )
+
+
 def _has_exchange_file(directory: Path, stem: str) -> bool:
     return any(
         (directory / f"{stem}{ext}").exists() for ext in _PASSENGER_EXCHANGE_EXTENSIONS
@@ -92,10 +102,14 @@ def build_pilates_bridge_settings(
 
     impacts_section: Dict[str, Any] = {
         "local_input_folder": _to_container_path(
-            WORKSPACE_CONTAINER_DIR, workspace.get_impacts_input_dir(), workspace.full_path
+            WORKSPACE_CONTAINER_DIR,
+            workspace.get_impacts_input_dir(),
+            workspace.full_path,
         ),
         "local_output_folder": _to_container_path(
-            WORKSPACE_CONTAINER_DIR, workspace.get_impacts_output_dir(), workspace.full_path
+            WORKSPACE_CONTAINER_DIR,
+            workspace.get_impacts_output_dir(),
+            workspace.full_path,
         ),
         "seed": cfg.seed,
         "pipeline": {
@@ -105,6 +119,41 @@ def build_pilates_bridge_settings(
     }
     impacts_section = _deep_merge(impacts_section, deepcopy(cfg.overrides))
     impacts_section["shared_input_cache_dir"] = INPUT_CACHE_CONTAINER_DIR
+    beam_output = Path(workspace.get_beam_output_dir())
+    if cfg.use_generated_fleet:
+        if not cfg.pipeline_presim.fleet:
+            raise ValueError(
+                "Using the generated IMPACTS fleet requires presim fleet generation."
+            )
+        if stage == "presim":
+            path = (
+                Path(impacts_section["local_input_folder"]) / "presim" / output_run_name
+            )
+            impacts_section["local_input_folder"] = path.as_posix()
+        else:
+            manifest = presim_fleet_manifest_path(settings, workspace, forecast_year)
+            if not manifest.is_file():
+                raise FileNotFoundError(
+                    f"Missing current IMPACTS fleet manifest: {manifest}"
+                )
+            impacts_section["presim_fleet_manifest"] = _to_container_path(
+                WORKSPACE_CONTAINER_DIR, str(manifest), workspace.full_path
+            )
+            run_year = getattr(state, "current_year", None) or settings.run.start_year
+            prefix = f"year-{run_year}-iteration-"
+            completed_runs = [
+                path
+                for path in (beam_output / settings.run.region).glob(f"{prefix}*")
+                if path.name.removeprefix(prefix).isdigit()
+                and (path / "ITERS").is_dir()
+            ]
+            if not completed_runs:
+                raise FileNotFoundError(
+                    f"No BEAM output for current PILATES year {run_year}."
+                )
+            beam_output = max(
+                completed_runs, key=lambda path: int(path.name.removeprefix(prefix))
+            )
 
     if stage == "postsim":
         impacts_section = _deep_merge(
@@ -127,7 +176,7 @@ def build_pilates_bridge_settings(
         "beam": {
             "local_input_folder": BEAM_INPUT_CONTAINER_DIR,
             "local_output_folder": _to_container_path(
-                WORKSPACE_CONTAINER_DIR, workspace.get_beam_output_dir(), workspace.full_path
+                WORKSPACE_CONTAINER_DIR, str(beam_output), workspace.full_path
             ),
             "router_directory": settings.beam.router_directory,
         },

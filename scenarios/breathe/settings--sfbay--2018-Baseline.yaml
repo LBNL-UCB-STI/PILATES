@@ -1,5 +1,6 @@
 base: ../sfbay/run--sfbay-pilates--20250730--2018-Baseline.yaml
 run:
+  start_year: 2018
   output_run_name: BREATHE--2018-Baseline
   models:
     impacts: impacts
@@ -13,7 +14,6 @@ infrastructure:
 beam:
   config: scenarios/breathe/pilates--sfbay--2018-Baseline.conf
   extra_jvm_args: ${BEAM_EXTRA_JVM_ARGS}
-  warmstart_linkstats_path: '{router_directory}/2018-baseline-linkstats/3.linkstats.FC07.v3.csv.gz'
 impacts:
   local_input_folder: impacts/impacts_input
   local_output_folder: impacts/impacts_output

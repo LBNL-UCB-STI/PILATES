@@ -956,7 +956,10 @@ def _beam_run_output_cache(
 ) -> CacheOptions:
     """Output cache options for beam_run."""
 
-    del settings, state, workspace
+    del state, workspace
+    if getattr(getattr(settings, "impacts", None), "use_generated_fleet", False):
+        # shortcut: rerun BEAM until the output contract restores emissions skims.
+        return CacheOptions(cache_mode="overwrite")
     return CacheOptions(
         cache_hydration="outputs-requested",
         cache_hydration_failure="miss",

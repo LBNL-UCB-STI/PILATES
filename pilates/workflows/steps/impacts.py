@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from consist import BindingResult, ExecutionOptions, define_step
+from consist import BindingResult, CacheOptions, ExecutionOptions, define_step
 
 from pilates.config.models import PilatesConfig
 from pilates.impacts.outputs import ImpactsPostsimOutputs, ImpactsPresimOutputs
@@ -133,6 +133,13 @@ def _execution_options(**_: Any) -> ExecutionOptions:
     return ExecutionOptions(input_binding="paths")
 
 
+def _generated_fleet_cache(*, settings: PilatesConfig, **_: Any) -> CacheOptions:
+    if getattr(getattr(settings, "impacts", None), "use_generated_fleet", False):
+        # shortcut: rerun IMPACTS until the Consist contract tracks the fleet handoff.
+        return CacheOptions(cache_mode="overwrite")
+    return CacheOptions()
+
+
 impacts_presim = StepDefinition(
     name="impacts_presim",
     function=_native_impacts_presim,
@@ -141,6 +148,7 @@ impacts_presim = StepDefinition(
     input_contract=_IMPACTS_INPUT_CONTRACT,
     output_paths=_presim_paths,
     execution_options=_execution_options,
+    cache_options=_generated_fleet_cache,
 )
 impacts_postsim = StepDefinition(
     name="impacts_postsim",
@@ -150,4 +158,5 @@ impacts_postsim = StepDefinition(
     input_contract=_IMPACTS_INPUT_CONTRACT,
     output_paths=_postsim_paths,
     execution_options=_execution_options,
+    cache_options=_generated_fleet_cache,
 )

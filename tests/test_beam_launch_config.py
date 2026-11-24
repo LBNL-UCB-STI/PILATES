@@ -1045,3 +1045,114 @@ def test_build_beam_launch_config_injects_full_skim_calculation_timeout_hours(
         )
         == "/app/output"
     )
+
+
+def test_generated_impacts_fleet_is_mounted_with_its_rate_files(tmp_path: Path) -> None:
+    import yaml
+
+    from pilates.beam.config_hocon import (
+        beam_config_env_overrides,
+        resolve_beam_config_value,
+    )
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    source_root = tmp_path / "beam/input/seattle"
+    primary = _write_base_config(source_root)
+    vehicle_keys = {
+        "passenger_vehicle_types": "vehicles.vehicleTypesFilePath",
+        "freight_vehicle_types": "freight.vehicleTypesFilePath",
+        "passenger_vehicles": "vehicles.vehiclesFilePath",
+        "freight_carriers": "freight.carriersFilePath",
+    }
+    with primary.open("a") as stream:
+        for key in vehicle_keys.values():
+            stream.write(
+                f'\nbeam.agentsim.agents.{key} = ${{beam.inputDirectory}}"/vehicle-tech/old.csv"'
+            )
+        stream.write(
+            '\nbeam.agentsim.agents.vehicles.dummySharedCar.vehicleTypeId = "old-car"\n'
+            "beam.agentsim.agents.rideHail.managers = [{\n"
+            '  name = "ride-hail"\n'
+            '  initialization.initType = "PROCEDURAL"\n'
+            '  initialization.procedural.vehicleTypeId = "old-car"\n'
+            "}]\n"
+        )
+    (source_root / "vehicle-tech").mkdir()
+    (source_root / "vehicle-tech/old.csv").write_text(
+        "vehicleTypeId,vehicleCategory,emfacId\nold-car,Car,fixture\n"
+    )
+    original = primary.read_bytes()
+
+    fleet = tmp_path / "impacts/fleet"
+    fleet.mkdir(parents=True)
+    rate = tmp_path / "impacts/rates/dataset/emfacId=fixture/fixture.parquet"
+    rate.parent.mkdir(parents=True)
+    rate.write_bytes(b"example rate bytes")
+    outputs = {}
+    for name in vehicle_keys:
+        if name.endswith("vehicle_types"):
+            source = fleet / f"{name}.csv"
+            source.write_text(
+                "vehicleTypeId,vehicleCategory,emfacId,emissionsRatesFile\n"
+                "a,Car,fixture,../rates/dataset/emfacId=fixture/fixture.parquet\n"
+            )
+        else:
+            source = fleet / f"{name}.parquet"
+            source.write_bytes(b"example assignment bytes")
+        outputs[name] = f"/app/workspace/{source.relative_to(tmp_path)}"
+    activities = fleet / "activities_manifest.yaml"
+    activities.write_text(
+        yaml.safe_dump(
+            {"outputs": {"emissions_store_root": "/app/workspace/impacts/rates"}}
+        )
+    )
+    manifest = fleet / "fleet_manifest.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "contract_version": "1",
+                "activities_manifest_path": "/app/workspace/impacts/fleet/activities_manifest.yaml",
+                "outputs": outputs,
+            }
+        )
+    )
+    settings = _settings()
+    tracker = Tracker(
+        run_dir=tmp_path / "runs", db_path=str(tmp_path / "provenance.duckdb")
+    )
+    launch = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch",
+        identity=tracker.identity,
+        prepared_inputs={},
+        impacts_fleet_manifest=manifest,
+        workspace_root=tmp_path,
+    )
+    assert primary.read_bytes() == original
+    env = beam_config_env_overrides(settings, config_root=launch.root)
+    shared = resolve_beam_config_value(
+        launch.primary_config,
+        key="beam.agentsim.agents.vehicles.dummySharedCar.vehicleTypeId",
+        env_overrides=env,
+    )
+    managers = resolve_beam_config_value(
+        launch.primary_config,
+        key="beam.agentsim.agents.rideHail.managers",
+        env_overrides=env,
+    )
+    assert shared == managers[0]["initialization"]["procedural"]["vehicleTypeId"] == "a"
+    for name, key in vehicle_keys.items():
+        path = Path(
+            resolve_beam_config_value(
+                launch.primary_config,
+                key=f"beam.agentsim.agents.{key}",
+                env_overrides=env,
+            )
+        )
+        assert path.is_file()
+        if name.endswith("vehicle_types"):
+            ref = path.read_text().strip().split(",")[-1]
+            assert (path.parent / ref).read_bytes() == rate.read_bytes()
+        else:
+            assert path.read_bytes() == (fleet / f"{name}.parquet").read_bytes()

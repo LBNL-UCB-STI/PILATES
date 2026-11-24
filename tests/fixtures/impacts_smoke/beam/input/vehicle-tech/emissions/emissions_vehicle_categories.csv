@@ -1,0 +1,55 @@
+emfac_vehicle_category,generic_vehicle_category,operation_days_per_year,idle_time_fraction,gvwr_lbs,tailpipe_height_meters
+LDA,passenger_cars,347,,0-8499,1.0
+LDT1,light_duty_trucks,347,,0-5999,1.0
+LDT2,light_duty_trucks,347,,0-5999,1.0
+MDV,light_duty_trucks,347,,5751-8500,1.0
+MH,other,327,,0-14000,1.0
+MCY,other,347,,,1.0
+LHD1,heavy_duty_trucks,327,0.3312,8501-10000,1.0
+LHD2,heavy_duty_trucks,327,0.3312,10001-14000,1.0
+T6 Public Class 4,medium_duty_trucks,312,0.3312,14001-16000,3.5
+T6 Public Class 5,medium_duty_trucks,312,0.3312,16001-19500,3.5
+T6 Public Class 6,medium_duty_trucks,312,0.3312,19501-26000,3.5
+T6 Public Class 7,heavy_duty_trucks,312,0.3312,26001-33000,3.5
+T6 Utility Class 5,medium_duty_trucks,312,0.4699,16001-19500,3.5
+T6 Utility Class 6,medium_duty_trucks,312,0.4699,19501-26000,3.5
+T6 Utility Class 7,heavy_duty_trucks,312,0.4699,26001-33000,3.5
+T6 Instate Tractor Class 6,medium_duty_trucks,312,0.3122,19501-26000,3.5
+T6 Instate Delivery Class 4,medium_duty_trucks,312,0.3312,14001-16000,3.5
+T6 Instate Delivery Class 5,medium_duty_trucks,312,0.3312,16001-19500,3.5
+T6 Instate Delivery Class 6,medium_duty_trucks,312,0.3312,19501-26000,3.5
+T6 Instate Other Class 4,medium_duty_trucks,312,0.3312,14001-16000,3.5
+T6 Instate Other Class 5,medium_duty_trucks,312,0.3312,16001-19500,3.5
+T6 Instate Other Class 6,medium_duty_trucks,312,0.3312,19501-26000,3.5
+T6 Instate Tractor Class 7,heavy_duty_trucks,312,0.3122,26001-33000,3.5
+T6 Instate Delivery Class 7,heavy_duty_trucks,312,0.3312,26001-33000,3.5
+T6 Instate Other Class 7,heavy_duty_trucks,312,0.3312,26001-33000,3.5
+T6 CAIRP Class 4,medium_duty_trucks,312,0.3312,14001-16000,3.5
+T6 CAIRP Class 5,medium_duty_trucks,312,0.3312,16001-19500,3.5
+T6 CAIRP Class 6,medium_duty_trucks,312,0.3312,19501-26000,3.5
+T6 CAIRP Class 7,heavy_duty_trucks,312,0.3312,26001-33000,3.5
+T6 OOS Class 4,medium_duty_trucks,312,0.3312,14001-16000,3.5
+T6 OOS Class 5,medium_duty_trucks,312,0.3312,16001-19500,3.5
+T6 OOS Class 6,medium_duty_trucks,312,0.3312,19501-26000,3.5
+T6 OOS Class 7,heavy_duty_trucks,312,0.3312,26001-33000,3.5
+T6TS,medium_duty_trucks,327,0.3312,14001-33000,3.5
+T7 Public Class 8,heavy_duty_trucks,312,0.3312,33001-80000,3.5
+PTO,other,312,,33001-80000,3.5
+T7 CAIRP Class 8,heavy_duty_trucks,312,0.129,33001-80000,3.5
+T7 Utility Class 8,heavy_duty_trucks,312,0.4699,33001-80000,3.5
+T7 NNOOS Class 8,heavy_duty_trucks,312,0.129,33001-80000,3.5
+T7 NOOS Class 8,heavy_duty_trucks,312,0.129,33001-80000,3.5
+T7 Other Port Class 8,heavy_duty_trucks,312,0.3122,33001-80000,3.5
+T7 POAK Class 8,heavy_duty_trucks,312,0.3122,33001-80000,3.5
+T7 POLA Class 8,heavy_duty_trucks,312,0.3122,33001-80000,3.5
+T7 Single Concrete/Transit Mix Class 8,heavy_duty_trucks,312,0.3312,33001-80000,3.5
+T7 Single Dump Class 8,heavy_duty_trucks,312,0.3312,33001-80000,3.5
+T7 Single Other Class 8,heavy_duty_trucks,312,0.3312,33001-80000,3.5
+T7 Tractor Class 8,heavy_duty_trucks,312,0.129,33001-80000,3.5
+T7 SWCV Class 8,heavy_duty_trucks,312,0.3122,33001-80000,3.5
+T7IS,heavy_duty_trucks,327,0.3312,33001-80000,3.5
+SBUS,medium_duty_trucks,327,0.3098,14001-33000,1.0
+UBUS,medium_duty_trucks,327,0.355,33001-80000,1.0
+Motor Coach,heavy_duty_trucks,292,0.5051,33001-80000,1.0
+OBUS,medium_duty_trucks,327,0.5051,14001-33000,1.0
+All Other Buses,medium_duty_trucks,327,0.5051,14001-33000,1.0

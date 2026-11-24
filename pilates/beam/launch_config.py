@@ -8,6 +8,7 @@ the container can mount the same concrete files.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 import logging
 from pathlib import Path
@@ -16,12 +17,15 @@ from typing import Any, Mapping
 
 from consist.core.identity import IdentityManager
 from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
+import yaml
+from pyhocon import ConfigFactory
 
 from pilates.beam.admission import copy_linkstats_provenance_sidecar
 from pilates.beam.config_hocon import (
     beam_config_env_overrides,
     resolve_beam_config_value,
 )
+from pilates.impacts.settings_bridge import WORKSPACE_CONTAINER_DIR
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -207,6 +211,8 @@ def build_beam_launch_config(
     output_dir: Path,
     identity: IdentityManager,
     prepared_inputs: Mapping[str, Path],
+    impacts_fleet_manifest: Path | None = None,
+    workspace_root: Path | None = None,
 ) -> BeamLaunchConfig:
     """Compile the explicit post-preprocess BEAM launch tree.
 
@@ -296,7 +302,26 @@ def build_beam_launch_config(
         )
 
     vehicle_source = prepared_inputs.get("vehicles_beam_in")
-    if vehicle_source is not None:
+    if impacts_fleet_manifest is not None:
+        if vehicle_source is not None:
+            raise ValueError(
+                "IMPACTS fleet generation and a separate prepared BEAM fleet cannot both supply vehicle assignments."
+            )
+        if workspace_root is None:
+            raise ValueError(
+                "A workspace root is required for the IMPACTS fleet handoff."
+            )
+        fleet_inputs, fleet_overrides = _prepare_impacts_fleet(
+            impacts_fleet_manifest,
+            workspace_root,
+            source_root,
+            source_primary,
+            derived_root,
+            env_overrides,
+        )
+        staged_inputs.extend(fleet_inputs)
+        overrides.update(fleet_overrides)
+    elif vehicle_source is not None:
         vehicle_destination = exchange_relative / (
             "vehicles" + "".join(Path(vehicle_source).suffixes)
         )
@@ -369,6 +394,180 @@ def build_beam_launch_config(
             has_population_inputs=has_population_inputs,
         )
     return launch_config
+
+
+def _prepare_impacts_fleet(
+    manifest_path: Path,
+    workspace_root: Path,
+    source_root: Path,
+    primary_config: Path,
+    derived_root: Path,
+    env_overrides: Mapping[str, str],
+) -> tuple[list[BeamLaunchInput], dict[str, Any]]:
+    workspace_root = workspace_root.resolve()
+
+    def host_path(value: str) -> Path:
+        path = (
+            workspace_root / Path(value).relative_to(WORKSPACE_CONTAINER_DIR)
+        ).resolve()
+        path.relative_to(workspace_root)
+        return path
+
+    manifest = yaml.safe_load(manifest_path.read_text())
+    if manifest["contract_version"] != "1":
+        raise ValueError(f"Unsupported IMPACTS fleet manifest version: {manifest_path}")
+    activities = yaml.safe_load(
+        host_path(manifest["activities_manifest_path"]).read_text()
+    )
+    rates = host_path(activities["outputs"]["emissions_store_root"])
+    outputs = manifest["outputs"]
+    passenger_types_key = "beam.agentsim.agents.vehicles.vehicleTypesFilePath"
+    passenger_types = resolve_beam_config_value(
+        primary_config, key=passenger_types_key, env_overrides=env_overrides
+    )
+    vehicle_dir = _relative_source_path(
+        source_root=source_root,
+        path=Path(str(passenger_types)).parent,
+        key=passenger_types_key,
+    )
+    prepared = manifest_path.parent / "beam-launch"
+    prepared.mkdir(exist_ok=True)
+    staged: dict[Path, BeamLaunchInput] = {}
+    overrides: dict[str, Any] = {}
+
+    def add(key: str, source: Path, destination: Path) -> None:
+        existing = staged.get(destination)
+        if existing is not None and existing.source != source:
+            raise ValueError(f"Conflicting generated IMPACTS files at {destination}")
+        staged[destination] = BeamLaunchInput(
+            key=key, source=source, destination=destination
+        )
+
+    for artifact, key in (
+        ("passenger_vehicle_types", passenger_types_key),
+        ("freight_vehicle_types", "beam.agentsim.agents.freight.vehicleTypesFilePath"),
+        ("passenger_vehicles", "beam.agentsim.agents.vehicles.vehiclesFilePath"),
+        ("freight_carriers", "beam.agentsim.agents.freight.carriersFilePath"),
+    ):
+        source = host_path(outputs[artifact])
+        if artifact.endswith("vehicle_types"):
+            updated = prepared / source.name
+            with source.open(newline="") as stream:
+                reader = csv.DictReader(stream)
+                rows = list(reader)
+            with updated.open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=reader.fieldnames)
+                writer.writeheader()
+                for row in rows:
+                    reference = row["emissionsRatesFile"]
+                    if reference:
+                        rate = (source.parent / reference).resolve()
+                        relative = rate.relative_to(rates)
+                        target = Path("impacts-rates") / relative
+                        add("impacts_emissions_rate", rate, vehicle_dir / target)
+                        row["emissionsRatesFile"] = target.as_posix()
+                    writer.writerow(row)
+            destination = vehicle_dir / f"impacts-{source.name}"
+            add(artifact, updated, destination)
+            if artifact == "passenger_vehicle_types":
+                overrides.update(
+                    _generated_passenger_vehicle_overrides(
+                        rows,
+                        Path(str(passenger_types)),
+                        primary_config,
+                        source_root,
+                        derived_root,
+                        env_overrides,
+                    )
+                )
+        else:
+            destination = Path(".pilates/impacts-fleet") / source.name
+            add(artifact, source, destination)
+        overrides[key] = str(derived_root / destination)
+    return list(staged.values()), overrides
+
+
+def _generated_passenger_vehicle_overrides(
+    rows: list[dict[str, str]],
+    original_types: Path,
+    primary_config: Path,
+    source_root: Path,
+    derived_root: Path,
+    env_overrides: Mapping[str, str],
+) -> dict[str, Any]:
+    generated_ids = {row["vehicleTypeId"] for row in rows}
+
+    def replacement(vehicle_id: str) -> str:
+        with original_types.open(newline="") as stream:
+            original = next(
+                (
+                    row
+                    for row in csv.DictReader(stream)
+                    if row["vehicleTypeId"] == vehicle_id
+                ),
+                None,
+            )
+        matches = [
+            row
+            for row in rows
+            if original is not None
+            and row.get("emfacId")
+            and row["emfacId"] == original.get("emfacId")
+            and row["vehicleCategory"] == original["vehicleCategory"]
+            and row["emissionsRatesFile"]
+        ]
+        if not matches:
+            raise ValueError(
+                f"Generated IMPACTS fleet has no equivalent for BEAM vehicle type {vehicle_id!r}."
+            )
+        matching_type = min(
+            matches,
+            key=lambda row: (
+                row.get("primaryVehicleEnergyFile")
+                != original.get("primaryVehicleEnergyFile"),
+                row["vehicleTypeId"],
+            ),
+        )
+        return matching_type["vehicleTypeId"]
+
+    overrides: dict[str, Any] = {}
+    shared_key = "beam.agentsim.agents.vehicles.dummySharedCar.vehicleTypeId"
+    shared = resolve_beam_config_value(
+        primary_config, key=shared_key, env_overrides=env_overrides
+    )
+    if shared and shared not in generated_ids:
+        overrides[shared_key] = replacement(shared)
+
+    managers_key = "beam.agentsim.agents.rideHail.managers"
+    managers = (
+        resolve_beam_config_value(
+            primary_config, key=managers_key, env_overrides=env_overrides
+        )
+        or []
+    )
+    changed = False
+    for manager in managers:
+        initialization = manager.get("initialization", {})
+        if initialization.get("initType", "").upper() != "PROCEDURAL":
+            continue
+        procedural = initialization.get("procedural", {})
+        current = procedural.get("vehicleTypeId")
+        if current and current not in generated_ids:
+            procedural["vehicleTypeId"] = replacement(current)
+            changed = True
+    if changed:
+        for manager in managers:
+            initialization = manager.get("initialization", {})
+            if file_path := initialization.get("filePath"):
+                path = Path(file_path)
+                if path.is_relative_to(source_root):
+                    initialization["filePath"] = str(
+                        derived_root / path.relative_to(source_root)
+                    )
+        overrides[managers_key] = ConfigFactory.from_dict({"managers": managers})[
+            "managers"
+        ]
+    return overrides
 
 
 def _ensure_parquet_exchange_scenario_files(
