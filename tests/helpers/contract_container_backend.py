@@ -446,6 +446,18 @@ class ContractValidatingContainerBackend:
                     f"ATLAS required input missing or empty: {fpath}"
                 )
 
+        if in_year >= 2015:
+            prior_dir = input_root / f"year{in_year}"
+            for req_continuation in (
+                "vehicles_output.RData",
+                "households_output.RData",
+            ):
+                cpath = prior_dir / req_continuation
+                if not cpath.exists() or cpath.stat().st_size == 0:
+                    raise FileNotFoundError(
+                        f"ATLAS continuation input missing or empty for forecast year {out_year}: {cpath}"
+                    )
+
         if beamac > 0:
             acc_candidates = list(staged_dir.glob("accessibility_*_tract.csv"))
             if not acc_candidates:

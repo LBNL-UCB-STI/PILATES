@@ -1934,3 +1934,101 @@ def test_cross_node_wiped_scratch_replay_from_archive_snapshot_duckdb(
         # All steps should hit cache on Node 2 because provenance duckdb was restored from snapshot
         replay_invocations = len(backend.invocations) - initial_invocations
         assert replay_invocations == 0
+
+
+def test_atlas_continuation_input_hydration_on_wiped_scratch_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Validate ATLAS continuation input (.RData) hydration across node restarts.
+
+    Scenario:
+    1. Interval 1 (Year 2015 -> 2017) runs on Node 1, executing UrbanSim and ATLAS
+       (2015 and 2017), archiving continuation outputs (year2015/vehicles_output.RData, etc.)
+       to the archive root. A simulated node interruption occurs after Year 2015 completes.
+    2. Node 2 starts with a wiped scratch directory pointing to the archived run dir.
+    3. To reproduce the HPC restart failure condition, the target directory `year2015/`
+       already exists on scratch (e.g. from partial staging or preprocessor mkdir) but is
+       missing `vehicles_output.RData` and `households_output.RData`.
+    4. ATLAS policy setting `adscen` is modified to ensure Year 2017 misses Consist cache
+       and executes its container.
+    5. Verifies:
+       - `_ensure_prior_atlas_subyear_continuation_inputs` recovers the continuation `.RData`
+         files from archive/provenance into the existing `year2015/` directory.
+       - `ContractValidatingContainerBackend` enforces the ATLAS continuation input contract
+         and confirms that `/atlas/input/year2015/vehicles_output.RData` exists before execution.
+       - ATLAS container invocation succeeds with `--outyear 2017`.
+    """
+    from pilates.runtime import launcher
+    from pilates.workflows import orchestrator
+
+    real_run_supply_demand_loop = orchestrator._run_supply_demand_loop
+
+    env = build_micro_world(
+        tmp_path,
+        start_year=2015,
+        end_year=2019,
+        land_use_freq=2,
+        travel_model_freq=2,
+        vehicle_ownership_freq=2,
+        supply_demand_iters=1,
+        max_year_intervals=2,
+        database_enabled=True,
+        enable_archive_copy=True,
+    )
+
+    # Interrupt right after Year 2015 supply-demand loop finishes
+    def _interrupt_after_2015_supply_demand(**kwargs):
+        year = kwargs["year"]
+        result = real_run_supply_demand_loop(**kwargs)
+        if year == 2015:
+            raise RuntimeError("Simulated node crash at end of Year 2015")
+        return result
+
+    with ContractValidatingContainerBackend() as backend:
+        monkeypatch.setattr(
+            orchestrator,
+            "_run_supply_demand_loop",
+            _interrupt_after_2015_supply_demand,
+        )
+        with pytest.raises(
+            RuntimeError, match="Simulated node crash at end of Year 2015"
+        ):
+            launcher.main(settings=env.settings)
+
+        archive_run_dir = _latest_run_dir(env.paths.archive_root)
+        pre_restart_count = len(backend.invocations)
+        assert (
+            pre_restart_count == 6
+        )  # urbansim, atlas(2015), atlas(2017), warmup, asim, beam
+
+        # Restore real supply_demand loop, wipe scratch to simulate fresh compute node
+        monkeypatch.setattr(
+            orchestrator, "_run_supply_demand_loop", real_run_supply_demand_loop
+        )
+        shutil.rmtree(env.paths.scratch_root)
+        env.paths.scratch_root.mkdir(parents=True, exist_ok=True)
+
+        restart_scratch = env.paths.scratch_root / archive_run_dir.name
+        # Pre-create the prior subyear directory to reproduce the directory-exists bug condition
+        precreated_prior_dir = restart_scratch / "atlas" / "atlas_input" / "year2015"
+        precreated_prior_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure it does NOT have the continuation files
+        assert not (precreated_prior_dir / "vehicles_output.RData").exists()
+
+        restart_settings = env.settings.model_copy(deep=True)
+        restart_settings.runtime.options.run_dir = str(archive_run_dir)
+        # Change adscen to force ATLAS container execution (cache miss) in Year 2017
+        restart_settings.atlas.adscen = "custom_incentives"
+
+        launcher.main(settings=restart_settings)
+
+        post_restart_invocations = backend.invocations[pre_restart_count:]
+        restarted_atlas_invocations = [
+            inv for inv in post_restart_invocations if inv.model_name == "atlas"
+        ]
+        assert len(restarted_atlas_invocations) >= 1
+        # Verify the continuation files were hydrated into the pre-existing directory
+        assert (precreated_prior_dir / "vehicles_output.RData").is_file()
+        assert (precreated_prior_dir / "households_output.RData").is_file()

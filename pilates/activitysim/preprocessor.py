@@ -2694,15 +2694,22 @@ def enrollment_tables(
     local_crs = settings.shared.geography.local_crs
 
     zone_type = settings.shared.geography.zones.zone_type
-    path_to_schools_data = "pilates/utils/data/{0}/{1}_{2}.csv".format(
-        region, zone_type, enrollment_type
-    )
+    data_dir = Path(__file__).resolve().parent.parent / "utils" / "data" / region
+    target_path = data_dir / f"{zone_type}_{enrollment_type}.csv"
+    legacy_path = data_dir / f"{enrollment_type}.csv"
+
+    chosen_path: Optional[Path] = None
+    if target_path.exists():
+        chosen_path = target_path
+    elif legacy_path.exists():
+        chosen_path = legacy_path
+
     assert enrollment_type in [
         "schools",
         "colleges",
     ], "enrollemnt type one of ['schools', 'colleges']"
 
-    if not os.path.exists(path_to_schools_data):
+    if chosen_path is None:
         if enrollment_type == "schools":
             enrollment = _get_school_enrollment(state_fips, county_codes)
         elif enrollment_type == "colleges":
@@ -2710,8 +2717,10 @@ def enrollment_tables(
         else:
             raise KeyError("enrollemnt type one of ['schools', 'colleges']")
     else:
-        logger.info("Reading school enrollment data from disk!")
-        enrollment = pd.read_csv(path_to_schools_data, dtype={asim_zone_id_col: str})
+        logger.info(
+            "Reading %s enrollment data from disk: %s", enrollment_type, chosen_path
+        )
+        enrollment = pd.read_csv(chosen_path, dtype={asim_zone_id_col: str})
 
     if asim_zone_id_col not in enrollment.columns:
         enrollment_df = enrollment[["x", "y"]].copy()
@@ -2723,11 +2732,11 @@ def enrollment_tables(
         enrollment = enrollment.dropna(subset=[asim_zone_id_col])
         enrollment[asim_zone_id_col] = enrollment[asim_zone_id_col].astype(str)
         del enrollment_df
-        logger.info("Saving {} enrollment data to disk!".format(enrollment_type))
-        os.makedirs(
-            os.path.dirname(path_to_schools_data), exist_ok=True
-        )  # Create directory if it doesn't exist
-        enrollment.to_csv(path_to_schools_data)
+        logger.info(
+            "Saving %s enrollment data to disk: %s", enrollment_type, target_path
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        enrollment.to_csv(target_path)
 
     return enrollment
 
