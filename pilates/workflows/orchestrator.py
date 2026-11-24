@@ -1234,7 +1234,9 @@ def run_pilates(
         plan_recorder=env.plan_recorder,
     )
 
+    last_year: int | None = None
     for year in env.state:
+        last_year = year
         _stage_banner(f"STARTING YEAR {year}", env.plan_recorder)
         logger.info(
             "[launcher] starting year=%s run_id=%s",
@@ -1295,26 +1297,30 @@ def run_pilates(
                     reason=f"after_supply_demand_y{year}"
                 )
 
-        if env.settings.postprocessing is not None:
-            _stage_banner("POST-PROCESSING", env.plan_recorder)
-            sim_state = run_postprocessing_stage(
-                scenario=env.scenario,
-                settings=env.settings,
-                state=env.state,
-                workspace=env.workspace,
-                sim_state=sim_state,
-                year=year,
-                last_synced=env.last_synced,
-                plan_recorder=env.plan_recorder,
-            )
-            if env.snapshot_manager is not None:
-                env.snapshot_manager.maybe_snapshot_interval(
-                    reason=f"after_postprocessing_y{year}"
-                )
-
         if env.snapshot_manager is not None:
             env.snapshot_manager.maybe_snapshot_interval(
                 reason=f"year_boundary_y{year}"
+            )
+
+    if (
+        last_year is not None
+        and env.settings.postprocessing is not None
+        and env.settings.postprocessing.enabled
+    ):
+        _stage_banner("POST-PROCESSING", env.plan_recorder)
+        sim_state = run_postprocessing_stage(
+            scenario=env.scenario,
+            settings=env.settings,
+            state=env.state,
+            workspace=env.workspace,
+            sim_state=sim_state,
+            year=last_year,
+            last_synced=env.last_synced,
+            plan_recorder=env.plan_recorder,
+        )
+        if env.snapshot_manager is not None:
+            env.snapshot_manager.maybe_snapshot_interval(
+                reason=f"after_postprocessing_y{last_year}"
             )
 
     return sim_state

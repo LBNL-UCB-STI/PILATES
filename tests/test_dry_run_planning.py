@@ -84,6 +84,8 @@ def test_plan_pilates_multi_year_full_stack_and_subyears(tmp_path: Path):
     settings.traffic_assignment_enabled = True
     missing_out = tmp_path / "must_not_be_created"
     _set_output_dir(settings, missing_out)
+    if settings.postprocessing is not None:
+        settings.postprocessing.enabled = True
 
     t0 = time.perf_counter()
     plan = plan_pilates(settings, include_postprocessing=True)

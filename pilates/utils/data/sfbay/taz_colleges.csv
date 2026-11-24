@@ -1,0 +1,143 @@
+unitid,inst_name,x,y,full_time_enrollment,part_time_enrollment,TAZ
+108269,Academy of Chinese Culture and Health Sciences,-122.272736,37.806664,111.0,25.0,970
+108649,Avalon School of Cosmetology-Alameda,-122.243568,37.764202,83.0,52.0,955
+108667,College of Alameda,-122.279259,37.782391,929.0,5354.0,961
+108861,American Baptist Seminary of the West,-122.256149,37.865253,27.0,46.0,1009
+110574,California State University-East Bay,-122.058075,37.65707,12333.0,3195.0,821
+110635,University of California-Berkeley,-122.260422,37.871967,35960.0,2229.0,1019
+111920,Chabot College,-122.106972,37.642513,3799.0,9658.0,811
+112127,Church Divinity School of the Pacific,-122.261391,37.876167,33.0,47.0,1020
+113704,Dominican School of Philosophy & Theology,-122.26461,37.8811,32.0,25.0,1028
+115214,Graduate Theological Union,-122.261848,37.875542,180.0,28.0,1020
+115728,Holy Names University,-122.187172,37.802654,653.0,396.0,911
+117247,Laney College,-122.262436,37.796204,2265.0,9402.0,946
+117520,Life Chiropractic College West,-122.116272,37.637638,537.0,28.0,810
+117557,Lincoln University,-122.269745,37.804787,538.0,36.0,971
+118772,Merritt College,-122.167336,37.789089,1038.0,5609.0,885
+118888,Mills College,-122.187889,37.782639,1241.0,156.0,902
+118994,Moler Barber College,-122.265091,37.826824,123.0,,976
+119553,National Holistic Institute,-122.287674,37.8419,644.0,31.0,991
+120290,Ohlone College,-121.914597,37.527954,3378.0,6815.0,754
+120740,Pacific Lutheran Theological Seminary,-122.260201,37.89817,46.0,6.0,1029
+120795,Pacific School of Religion,-122.263329,37.876598,106.0,53.0,1020
+121178,Peralta Community College System Office,-122.25972,37.793018,,,947
+121983,Argosy University-San Francisco Bay Area,-122.267525,37.781239,100.0,230.0,960
+122296,Samuel Merritt University,-122.266335,37.82029,1274.0,319.0,979
+123095,Saybrook University,-122.272392,37.804459,311.0,247.0,969
+123208,Wyotech-Fremont,-121.919395,37.46928,,,750
+123916,Starr King School for the Ministry,-122.26178,37.876938,47.0,38.0,1020
+124557,University of California-System Administration Central Office,-122.271339,37.802223,,,968
+125170,Berkeley City College,-122.269791,37.870468,1536.0,5628.0,1018
+126012,The Wright Institute,-122.253166,37.868221,451.0,,1007
+246974,Carrington College-San Leandro,-122.125816,37.701218,436.0,42.0,863
+366401,Las Positas College,-121.804947,37.709621,2911.0,6001.0,720
+371779,Heald College-Hayward,-122.114937,37.636589,,,810
+384306,Acupuncture and Integrative Medicine College-Berkeley,-122.267639,37.862755,75.0,30.0,1011
+437653,The English Center,-122.275383,37.794415,107.0,,967
+447458,Expression College for Digital Arts,-122.295403,37.84763,429.0,,991
+447953,SUM Bible College and Theological Seminary,-122.177765,37.734081,489.0,80.0,878
+458575,Zaytuna College,-122.26078,37.877121,61.0,,1020
+459134,Northern California Institute of Cosmetology Inc,-122.160568,37.730499,13.0,15.0,870
+459143,Golden State College of Court Reporting,-121.92997,37.690079,31.0,16.0,736
+459204,Unitek College,-121.961761,37.509041,821.0,,759
+461175,International College of Cosmetology,-122.220871,37.774971,144.0,45.0,926
+467058,ITT Technical Institute-Oakland,-122.273308,37.804138,130.0,43.0,969
+479424,Unitek College,-122.115685,37.660641,60.0,,810
+486488,California Jazz Conservatory,-122.2687,37.871143,29.0,26.0,1018
+486558,Aviation Institute of Maintenance,-122.202248,37.725838,162.0,2.0,874
+112817,Contra Costa Community College District Office,-122.134773,38.018944,,,1092
+112826,Contra Costa College,-122.342384,37.968624,1847.0,4508.0,1072
+113634,Diablo Valley College,-122.069862,37.968037,7632.0,12062.0,1127
+115533,Heald College-Concord,-122.030045,38.018936,,,1097
+116712,John F. Kennedy University,-122.183975,37.881794,563.0,548.0,1154
+117894,Los Medanos College,-121.861122,38.00555,3057.0,5804.0,1198
+121017,Paris Beauty College,-122.043457,37.972202,29.0,33.0,1113
+123554,Saint Mary's College of California,-122.106796,37.83997,3301.0,729.0,1160
+382258,Mt. Diablo Adult Education-Mt. Diablo USD,-122.027122,37.968399,73.0,62.0,1116
+438258,Carrington College-Pleasant Hill,-122.072151,37.96265,519.0,97.0,1127
+456427,ITT Technical Institute-Concord,-122.054352,37.975746,206.0,27.0,1122
+459231,Paul Mitchell the School-East Bay,-122.06102,37.944672,194.0,,1121
+481474,W Academy of Salon and Spa,-121.99646,37.81773,25.0,18.0,1161
+113698,Dominican University of California,-122.514656,37.980015,1438.0,425.0,1427
+118347,College of Marin,-122.549934,37.955013,1273.0,4217.0,1436
+122603,San Francisco Theological Seminary,-122.564301,37.969593,54.0,102.0,1432
+119331,Napa Valley College,-122.272568,38.272541,2233.0,4024.0,1294
+120865,Pacific Union College,-122.449638,38.574089,1362.0,193.0,1313
+476744,LeMelange Academy of Hair,-122.286835,38.29837,26.0,39.0,1299
+108232,Academy of Art University,-122.400688,37.787746,8301.0,5499.0,12
+109086,American Conservatory Theater,-122.404945,37.787327,46.0,,5
+110316,California Institute of Integral Studies,-122.416534,37.774769,1187.0,301.0,10
+110370,California College of the Arts,-122.39994,37.767231,1853.0,122.0,108
+110398,University of California-Hastings College of Law,-122.415398,37.78072,933.0,17.0,9
+110699,University of California-San Francisco,-122.458046,37.762737,3107.0,,91
+111009,Le Cordon Bleu College of Culinary Arts-San Francisco,-122.402641,37.765415,380.0,,108
+112190,City College of San Francisco,-122.451157,37.725952,6565.0,16826.0,133
+114390,Fashion Institute of Design & Merchandising-San Francisco,-122.406502,37.786324,334.0,61.0,5
+115083,Golden Gate University-San Francisco,-122.398788,37.789207,979.0,1756.0,13
+115515,Heald College-San Francisco,-122.404243,37.782001,,,11
+117928,Argosy University-The Art Institute of California-San Francisco,-122.417183,37.803959,545.0,246.0,39
+118921,Marinello Schools of Beauty-San Francisco,-122.41082,37.781231,,,11
+122454,San Francisco Art Institute,-122.417,37.803574,557.0,42.0,39
+122506,San Francisco Conservatory of Music,-122.420143,37.775322,374.0,5.0,81
+122597,San Francisco State University,-122.477905,37.721344,24273.0,5983.0,188
+122612,University of San Francisco,-122.450974,37.775562,9763.0,1034.0,69
+430591,American College of Traditional Chinese Medicine,-122.398239,37.760502,,,112
+440819,Miami Ad School-San Francisco,-122.42157,37.788811,81.0,,32
+454777,San Francisco Institute of Esthetics & Cosmetology Inc,-122.407082,37.777042,129.0,87.0,20
+461829,Cinta Aveda Institute,-122.404259,37.790901,279.0,,3
+483878,Bay Area Medical Academy,-122.406128,37.790779,123.0,,3
+486187,San Francisco College of Cosmetology,-122.419525,37.763813,50.0,16.0,106
+486372,San Francisco School of Digital Filmmaking,-122.407196,37.782135,30.0,11.0,11
+486433,Presidio Graduate School,-122.475258,37.800259,60.0,73.0,52
+111434,Canada College,-122.265549,37.447365,1140.0,5337.0,300
+115658,Hilltop Beauty School,-122.461678,37.705544,29.0,103.0,204
+118693,Menlo College,-122.181442,37.452908,747.0,40.0,341
+120184,Notre Dame de Namur University,-122.284615,37.517502,1013.0,842.0,286
+122782,San Mateo County Community College District Office,-122.337601,37.531185,,,291
+122791,College of San Mateo,-122.336075,37.534355,2456.0,6433.0,291
+123509,Skyline College,-122.465981,37.630543,2416.0,7265.0,229
+459213,Gurnick Academy of Medical Arts,-122.307892,37.54763,923.0,34.0,278
+476799,Unitek College,-122.455948,37.656609,69.0,,217
+110778,Sofia University,-122.108658,37.430325,285.0,11.0,362
+111717,CET-Sobrato,-121.886978,37.322723,431.0,,560
+111771,CET-Gilroy,-121.561432,37.015671,,,706
+112394,Cogswell College,-121.940552,37.413666,528.0,105.0,412
+113333,De Anza College,-122.045364,37.319176,11412.0,11100.0,490
+113908,Marinello Schools of Beauty-Santa Clara,-121.947777,37.347965,,,545
+114266,Evergreen Valley College,-121.766685,37.301735,2673.0,6018.0,653
+114716,Foothill College,-122.128326,37.361103,5334.0,10114.0,347
+114831,Foothill-De Anza Community College District,-122.127052,37.360962,,,347
+114938,Gavilan College,-121.568176,36.973274,1844.0,4275.0,705
+115490,Heald College-San Jose,-121.893913,37.410896,,,607
+115931,Institute for Business and Technology,-121.969543,37.368641,408.0,,431
+118930,Mission College,-121.982178,37.391323,2085.0,6491.0,415
+119544,The National Hispanic University,-121.815918,37.359058,,,636
+120698,Palo Alto University,-122.18602,37.383251,909.0,222.0,347
+122737,San Jose-Evergreen Community College District,-121.891457,37.334728,,,558
+122746,San Jose City College,-121.929749,37.316292,2093.0,6352.0,533
+122755,San Jose State University,-121.88121,37.335201,25471.0,7302.0,557
+122931,Santa Clara University,-121.938187,37.352707,7301.0,1379.0,543
+125222,West Valley Mission Community College District Office,-122.011078,37.262848,,,497
+125499,West Valley College,-122.009705,37.263134,2696.0,6103.0,497
+243744,Stanford University,-122.168823,37.426968,15778.0,1202.0,354
+437936,Carrington College-San Jose,-121.776718,37.248138,739.0,52.0,656
+443128,International Technological University,-121.930992,37.388809,785.0,391.0,409
+447801,University of East-West Medicine,-121.997009,37.386398,156.0,102.0,427
+451848,Argosy University-The Art Institute of California-Silicon Valley,-121.999382,37.373169,149.0,77.0,427
+461980,Academy for Salon Professionals,-121.963425,37.351761,53.0,49.0,436
+475097,International Culinary Center-California,-121.961678,37.292992,67.0,54.0,502
+476470,WestMed College,-121.947594,37.317379,358.0,,467
+484206,The Salon Professional Academy-San Jose,-121.988632,37.292141,41.0,49.0,475
+486293,Bay Area College of Nursing,-122.101181,37.421139,48.0,,374
+111188,The California Maritime Academy,-122.231552,38.069061,1038.0,37.0,1222
+123563,Solano Community College,-122.120232,38.235512,3257.0,6707.0,1249
+447810,Blake Austin College,-121.945602,38.378548,307.0,,1280
+454546,Milan Institute of Cosmetology-Fairfield,-122.045502,38.248447,76.0,,1262
+459736,Touro University California,-122.265549,38.084843,1241.0,145.0,1238
+480000,Hinton Barber and Beauty College,-122.222572,38.10643,44.0,2.0,1231
+481960,InterCoast Colleges-Fairfield,-122.050545,38.275612,47.0,,1268
+114123,Empire College,-122.728645,38.467789,373.0,69.0,1373
+118161,Lytles Redwood Empire Beauty College Inc,-122.758545,38.508579,129.0,,1367
+123013,Santa Rosa Junior College,-122.720688,38.454159,6750.0,15661.0,1363
+123572,Sonoma State University,-122.673264,38.341022,8261.0,1147.0,1342
+461643,Bergin University of Canine Studies,-122.720718,38.353748,42.0,19.0,1337

@@ -338,3 +338,48 @@ def test_run_vehicle_ownership_stage_advances_population_source_on_intermediate_
     assert seen_prior_h5 == [pop_initial, pop_2010]
     assert updated.land_use.prior_h5 == pop_2012
     assert updated.land_use.population_source == pop_2012
+
+
+def test_postprocessing_config_defaults_disabled():
+    from pilates.config.models import PostprocessingConfig
+
+    cfg = PostprocessingConfig(output_folder="out", mep_output_folder="mep")
+    assert cfg.enabled is False
+
+
+def test_run_pilates_runs_postprocessing_only_at_end_when_enabled(
+    monkeypatch, tmp_path
+):
+    from pilates.workflows import orchestrator
+    from pilates.workflows.sim_state import SimState
+
+    post_calls = []
+
+    monkeypatch.setattr(
+        orchestrator, "bootstrap_initial_state", lambda **_kw: SimState()
+    )
+    monkeypatch.setattr(orchestrator, "get_land_use_model", lambda _s: None)
+    monkeypatch.setattr(orchestrator, "get_vehicle_ownership_model", lambda _s: None)
+    monkeypatch.setattr(orchestrator, "get_activity_demand_model", lambda _s: None)
+    monkeypatch.setattr(orchestrator, "get_traffic_assignment_model", lambda _s: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "run_postprocessing_stage",
+        lambda **kw: post_calls.append(kw["year"]) or kw["sim_state"],
+    )
+
+    def _run_with(enabled: bool):
+        post_calls.clear()
+        settings = SimpleNamespace(
+            postprocessing=SimpleNamespace(enabled=enabled),
+        )
+        orchestrator.run_pilates(
+            scenario=SimpleNamespace(coupler={}),
+            settings=settings,
+            state=[2017, 2023],
+            workspace=SimpleNamespace(full_path=tmp_path),
+        )
+        return list(post_calls)
+
+    assert _run_with(False) == []
+    assert _run_with(True) == [2023]

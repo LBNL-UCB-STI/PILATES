@@ -490,6 +490,9 @@ class AtlasConfig(BaseModel):
 class PostprocessingConfig(BaseModel):
     """Postprocessing and validation configuration."""
 
+    enabled: bool = Field(
+        False, description="Enable end-of-run postprocessing (disabled by default)"
+    )
     output_folder: str
     mep_output_folder: str
     scenario_definitions: Dict[str, Any] = Field(default_factory=dict)
@@ -497,6 +500,7 @@ class PostprocessingConfig(BaseModel):
 
     def to_consist_facet(self) -> Dict[str, Any]:
         return {
+            "enabled": self.enabled,
             "output_folder": self.output_folder,
             "mep_output_folder": self.mep_output_folder,
             "scenario_definitions": self.scenario_definitions,

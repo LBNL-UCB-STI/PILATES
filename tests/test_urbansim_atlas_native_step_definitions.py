@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
-from typing import cast
+from typing import Sequence, cast
 from uuid import UUID
 
 import consist
@@ -712,6 +712,298 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     assert (year_root / "households_output.RData").read_text(
         encoding="utf-8"
     ) == "households\n"
+
+
+def test_hydrate_atlas_subyear_continuation_outputs_recovers_rdata_when_dir_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Continuation hydration recovers member RData files even when the destination directory already exists."""
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    workspace_root = tmp_path / "workspace"
+    workspace = _workspace(workspace_root)
+    workspace.archive_run_dir = str(archive_root)
+    settings = _settings()
+    settings.run.enable_archive_copy = True
+    state = _state()
+    tracker = Tracker(
+        run_dir=local_root / "consist-runs",
+        db_path=str(local_root / "provenance.duckdb"),
+        hashing_strategy="full",
+        mounts={"workspace": workspace.full_path},
+    )
+
+    source_h5 = tmp_path / "source" / "output_2030.h5"
+    source_h5.parent.mkdir(parents=True)
+    source_h5.write_bytes(b"UrbanSim source\n")
+
+    class _Preprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
+            year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
+            year_root.mkdir(parents=True, exist_ok=True)
+            for filename in (
+                "households.csv",
+                "blocks.csv",
+                "persons.csv",
+                "residential.csv",
+                "jobs.csv",
+                "grave.csv",
+            ):
+                (year_root / filename).write_text("id\n1\n", encoding="utf-8")
+
+    class _Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
+            output_root.mkdir(parents=True, exist_ok=True)
+            (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
+            (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
+            year_root = launch_context.input_root / "year2030"
+            (year_root / "vehicles_output.RData").write_text("vehicles\n")
+            (year_root / "households_output.RData").write_text("households\n")
+
+    monkeypatch.setattr(atlas, "AtlasPreprocessor", _Preprocessor)
+    monkeypatch.setattr(atlas, "AtlasRunner", _Runner)
+
+    with tracker.scenario("atlas-output-recovery") as scenario:
+        with tracker.start_run("seed-usim", "test"):
+            source_artifact = tracker.log_artifact(
+                source_h5, key=USIM_DATASTORE_H5, direction="input"
+            )
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, source_artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
+        sim_state = SimState(land_use=LandUseState(current_h5=source_artifact))
+        prepared_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_PREPROCESS,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="preprocess",
+            sim_state=sim_state,
+        )
+        continuation_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_RUN,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="run",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=source_artifact),
+                extras=dict(prepared_result.outputs),
+            ),
+        )
+
+    year_root = Path(workspace.get_atlas_mutable_input_dir()) / "year2030"
+    # Simulate a new job workspace: year2030 directory exists (from preprocess),
+    # but vehicles_output.RData and households_output.RData are missing.
+    (year_root / "vehicles_output.RData").unlink()
+    (year_root / "households_output.RData").unlink()
+    assert year_root.is_dir()
+    assert (year_root / "households.csv").is_file()
+    assert not (year_root / "vehicles_output.RData").exists()
+    assert not (year_root / "households_output.RData").exists()
+
+    atlas.hydrate_atlas_subyear_continuation_outputs(
+        tracker=tracker,
+        settings=settings,
+        workspace=workspace,
+        prior_year=2030,
+        start_year=2020,
+        state=state,
+        atlas_run_id=continuation_result.run.id,
+        preserve_existing=True,
+        on_missing="warn",
+    )
+
+    assert (year_root / "vehicles_output.RData").is_file()
+    assert (year_root / "vehicles_output.RData").read_text(
+        encoding="utf-8"
+    ) == "vehicles\n"
+    assert (year_root / "households_output.RData").is_file()
+    assert (year_root / "households_output.RData").read_text(
+        encoding="utf-8"
+    ) == "households\n"
+    assert (year_root / "households.csv").is_file()
+
+
+def test_recover_prior_atlas_subyear_files_resolves_directory_artifact_without_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_recover_prior_atlas_subyear_files resolves directory OutputSet member files via tracker without archive."""
+
+    local_root = tmp_path / "local"
+    workspace_root = tmp_path / "workspace"
+    workspace = _workspace(workspace_root)
+    # Archive explicitly disabled / absent
+    workspace.archive_run_dir = None
+    settings = _settings()
+    settings.run.enable_archive_copy = False
+    state = _state()
+    tracker = Tracker(
+        run_dir=local_root / "consist-runs",
+        db_path=str(local_root / "provenance.duckdb"),
+        hashing_strategy="full",
+        mounts={"workspace": workspace.full_path},
+    )
+
+    source_h5 = tmp_path / "source" / "output_2030.h5"
+    source_h5.parent.mkdir(parents=True)
+    source_h5.write_bytes(b"UrbanSim source\n")
+
+    class _Preprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
+            year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
+            year_root.mkdir(parents=True, exist_ok=True)
+            for filename in (
+                "households.csv",
+                "blocks.csv",
+                "persons.csv",
+                "residential.csv",
+                "jobs.csv",
+                "grave.csv",
+            ):
+                (year_root / filename).write_text("id\n1\n", encoding="utf-8")
+
+    class _Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
+            output_root.mkdir(parents=True, exist_ok=True)
+            (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
+            (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
+            year_root = launch_context.input_root / "year2030"
+            (year_root / "vehicles_output.RData").write_text("vehicles\n")
+            (year_root / "households_output.RData").write_text("households\n")
+
+    monkeypatch.setattr(atlas, "AtlasPreprocessor", _Preprocessor)
+    monkeypatch.setattr(atlas, "AtlasRunner", _Runner)
+
+    with tracker.scenario("atlas-tracker-only-recovery") as scenario:
+        with tracker.start_run("seed-usim", "test"):
+            source_artifact = tracker.log_artifact(
+                source_h5, key=USIM_DATASTORE_H5, direction="input"
+            )
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, source_artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
+        sim_state = SimState(land_use=LandUseState(current_h5=source_artifact))
+        prepared_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_PREPROCESS,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="preprocess",
+            sim_state=sim_state,
+        )
+        continuation_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_RUN,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="run",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=source_artifact),
+                extras=dict(prepared_result.outputs),
+            ),
+        )
+
+    target_year_dir = workspace_root / "new_node_input" / "year2030"
+    target_year_dir.mkdir(parents=True, exist_ok=True)
+
+    # Test recovery of member files from directory-level OutputSet
+    missing = atlas._recover_prior_atlas_subyear_files(
+        workspace=workspace,
+        state=state,
+        tracker=tracker,
+        prior_year=2030,
+        target_dir=target_year_dir,
+        expected_files=("vehicles_output.RData", "households_output.RData"),
+        run_id=continuation_result.run.id,
+    )
+
+    assert missing == []
+    assert (target_year_dir / "vehicles_output.RData").read_text(
+        encoding="utf-8"
+    ) == "vehicles\n"
+    assert (target_year_dir / "households_output.RData").read_text(
+        encoding="utf-8"
+    ) == "households\n"
+
+
+def test_ensure_prior_atlas_subyear_continuation_inputs_fails_fast_on_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """_ensure_prior_atlas_subyear_continuation_inputs raises RuntimeError if continuation files are missing."""
+    workspace_root = tmp_path / "workspace"
+    workspace = _workspace(workspace_root)
+    settings = _settings()
+    state = _state()
+    state.start_year = 2020
+    state.forecast_year = 2024  # prior_year is 2022
+
+    input_root = workspace_root / "atlas_input"
+    input_root.mkdir(parents=True)
+
+    class _MockRun:
+        id = "mock-run-id"
+        status = "completed"
+
+    class _MockTracker:
+        run_dir = None
+
+        def find_runs(self, **kwargs: object) -> list[_MockRun]:
+            if kwargs.get("model") == "atlas_run":
+                return [_MockRun()]
+            return []
+
+        def resolve_run_output_paths(
+            self, run_ids: Sequence[str], existing_only: bool = True
+        ) -> dict[str, dict[str, Path]]:
+            return {}
+
+        def hydrate_run_outputs(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(atlas.cr, "current_tracker", lambda: _MockTracker())
+
+    with pytest.raises(
+        RuntimeError, match="prior subyear 2022 continuation input\\(s\\) missing"
+    ):
+        atlas._ensure_prior_atlas_subyear_continuation_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            input_root=input_root,
+        )
 
 
 def test_atlas_run_identity_includes_exact_selected_static_sources(
