@@ -85,6 +85,7 @@ def build_pilates_bridge_settings(
     workspace: Any,
     *,
     stage: Literal["presim", "postsim"],
+    beam_output_dir: Path | None = None,
 ) -> Dict[str, Any]:
     """
     Build the PILATES->IMPACTS bridge settings dict for the given stage,
@@ -119,7 +120,7 @@ def build_pilates_bridge_settings(
     }
     impacts_section = _deep_merge(impacts_section, deepcopy(cfg.overrides))
     impacts_section["shared_input_cache_dir"] = INPUT_CACHE_CONTAINER_DIR
-    beam_output = Path(workspace.get_beam_output_dir())
+    beam_output = beam_output_dir or Path(workspace.get_beam_output_dir())
     if cfg.use_generated_fleet:
         if not cfg.pipeline_presim.fleet:
             raise ValueError(
@@ -138,21 +139,6 @@ def build_pilates_bridge_settings(
                 )
             impacts_section["presim_fleet_manifest"] = _to_container_path(
                 WORKSPACE_CONTAINER_DIR, str(manifest), workspace.full_path
-            )
-            run_year = getattr(state, "current_year", None) or settings.run.start_year
-            prefix = f"year-{run_year}-iteration-"
-            completed_runs = [
-                path
-                for path in (beam_output / settings.run.region).glob(f"{prefix}*")
-                if path.name.removeprefix(prefix).isdigit()
-                and (path / "ITERS").is_dir()
-            ]
-            if not completed_runs:
-                raise FileNotFoundError(
-                    f"No BEAM output for current PILATES year {run_year}."
-                )
-            beam_output = max(
-                completed_runs, key=lambda path: int(path.name.removeprefix(prefix))
             )
 
     if stage == "postsim":

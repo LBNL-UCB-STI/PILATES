@@ -35,12 +35,16 @@ class ImpactsPresimRunner(GenericRunner[None, ImpactsPresimOutputs, Workspace]):
         if cfg is None:
             raise ValueError("Impacts config is missing")
 
-        bridge = build_pilates_bridge_settings(settings, self.state, workspace, stage="presim")
+        bridge = build_pilates_bridge_settings(
+            settings, self.state, workspace, stage="presim"
+        )
 
         bridge_path = Path(workspace.get_impacts_bridge_settings_path("presim"))
         settings_path = Path(workspace.get_impacts_settings_path("presim"))
         bridge_path.parent.mkdir(parents=True, exist_ok=True)
-        bridge_path.write_text(yaml.safe_dump(bridge, sort_keys=False), encoding="utf-8")
+        bridge_path.write_text(
+            yaml.safe_dump(bridge, sort_keys=False), encoding="utf-8"
+        )
 
         bridge_container_path = _to_container_path(
             WORKSPACE_CONTAINER_DIR, str(bridge_path), workspace.full_path

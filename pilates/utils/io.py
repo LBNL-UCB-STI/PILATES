@@ -10,73 +10,60 @@ import argparse
 import logging
 import os
 import pandas as pd
-from types import SimpleNamespace
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from pilates.utils.settings_helper import get as get_setting
-from pilates.config.models import load_config, PilatesConfig
+from pilates.config.models import load_config, PilatesConfig, SettingsLike
 
 logger = logging.getLogger(__name__)
 
 
-def _runtime_namespace(settings: Any) -> Any:
-    runtime = getattr(settings, "runtime", None)
-    if runtime is None:
-        runtime = SimpleNamespace()
-        setattr(settings, "runtime", runtime)
-    return runtime
-
-
-def _runtime_options_namespace(settings: Any) -> Any:
-    runtime = _runtime_namespace(settings)
-    options = getattr(runtime, "options", None)
-    if options is None:
-        options = SimpleNamespace()
-        setattr(runtime, "options", options)
-    return options
-
-
-def _runtime_flags_namespace(settings: Any) -> Any:
-    runtime = _runtime_namespace(settings)
-    flags = getattr(runtime, "flags", None)
-    if flags is None:
-        flags = SimpleNamespace()
-        setattr(runtime, "flags", flags)
-    return flags
-
-
 def _apply_runtime_options(
-    settings: Any,
+    settings: SettingsLike,
     *,
-    state_file_loc: Optional[str],
     settings_file: str,
-    allow_rewind_resume: bool,
+    run_dir: Optional[str] = None,
+    timestamp: bool = False,
 ) -> None:
-    runtime_options = _runtime_options_namespace(settings)
-    runtime_options.state_file_loc = state_file_loc
-    runtime_options.settings_file = settings_file
-    runtime_options.allow_rewind_resume = allow_rewind_resume
-    settings.state_file_loc = state_file_loc
+    if isinstance(settings, PilatesConfig):
+        settings.runtime.options.settings_file = settings_file
+        settings.runtime.options.run_dir = run_dir
+        settings.runtime.options.timestamp = timestamp
+        return
+
     settings.settings_file = settings_file
-    settings.allow_rewind_resume = allow_rewind_resume
+    settings.run_dir = run_dir
+    settings.timestamp = timestamp
 
 
-def apply_runtime_flags(settings: Any, enabled_flags: Dict[str, bool]) -> None:
-    runtime_flags = _runtime_flags_namespace(settings)
+def apply_runtime_flags(settings: SettingsLike, enabled_flags: Dict[str, bool]) -> None:
+    if isinstance(settings, PilatesConfig):
+        settings.runtime.flags.land_use_enabled = enabled_flags["land_use_enabled"]
+        settings.runtime.flags.vehicle_ownership_model_enabled = enabled_flags[
+            "vehicle_ownership_model_enabled"
+        ]
+        settings.runtime.flags.activity_demand_enabled = enabled_flags[
+            "activity_demand_enabled"
+        ]
+        settings.runtime.flags.traffic_assignment_enabled = enabled_flags[
+            "traffic_assignment_enabled"
+        ]
+        settings.runtime.flags.replanning_enabled = enabled_flags["replanning_enabled"]
+        settings.runtime.flags_initialized = True
+        return
+
     for attr, value in enabled_flags.items():
-        setattr(runtime_flags, attr, bool(value))
-        setattr(settings, attr, bool(value))
-    settings.runtime.flags_initialized = True
+        setattr(settings, attr, value)
 
 
-def get_land_use_model(settings: Any) -> Optional[str]:
+def get_land_use_model(settings: SettingsLike) -> Optional[str]:
     """Resolve the configured land-use model across legacy/new schemas."""
     return get_setting(
         settings, "run.models.land_use", default=get_setting(settings, "land_use_model")
     )
 
 
-def get_vehicle_ownership_model(settings: Any) -> Optional[str]:
+def get_vehicle_ownership_model(settings: SettingsLike) -> Optional[str]:
     """Resolve the configured vehicle-ownership model across legacy/new schemas."""
     return get_setting(
         settings,
@@ -85,7 +72,7 @@ def get_vehicle_ownership_model(settings: Any) -> Optional[str]:
     )
 
 
-def get_activity_demand_model(settings: Any) -> Optional[str]:
+def get_activity_demand_model(settings: SettingsLike) -> Optional[str]:
     """Resolve the configured activity-demand model across legacy/new schemas."""
     return get_setting(
         settings,
@@ -94,7 +81,7 @@ def get_activity_demand_model(settings: Any) -> Optional[str]:
     )
 
 
-def get_traffic_assignment_model(settings: Any) -> Optional[str]:
+def get_traffic_assignment_model(settings: SettingsLike) -> Optional[str]:
     """
     Resolve the configured traffic-assignment model across legacy/new schemas.
     """
@@ -106,7 +93,7 @@ def get_traffic_assignment_model(settings: Any) -> Optional[str]:
     )
 
 
-def is_land_use_enabled(settings: Any) -> bool:
+def is_land_use_enabled(settings: SettingsLike) -> bool:
     """
     Resolve whether land use is enabled using attached runtime flags when present.
     """
@@ -118,13 +105,10 @@ def is_land_use_enabled(settings: Any) -> bool:
     explicit = get_setting(settings, "land_use_enabled")
     if explicit is not None:
         return bool(explicit)
-    runtime_flags = getattr(getattr(settings, "runtime", None), "flags", None)
-    if runtime_flags is not None and hasattr(runtime_flags, "land_use_enabled"):
-        return bool(runtime_flags.land_use_enabled)
     return get_land_use_model(settings) == "urbansim"
 
 
-def is_activity_demand_enabled(settings: Any) -> bool:
+def is_activity_demand_enabled(settings: SettingsLike) -> bool:
     """
     Resolve whether activity demand is enabled using attached runtime flags when present.
     """
@@ -139,9 +123,6 @@ def is_activity_demand_enabled(settings: Any) -> bool:
     explicit = get_setting(settings, "activity_demand_enabled")
     if explicit is not None:
         return bool(explicit)
-    runtime_flags = getattr(getattr(settings, "runtime", None), "flags", None)
-    if runtime_flags is not None and hasattr(runtime_flags, "activity_demand_enabled"):
-        return bool(runtime_flags.activity_demand_enabled)
 
     model_name = get_activity_demand_model(settings)
     if model_name is not None:
@@ -149,7 +130,7 @@ def is_activity_demand_enabled(settings: Any) -> bool:
     return get_setting(settings, "activitysim") is not None
 
 
-def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
+def compute_model_enabled_flags(settings: SettingsLike) -> Dict[str, bool]:
     """
     Compute which models are enabled based on the provided settings configuration.
 
@@ -247,15 +228,20 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
         "-c", "--config", default="settings.yaml", help="config file name"
     )
     parser.add_argument(
-        "-S",
-        "--stage",
+        "--run-dir",
         default=None,
-        help="current state file to pick up from",
+        help="Explicit run/archive directory path to use or resume",
     )
     parser.add_argument(
-        "--allow-rewind-resume",
+        "--timestamp",
         action="store_true",
-        help="allow resuming from an earlier year than the archive run state",
+        help="Append timestamp suffix to the run directory",
+    )
+    parser.add_argument(
+        "--resume",
+        choices=["strict", "recompute"],
+        default=None,
+        help="Resume cache validation policy ('strict' or 'recompute')",
     )
     args = parser.parse_args()
 
@@ -263,21 +249,17 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
     if args.config:
         settings_file = args.config
 
-    stage_file_loc = args.stage
-    if args.stage is not None and not os.path.exists(stage_file_loc):
-        raise FileNotFoundError(
-            f"Explicit stage file provided via -S/--stage does not exist: {stage_file_loc}"
-        )
-
     # Load settings from the specified config file into a Pydantic model for validation and structured access.
     settings = load_config(settings_file)
+    if args.resume is not None:
+        settings.run.resume_policy = args.resume
 
     # Attach runtime-specific file paths to the settings object for easy access later.
     _apply_runtime_options(
         settings,
-        state_file_loc=stage_file_loc,
         settings_file=settings_file,
-        allow_rewind_resume=args.allow_rewind_resume is True,
+        run_dir=args.run_dir,
+        timestamp=args.timestamp is True,
     )
 
     # Compute and attach model enabled flags to the settings object.
@@ -312,7 +294,7 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
 
 
 def read_datastore(
-    settings: Any,
+    settings: SettingsLike,
     year: Optional[int] = None,
     warm_start: bool = False,
     mutable_data_dir: Optional[str] = None,

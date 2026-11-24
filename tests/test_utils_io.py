@@ -179,8 +179,9 @@ class TestParseArgsAndSettings:
         # Mock argparse
         mock_args = MagicMock()
         mock_args.config = "settings.yaml"
-        mock_args.stage = None
-        mock_args.allow_rewind_resume = False
+        mock_args.run_dir = None
+        mock_args.timestamp = False
+        mock_args.resume = None
         mock_arg_parser.return_value.parse_args.return_value = mock_args
 
         # Mock compute_model_enabled_flags
@@ -207,14 +208,15 @@ class TestParseArgsAndSettings:
         mock_load_config.assert_called_with("settings.yaml")
         mock_compute_flags.assert_called_once_with(settings)
 
-        assert settings.state_file_loc is None
+        assert settings.run_dir is None
+        assert settings.timestamp is False
         assert settings.settings_file == "settings.yaml"
         assert settings.land_use_enabled is True
         assert settings.vehicle_ownership_model_enabled is True
 
     @patch("argparse.ArgumentParser")
     @patch("pilates.utils.io.compute_model_enabled_flags")
-    def test_custom_config_and_stage_files(
+    def test_custom_config_and_run_dir(
         self,
         mock_compute_flags,
         mock_arg_parser,
@@ -227,8 +229,9 @@ class TestParseArgsAndSettings:
         # Mock argparse
         mock_args = MagicMock()
         mock_args.config = "custom_settings.yaml"
-        mock_args.stage = "custom_stage.yaml"
-        mock_args.allow_rewind_resume = False
+        mock_args.run_dir = "custom_run_dir"
+        mock_args.timestamp = True
+        mock_args.resume = None
         mock_arg_parser.return_value.parse_args.return_value = mock_args
 
         # Mock compute_model_enabled_flags
@@ -248,11 +251,11 @@ class TestParseArgsAndSettings:
             "taz",  # shared.skims.zone_type
         ]
 
-        with patch("pilates.utils.io.os.path.exists", return_value=True):
-            settings = parse_args_and_settings()
+        settings = parse_args_and_settings()
 
         mock_load_config.assert_called_with("custom_settings.yaml")
-        assert settings.state_file_loc == "custom_stage.yaml"
+        assert settings.run_dir == "custom_run_dir"
+        assert settings.timestamp is True
         assert settings.settings_file == "custom_settings.yaml"
 
     @patch("argparse.ArgumentParser")
@@ -332,72 +335,3 @@ class TestParseArgsAndSettings:
 
         with pytest.raises(ValueError, match="atlas_beamac must be 0"):
             parse_args_and_settings()
-
-    @patch("argparse.ArgumentParser")
-    @patch("pilates.utils.io.compute_model_enabled_flags")
-    def test_explicit_stage_file_missing_raises(
-        self,
-        mock_compute_flags,
-        mock_arg_parser,
-        mock_dependencies,
-        mock_settings_pydantic,
-    ):
-        mock_get_setting, mock_load_config = mock_dependencies
-        mock_load_config.return_value = mock_settings_pydantic
-
-        mock_args = MagicMock()
-        mock_args.config = "settings.yaml"
-        mock_args.stage = "definitely_missing_stage.yaml"
-        mock_args.allow_rewind_resume = False
-        mock_arg_parser.return_value.parse_args.return_value = mock_args
-
-        mock_compute_flags.return_value = {
-            "land_use_enabled": True,
-            "vehicle_ownership_model_enabled": True,
-            "activity_demand_enabled": True,
-            "traffic_assignment_enabled": True,
-            "replanning_enabled": True,
-        }
-
-        with pytest.raises(
-            FileNotFoundError, match="Explicit stage file provided via -S/--stage"
-        ):
-            parse_args_and_settings()
-
-        mock_load_config.assert_not_called()
-        mock_get_setting.assert_not_called()
-
-    @patch("argparse.ArgumentParser")
-    @patch("pilates.utils.io.compute_model_enabled_flags")
-    def test_allow_rewind_resume_flag_attached_to_settings(
-        self,
-        mock_compute_flags,
-        mock_arg_parser,
-        mock_dependencies,
-        mock_settings_pydantic,
-    ):
-        mock_get_setting, mock_load_config = mock_dependencies
-        mock_load_config.return_value = mock_settings_pydantic
-
-        mock_args = MagicMock()
-        mock_args.config = "settings.yaml"
-        mock_args.stage = None
-        mock_args.allow_rewind_resume = True
-        mock_arg_parser.return_value.parse_args.return_value = mock_args
-
-        mock_compute_flags.return_value = {
-            "land_use_enabled": True,
-            "vehicle_ownership_model_enabled": True,
-            "activity_demand_enabled": True,
-            "traffic_assignment_enabled": True,
-            "replanning_enabled": True,
-        }
-        mock_get_setting.side_effect = [
-            0,  # activitysim.household_sample_size
-            0,  # atlas.beamac
-            "sfbay",  # run.region
-            "taz",  # shared.skims.zone_type
-        ]
-
-        settings = parse_args_and_settings()
-        assert settings.allow_rewind_resume is True

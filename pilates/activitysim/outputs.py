@@ -4,24 +4,22 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     Dict,
-    Iterable,
     Mapping,
     Optional,
     Tuple,
     Union,
 )
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 import json
 from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
     USIM_DATASTORE_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.outputs_base import (
     OutputValidator,
@@ -93,7 +91,7 @@ def normalize_asim_output_key(key: str) -> str:
     return ASIM_OUTPUT_KEY_MAP.get(key, key)
 
 
-def configured_asim_output_tables(settings: Any) -> Dict[str, str]:
+def configured_asim_output_tables(settings: SettingsLike) -> Dict[str, str]:
     """Return physical final-pipeline table names indexed by semantic output key.
 
     ``output_tables.tables`` is the execution contract: it determines which
@@ -127,7 +125,7 @@ def configured_asim_output_tables(settings: Any) -> Dict[str, str]:
     return configured
 
 
-def configured_asim_output_keys(settings: Any) -> Tuple[str, ...]:
+def configured_asim_output_keys(settings: SettingsLike) -> Tuple[str, ...]:
     """Return the semantic output keys enabled by the active ActivitySim config."""
 
     return tuple(configured_asim_output_tables(settings))
@@ -203,6 +201,14 @@ class _UrbanSimToActivitySimBoundaryValidator:
         outputs: "ActivitySimPreprocessOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
+        """
+        Return warning results if prepared tables sit outside ``mutable_data_dir``.
+
+        Applies only when an UrbanSim step is present in
+        ``context.upstream_outputs``, verifying that ``land_use_table``,
+        ``households_table``, and ``persons_table`` live directly inside
+        ``outputs.mutable_data_dir``.
+        """
         upstream = (
             context.upstream_outputs if context.upstream_outputs is not None else {}
         )
@@ -253,24 +259,6 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
         OMX skims input path when present.
     """
 
-    primary_output_attr: ClassVar[str] = "mutable_data_dir"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (
-        ASIM_LAND_USE_IN,
-        ASIM_HOUSEHOLDS_IN,
-        ASIM_PERSONS_IN,
-    )
-    record_keys: ClassVar[Dict[str, str]] = {
-        "land_use_table": ASIM_LAND_USE_IN,
-        "households_table": ASIM_HOUSEHOLDS_IN,
-        "persons_table": ASIM_PERSONS_IN,
-        "omx_skims": ASIM_OMX_SKIMS,
-    }
-    record_descriptions: ClassVar[Dict[str, str]] = {
-        "land_use_table": "ActivitySim land use input table",
-        "households_table": "ActivitySim households input table",
-        "persons_table": "ActivitySim persons input table",
-        "omx_skims": "ActivitySim OMX skims input",
-    }
     required_path_fields: ClassVar[Tuple[str, ...]] = (
         "mutable_data_dir",
         "land_use_table",
@@ -307,11 +295,6 @@ class ActivitySimRunOutputs(StepOutputsBase):
         Mapping of short_name to known content hashes for raw outputs.
     """
 
-    primary_output_attr: ClassVar[str] = "output_dir"
-    declared_outputs: ClassVar[Tuple[str, ...]] = tuple(
-        dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values())
-    )
-    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     validators: ClassVar[Tuple[OutputValidator, ...]] = ()
@@ -321,16 +304,6 @@ class ActivitySimRunOutputs(StepOutputsBase):
     raw_output_hashes: Dict[str, str] = field(default_factory=dict)
     source_input_paths: Dict[str, Path] = field(default_factory=dict)
     source_input_hashes: Dict[str, str] = field(default_factory=dict)
-
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield run output records.
-        """
-        for key, path in self.raw_outputs.items():
-            normalized_key = _normalize_activitysim_run_output_key(key)
-            yield normalized_key, path, f"ActivitySim raw output: {normalized_key}"
-        if self.zarr_skims is not None:
-            yield ZARR_SKIMS, self.zarr_skims, "ActivitySim generated Zarr skims"
 
 
 class _ActivitySimRunOutputsValidator:
@@ -349,7 +322,13 @@ class _ActivitySimRunOutputsValidator:
         outputs: "ActivitySimRunOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
-        declared = set(outputs.declared_output_keys())
+        """
+        Return warning results for raw output keys outside ``ASIM_OUTPUT_KEY_MAP``.
+
+        Normalizes each key in ``outputs.raw_outputs`` and flags unrecognized
+        keys without failing the run.
+        """
+        declared = set(ASIM_OUTPUT_KEY_MAP.values())
         results: list[ValidationResult] = []
         for raw_key in outputs.raw_outputs:
             normalized_key = _normalize_activitysim_run_output_key(raw_key)
@@ -407,6 +386,13 @@ class _ActivitySimPostprocessOutputsValidator:
         outputs: "ActivitySimPostprocessOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
+        """
+        Return an error result if ``usim_datastore_h5`` is missing with land use active.
+
+        Checks ``context.state`` / ``context.settings`` for an enabled
+        ``land_use`` stage and requires ``outputs.usim_datastore_h5`` so
+        downstream UrbanSim steps receive the updated datastore.
+        """
         if not _activitysim_postprocess_requires_usim_output(context):
             return []
         if outputs.usim_datastore_h5 is not None:
@@ -446,15 +432,6 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         (``usim_datastore_h5``).
     """
 
-    primary_output_attr: ClassVar[str] = "usim_datastore_h5"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_DATASTORE_H5,)
-    optional_outputs: ClassVar[Tuple[str, ...]] = (
-        "asim_input_households_csv_archived",
-        "asim_input_persons_csv_archived",
-        "asim_input_land_use_csv_archived",
-        "asim_input_skims_omx_archived",
-    )
-    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "usim_datastore_h5",
@@ -474,17 +451,3 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         if self.usim_datastore_h5 is None:
             return None
         return USIM_DATASTORE_H5
-
-    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
-        """
-        Yield postprocessed output records.
-        """
-        usim_key = self._resolved_usim_datastore_key()
-        if usim_key is not None and self.usim_datastore_h5 is not None:
-            yield (
-                usim_key,
-                self.usim_datastore_h5,
-                "New UrbanSim input data for next iteration",
-            )
-        for key, path in self.processed_outputs.items():
-            yield key, path, f"ActivitySim output file: {key}"

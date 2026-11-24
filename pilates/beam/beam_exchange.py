@@ -6,9 +6,10 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from pilates.beam.config_hocon import (
     BeamConfigHoconError,
+    _lookup_dotted_key,
     beam_config_env_overrides,
     beam_primary_config_path,
-    resolve_beam_config_value,
+    load_resolved_beam_config_tree,
 )
 from pilates.config import PilatesConfig
 from pilates.generic.records import FileRecord, RecordStore
@@ -52,13 +53,13 @@ def config_beam_exchange_scenario_folder(
 
     env_overrides = beam_config_env_overrides(settings, workspace=workspace)
     try:
+        config_tree = load_resolved_beam_config_tree(
+            config_path,
+            env_overrides=env_overrides,
+        )
         resolved = None
         for candidate_key in ("beam.exchange.scenario.folder", "folder"):
-            resolved = resolve_beam_config_value(
-                config_path,
-                key=candidate_key,
-                env_overrides=env_overrides,
-            )
+            resolved = _lookup_dotted_key(config_tree, candidate_key)
             if resolved is not None:
                 break
     except BeamConfigHoconError as exc:

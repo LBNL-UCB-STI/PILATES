@@ -1,10 +1,11 @@
 from types import SimpleNamespace
 
+import consist
 import pytest
 import pandas as pd
 
 from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
-from pilates.workflows.stages.vehicle_ownership import (
+from pilates.workflows.orchestrator import (
     _validate_population_h5_for_activitysim_year,
 )
 
@@ -59,8 +60,10 @@ def test_resolve_atlas_usim_datastore_path_accepts_artifact_like_explicit_value(
         get_usim_mutable_data_dir=lambda: str(usim_dir),
     )
     state = SimpleNamespace(
-        atlas_usim_datastore_h5=SimpleNamespace(
-            path="urbansim/data/artifact_current.h5"
+        atlas_usim_datastore_h5=consist.Artifact(
+            key="usim_datastore_h5",
+            uri="workspace://urbansim/data/artifact_current.h5",
+            driver="h5",
         ),
         forecast_year=2029,
         is_start_year=lambda: False,
@@ -73,3 +76,40 @@ def test_resolve_atlas_usim_datastore_path_accepts_artifact_like_explicit_value(
     )
 
     assert resolved == explicit
+
+
+def test_select_atlas_datastore_prefers_multiyr_forecast_output_for_subyear():
+    from pilates.workflows.sim_state import LandUseState, SimState
+    from pilates.workflows.steps.atlas import _select_atlas_datastore_from_sim_state
+
+    input_for_2023 = consist.Artifact(
+        key="usim_datastore_h5",
+        uri="workspace://urbansim/data/input_data_for_2023_outputs.h5",
+        driver="h5",
+    )
+    model_2023 = consist.Artifact(
+        key="usim_forecast_output",
+        uri="workspace://urbansim/data/model_data_2023.h5",
+        driver="h5",
+    )
+    pop_2017 = consist.Artifact(
+        key="usim_population_source_h5",
+        uri="workspace://urbansim/data/model_data_2017_population_source.h5",
+        driver="h5",
+    )
+    sim_state = SimState(
+        land_use=LandUseState(
+            current_h5=input_for_2023,
+            merged_h5=input_for_2023,
+            forecast_output=model_2023,
+            population_source=pop_2017,
+        )
+    )
+
+    selected = _select_atlas_datastore_from_sim_state(
+        sim_state=sim_state,
+        use_base_datastore=False,
+        expected_filename="model_data_2019.h5",
+    )
+
+    assert selected is model_2023

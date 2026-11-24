@@ -16,7 +16,9 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
+    Protocol,
     Sequence,
     Union,
 )
@@ -144,6 +146,14 @@ class RunConfig(BaseModel):
         description=(
             "Fail startup if required restart artifacts are still missing after "
             "startup hydration/preflight checks"
+        ),
+    )
+    resume_policy: Literal["strict", "recompute"] = Field(
+        "strict",
+        description=(
+            "Resume cache validation policy: 'strict' asserts previously completed "
+            "steps must be cache hits and fails early on drift; 'recompute' allows "
+            "re-execution of invalidated steps."
         ),
     )
     consist_db_local_run: bool = Field(
@@ -484,6 +494,9 @@ class AtlasConfig(BaseModel):
 class PostprocessingConfig(BaseModel):
     """Postprocessing and validation configuration."""
 
+    enabled: bool = Field(
+        False, description="Enable end-of-run postprocessing (disabled by default)"
+    )
     output_folder: str
     mep_output_folder: str
     scenario_definitions: Dict[str, Any] = Field(default_factory=dict)
@@ -491,6 +504,7 @@ class PostprocessingConfig(BaseModel):
 
     def to_consist_facet(self) -> Dict[str, Any]:
         return {
+            "enabled": self.enabled,
             "output_folder": self.output_folder,
             "mep_output_folder": self.mep_output_folder,
             "scenario_definitions": self.scenario_definitions,
@@ -720,12 +734,20 @@ class PilatesConfig(BaseModel):
         self._runtime.flags.replanning_enabled = value
 
     @property
-    def state_file_loc(self) -> Optional[str]:
-        return self._runtime.options.state_file_loc
+    def run_dir(self) -> Optional[str]:
+        return self._runtime.options.run_dir
 
-    @state_file_loc.setter
-    def state_file_loc(self, value: Optional[str]) -> None:
-        self._runtime.options.state_file_loc = value
+    @run_dir.setter
+    def run_dir(self, value: Optional[str]) -> None:
+        self._runtime.options.run_dir = value
+
+    @property
+    def timestamp(self) -> bool:
+        return self._runtime.options.timestamp
+
+    @timestamp.setter
+    def timestamp(self, value: bool) -> None:
+        self._runtime.options.timestamp = bool(value)
 
     @property
     def settings_file(self) -> Optional[str]:
@@ -734,14 +756,6 @@ class PilatesConfig(BaseModel):
     @settings_file.setter
     def settings_file(self, value: Optional[str]) -> None:
         self._runtime.options.settings_file = value
-
-    @property
-    def allow_rewind_resume(self) -> bool:
-        return self._runtime.options.allow_rewind_resume
-
-    @allow_rewind_resume.setter
-    def allow_rewind_resume(self, value: bool) -> None:
-        self._runtime.options.allow_rewind_resume = bool(value)
 
     def get_enabled_models(self) -> List[str]:
         """Get list of enabled model names."""
@@ -1013,6 +1027,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return 0
 
 
+class HasRunSettings(Protocol):
+    """Structural protocol for minimal settings stubs exposing a ``run`` section."""
+
+    @property
+    def run(self) -> Any: ...
+
+
+SettingsLike = Union[PilatesConfig, Mapping[str, Any], HasRunSettings]
+
+
 __all__ = [
     "ActivitySimAdmissionConfig",
     "ActivitySimConfig",
@@ -1030,6 +1054,7 @@ __all__ = [
     "DockerConfig",
     "FullSkimsCreatorConfig",
     "GeographyConfig",
+    "HasRunSettings",
     "InfrastructureConfig",
     "ModelSelection",
     "PilatesConfig",
@@ -1039,6 +1064,7 @@ __all__ = [
     "RunConfig",
     "RuntimeFlags",
     "RuntimeOptions",
+    "SettingsLike",
     "SharedConfig",
     "SkimsConfig",
     "UrbanSimAdmissionConfig",

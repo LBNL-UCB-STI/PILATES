@@ -1,4 +1,4 @@
-from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.orchestrator import AtlasSubState
 
 
 class DummyState:
@@ -53,7 +53,7 @@ def test_atlas_substate_set_sub_stage_progress_updates_parent() -> None:
 
     atlas_state.set_sub_stage_progress("atlas")
 
-    assert parent.sub_stage_progress == "atlas"
+    assert parent.sub_stage_progress is None
 
 
 def test_atlas_substate_exposes_parent_iteration() -> None:

@@ -13,6 +13,7 @@ infrastructure:
     impacts: docker://ghcr.io/lbnl-ucb-sti/impacts:v0.2.0
 beam:
   config: scenarios/breathe/pilates--sfbay--2018-Baseline.conf
+  scenario_folder: urbansim/atlas-2019
   extra_jvm_args: ${BEAM_EXTRA_JVM_ARGS}
 impacts:
   local_input_folder: impacts/impacts_input

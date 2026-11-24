@@ -5,7 +5,7 @@ import shutil
 import time
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from typing import Any, Optional, List, Tuple, Union, Dict, TYPE_CHECKING
+from typing import Any, Optional, List, Tuple, Union, Dict
 
 import numpy as np
 import openmatrix as omx
@@ -36,6 +36,10 @@ from pilates.utils.zone_utils import (
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
     FINAL_SKIMS_OMX,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -43,9 +47,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_PERSONS_TABLE,
 )
 from pilates.workflows.state import WorkflowState
-
-if TYPE_CHECKING:
-    from pilates.workspace import Workspace
+from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 _ASIM_ATLAS_DISABLED_VEHICLE_MODEL_NAMES = frozenset(
@@ -2199,6 +2201,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                         skims_loc,
                     )
                 else:
+                    Path(skims_loc).touch()
                     logger.debug(
                         "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
                         skims_loc,
@@ -2250,7 +2253,13 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         if skims_omx_path is not None:
             output_values["omx_skims"] = skims_omx_path
         input_hashes: Dict[str, str] = {}
-        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
+        preprocess_record_fields = (
+            ("land_use_table", ASIM_LAND_USE_IN),
+            ("households_table", ASIM_HOUSEHOLDS_IN),
+            ("persons_table", ASIM_PERSONS_IN),
+            ("omx_skims", ASIM_OMX_SKIMS),
+        )
+        for field_name, record_key in preprocess_record_fields:
             record = records_by_key.get(record_key)
             if record is None:
                 continue
@@ -2686,15 +2695,22 @@ def enrollment_tables(
     local_crs = settings.shared.geography.local_crs
 
     zone_type = settings.shared.geography.zones.zone_type
-    path_to_schools_data = "pilates/utils/data/{0}/{1}_{2}.csv".format(
-        region, zone_type, enrollment_type
-    )
+    data_dir = Path(__file__).resolve().parent.parent / "utils" / "data" / region
+    target_path = data_dir / f"{zone_type}_{enrollment_type}.csv"
+    legacy_path = data_dir / f"{enrollment_type}.csv"
+
+    chosen_path: Optional[Path] = None
+    if target_path.exists():
+        chosen_path = target_path
+    elif legacy_path.exists():
+        chosen_path = legacy_path
+
     assert enrollment_type in [
         "schools",
         "colleges",
     ], "enrollemnt type one of ['schools', 'colleges']"
 
-    if not os.path.exists(path_to_schools_data):
+    if chosen_path is None:
         if enrollment_type == "schools":
             enrollment = _get_school_enrollment(state_fips, county_codes)
         elif enrollment_type == "colleges":
@@ -2702,8 +2718,10 @@ def enrollment_tables(
         else:
             raise KeyError("enrollemnt type one of ['schools', 'colleges']")
     else:
-        logger.info("Reading school enrollment data from disk!")
-        enrollment = pd.read_csv(path_to_schools_data, dtype={asim_zone_id_col: str})
+        logger.info(
+            "Reading %s enrollment data from disk: %s", enrollment_type, chosen_path
+        )
+        enrollment = pd.read_csv(chosen_path, dtype={asim_zone_id_col: str})
 
     if asim_zone_id_col not in enrollment.columns:
         enrollment_df = enrollment[["x", "y"]].copy()
@@ -2715,11 +2733,11 @@ def enrollment_tables(
         enrollment = enrollment.dropna(subset=[asim_zone_id_col])
         enrollment[asim_zone_id_col] = enrollment[asim_zone_id_col].astype(str)
         del enrollment_df
-        logger.info("Saving {} enrollment data to disk!".format(enrollment_type))
-        os.makedirs(
-            os.path.dirname(path_to_schools_data), exist_ok=True
-        )  # Create directory if it doesn't exist
-        enrollment.to_csv(path_to_schools_data)
+        logger.info(
+            "Saving %s enrollment data to disk: %s", enrollment_type, target_path
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        enrollment.to_csv(target_path)
 
     return enrollment
 
@@ -2784,6 +2802,11 @@ def ensure_activitysim_mutable_configs(
     else:
         input_dir = mutable_data_rel
 
+    from pilates.workspace import is_dry_run_workspace
+
+    if is_dry_run_workspace(workspace):
+        return Path(input_dir)
+
     configs_dest_dir: Optional[str] = None
     if workspace is not None and folder_path is None:
         try:
@@ -2800,6 +2823,14 @@ def ensure_activitysim_mutable_configs(
         )
     if configs_dest_dir is None:
         return Path(mutable_configs_rel)
+    if (
+        folder_path is None
+        and workspace_root is None
+        and isinstance(workspace, Workspace)
+        and workspace._asim_mutable_staged_dir == configs_dest_dir
+        and os.path.isdir(configs_dest_dir)
+    ):
+        return Path(configs_dest_dir)
 
     region = get_setting(settings, "run.region")
     project_root = find_project_root(start_path=os.path.dirname(__file__))
@@ -2912,6 +2943,12 @@ def ensure_activitysim_mutable_configs(
     elif local_configs_folder:
         os.makedirs(configs_dest_dir, exist_ok=True)
 
+    if (
+        folder_path is None
+        and workspace_root is None
+        and isinstance(workspace, Workspace)
+    ):
+        workspace._asim_mutable_staged_dir = configs_dest_dir
     return Path(configs_dest_dir)
 
 

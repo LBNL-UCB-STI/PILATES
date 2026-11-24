@@ -1,3 +1,25 @@
+# pilates/postprocessing/postprocessor.py
+"""
+Legacy workspace postprocessor for MEP and PILATES summary outputs.
+
+NOTE (Phase 1.4 Architectural Blocker):
+----------------------------------------
+This module currently relies on scraping the mutable local workspace filesystem
+(e.g., globbing for raw parquet, csv, and shapefiles across asim_output_data_dir,
+beam_output_data_dir, etc.) rather than receiving typed Consist Artifacts or
+relying on LinkML-defined artifact schemas.
+
+Under Phase 1.1–1.3 zero-copy metadata replay (`cache_hydration="metadata"`), intermediate
+simulation workspaces are not fully hydrated on disk on fresh compute nodes when steps
+are cache hits. In stack layer Phase 1.4 / LinkML migration:
+1. `postprocessing` must be refactored into declarative input-binding steps declaring
+   precise upstream artifact inputs (e.g., via LinkML schemas) rather than raw filesystem scraping.
+2. Legacy file-copy routines (`copy_outputs_to_mep`, `find_closest_file`, directory walking)
+   must be replaced by typed artifact resolution through `scenario.coupler` / Consist artifacts.
+Until then, downstream postprocessing requires either upstream outputs to be materialized
+or runs on the same node where simulation outputs were staged.
+"""
+
 import gzip
 import os
 import pandas as pd
@@ -44,14 +66,23 @@ dtypes = {
 
 
 def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
-    asim_output_data_dir = settings.activitysim.local_output_folder
-    mep_output_data_dir = os.path.join(
-        settings.postprocessing.mep_output_folder, str(year)
-    )
+    if workspace is not None:
+        asim_output_data_dir = str(workspace.get_asim_output_dir())
+        mep_folder = settings.postprocessing.mep_output_folder
+        if not os.path.isabs(mep_folder):
+            mep_folder = os.path.join(str(workspace.full_path), mep_folder)
+        mep_output_data_dir = os.path.join(mep_folder, str(year))
+        beam_output_base = str(workspace.get_beam_output_dir())
+    else:
+        asim_output_data_dir = settings.activitysim.local_output_folder
+        mep_output_data_dir = os.path.join(
+            settings.postprocessing.mep_output_folder, str(year)
+        )
+        beam_output_base = settings.beam.local_output_folder
     if not os.path.exists(mep_output_data_dir):
         os.makedirs(mep_output_data_dir)
     beam_iter_output_dir = os.path.join(
-        settings.beam.local_output_folder,
+        beam_output_base,
         settings.run.region,
         "year-{0}-iteration-{1}".format(year, iter),
     )
@@ -72,7 +103,11 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
                 f_out.writelines(f_in)
 
     def copy_urbansim_outputs_to_mep():
-        data_dir = settings.urbansim.local_mutable_data_folder
+        data_dir = (
+            str(workspace.get_usim_mutable_data_dir())
+            if workspace is not None
+            else settings.urbansim.local_mutable_data_folder
+        )
         usim_output_store_name = get_usim_datastore_fname(
             settings, io="input", year=year
         )
@@ -1100,7 +1135,7 @@ def build_mep_summaries(trips, settings, year, iteration):
     )
 
 
-def process_event_file(settings, year, iteration):
+def process_event_file(settings, year, iteration, *, output_path=None):
     try:
         logger.info("Loading utilities")
         utils = _read_asim_utilities(settings, year, iteration)
@@ -1139,9 +1174,13 @@ def process_event_file(settings, year, iteration):
             date.today().strftime("%Y%m%d"),
             iteration,
         )
-        final_output.to_csv(
-            os.path.join(post_output_folder, filename), compression="gzip"
+        target_path = (
+            str(output_path)
+            if output_path is not None
+            else os.path.join(post_output_folder, filename)
         )
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        final_output.to_csv(target_path, compression="gzip")
 
         logger.info("Building mep summaries")
         try:

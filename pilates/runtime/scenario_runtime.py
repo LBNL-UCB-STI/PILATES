@@ -12,13 +12,19 @@ from typing import (
     Sequence,
 )
 
-from pilates.config import PilatesConfig
-from pilates.workflows.catalog import schema_step_specs
+if TYPE_CHECKING:
+    from pilates.workflows.state import WorkflowState
+
+from pilates.config import PilatesConfig, SettingsLike
+from pilates.utils.io import (
+    compute_model_enabled_flags,
+    get_activity_demand_model,
+    get_traffic_assignment_model,
+)
+from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.steps import STEP_DEFINITIONS
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from pilates.workflows.surface import EnabledWorkflowSurface
 
 
 def coerce_int(value: Any) -> Optional[int]:
@@ -119,144 +125,93 @@ def resolve_cache_epoch(settings: PilatesConfig) -> int:
 
 
 def build_schema_steps() -> List[Callable[..., Any]]:
-    """Return catalog-ordered committed native Consist callables for schema checks."""
-    return [spec.definition.function for spec in schema_step_specs()]
+    """Return committed native Consist callables in canonical step order."""
+    return [definition.function for definition in STEP_DEFINITIONS.values()]
+
+
+def _enabled_schema_step_names(
+    settings: SettingsLike,
+    *,
+    include_optional: bool = True,
+) -> set[str]:
+    flags = compute_model_enabled_flags(settings)
+    enabled: set[str] = set()
+
+    if flags.get("land_use_enabled"):
+        enabled.update({"urbansim_run", "urbansim_postprocess"})
+    if flags.get("vehicle_ownership_model_enabled"):
+        enabled.update({"atlas_preprocess", "atlas_run", "atlas_postprocess"})
+
+    activity_model = get_activity_demand_model(settings)
+    if flags.get("activity_demand_enabled") and (
+        activity_model is None or activity_model == "activitysim"
+    ):
+        enabled.update(
+            {
+                "activitysim_preprocess",
+                "activitysim_run",
+                "activitysim_postprocess",
+            }
+        )
+
+    traffic_model = get_traffic_assignment_model(settings)
+    if flags.get("traffic_assignment_enabled") and (
+        traffic_model is None or traffic_model == "beam"
+    ):
+        schedule = str(
+            get_setting(settings, "beam.full_skim.run_schedule", default="disabled")
+            or "disabled"
+        )
+        if schedule == "standalone":
+            if include_optional:
+                enabled.add("beam_preprocess")
+                enabled.add("beam_full_skim")
+        else:
+            enabled.update({"beam_preprocess", "beam_run", "beam_postprocess"})
+            if include_optional and schedule in {
+                "after_each_iteration",
+                "after_final_iteration",
+            }:
+                enabled.add("beam_full_skim")
+
+    if "beam_run" in enabled and get_setting(settings, "run.models.impacts"):
+        enabled.update(("impacts_presim", "impacts_postsim"))
+
+    if include_optional and bool(
+        get_setting(settings, "postprocessing.enabled", default=False)
+    ):
+        enabled.add("postprocessing")
+
+    return enabled
 
 
 def filter_schema_steps_for_enabled_models(
     steps: List[Callable[..., Any]],
     *,
-    surface: "EnabledWorkflowSurface",
+    settings: SettingsLike,
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
-    enabled_step_names = surface.enabled_schema_step_names(
-        include_optional=include_optional
+    enabled_step_names = _enabled_schema_step_names(
+        settings,
+        include_optional=include_optional,
     )
     enabled_step_functions = {
-        spec.definition.function
-        for spec in schema_step_specs(include_optional=include_optional)
-        if spec.step_name in enabled_step_names
+        definition.function
+        for step_name, definition in STEP_DEFINITIONS.items()
+        if step_name in enabled_step_names
     }
     return [step_func for step_func in steps if step_func in enabled_step_functions]
-
-
-def _required_output_keys_for_surface(
-    *,
-    surface: "EnabledWorkflowSurface",
-    state: Any = None,
-) -> List[str]:
-    required_output_keys: List[str] = []
-    seen = set()
-
-    min_order = _required_output_restart_frontier_order(
-        surface=surface,
-        state=state,
-    )
-    for spec in schema_step_specs(include_optional=True):
-        if min_order is not None and spec.order < min_order:
-            continue
-        step_name = spec.step_name
-        if not surface.step_enabled(step_name, include_optional=False):
-            continue
-        step_surface = surface.step_surface(step_name)
-        if step_surface is None:
-            continue
-        for key in step_surface.required_output_keys:
-            if key in seen:
-                continue
-            required_output_keys.append(key)
-            seen.add(key)
-    return required_output_keys
-
-
-def _stage_name(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    name = getattr(value, "name", None)
-    if isinstance(name, str) and name:
-        return name
-    raw_value = getattr(value, "value", None)
-    if isinstance(raw_value, str) and raw_value:
-        return raw_value
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _state_stage_matches(state: Any, value: Any, stage_name: str) -> bool:
-    stage_enum = getattr(state, "Stage", None)
-    expected = getattr(stage_enum, stage_name, None) if stage_enum is not None else None
-    if expected is not None and value == expected:
-        return True
-    return _stage_name(value) == stage_name
-
-
-def _restart_frontier_stage_name(
-    *,
-    surface: "EnabledWorkflowSurface",
-    state: Any,
-) -> Optional[str]:
-    raw_run_mode = getattr(surface, "run_mode", None)
-    run_mode = str(getattr(raw_run_mode, "value", raw_run_mode))
-    if run_mode != "restart":
-        return None
-
-    current_major_stage = getattr(state, "current_major_stage", None)
-    if current_major_stage is None:
-        return None
-
-    if _state_stage_matches(state, current_major_stage, "supply_demand_loop"):
-        current_sub_stage = getattr(state, "current_sub_stage", None)
-        current_sub_stage_name = _stage_name(current_sub_stage)
-        if current_sub_stage_name in {"activity_demand", "traffic_assignment"}:
-            return current_sub_stage_name
-        for stage_name in ("activity_demand", "traffic_assignment"):
-            if any(
-                spec.stage_name == stage_name
-                and surface.step_enabled(spec.step_name, include_optional=False)
-                for spec in schema_step_specs(include_optional=True)
-            ):
-                return stage_name
-        return None
-
-    return _stage_name(current_major_stage)
-
-
-def _required_output_restart_frontier_order(
-    *,
-    surface: "EnabledWorkflowSurface",
-    state: Any = None,
-) -> Optional[int]:
-    if state is None:
-        return None
-
-    frontier_stage_name = _restart_frontier_stage_name(surface=surface, state=state)
-    if frontier_stage_name is None:
-        return None
-
-    orders = [
-        spec.order
-        for spec in schema_step_specs(include_optional=True)
-        if spec.stage_name == frontier_stage_name
-        and surface.step_enabled(spec.step_name, include_optional=False)
-    ]
-    if not orders:
-        return None
-    return min(orders)
 
 
 def build_scenario_runtime_contract(
     *,
     settings: PilatesConfig,
-    state: Any,
+    state: "WorkflowState",
     workspace: Any,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
-    surface: "EnabledWorkflowSurface",
     build_scenario_consist_kwargs_fn: Callable[[Any], Dict[str, Any]],
-    build_coupler_schema_fn: Callable[..., Dict[str, str]],
-    validate_workflow_step_contracts_fn: Callable[..., None],
     build_schema_steps_fn: Callable[[], List[Callable[..., Any]]],
     filter_schema_steps_for_enabled_models_fn: Callable[..., List[Callable[..., Any]]],
     merge_epoch_facet_fn: Callable[..., Dict[str, Any]],
@@ -291,23 +246,14 @@ def build_scenario_runtime_contract(
     schema_steps_all = build_schema_steps_fn()
     schema_steps_enabled = filter_schema_steps_for_enabled_models_fn(
         schema_steps_all,
+        settings=settings,
         include_optional=True,
-        surface=surface,
     )
-    validate_workflow_step_contracts_fn(
-        declared_steps=schema_steps_enabled,
-        require_all_tracked_declared=False,
-    )
-    coupler_schema = build_coupler_schema_fn(schema_steps_enabled, settings=settings)
-    required_output_keys = _required_output_keys_for_surface(
-        surface=surface,
-        state=state,
-    )
+    required_output_keys: List[str] = []
     scenario_kwargs["require_outputs"] = required_output_keys
     return {
         "scenario_kwargs": scenario_kwargs,
         "schema_steps_all": schema_steps_all,
         "schema_steps_enabled": schema_steps_enabled,
-        "coupler_schema": coupler_schema,
         "required_output_keys": required_output_keys,
     }

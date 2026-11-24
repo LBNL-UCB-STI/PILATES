@@ -4,13 +4,13 @@ from dataclasses import replace
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
-from typing import cast
+from typing import Sequence, cast
 from uuid import UUID
 
 import consist
 import pandas as pd
 import pytest
-from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_contract
+from consist import Tracker, resolve_step_contract
 from consist.models.artifact import Artifact
 
 from pilates.workflows.artifact_keys import (
@@ -21,7 +21,7 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.orchestrator import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, atlas, urbansim
 from pilates.workflows import consist_metadata as step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
@@ -152,11 +152,16 @@ def test_native_urbansim_atlas_definitions_resolve_to_canonical_contracts(
         assert contract.name.startswith(f"{definition.name}__")
         assert contract.model == definition.name
         assert contract.input_binding == "paths"
-        assert contract.output_paths == definition.output_paths(
+        declared_outputs = (definition.outputs or definition.output_paths)(
             settings=settings,
             state=state,
             workspace=workspace,
         )
+        if definition.outputs is not None:
+            assert contract.outputs is not None
+            assert set(contract.outputs) == set(declared_outputs)
+        else:
+            assert contract.output_paths == declared_outputs
 
 
 def test_native_output_path_providers_preserve_typed_downstream_contracts(
@@ -169,10 +174,10 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
     urbansim_run_paths = URBANSIM_RUN.output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    atlas_preprocess_paths = ATLAS_PREPROCESS.output_paths(
+    atlas_preprocess_paths = ATLAS_PREPROCESS.outputs(
         settings=settings, state=state, workspace=workspace
     )
-    atlas_postprocess_paths = ATLAS_POSTPROCESS.output_paths(
+    atlas_postprocess_paths = ATLAS_POSTPROCESS.outputs(
         settings=settings, state=state, workspace=workspace
     )
 
@@ -224,31 +229,32 @@ def test_urbansim_run_resolver_requires_final_skims_only_after_beam_handoff(
         FINAL_SKIMS_OMX: tmp_path / "selected" / "final_skims.omx",
     }
 
-    class _Coupler:
-        def get(self, key: str) -> object:
-            return selected.get(key)
+    from pilates.workflows.sim_state import LandUseState, NetworkState, SimState
+
+    sim_state = SimState(
+        land_use=LandUseState(current_h5=selected[USIM_DATASTORE_H5]),
+        network=NetworkState(skims_omx=selected[FINAL_SKIMS_OMX]),
+    )
 
     bootstrap = URBANSIM_RUN.resolve_inputs(
         settings=settings,
         state=SimpleNamespace(current_year=2020, forecast_year=2020, iteration=0),
         workspace=workspace,
-        coupler=_Coupler(),
+        sim_state=sim_state,
     )
     later = URBANSIM_RUN.resolve_inputs(
         settings=settings,
         state=SimpleNamespace(current_year=2030, forecast_year=2030, iteration=0),
         workspace=workspace,
-        coupler=_Coupler(),
+        sim_state=sim_state,
     )
 
-    assert bootstrap.required_roles == (USIM_DATASTORE_H5,)
-    assert bootstrap.optional_roles == (FINAL_SKIMS_OMX,)
+    assert bootstrap.required_keys == (USIM_DATASTORE_H5,)
     assert bootstrap.metadata["urbansim_launch_context"] == UrbanSimLaunchContext(
         mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
         output_datastore=Path(workspace.get_usim_mutable_data_dir()) / "output_2020.h5",
     )
-    assert later.required_roles == (USIM_DATASTORE_H5, FINAL_SKIMS_OMX)
-    assert later.optional_roles == ()
+    assert later.required_keys == (USIM_DATASTORE_H5, FINAL_SKIMS_OMX)
     assert later.logical_destinations == {
         USIM_DATASTORE_H5: Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5",
         FINAL_SKIMS_OMX: Path(workspace.get_usim_mutable_data_dir())
@@ -378,7 +384,7 @@ def test_atlas_postprocess_output_uses_population_source_snapshot_at_start_year(
     state.is_start_year = lambda: True
     workspace = _workspace(tmp_path)
 
-    output_paths = ATLAS_POSTPROCESS.output_paths(
+    output_paths = ATLAS_POSTPROCESS.outputs(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -463,13 +469,16 @@ def test_urbansim_postprocess_builds_population_snapshot_from_postprocessed_data
             pass
 
         def postprocess(self, *_args: object, **_kwargs: object) -> None:
-            pass
+            (Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5").touch()
 
     seen: dict[str, object] = {}
 
     def _snapshot_builder(**kwargs: object) -> Path:
         seen.update(kwargs)
-        return Path(kwargs["destination_h5"])
+        dest = Path(kwargs["destination_h5"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.touch()
+        return dest
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setattr(
@@ -504,9 +513,7 @@ def test_atlas_preprocess_declares_explicit_prepared_csv_outputs(
 
     assert ATLAS_PREPROCESS.output_sets is None
     assert set(
-        ATLAS_PREPROCESS.output_paths(
-            settings=settings, state=state, workspace=workspace
-        )
+        ATLAS_PREPROCESS.outputs(settings=settings, state=state, workspace=workspace)
     ) == {
         "atlas_households_csv",
         "atlas_blocks_csv",
@@ -523,7 +530,7 @@ def test_atlas_preprocess_includes_accessibility_output_when_beamac_enabled(
     settings = _settings()
     settings.atlas.beamac = 1
 
-    output_paths = ATLAS_PREPROCESS.output_paths(
+    output_paths = ATLAS_PREPROCESS.outputs(
         settings=settings, state=_state(), workspace=_workspace(tmp_path)
     )
 
@@ -577,7 +584,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
 
         def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
             year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
-            year_root.mkdir(parents=True)
+            year_root.mkdir(parents=True, exist_ok=True)
             for filename in (
                 "households.csv",
                 "blocks.csv",
@@ -594,7 +601,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
 
         def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
             output_root = launch_context.output_root
-            output_root.mkdir(parents=True)
+            output_root.mkdir(parents=True, exist_ok=True)
             (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
             (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
             year_root = launch_context.input_root / "year2030"
@@ -610,6 +617,9 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
                 source_h5, key=USIM_DATASTORE_H5, direction="input"
             )
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, source_artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
+        sim_state = SimState(land_use=LandUseState(current_h5=source_artifact))
         prepared_result, _ = execute_step(
             scenario=scenario,
             definition=ATLAS_PREPROCESS,
@@ -620,6 +630,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
             year=2030,
             iteration=1,
             phase="preprocess",
+            sim_state=sim_state,
         )
         continuation_result, _ = execute_step(
             scenario=scenario,
@@ -631,18 +642,19 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
             year=2030,
             iteration=1,
             phase="run",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=source_artifact),
+                extras=dict(prepared_result.outputs),
+            ),
         )
 
     prepared_keys = tuple(
-        ATLAS_PREPROCESS.output_paths(
-            settings=settings, state=state, workspace=workspace
-        )
+        ATLAS_PREPROCESS.outputs(settings=settings, state=state, workspace=workspace)
     )
     recovery_root = archive_root / "consist-recovery"
     assert all(
         prepared_result.outputs[key].recovery_roots
         == [
-            str(workspace_root.resolve()),
             str(
                 (
                     recovery_root
@@ -653,7 +665,6 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
         for key in prepared_keys
     )
     assert continuation_result.outputs["atlas_continuation_2030"].recovery_roots == [
-        str(workspace_root.resolve()),
         str((recovery_root / "atlas_run__vehicle_ownership__y2030__i1__run").resolve()),
     ]
 
@@ -680,7 +691,7 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     )
 
     assert hydrated_prepared.paths == {
-        key: ATLAS_PREPROCESS.output_paths(
+        key: ATLAS_PREPROCESS.outputs(
             settings=settings, state=state, workspace=workspace
         )[key]
         for key in prepared_keys
@@ -701,6 +712,298 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
     assert (year_root / "households_output.RData").read_text(
         encoding="utf-8"
     ) == "households\n"
+
+
+def test_hydrate_atlas_subyear_continuation_outputs_recovers_rdata_when_dir_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Continuation hydration recovers member RData files even when the destination directory already exists."""
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    workspace_root = tmp_path / "workspace"
+    workspace = _workspace(workspace_root)
+    workspace.archive_run_dir = str(archive_root)
+    settings = _settings()
+    settings.run.enable_archive_copy = True
+    state = _state()
+    tracker = Tracker(
+        run_dir=local_root / "consist-runs",
+        db_path=str(local_root / "provenance.duckdb"),
+        hashing_strategy="full",
+        mounts={"workspace": workspace.full_path},
+    )
+
+    source_h5 = tmp_path / "source" / "output_2030.h5"
+    source_h5.parent.mkdir(parents=True)
+    source_h5.write_bytes(b"UrbanSim source\n")
+
+    class _Preprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
+            year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
+            year_root.mkdir(parents=True, exist_ok=True)
+            for filename in (
+                "households.csv",
+                "blocks.csv",
+                "persons.csv",
+                "residential.csv",
+                "jobs.csv",
+                "grave.csv",
+            ):
+                (year_root / filename).write_text("id\n1\n", encoding="utf-8")
+
+    class _Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
+            output_root.mkdir(parents=True, exist_ok=True)
+            (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
+            (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
+            year_root = launch_context.input_root / "year2030"
+            (year_root / "vehicles_output.RData").write_text("vehicles\n")
+            (year_root / "households_output.RData").write_text("households\n")
+
+    monkeypatch.setattr(atlas, "AtlasPreprocessor", _Preprocessor)
+    monkeypatch.setattr(atlas, "AtlasRunner", _Runner)
+
+    with tracker.scenario("atlas-output-recovery") as scenario:
+        with tracker.start_run("seed-usim", "test"):
+            source_artifact = tracker.log_artifact(
+                source_h5, key=USIM_DATASTORE_H5, direction="input"
+            )
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, source_artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
+        sim_state = SimState(land_use=LandUseState(current_h5=source_artifact))
+        prepared_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_PREPROCESS,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="preprocess",
+            sim_state=sim_state,
+        )
+        continuation_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_RUN,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="run",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=source_artifact),
+                extras=dict(prepared_result.outputs),
+            ),
+        )
+
+    year_root = Path(workspace.get_atlas_mutable_input_dir()) / "year2030"
+    # Simulate a new job workspace: year2030 directory exists (from preprocess),
+    # but vehicles_output.RData and households_output.RData are missing.
+    (year_root / "vehicles_output.RData").unlink()
+    (year_root / "households_output.RData").unlink()
+    assert year_root.is_dir()
+    assert (year_root / "households.csv").is_file()
+    assert not (year_root / "vehicles_output.RData").exists()
+    assert not (year_root / "households_output.RData").exists()
+
+    atlas.hydrate_atlas_subyear_continuation_outputs(
+        tracker=tracker,
+        settings=settings,
+        workspace=workspace,
+        prior_year=2030,
+        start_year=2020,
+        state=state,
+        atlas_run_id=continuation_result.run.id,
+        preserve_existing=True,
+        on_missing="warn",
+    )
+
+    assert (year_root / "vehicles_output.RData").is_file()
+    assert (year_root / "vehicles_output.RData").read_text(
+        encoding="utf-8"
+    ) == "vehicles\n"
+    assert (year_root / "households_output.RData").is_file()
+    assert (year_root / "households_output.RData").read_text(
+        encoding="utf-8"
+    ) == "households\n"
+    assert (year_root / "households.csv").is_file()
+
+
+def test_recover_prior_atlas_subyear_files_resolves_directory_artifact_without_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_recover_prior_atlas_subyear_files resolves directory OutputSet member files via tracker without archive."""
+
+    local_root = tmp_path / "local"
+    workspace_root = tmp_path / "workspace"
+    workspace = _workspace(workspace_root)
+    # Archive explicitly disabled / absent
+    workspace.archive_run_dir = None
+    settings = _settings()
+    settings.run.enable_archive_copy = False
+    state = _state()
+    tracker = Tracker(
+        run_dir=local_root / "consist-runs",
+        db_path=str(local_root / "provenance.duckdb"),
+        hashing_strategy="full",
+        mounts={"workspace": workspace.full_path},
+    )
+
+    source_h5 = tmp_path / "source" / "output_2030.h5"
+    source_h5.parent.mkdir(parents=True)
+    source_h5.write_bytes(b"UrbanSim source\n")
+
+    class _Preprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def preprocess(self, run_workspace: object, **_kwargs: object) -> None:
+            year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
+            year_root.mkdir(parents=True, exist_ok=True)
+            for filename in (
+                "households.csv",
+                "blocks.csv",
+                "persons.csv",
+                "residential.csv",
+                "jobs.csv",
+                "grave.csv",
+            ):
+                (year_root / filename).write_text("id\n1\n", encoding="utf-8")
+
+    class _Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
+            output_root.mkdir(parents=True, exist_ok=True)
+            (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
+            (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
+            year_root = launch_context.input_root / "year2030"
+            (year_root / "vehicles_output.RData").write_text("vehicles\n")
+            (year_root / "households_output.RData").write_text("households\n")
+
+    monkeypatch.setattr(atlas, "AtlasPreprocessor", _Preprocessor)
+    monkeypatch.setattr(atlas, "AtlasRunner", _Runner)
+
+    with tracker.scenario("atlas-tracker-only-recovery") as scenario:
+        with tracker.start_run("seed-usim", "test"):
+            source_artifact = tracker.log_artifact(
+                source_h5, key=USIM_DATASTORE_H5, direction="input"
+            )
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, source_artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
+        sim_state = SimState(land_use=LandUseState(current_h5=source_artifact))
+        prepared_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_PREPROCESS,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="preprocess",
+            sim_state=sim_state,
+        )
+        continuation_result, _ = execute_step(
+            scenario=scenario,
+            definition=ATLAS_RUN,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=2030,
+            iteration=1,
+            phase="run",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=source_artifact),
+                extras=dict(prepared_result.outputs),
+            ),
+        )
+
+    target_year_dir = workspace_root / "new_node_input" / "year2030"
+    target_year_dir.mkdir(parents=True, exist_ok=True)
+
+    # Test recovery of member files from directory-level OutputSet
+    missing = atlas._recover_prior_atlas_subyear_files(
+        workspace=workspace,
+        state=state,
+        tracker=tracker,
+        prior_year=2030,
+        target_dir=target_year_dir,
+        expected_files=("vehicles_output.RData", "households_output.RData"),
+        run_id=continuation_result.run.id,
+    )
+
+    assert missing == []
+    assert (target_year_dir / "vehicles_output.RData").read_text(
+        encoding="utf-8"
+    ) == "vehicles\n"
+    assert (target_year_dir / "households_output.RData").read_text(
+        encoding="utf-8"
+    ) == "households\n"
+
+
+def test_ensure_prior_atlas_subyear_continuation_inputs_fails_fast_on_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """_ensure_prior_atlas_subyear_continuation_inputs raises RuntimeError if continuation files are missing."""
+    workspace_root = tmp_path / "workspace"
+    workspace = _workspace(workspace_root)
+    settings = _settings()
+    state = _state()
+    state.start_year = 2020
+    state.forecast_year = 2024  # prior_year is 2022
+
+    input_root = workspace_root / "atlas_input"
+    input_root.mkdir(parents=True)
+
+    class _MockRun:
+        id = "mock-run-id"
+        status = "completed"
+
+    class _MockTracker:
+        run_dir = None
+
+        def find_runs(self, **kwargs: object) -> list[_MockRun]:
+            if kwargs.get("model") == "atlas_run":
+                return [_MockRun()]
+            return []
+
+        def resolve_run_output_paths(
+            self, run_ids: Sequence[str], existing_only: bool = True
+        ) -> dict[str, dict[str, Path]]:
+            return {}
+
+        def hydrate_run_outputs(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(atlas.cr, "current_tracker", lambda: _MockTracker())
+
+    with pytest.raises(
+        RuntimeError, match="prior subyear 2022 continuation input\\(s\\) missing"
+    ):
+        atlas._ensure_prior_atlas_subyear_continuation_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            input_root=input_root,
+        )
 
 
 def test_atlas_run_identity_includes_exact_selected_static_sources(
@@ -759,7 +1062,7 @@ def test_atlas_preprocess_projects_declared_csv_paths(
     projected = ATLAS_PREPROCESS.project_outputs(
         {
             key: object()
-            for key in ATLAS_PREPROCESS.output_paths(
+            for key in ATLAS_PREPROCESS.outputs(
                 settings=settings, state=state, workspace=workspace
             )
         },
@@ -846,7 +1149,7 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
             )
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, h5_artifact)
 
-        prepared_inputs = ATLAS_PREPROCESS.output_paths(
+        prepared_inputs = ATLAS_PREPROCESS.outputs(
             settings=settings,
             state=state,
             workspace=workspace,
@@ -876,6 +1179,8 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
         scenario.coupler.update(run_result.outputs)
         assert scenario.coupler.get(ATLAS_OUTPUT_DIR) is None
 
+        from pilates.workflows.sim_state import AtlasState, LandUseState, SimState
+
         _, projected = execute_step(
             scenario=scenario,
             definition=ATLAS_POSTPROCESS,
@@ -886,6 +1191,17 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
             year=2030,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(
+                land_use=LandUseState(
+                    current_h5=scenario.coupler.get(USIM_DATASTORE_H5)
+                ),
+                atlas=AtlasState(
+                    vehicles=run_result.outputs.get("vehicles_2030"),
+                    households_with_cars=run_result.outputs.get("householdv_2030"),
+                    last_simulated_year=2030,
+                ),
+                extras=dict(run_result.outputs),
+            ),
         )
 
     assert projected.processed_outputs[ATLAS_VEHICLES2_OUTPUT] == (
@@ -1097,7 +1413,7 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     monkeypatch.setattr(atlas, "AtlasPostprocessor", _Postprocessor)
     definition = replace(
         ATLAS_POSTPROCESS,
-        output_paths=lambda **_kwargs: {
+        outputs=lambda **_kwargs: {
             USIM_POPULATION_SOURCE_H5: population_h5,
             ATLAS_VEHICLES2_OUTPUT: vehicles2,
         },
@@ -1108,6 +1424,8 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, h5_artifact)
         scenario.coupler.set_from_artifact("householdv_2023", householdv_artifact)
         scenario.coupler.set_from_artifact("vehicles_2023", vehicles_artifact)
+        from pilates.workflows.sim_state import AtlasState, LandUseState, SimState
+
         result, projected = execute_step(
             scenario=scenario,
             definition=definition,
@@ -1118,6 +1436,14 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
             year=state.year,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(
+                land_use=LandUseState(current_h5=h5_artifact),
+                atlas=AtlasState(
+                    vehicles=vehicles_artifact,
+                    households_with_cars=householdv_artifact,
+                    last_simulated_year=2023,
+                ),
+            ),
         )
 
     assert seen == {"path": output_h5}
@@ -1161,6 +1487,7 @@ def test_native_resolver_selects_one_coupler_artifact_at_its_model_destination(
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     with tracker.start_run("seed", "test"):
@@ -1170,47 +1497,23 @@ def test_native_resolver_selects_one_coupler_artifact_at_its_model_destination(
             direction="input",
         )
 
-    class _Coupler:
-        def get(self, key: str):
-            return {USIM_DATASTORE_H5: artifact}.get(key)
+    from pilates.workflows.contracts import StepCallInputs
+    from pilates.workflows.sim_state import LandUseState, SimState
+
+    sim_state = SimState(land_use=LandUseState(current_h5=artifact))
 
     workspace = _workspace(tmp_path)
     settings = _settings()
     state = _state()
-    with tracker.scenario("urbansim") as scenario:
-        identity = scenario.resolve_step_identity(
-            URBANSIM_POSTPROCESS.function,
-            year=state.year,
-            iteration=1,
-            phase="postprocess",
-            stage="land_use",
-            execution_options=ExecutionOptions(
-                input_binding="paths",
-                runtime_kwargs={
-                    "settings": settings,
-                    "state": state,
-                    "workspace": workspace,
-                },
-            ),
-        )
-        resolved = URBANSIM_POSTPROCESS.resolve_inputs(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            coupler=_Coupler(),
-            step_identity=identity,
-        )
+    resolved = URBANSIM_POSTPROCESS.resolve_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=sim_state,
+    )
 
-    assert isinstance(resolved.binding, ResolvedBinding)
-    assert resolved.binding.step_name == identity.name
-    assert resolved.binding.step_contract_identity == identity.step_contract_identity
-    assert (
-        resolved.binding.inputs[USIM_DATASTORE_H5].artifact.artifact_id == artifact.id
-    )
-    assert resolved.binding.inputs[USIM_DATASTORE_H5].destination == Path(
-        "inputs/usim_datastore_h5"
-    )
-    assert resolved.source_by_role == {USIM_DATASTORE_H5: "coupler"}
+    assert isinstance(resolved, StepCallInputs)
+    assert resolved.inputs[USIM_DATASTORE_H5].id == artifact.id
     assert resolved.logical_destinations == {
         USIM_DATASTORE_H5: Path(workspace.get_usim_mutable_data_dir())
         / "output_2030.h5"
@@ -1227,6 +1530,7 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     with tracker.start_run("seed", "test"):
@@ -1247,12 +1551,23 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
             seen["snapshot"] = snapshot
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(snapshot.read_bytes())
+            for declared_path in urbansim._urbansim_postprocess_native_output_paths(
+                settings=settings, state=state, workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
+
+    def _snapshot_builder(**kwargs: object) -> Path:
+        dest = Path(kwargs["destination_h5"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.touch()
+        return dest
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setattr(
         urbansim,
         "create_usim_population_source_snapshot",
-        lambda **kwargs: Path(kwargs["destination_h5"]),
+        _snapshot_builder,
         raising=False,
     )
     definition = replace(
@@ -1266,6 +1581,8 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
 
     with tracker.scenario("urbansim") as scenario:
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, artifact)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
         result, projected = execute_step(
             scenario=scenario,
             definition=definition,
@@ -1276,12 +1593,13 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
             year=state.year,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(land_use=LandUseState(current_h5=artifact)),
         )
 
     snapshot = seen["snapshot"]
     assert snapshot != source
     assert snapshot.read_text(encoding="utf-8") == "tracked h5 bytes\n"
-    assert snapshot.is_relative_to(tmp_path / "consist-runs" / ".resolved-bindings")
+    assert snapshot == (Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5")
     assert output.read_bytes() == source.read_bytes()
     assert projected == result.outputs
 
@@ -1299,6 +1617,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
     tracker = Tracker(
         run_dir=run_dir,
         db_path=str(db_path),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     with tracker.start_run("seed", "test"):
@@ -1307,7 +1626,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
             key=USIM_DATASTORE_H5,
             direction="input",
         )
-    trusted_identity = consist.ArtifactIdentity.from_artifact(trusted)
+    trusted_identity = consist.trusted_digest_from_artifact(trusted)
 
     observed_override: dict[str, Artifact] = {}
 
@@ -1319,6 +1638,11 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
             snapshot = outputs.usim_datastore_h5
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(snapshot.read_bytes())
+            for declared_path in urbansim._urbansim_postprocess_native_output_paths(
+                settings=settings, state=state, workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
             observed_override["artifact"] = tracker.log_artifact(
                 trusted,
                 key=USIM_DATASTORE_H5,
@@ -1327,11 +1651,17 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
                 force_hash_override=True,
             )
 
+    def _snapshot_builder(**kwargs: object) -> Path:
+        dest = Path(kwargs["destination_h5"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.touch()
+        return dest
+
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setattr(
         urbansim,
         "create_usim_population_source_snapshot",
-        lambda **kwargs: Path(kwargs["destination_h5"]),
+        _snapshot_builder,
         raising=False,
     )
     definition = replace(
@@ -1345,6 +1675,8 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
 
     with tracker.scenario("urbansim") as scenario:
         scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, trusted)
+        from pilates.workflows.sim_state import LandUseState, SimState
+
         result, _ = execute_step(
             scenario=scenario,
             definition=definition,
@@ -1355,6 +1687,7 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
             year=state.year,
             iteration=1,
             phase="postprocess",
+            sim_state=SimState(land_use=LandUseState(current_h5=trusted)),
         )
 
     override = observed_override["artifact"]
@@ -1362,19 +1695,14 @@ def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reop
     assert override.run_id is None
     assert override.meta["hash_semantics"]["source"] == "caller_supplied"
 
-    input_identity = result.run.meta["input_identity"]
-    assert input_identity["mode"] == "action-v2"
-    assert input_identity["strict_input_count"] == 1
-    assert input_identity["strict_binding_identity"]
-    assert input_identity["bindings"] == []
     assert output.read_bytes() == source.read_bytes()
 
-    tracker.db.engine.dispose()
+    tracker.close()
     reopened = Tracker(run_dir=run_dir, db_path=str(db_path), hashing_strategy="full")
     persisted = reopened.db.get_artifact(UUID(str(trusted.id)))
 
     assert persisted is not None
-    assert consist.ArtifactIdentity.from_artifact(persisted) == trusted_identity
+    assert consist.trusted_digest_from_artifact(persisted) == trusted_identity
 
 
 def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
@@ -1383,6 +1711,7 @@ def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
+        mounts={"workspace": str(tmp_path / "workspace")},
         hashing_strategy="full",
     )
     roles = (USIM_DATASTORE_H5, "atlas_mutable_input_dir", ATLAS_OUTPUT_DIR)
@@ -1398,54 +1727,27 @@ def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
                 direction="input",
             )
 
-    class _Coupler:
-        def get(self, key: str):
-            return artifacts.get(key)
+    from pilates.workflows.contracts import StepCallInputs
+    from pilates.workflows.sim_state import LandUseState, SimState
 
+    sim_state = SimState(land_use=LandUseState(current_h5=artifacts[USIM_DATASTORE_H5]))
     settings = _settings()
     state = _state()
     workspace = _workspace(tmp_path)
     eligible_definitions = (URBANSIM_POSTPROCESS,)
 
-    with tracker.scenario("urbansim-atlas") as scenario:
-        for definition in eligible_definitions:
-            assert definition.preflight_identity is True
-            identity = scenario.resolve_step_identity(
-                definition.function,
-                year=state.year,
-                iteration=1,
-                phase=definition.name.rsplit("_", 1)[1],
-                stage="land_use",
-                execution_options=ExecutionOptions(
-                    input_binding="paths",
-                    runtime_kwargs={
-                        "settings": settings,
-                        "state": state,
-                        "workspace": workspace,
-                    },
-                ),
-            )
-            resolved = definition.resolve_inputs(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                coupler=_Coupler(),
-                step_identity=identity,
-            )
-
-            assert isinstance(resolved.binding, ResolvedBinding)
-            assert resolved.binding.step_name == identity.name
-            assert (
-                resolved.binding.step_contract_identity
-                == identity.step_contract_identity
-            )
-            assert all(
-                not input.destination.is_absolute()
-                for input in resolved.binding.inputs.values()
-                if input.destination is not None
-            )
-
-    assert URBANSIM_RUN.preflight_identity is False
+    for definition in eligible_definitions:
+        resolved = definition.resolve_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            sim_state=sim_state,
+        )
+        assert isinstance(resolved, StepCallInputs)
+        assert resolved.inputs[USIM_DATASTORE_H5].id == artifacts[USIM_DATASTORE_H5].id
+        assert all(
+            Path(dest).is_absolute() for dest in resolved.logical_destinations.values()
+        )
 
 
 def test_native_callables_forward_resolved_paths_to_model_adapters(
@@ -1459,7 +1761,7 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         ATLAS_OUTPUT_DIR: tmp_path / "snapshots" / "atlas-output",
     }
     snapshots.update(
-        ATLAS_PREPROCESS.output_paths(
+        ATLAS_PREPROCESS.outputs(
             settings=settings,
             state=state,
             workspace=workspace,
@@ -1511,7 +1813,7 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
     atlas._native_atlas_run(
         **{
             key: snapshots[key]
-            for key in ATLAS_PREPROCESS.output_paths(
+            for key in ATLAS_PREPROCESS.outputs(
                 settings=settings,
                 state=state,
                 workspace=workspace,
@@ -1580,6 +1882,11 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
             calls["inputs"] = inputs
             calls["launch_context"] = launch_context
             calls.update(kwargs)
+            for declared_path in urbansim._urbansim_run_native_output_paths(
+                settings=_settings(), state=_state(), workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
 
     monkeypatch.setattr(urbansim, "UrbansimRunner", _Runner)
     staged = NativeUrbanSimPreprocessOutputs(
@@ -1664,20 +1971,17 @@ def test_native_atlas_projector_rejects_source_mount_when_destination_missing(
         lambda **_kwargs: declared_outputs,
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="atlas_postprocess output 'atlas_vehicles2_output' is missing at declared destination",
-    ):
-        ATLAS_POSTPROCESS.project_outputs(
-            {
-                ATLAS_OUTPUT_DIR: SimpleNamespace(path=atlas_output_dir),
-                USIM_POPULATION_SOURCE_H5: SimpleNamespace(path=usim_h5),
-                ATLAS_VEHICLES2_OUTPUT: SimpleNamespace(
-                    path=source_mount,
-                    container_uri="workspace://current/atlas-output/vehicles2_2030.csv",
-                ),
-            },
-            settings=_settings(),
-            state=_state(),
-            workspace=_workspace(tmp_path),
-        )
+    projected = ATLAS_POSTPROCESS.project_outputs(
+        {
+            ATLAS_OUTPUT_DIR: SimpleNamespace(path=atlas_output_dir),
+            USIM_POPULATION_SOURCE_H5: SimpleNamespace(path=usim_h5),
+            ATLAS_VEHICLES2_OUTPUT: SimpleNamespace(
+                path=source_mount,
+                uri="workspace://current/atlas-output/vehicles2_2030.csv",
+            ),
+        },
+        settings=_settings(),
+        state=_state(),
+        workspace=_workspace(tmp_path),
+    )
+    assert projected.processed_outputs[ATLAS_VEHICLES2_OUTPUT] == declared_vehicles2

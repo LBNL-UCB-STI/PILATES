@@ -8,7 +8,7 @@ from pilates.urbansim.preprocessor import (
 )
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 
 
 class _WorkspaceStub:
@@ -96,7 +96,6 @@ def test_stage_urbansim_run_workspace_writes_conventional_mutable_inputs(
         current_year=2020,
         start_year=2020,
         iteration=0,
-        run_info_path=None,
     )
     monkeypatch.setattr(
         "pilates.utils.zone_utils.get_block_to_zone_mapping",
@@ -149,7 +148,6 @@ def test_stage_urbansim_run_workspace_ignores_archived_static_input(
         current_year=2020,
         start_year=2020,
         iteration=0,
-        run_info_path=str(run_info_path),
     )
     monkeypatch.setattr(
         "pilates.utils.zone_utils.get_block_to_zone_mapping",
@@ -182,7 +180,6 @@ def test_stage_urbansim_run_workspace_replaces_base_skims_after_beam_iteration(
         current_year=2021,
         start_year=2020,
         iteration=0,
-        run_info_path=None,
     )
     monkeypatch.setattr(
         "pilates.utils.zone_utils.get_block_to_zone_mapping",
@@ -218,7 +215,6 @@ def test_stage_urbansim_run_workspace_accepts_optional_explicit_skims_at_bootstr
         current_year=2020,
         start_year=2020,
         iteration=0,
-        run_info_path=None,
     )
     monkeypatch.setattr(
         "pilates.utils.zone_utils.get_block_to_zone_mapping",
@@ -249,7 +245,6 @@ def test_stage_urbansim_run_workspace_rejects_missing_bound_datastore(
         current_year=2020,
         start_year=2020,
         iteration=0,
-        run_info_path=None,
     )
 
     with pytest.raises(RuntimeError, match="bound datastore H5 to exist"):
@@ -279,7 +274,6 @@ def test_stage_urbansim_run_workspace_ignores_unbound_current_workspace_skims(
         atlas_interval_start_year=2020,
         start_year=2020,
         iteration=0,
-        run_info_path=None,
     )
     monkeypatch.setattr(
         "pilates.utils.zone_utils.get_block_to_zone_mapping",
@@ -321,7 +315,6 @@ def test_stage_urbansim_run_workspace_ignores_unbound_restart_workspace_skims(
         atlas_interval_start_year=2020,
         start_year=2020,
         iteration=0,
-        run_info_path=str(run_info_path),
     )
     monkeypatch.setattr(
         "pilates.utils.zone_utils.get_block_to_zone_mapping",
@@ -356,7 +349,6 @@ def test_stage_urbansim_run_workspace_requires_final_skims_after_beam_iteration(
         current_year=2021,
         start_year=2020,
         iteration=0,
-        run_info_path=None,
     )
     monkeypatch.setattr(
         "pilates.utils.zone_utils.get_block_to_zone_mapping",

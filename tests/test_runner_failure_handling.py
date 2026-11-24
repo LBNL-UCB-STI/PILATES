@@ -14,7 +14,7 @@ class _State:
         self.written = True
 
 
-def test_persist_state_on_error_writes_state(tmp_path, caplog):
+def test_persist_state_on_error_logs_without_writing_state(tmp_path, caplog):
     caplog.set_level("ERROR")
     state_path = tmp_path / "state.yaml"
     state = _State(str(state_path))
@@ -24,5 +24,6 @@ def test_persist_state_on_error_writes_state(tmp_path, caplog):
     except RuntimeError:
         persist_state_on_error(state, "test-step")
 
-    assert state.written is True
-    assert os.path.exists(state_path)
+    assert "test-step failed." in caplog.text
+    assert state.written is False
+    assert not os.path.exists(state_path)

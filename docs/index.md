@@ -9,7 +9,7 @@ hide:
   <div class="home-hero__inner">
     <p class="home-hero__eyebrow">PILATES documentation</p>
     <h1>Multi-model co-simulation for land use, fleet, and transportation.</h1>
-    <p class="tagline">PILATES orchestrates multi-year simulations across land-use, demographic, vehicle-ownership, activity-demand, and network-assignment models—managing execution order, cross-model data contracts, receiving-side admission checks, and Consist-backed provenance.</p>
+    <p class="tagline">PILATES orchestrates multi-year simulations across land-use, demographic, vehicle-ownership, activity-demand, and network-assignment models. It manages execution order, cross-model data contracts, receiving-side admission checks, and Consist-backed provenance.</p>
     <div class="home-actions">
       <a class="md-button md-button--primary" href="start-here/getting_started/">Run a scenario</a>
       <a class="md-button" href="extend/adding_a_model/">Add or integrate a model</a>
@@ -65,10 +65,7 @@ At runtime:
   executes inside its container or environment, publishes typed outputs back to
   the coupler, and archives durable outputs.
 
-Because stages communicate strictly through named coupler roles and typed step
-contracts rather than hardcoded file paths, individual models can be disabled,
-swapped, or fed via pre-admitted external handoffs without rewriting the
-orchestrator.
+Stages communicate through named coupler roles and typed step contracts rather than hardcoded file paths, so you can disable or swap individual models or feed pre-admitted external handoffs without rewriting the orchestrator.
 
 ## What We Use It For
 

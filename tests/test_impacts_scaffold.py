@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
+import pytest
 import yaml
 
-from pilates.config.models import ImpactsConfig
+from pilates.config.models import ImpactsConfig, load_config
 from pilates.impacts import ImpactsPostsimRunner, ImpactsPresimRunner
 from pilates.impacts.settings_bridge import (
     BEAM_INPUT_CONTAINER_DIR,
@@ -18,8 +18,14 @@ from pilates.impacts.settings_bridge import (
     resolve_shared_input_cache_folder,
     resolve_population_override,
 )
-from pilates.workflows.stages.impacts_presim import run_impacts_presim_stage
-from pilates.workflows.state import WorkflowState
+from pilates.workflows.artifact_keys import (
+    BEAM_EMISSIONS_SKIMS,
+    BEAM_NETWORK_FINAL,
+    IMPACTS_FLEET_MANIFEST,
+)
+from pilates.workflows.dry_run import plan_pilates
+from pilates.workflows.sim_state import SimState
+from pilates.workflows.steps import beam_run, impacts_postsim, impacts_presim
 from pilates.workspace import Workspace
 
 
@@ -112,26 +118,23 @@ def test_generated_fleet_postsim_uses_current_year_beam_and_forecast_fleet(
     manifest = presim_fleet_manifest_path(settings, workspace, 2021)
     manifest.parent.mkdir(parents=True)
     manifest.touch()
-    beam_root = Path(workspace.get_beam_output_dir()) / settings.run.region
-    for name in (
-        "year-2020-iteration-2",
-        "year-2020-iteration-10",
-        "year-2020-iteration-10_1",
-        "year-2021-iteration-11",
-    ):
-        (beam_root / name / "ITERS").mkdir(parents=True)
+    beam_root = Path(workspace.get_impacts_input_dir()) / "beam-output" / "2021"
     presim = build_pilates_bridge_settings(settings, state, workspace, stage="presim")
-    postsim = build_pilates_bridge_settings(settings, state, workspace, stage="postsim")
+    postsim = build_pilates_bridge_settings(
+        settings, state, workspace, stage="postsim", beam_output_dir=beam_root
+    )
     assert presim["impacts"]["local_input_folder"].endswith("/presim/testrun_y2021")
     assert postsim["impacts"]["presim_fleet_manifest"].endswith(
         "/impacts_presim--seattle--testrun_y2021/activities/fleet_manifest.yaml"
     )
     assert postsim["beam"]["local_output_folder"] == (
-        "/app/workspace/beam/output/seattle/year-2020-iteration-10"
+        "/app/workspace/impacts/input/beam-output/2021"
     )
 
 
-def test_to_container_path_translates_relative_to_workspace_root(tmp_path: Path) -> None:
+def test_to_container_path_translates_relative_to_workspace_root(
+    tmp_path: Path,
+) -> None:
     host_path = str(tmp_path / "impacts" / "output")
     result = _to_container_path(WORKSPACE_CONTAINER_DIR, host_path, str(tmp_path))
     assert result == "/app/workspace/impacts/output"
@@ -280,7 +283,10 @@ def test_impacts_presim_runner_run(tmp_path: Path, monkeypatch) -> None:
     }
 
     impacts_output_dir = Path(workspace.get_impacts_output_dir())
-    assert outputs.output_dir == impacts_output_dir / "impacts_presim--seattle--testrun_y2025"
+    assert (
+        outputs.output_dir
+        == impacts_output_dir / "impacts_presim--seattle--testrun_y2025"
+    )
     assert outputs.settings_path == Path(workspace.get_impacts_settings_path("presim"))
     assert outputs.bridge_settings_path == Path(
         workspace.get_impacts_bridge_settings_path("presim")
@@ -323,7 +329,10 @@ def test_impacts_postsim_runner_run(tmp_path: Path, monkeypatch) -> None:
     expected_output_dir = impacts_output_dir / "impacts-postsim--seattle--testrun_y2025"
     assert outputs.output_dir == expected_output_dir
     assert outputs.pipeline_manifest == expected_output_dir / "pipeline_manifest.yaml"
-    assert outputs.postprocess_manifest == expected_output_dir / "postprocess_manifest.yaml"
+    assert (
+        outputs.postprocess_manifest
+        == expected_output_dir / "postprocess_manifest.yaml"
+    )
     assert (
         outputs.exposure_table
         == expected_output_dir / "exposure" / "beam_concentration_distribution.parquet"
@@ -340,7 +349,9 @@ def test_impacts_postsim_runner_run(tmp_path: Path, monkeypatch) -> None:
     }
 
 
-def test_impacts_postsim_mounts_isrm_dataset_read_only(tmp_path: Path, monkeypatch) -> None:
+def test_impacts_postsim_mounts_isrm_dataset_read_only(
+    tmp_path: Path, monkeypatch
+) -> None:
     inmap_data = tmp_path / "inmap"
     inmap_data.mkdir()
     (inmap_data / "isrm.zarr").mkdir()
@@ -348,9 +359,7 @@ def test_impacts_postsim_mounts_isrm_dataset_read_only(tmp_path: Path, monkeypat
     settings = _make_settings(
         shared_input_cache_folder=str(cache_folder),
         local_inmap_data_folder=str(inmap_data),
-        overrides={
-            "dispersions": {"inmap": {"isrm_zarr": "/app/inmap/isrm.zarr"}}
-        },
+        overrides={"dispersions": {"inmap": {"isrm_zarr": "/app/inmap/isrm.zarr"}}},
     )
     workspace = _make_workspace(tmp_path / "workspace", settings)
     state = _make_state(settings, forecast_year=2025)
@@ -383,8 +392,7 @@ def test_impacts_postsim_mounts_isrm_dataset_read_only(tmp_path: Path, monkeypat
         )
     )
     assert (
-        bridge["impacts"]["dispersions"]["inmap"]["isrm_zarr"]
-        == "/app/inmap/isrm.zarr"
+        bridge["impacts"]["dispersions"]["inmap"]["isrm_zarr"] == "/app/inmap/isrm.zarr"
     )
     assert bridge["impacts"]["shared_input_cache_dir"] == INPUT_CACHE_CONTAINER_DIR
 
@@ -402,9 +410,7 @@ def test_impacts_postsim_requires_host_folder_for_container_inmap_path(
     tmp_path: Path,
 ) -> None:
     settings = _make_settings(
-        overrides={
-            "dispersions": {"inmap": {"isrm_zarr": "/app/inmap/isrm.zarr"}}
-        }
+        overrides={"dispersions": {"inmap": {"isrm_zarr": "/app/inmap/isrm.zarr"}}}
     )
     workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings, forecast_year=2025)
@@ -426,7 +432,9 @@ def test_default_input_cache_is_shared_outside_run_workspace(tmp_path: Path) -> 
     )
 
 
-def test_impacts_runner_raises_when_container_fails(tmp_path: Path, monkeypatch) -> None:
+def test_impacts_runner_raises_when_container_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
     settings = _make_settings()
     workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings, forecast_year=2025)
@@ -444,67 +452,57 @@ def test_impacts_runner_raises_when_container_fails(tmp_path: Path, monkeypatch)
         raise AssertionError("Expected RuntimeError when container run fails")
 
 
-def test_run_impacts_presim_stage_returns_early_when_disabled(
-    tmp_path: Path, monkeypatch
-) -> None:
-    settings = _make_settings()
-    settings["run"]["models"]["impacts"] = None
+def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMPACTS_INMAP_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BEAM_MEMORY", "6g")
+    monkeypatch.setenv("BEAM_EXTRA_JVM_ARGS", "")
+    settings = load_config(
+        Path(__file__).resolve().parents[1]
+        / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml"
+    )
+    settings.impacts.use_generated_fleet = True
+    settings.postprocessing = None
+    plan = plan_pilates(settings)
+
+    assert [step.step_name for step in plan.steps] == [
+        "impacts_presim",
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+        "impacts_postsim",
+    ]
+    presim, _, beam, _, postsim = plan.steps
+    assert beam.inputs[IMPACTS_FLEET_MANIFEST] == presim.step_id
+    assert postsim.inputs[IMPACTS_FLEET_MANIFEST] == presim.step_id
+    assert postsim.inputs[BEAM_EMISSIONS_SKIMS] == beam.step_id
+    assert postsim.inputs[BEAM_NETWORK_FINAL] == beam.step_id
+    assert "impacts_postsim_dir" in postsim.outputs
+
+    with pytest.raises(RuntimeError, match=BEAM_EMISSIONS_SKIMS):
+        inputs = impacts_postsim.resolve_inputs(
+            settings=settings,
+            state=_make_state(settings, forecast_year=2018),
+            workspace=_make_workspace(tmp_path, settings),
+            sim_state=SimState(),
+        )
+        inputs.require_complete(impacts_postsim.name)
+
+
+def test_impacts_resume_requests_archived_fleet_and_beam_outputs(tmp_path):
+    settings = _make_settings(use_generated_fleet=True)
     workspace = _make_workspace(tmp_path, settings)
-    state = _make_state(settings, forecast_year=2025)
-
-    def _fail_execute_step(*_args, **_kwargs):
-        raise AssertionError("execute_step should not run when IMPACTS is disabled")
-
-    monkeypatch.setattr(
-        "pilates.workflows.stages.impacts_presim.execute_step", _fail_execute_step
-    )
-
-    context = SimpleNamespace(settings=settings, state=state, workspace=workspace)
-
-    run_impacts_presim_stage(
-        scenario=None,
-        coupler=None,
-        year=2025,
-        context=context,
-    )
-
-
-def test_run_impacts_presim_stage_uses_native_step(monkeypatch, tmp_path: Path) -> None:
-    settings = _make_settings()
-    workspace = _make_workspace(tmp_path, settings)
-    state = _make_state(settings, forecast_year=2025)
-    captured = {}
-    monkeypatch.setattr(
-        "pilates.workflows.stages.impacts_presim.execute_step",
-        lambda **kwargs: (None, captured.update(kwargs)),
-    )
-
-    run_impacts_presim_stage(
-        scenario="scenario",
-        coupler=None,
-        year=2025,
-        context=SimpleNamespace(settings=settings, state=state, workspace=workspace),
-    )
-
-    assert captured["definition"].name == "impacts_presim"
-    assert captured["stage"] == "impacts_presim"
-
-
-def test_workflow_state_enables_terminal_postprocessing_for_impacts() -> None:
-    state = WorkflowState(
-        start_year=2020,
-        end_year=2021,
-        travel_model_freq=1,
-        land_use_enabled=False,
-        vehicle_ownership_model_enabled=False,
-        activity_demand_enabled=False,
-        traffic_assignment_enabled=False,
-        year=2020,
-        major_stage=None,
-        inner_iter=0,
-        sub_stage=None,
-        file_loc=None,
-        asim_compiled=False,
-        full_settings=_make_settings(),
-    )
-    assert WorkflowState.Stage.postprocessing in state.enabled_stages
+    state = _make_state(settings)
+    state.is_restart_run = False
+    for step in (impacts_presim, beam_run, impacts_postsim):
+        options = step.cache_options(
+            settings=settings, state=state, workspace=workspace
+        )
+        assert options.cache_mode == "overwrite"
+    state.is_restart_run = True
+    for step in (impacts_presim, beam_run, impacts_postsim):
+        options = step.cache_options(
+            settings=settings, state=state, workspace=workspace
+        )
+        assert options.cache_mode != "overwrite"
+        assert options.cache_hydration == "outputs-requested"
+        assert options.cache_hydration_failure == "miss"

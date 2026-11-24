@@ -4,18 +4,19 @@ Whole-stage and whole-year execution are exercised through the native golden
 workflow.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from consist import BindingResult
 
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.stages import supply_demand_beam as beam_stage
-from pilates.workflows.stages.supply_demand_beam import (
+from pilates.workflows.contracts import StepCallInputs
+from pilates.workflows import orchestrator as beam_stage
+from pilates.workflows.orchestrator import (
     _FAIL_AFTER_BEAM_RUN_ENV,
     _maybe_fail_after_beam_run_for_canary,
 )
+from pilates.workflows.sim_state import SimState
 
 
 def test_beam_restart_canary_failpoint_requires_explicit_env(monkeypatch):
@@ -44,60 +45,49 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
     preprocess_outputs = SimpleNamespace(
         prepared_inputs={"plans_beam_in": tmp_path / "plans.csv"}
     )
-    run_inputs = ResolvedStepInputs(
-        step_name="beam_run",
-        binding=BindingResult(inputs={"beam_config_file": launch_primary}),
+    run_inputs = StepCallInputs(
+        inputs={"beam_config_file": launch_primary},
     )
-    postprocess_inputs = ResolvedStepInputs(
-        step_name="beam_postprocess",
-        binding=BindingResult(inputs={}),
-    )
+    postprocess_inputs = StepCallInputs()
     observed: dict[str, object] = {}
 
-    class Coupler:
-        def get(self, _key, default=None):
-            return default
-
-    scenario = SimpleNamespace(
-        coupler=Coupler(), tracker=SimpleNamespace(run_dir=tmp_path)
-    )
+    scenario = SimpleNamespace(coupler={}, tracker=SimpleNamespace(run_dir=tmp_path))
     context = SimpleNamespace(
-        settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(travel="beam")),
+            beam=SimpleNamespace(full_skim=None),
+        ),
         state=SimpleNamespace(
             is_restart_run=False,
             sub_stage_progress=None,
-            run_info_path=None,
             archive_run_dir=None,
+            forecast_year=None,
+            year=2030,
             set_sub_stage_progress=lambda _: None,
         ),
         workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
     )
 
-    def fake_execute_step(
-        *, phase, runtime_kwargs=None, resolved_inputs=None, **_kwargs
-    ):
+    def fake_execute_step(*, phase, runtime_kwargs=None, step_inputs=None, **_kwargs):
         if phase == "preprocess":
-            return SimpleNamespace(), preprocess_outputs
+            return SimpleNamespace(outputs={}), preprocess_outputs
         if phase == "run":
             observed["runtime"] = runtime_kwargs
-            observed["resolved"] = resolved_inputs
+            observed["resolved"] = step_inputs
             return (
                 SimpleNamespace(run=SimpleNamespace(id="run-1"), outputs={}),
-                SimpleNamespace(),
+                SimpleNamespace(raw_outputs={}),
             )
         if phase == "postprocess":
-            return SimpleNamespace(), SimpleNamespace()
+            return SimpleNamespace(outputs={}), SimpleNamespace(
+                final_skims_omx=None, zarr_skims=None
+            )
         pytest.fail(f"unexpected phase {phase}")
 
-    def resolve_run_inputs(**kwargs):
-        observed["resolver"] = kwargs
-        return run_inputs
-
     monkeypatch.setattr(
-        beam_stage, "_compile_beam_launch_config", lambda **_: launch_config
-    )
-    monkeypatch.setattr(
-        beam_stage, "beam_run", SimpleNamespace(resolve_inputs=resolve_run_inputs)
+        beam_stage,
+        "beam_run",
+        SimpleNamespace(resolve_inputs=lambda **_kwargs: run_inputs),
     )
     monkeypatch.setattr(
         beam_stage,
@@ -109,15 +99,17 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         beam_stage, "_maybe_fail_after_beam_run_for_canary", lambda **_: None
     )
 
-    beam_stage._run_beam_steps(
+    beam_stage.run_traffic_assignment_phase(
         scenario=scenario,
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        sim_state=SimState(),
         year=2030,
         iteration=1,
-        context=context,
     )
 
-    assert observed["resolved"] is run_inputs
-    assert observed["runtime"] == {"beam_launch_config": launch_config}
+    assert observed["runtime"] is None
 
 
 def test_native_archive_is_called_with_verify_before_canary_failpoint(
@@ -160,7 +152,7 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
         pytest.fail("canary failure must happen before native postprocess")
 
     scenario = SimpleNamespace(
-        coupler=object(),
+        coupler=None,
         tracker=SimpleNamespace(run_dir=tmp_path),
         run=fake_scenario_run,
     )
@@ -172,7 +164,6 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
         state=SimpleNamespace(
             is_restart_run=False,
             sub_stage_progress=None,
-            run_info_path=None,
             archive_run_dir=str(archive_root),
             set_sub_stage_progress=lambda _: None,
         ),
@@ -189,25 +180,18 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
 
     monkeypatch.setattr(
         beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_kwargs: SimpleNamespace(
-            root=tmp_path / "launch", primary_config=tmp_path / "launch" / "beam.conf"
-        ),
-    )
-    monkeypatch.setattr(
-        beam_stage,
         "beam_preprocess",
         replace(
             beam_stage.beam_preprocess,
-            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
-                "beam_preprocess", BindingResult(inputs={})
+            resolve_inputs=lambda **_kwargs: StepCallInputs(),
+            project_outputs=lambda *_args, **_kwargs: SimpleNamespace(
+                prepared_inputs={}, full_skim_artifact=None
             ),
-            project_outputs=lambda *_args, **_kwargs: SimpleNamespace(),
+            outputs=None,
             output_paths=None,
             output_sets=None,
             execution_options=None,
             input_contract=None,
-            preflight_identity=False,
         ),
     )
     monkeypatch.setattr(
@@ -215,25 +199,28 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
         "beam_run",
         replace(
             beam_stage.beam_run,
-            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
-                "beam_run", BindingResult(inputs={})
-            ),
-            project_outputs=lambda *_args, **_kwargs: SimpleNamespace(),
+            resolve_inputs=lambda **_kwargs: StepCallInputs(),
+            project_outputs=lambda *_args, **_kwargs: SimpleNamespace(raw_outputs={}),
             output_paths=None,
             output_sets=None,
             execution_options=None,
             input_contract=None,
-            preflight_identity=False,
         ),
     )
     monkeypatch.setattr(beam_stage, "_maybe_fail_after_beam_run_for_canary", failpoint)
 
     with pytest.raises(RuntimeError, match="canary"):
-        beam_stage._run_beam_steps(
+        beam_stage.run_traffic_assignment_phase(
             scenario=scenario,
+            settings=SimpleNamespace(
+                run=SimpleNamespace(models=SimpleNamespace(travel="beam")),
+                beam=SimpleNamespace(full_skim=None),
+            ),
+            state=SimpleNamespace(forecast_year=2021, year=2021),
+            workspace=context.workspace,
+            sim_state=SimState(),
             year=2021,
             iteration=0,
-            context=context,
         )
 
     assert calls == ["preprocess", "run", "archived", "failpoint"]
@@ -282,7 +269,7 @@ def test_run_completion_archive_handles_nested_scalar_and_enclosing_directory_ar
         ),
     )
 
-    expected_roots = {str(workspace_root.resolve()), str(recovery_root.resolve())}
+    expected_roots = {str(recovery_root.resolve())}
     for key, expected_path in (
         ("beam_skims_raw", raw_skim),
         ("final_skims_omx", final_omx),
@@ -291,7 +278,18 @@ def test_run_completion_archive_handles_nested_scalar_and_enclosing_directory_ar
     ):
         art = run_result.outputs[key]
         assert Path(art.abs_path).resolve() == expected_path.resolve()
-        roots = {str(Path(r).resolve()) for r in (art.meta.get("recovery_roots") or [])}
+        roots = {
+            str(Path(r).resolve())
+            for r in (
+                art.recovery_roots
+                or (
+                    art.meta.get("recovery_roots")
+                    if isinstance(art.meta, Mapping)
+                    else []
+                )
+                or []
+            )
+        }
         assert expected_roots.issubset(roots)
     assert (
         recovery_root
@@ -317,6 +315,9 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
         def get(self, _key, default=None):
             return default
 
+        def update(self, _items):
+            return None
+
     scenario = SimpleNamespace(
         coupler=Coupler(), tracker=SimpleNamespace(run_dir=tmp_path)
     )
@@ -325,7 +326,6 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
         state=SimpleNamespace(
             is_restart_run=True,
             sub_stage_progress="postprocessor",
-            run_info_path=None,
             archive_run_dir=None,
             set_sub_stage_progress=lambda _: None,
         ),
@@ -336,49 +336,48 @@ def test_interrupted_postprocess_restart_proceeds_directly_through_step_executio
     def fake_execute_step(*, phase, **_kwargs):
         calls.append(phase)
         if phase == "preprocess":
-            return SimpleNamespace(), SimpleNamespace(prepared_inputs={})
+            return (
+                SimpleNamespace(outputs={}),
+                SimpleNamespace(prepared_inputs={}, full_skim_artifact=None),
+            )
         if phase == "run":
             return (
                 SimpleNamespace(run=SimpleNamespace(id="run-1"), outputs={}),
-                SimpleNamespace(),
+                SimpleNamespace(raw_outputs={}),
             )
         if phase == "postprocess":
-            return SimpleNamespace(), SimpleNamespace()
+            return (
+                SimpleNamespace(outputs={}),
+                SimpleNamespace(final_skims_omx=None, zarr_skims=None),
+            )
         pytest.fail(f"unexpected phase {phase}")
 
     monkeypatch.setattr(
         beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_: SimpleNamespace(root=launch_root, primary_config=launch_primary),
-    )
-    monkeypatch.setattr(
-        beam_stage,
         "beam_run",
-        SimpleNamespace(
-            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
-                "beam_run", BindingResult(inputs={})
-            )
-        ),
+        SimpleNamespace(resolve_inputs=lambda **_kwargs: StepCallInputs()),
     )
     monkeypatch.setattr(
         beam_stage,
         "beam_postprocess",
-        SimpleNamespace(
-            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
-                "beam_postprocess", BindingResult(inputs={})
-            )
-        ),
+        SimpleNamespace(resolve_inputs=lambda **_kwargs: StepCallInputs()),
     )
     monkeypatch.setattr(beam_stage, "execute_step", fake_execute_step)
     monkeypatch.setattr(
         beam_stage, "_maybe_fail_after_beam_run_for_canary", lambda **_: None
     )
 
-    beam_stage._run_beam_steps(
+    beam_stage.run_traffic_assignment_phase(
         scenario=scenario,
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(travel="beam")),
+            beam=SimpleNamespace(full_skim=None),
+        ),
+        state=SimpleNamespace(forecast_year=2021, year=2021),
+        workspace=context.workspace,
+        sim_state=SimState(),
         year=2021,
         iteration=0,
-        context=context,
     )
 
     assert calls == ["preprocess", "run", "postprocess"]

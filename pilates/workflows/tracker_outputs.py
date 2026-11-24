@@ -4,7 +4,6 @@ import logging
 from typing import Dict, Mapping, Optional, Protocol, TypeVar, cast
 
 from pilates.utils import consist_runtime as cr
-from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 
 RunOutputValue = TypeVar("RunOutputValue")
 
@@ -22,19 +21,10 @@ def canonicalize_output_mapping(
     for raw_key, value in mapping.items():
         if value is None:
             continue
-        canonical[canonical_artifact_key_from_raw_key(str(raw_key))] = value
+        canonical[
+            str(raw_key).split("/", 1)[-1] if "/" in str(raw_key) else str(raw_key)
+        ] = value
     return canonical
-
-
-def merge_canonical_output_mappings(
-    *mappings: Optional[Mapping[str, RunOutputValue]],
-) -> Dict[str, RunOutputValue]:
-    merged: Dict[str, RunOutputValue] = {}
-    for mapping in mappings:
-        if not mapping:
-            continue
-        merged.update(canonicalize_output_mapping(mapping))
-    return merged
 
 
 def load_tracker_run_outputs(

@@ -13,7 +13,10 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 import shutil
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from pilates.config.models import SettingsLike
 
 from consist.core.identity import IdentityManager
 from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
@@ -52,6 +55,7 @@ _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY = (
 )
 _POLICY_OVERRIDE_KEYS: tuple[str, ...] = (
     "beam.inputDirectory",
+    "beam.agentsim.agents.vehicles.vehiclesFilePath",
     _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
     _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
     *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
@@ -122,7 +126,7 @@ class BeamLaunchInput:
 
 def materialize_beam_launch_config(
     *,
-    settings: Any,
+    settings: SettingsLike,
     source_root: Path,
     output_dir: Path,
     identity: IdentityManager,
@@ -204,9 +208,236 @@ def materialize_beam_launch_config(
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
 
 
+def _collect_freight_overrides_and_inputs(
+    *,
+    config_tree: Mapping[str, Any],
+    source_root: Path | None,
+    derived_root: Path | None,
+) -> tuple[dict[str, Any], list[BeamLaunchInput]]:
+    """Resolve and stage freight input paths that are bare-relative or external."""
+    from pilates.beam.config_hocon import _lookup_dotted_key
+
+    freight_enabled = bool(
+        _lookup_dotted_key(config_tree, "beam.agentsim.agents.freight.enabled")
+    )
+    keys = (
+        (
+            "beam.agentsim.agents.freight.plansFilePath",
+            "beam.agentsim.agents.freight.toursFilePath",
+            "beam.agentsim.agents.freight.carriersFilePath",
+            "beam.agentsim.agents.freight.vehicleTypesFilePath",
+            "beam.agentsim.agents.freight.carrierParkingFilePath",
+        )
+        if freight_enabled
+        else (
+            "beam.agentsim.agents.freight.vehicleTypesFilePath",
+            "beam.agentsim.agents.freight.carrierParkingFilePath",
+        )
+    )
+
+    overrides: dict[str, Any] = {}
+    staged: list[BeamLaunchInput] = []
+    resolved_source_root = source_root.resolve() if source_root is not None else None
+
+    for key in keys:
+        raw_val = _lookup_dotted_key(config_tree, key)
+        if not raw_val or not isinstance(raw_val, (str, Path)):
+            continue
+        candidate = Path(str(raw_val))
+        if (
+            not candidate.is_absolute()
+            and resolved_source_root is not None
+            and (resolved_source_root / candidate).exists()
+        ):
+            resolved = (resolved_source_root / candidate).resolve()
+        elif candidate.exists():
+            resolved = candidate.resolve()
+        else:
+            continue
+
+        if resolved_source_root is not None:
+            try:
+                rel = resolved.relative_to(resolved_source_root)
+                # Only override bare-relative paths; ${beam.inputDirectory}/... already resolves.
+                if not candidate.is_absolute():
+                    overrides[key] = (
+                        str(derived_root / rel) if derived_root else str(rel)
+                    )
+                continue
+            except ValueError:
+                pass
+
+        dest = Path(".pilates") / "freight" / resolved.name
+        overrides[key] = str(derived_root / dest) if derived_root else str(dest)
+        staged.append(
+            BeamLaunchInput(
+                key=f"freight_{key.rsplit('.', 1)[-1]}",
+                source=resolved,
+                destination=dest,
+            )
+        )
+
+    return overrides, staged
+
+
+def compute_beam_launch_overrides(
+    *,
+    settings: SettingsLike,
+    config_tree: dict[str, Any] | None = None,
+    env_overrides: Mapping[str, str] | None = None,
+    prepared_inputs: Mapping[str, Any] | None = None,
+    derived_root: Path | None = None,
+    exchange_relative: Path | None = None,
+    source_root: Path | None = None,
+) -> tuple[dict[str, Any], bool, bool, bool]:
+    """Compute pure structured HOCON launch overrides and policy flags."""
+    env_overrides_dict = dict(env_overrides or {})
+    overrides: dict[str, Any] = {
+        "beam.outputs.baseOutputDirectory": _BEAM_CONTAINER_OUTPUT_DIR,
+    }
+    introduces_missing_format_key = False
+    introduces_missing_skim_name_key = False
+    introduces_missing_full_skim_timeout_key = False
+
+    if config_tree is not None:
+        format_overrides, introduces_missing_format_key = _artifact_format_overrides(
+            settings=settings,
+            config_tree=config_tree,
+        )
+        overrides.update(format_overrides)
+        skim_name_overrides, introduces_missing_skim_name_key = (
+            _activitysim_skims_file_base_name_override(
+                settings=settings,
+                config_tree=config_tree,
+            )
+        )
+        overrides.update(skim_name_overrides)
+        full_skim_timeout_overrides, introduces_missing_full_skim_timeout_key = (
+            _full_skim_calculation_timeout_override(
+                settings=settings,
+                config_tree=config_tree,
+            )
+        )
+        overrides.update(full_skim_timeout_overrides)
+    else:
+        beam_cfg = getattr(settings, "beam", None)
+        if beam_cfg is not None:
+            formats = getattr(beam_cfg, "artifact_formats", None)
+            if formats is not None:
+                format_values = formats.model_dump()
+                for field_name, config_key in _ARTIFACT_FORMAT_POLICY_KEYS.items():
+                    if field_name in format_values:
+                        overrides[config_key] = format_values[field_name]
+            skim_base = getattr(beam_cfg, "activitysim_skims_file_base_name", None)
+            if skim_base:
+                overrides[_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY] = skim_base
+            full_skim = getattr(beam_cfg, "full_skim", None)
+            if (
+                full_skim is not None
+                and getattr(full_skim, "run_schedule", "disabled") != "disabled"
+            ):
+                overrides[_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY] = int(
+                    getattr(full_skim, "calculation_timeout_hours", 72)
+                )
+
+    inputs = prepared_inputs or {}
+    warmstart = inputs.get(LINKSTATS_WARMSTART)
+    if warmstart is not None:
+        warmstart_dest_name = (
+            _warmstart_destination_name(Path(warmstart))
+            if isinstance(warmstart, (str, Path)) and Path(warmstart).is_file()
+            else "initial_linkstats"
+        )
+        warmstart_destination = Path(".pilates") / "warmstarts" / warmstart_dest_name
+        overrides["beam.warmStart.initialLinkstatsFilePath"] = (
+            str(derived_root / warmstart_destination)
+            if derived_root
+            else str(warmstart_destination)
+        )
+
+    vehicle_source = inputs.get("vehicles_beam_in")
+    if vehicle_source is not None:
+        vehicle_suffix = (
+            "".join(Path(vehicle_source).suffixes)
+            if isinstance(vehicle_source, (str, Path))
+            else ".parquet"
+        )
+        vehicle_destination = (
+            exchange_relative or Path("exchange")
+        ) / f"vehicles{vehicle_suffix}"
+        overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = (
+            str(derived_root / vehicle_destination)
+            if derived_root
+            else str(vehicle_destination)
+        )
+    elif config_tree is not None:
+        from pilates.beam.config_hocon import _lookup_dotted_key
+
+        configured_vehicles_path = _lookup_dotted_key(
+            config_tree,
+            "beam.agentsim.agents.vehicles.vehiclesFilePath",
+        )
+        if (
+            configured_vehicles_path
+            and not Path(str(configured_vehicles_path)).exists()
+        ):
+            overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = ""
+
+    beam_cfg = getattr(settings, "beam", None)
+    if beam_cfg is not None and getattr(beam_cfg, "discard_plans_every_year", False):
+        overrides["beam.replanning.maxAgentPlanMemorySize"] = 0
+
+    zones = getattr(getattr(settings, "shared", None), "geography", None)
+    zones = getattr(zones, "zones", None) if zones is not None else None
+    if zones is not None:
+        zone_destination = Path("shape") / "canonical_zones_sorted.geojson"
+        overrides["beam.agentsim.taz.filePath"] = (
+            str(derived_root / zone_destination)
+            if derived_root
+            else str(zone_destination)
+        )
+        overrides["beam.agentsim.taz.tazIdFieldName"] = zones.activitysim_index_col
+
+    if config_tree is not None:
+        from pilates.beam.config_hocon import _lookup_dotted_key
+
+        r5_source = _lookup_dotted_key(
+            config_tree,
+            "beam.routing.r5.directory",
+        )
+        if r5_source:
+            if derived_root is not None and source_root is not None:
+                r5_relative = _relative_source_path(
+                    source_root=source_root,
+                    path=Path(str(r5_source)),
+                    key="beam.routing.r5.directory",
+                )
+                generated_network = derived_root / r5_relative / "physsim-network.xml"
+            else:
+                generated_network = Path(str(r5_source)) / "physsim-network.xml"
+            overrides["matsim.modules.network.inputNetworkFile"] = str(
+                generated_network
+            )
+            overrides["beam.physsim.inputNetworkFilePath"] = str(generated_network)
+
+        freight_overrides, _ = _collect_freight_overrides_and_inputs(
+            config_tree=config_tree,
+            source_root=source_root,
+            derived_root=derived_root,
+        )
+        overrides.update(freight_overrides)
+
+    return (
+        overrides,
+        introduces_missing_format_key,
+        introduces_missing_skim_name_key,
+        introduces_missing_full_skim_timeout_key,
+    )
+
+
 def build_beam_launch_config(
     *,
-    settings: Any,
+    settings: SettingsLike,
     source_root: Path,
     output_dir: Path,
     identity: IdentityManager,
@@ -227,46 +458,36 @@ def build_beam_launch_config(
     derived_root = output_dir / source_root.name
     env_overrides = beam_config_env_overrides(settings, config_root=source_root)
     source_primary = source_root / settings.beam.config
+    from pilates.beam.config_hocon import (
+        load_resolved_beam_config_tree,
+        _lookup_dotted_key,
+    )
+
+    config_tree = load_resolved_beam_config_tree(
+        source_primary, env_overrides=env_overrides
+    )
+    exchange_folder = _lookup_dotted_key(config_tree, "beam.exchange.scenario.folder")
     exchange_relative = _relative_source_path(
         source_root=source_root,
-        path=Path(
-            str(
-                resolve_beam_config_value(
-                    source_primary,
-                    key="beam.exchange.scenario.folder",
-                    env_overrides=env_overrides,
-                )
-                or source_root / settings.beam.scenario_folder
-            )
-        ),
+        path=Path(str(exchange_folder or source_root / settings.beam.scenario_folder)),
         key="beam.exchange.scenario.folder",
     )
     staged_inputs: list[BeamLaunchInput] = []
-    overrides: dict[str, Any] = {
-        "beam.outputs.baseOutputDirectory": _BEAM_CONTAINER_OUTPUT_DIR,
-    }
-    format_overrides, introduces_missing_format_key = _artifact_format_overrides(
+    (
+        overrides,
+        introduces_missing_format_key,
+        introduces_missing_skim_name_key,
+        introduces_missing_full_skim_timeout_key,
+    ) = compute_beam_launch_overrides(
         settings=settings,
-        source_primary=source_primary,
+        config_tree=config_tree,
         env_overrides=env_overrides,
+        prepared_inputs=prepared_inputs,
+        derived_root=derived_root,
+        exchange_relative=exchange_relative,
+        source_root=source_root,
     )
-    overrides.update(format_overrides)
-    skim_name_overrides, introduces_missing_skim_name_key = (
-        _activitysim_skims_file_base_name_override(
-            settings=settings,
-            source_primary=source_primary,
-            env_overrides=env_overrides,
-        )
-    )
-    overrides.update(skim_name_overrides)
-    full_skim_timeout_overrides, introduces_missing_full_skim_timeout_key = (
-        _full_skim_calculation_timeout_override(
-            settings=settings,
-            source_primary=source_primary,
-            env_overrides=env_overrides,
-        )
-    )
-    overrides.update(full_skim_timeout_overrides)
+
     population_stems = {
         BEAM_PLANS_IN: "plans",
         BEAM_HOUSEHOLDS_IN: "households",
@@ -297,9 +518,6 @@ def build_beam_launch_config(
                 destination=warmstart_destination,
             )
         )
-        overrides["beam.warmStart.initialLinkstatsFilePath"] = str(
-            derived_root / warmstart_destination
-        )
 
     vehicle_source = prepared_inputs.get("vehicles_beam_in")
     if impacts_fleet_manifest is not None:
@@ -318,6 +536,11 @@ def build_beam_launch_config(
             source_primary,
             derived_root,
             env_overrides,
+            passenger_destination=(
+                exchange_relative / "vehicles.parquet"
+                if overrides["beam.exchange.scenario.fileFormat"] == "parquet"
+                else None
+            ),
         )
         staged_inputs.extend(fleet_inputs)
         overrides.update(fleet_overrides)
@@ -332,43 +555,14 @@ def build_beam_launch_config(
                 destination=vehicle_destination,
             )
         )
-        overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = str(
-            derived_root / vehicle_destination
-        )
-    else:
-        configured_vehicles_path = resolve_beam_config_value(
-            source_primary,
-            key="beam.agentsim.agents.vehicles.vehiclesFilePath",
-            env_overrides=env_overrides,
-        )
-        if (
-            configured_vehicles_path
-            and not Path(str(configured_vehicles_path)).exists()
-        ):
-            overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = ""
 
-    if settings.beam.discard_plans_every_year:
-        overrides["beam.replanning.maxAgentPlanMemorySize"] = 0
-    zones = settings.shared.geography.zones
-    if zones is not None:
-        zone_destination = Path("shape") / "canonical_zones_sorted.geojson"
-        overrides["beam.agentsim.taz.filePath"] = str(derived_root / zone_destination)
-        overrides["beam.agentsim.taz.tazIdFieldName"] = zones.activitysim_index_col
-
-    r5_source = resolve_beam_config_value(
-        source_primary,
-        key="beam.routing.r5.directory",
-        env_overrides=env_overrides,
-    )
-    if r5_source:
-        r5_relative = _relative_source_path(
+    if config_tree is not None:
+        _, freight_staged = _collect_freight_overrides_and_inputs(
+            config_tree=config_tree,
             source_root=source_root,
-            path=Path(str(r5_source)),
-            key="beam.routing.r5.directory",
+            derived_root=output_dir,
         )
-        generated_network = derived_root / r5_relative / "physsim-network.xml"
-        overrides["matsim.modules.network.inputNetworkFile"] = str(generated_network)
-        overrides["beam.physsim.inputNetworkFilePath"] = str(generated_network)
+        staged_inputs.extend(freight_staged)
 
     launch_config = materialize_beam_launch_config(
         settings=settings,
@@ -381,6 +575,7 @@ def build_beam_launch_config(
             introduces_missing_format_key
             or introduces_missing_skim_name_key
             or introduces_missing_full_skim_timeout_key
+            or vehicle_source is not None
         ),
     )
     if overrides.get("beam.exchange.scenario.fileFormat") == "parquet":
@@ -393,6 +588,14 @@ def build_beam_launch_config(
             scenario_folder=settings.beam.scenario_folder,
             has_population_inputs=has_population_inputs,
         )
+    if (
+        impacts_fleet_manifest is not None
+        and overrides["beam.exchange.scenario.fileFormat"] != "parquet"
+    ):
+        # The UrbanSim reader tries its exchange fleet before the configured vehicle path.
+        (launch_config.root / exchange_relative / "vehicles.csv.gz").unlink(
+            missing_ok=True
+        )
     return launch_config
 
 
@@ -403,6 +606,8 @@ def _prepare_impacts_fleet(
     primary_config: Path,
     derived_root: Path,
     env_overrides: Mapping[str, str],
+    *,
+    passenger_destination: Path | None,
 ) -> tuple[list[BeamLaunchInput], dict[str, Any]]:
     workspace_root = workspace_root.resolve()
 
@@ -430,8 +635,10 @@ def _prepare_impacts_fleet(
         path=Path(str(passenger_types)).parent,
         key=passenger_types_key,
     )
-    prepared = manifest_path.parent / "beam-launch"
-    prepared.mkdir(exist_ok=True)
+    prepared = derived_root.parent.with_name(
+        f"{derived_root.parent.name}.impacts-fleet-sources"
+    )
+    prepared.mkdir(parents=True, exist_ok=True)
     staged: dict[Path, BeamLaunchInput] = {}
     overrides: dict[str, Any] = {}
 
@@ -481,7 +688,12 @@ def _prepare_impacts_fleet(
                     )
                 )
         else:
-            destination = Path(".pilates/impacts-fleet") / source.name
+            destination = (
+                passenger_destination
+                if artifact == "passenger_vehicles"
+                and passenger_destination is not None
+                else Path(".pilates/impacts-fleet") / source.name
+            )
             add(artifact, source, destination)
         overrides[key] = str(derived_root / destination)
     return list(staged.values()), overrides
@@ -748,17 +960,16 @@ def _write_synthetic_parquet_stub(
 
 def _activitysim_skims_file_base_name_override(
     *,
-    settings: Any,
-    source_primary: Path,
-    env_overrides: Mapping[str, str],
+    settings: SettingsLike,
+    config_tree: dict[str, Any],
 ) -> tuple[dict[str, str], bool]:
     """Return the configured BEAM activity-sim skimmer writer base name."""
 
     expected = settings.beam.activitysim_skims_file_base_name
-    source_value = resolve_beam_config_value(
-        source_primary,
-        key=_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
-        env_overrides=dict(env_overrides),
+    from pilates.beam.config_hocon import _lookup_dotted_key
+
+    source_value = _lookup_dotted_key(
+        config_tree, _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY
     )
     if source_value is None:
         logger.warning(
@@ -780,9 +991,8 @@ def _activitysim_skims_file_base_name_override(
 
 def _full_skim_calculation_timeout_override(
     *,
-    settings: Any,
-    source_primary: Path,
-    env_overrides: Mapping[str, str],
+    settings: SettingsLike,
+    config_tree: dict[str, Any],
 ) -> tuple[dict[str, int], bool]:
     """Return the configured BEAM BackgroundFullSkimsCreator timeout in hours."""
 
@@ -793,10 +1003,10 @@ def _full_skim_calculation_timeout_override(
     ):
         return {}, False
     expected = int(getattr(full_skim, "calculation_timeout_hours", 72))
-    source_value = resolve_beam_config_value(
-        source_primary,
-        key=_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY,
-        env_overrides=dict(env_overrides),
+    from pilates.beam.config_hocon import _lookup_dotted_key
+
+    source_value = _lookup_dotted_key(
+        config_tree, _FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY
     )
     return (
         {_FULL_SKIM_CALCULATION_TIMEOUT_HOURS_KEY: expected},
@@ -806,9 +1016,8 @@ def _full_skim_calculation_timeout_override(
 
 def _artifact_format_overrides(
     *,
-    settings: Any,
-    source_primary: Path,
-    env_overrides: Mapping[str, str],
+    settings: SettingsLike,
+    config_tree: dict[str, Any],
 ) -> tuple[dict[str, str], bool]:
     """Return typed format policy overrides and report legacy missing keys."""
 
@@ -823,11 +1032,9 @@ def _artifact_format_overrides(
     policy_summary: list[str] = []
     for field_name, config_key in _ARTIFACT_FORMAT_POLICY_KEYS.items():
         expected = overrides[config_key]
-        source_value = resolve_beam_config_value(
-            source_primary,
-            key=config_key,
-            env_overrides=dict(env_overrides),
-        )
+        from pilates.beam.config_hocon import _lookup_dotted_key
+
+        source_value = _lookup_dotted_key(config_tree, config_key)
         source_kind = "configured" if field_name in field_sources else "default"
         policy_summary.append(f"{field_name}={expected} ({source_kind})")
         if source_value is None:

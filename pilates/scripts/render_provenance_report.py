@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from pathlib import Path
 import sys
 
@@ -62,9 +63,9 @@ def main() -> int:
     )
     run = tracker.get_run(args.run_id)
     mounts = {}
-    if run is not None and isinstance(getattr(run, "meta", None), dict):
+    if run is not None and isinstance(run.meta, Mapping):
         run_mounts = run.meta.get("mounts")
-        if isinstance(run_mounts, dict):
+        if isinstance(run_mounts, Mapping):
             mounts = {str(k): str(v) for k, v in run_mounts.items()}
     if mounts:
         tracker = consist.Tracker(

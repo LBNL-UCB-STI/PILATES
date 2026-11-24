@@ -21,24 +21,29 @@ class _StubState:
         self.forecast_year = 2017
 
 
-def test_noop_scenario_run_returns_outputs_mapping():
+def test_ephemeral_scenario_run_returns_outputs_mapping(tmp_path):
+    out_file = tmp_path / "out.txt"
+    out_file.write_text("dummy", encoding="utf-8")
     store = RecordStore(
         recordList=[
-            FileRecord(file_path="/tmp/out.txt", short_name="out", description="out")
+            FileRecord(file_path=str(out_file), short_name="out", description="out")
         ]
     )
 
     def _run():
         return store
 
-    with cr.scenario("noop-test", enabled=False) as scenario:
-        result = scenario.run(fn=_run, output_paths={"out": "/tmp/out.txt"})
+    tracker = consist.Tracker(
+        db_path=None, run_dir=None, mounts={"workspace": str(tmp_path)}
+    )
+    assert tracker.is_ephemeral is True
+
+    with cr.scenario("ephemeral-test", tracker=tracker) as scenario:
+        result = scenario.run(fn=_run, output_paths={"out": str(out_file)})
 
     output = result.outputs["out"]
-    assert isinstance(output, consist.NoopArtifact)
     assert output.key == "out"
-    assert str(output.path) == "/tmp/out.txt"
-    assert isinstance(result, consist.NoopRunResult)
+    assert str(output.path) == str(out_file)
     assert result.run is not None
     assert result.cache_hit is False
 

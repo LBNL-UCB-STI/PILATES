@@ -26,7 +26,9 @@ def _tracked_yaml_paths(root: Path) -> list[Path]:
         )
     except Exception:
         return sorted(root.glob("*.yaml"))
-    return sorted(REPO_ROOT / line for line in result.stdout.splitlines() if line.strip())
+    return sorted(
+        REPO_ROOT / line for line in result.stdout.splitlines() if line.strip()
+    )
 
 
 ACTIVE_SCENARIO_PATHS = sorted(
@@ -37,6 +39,7 @@ ACTIVE_SCENARIO_PATHS = sorted(
 @pytest.fixture(autouse=True)
 def _set_inmap_path_for_scenario_config_tests(monkeypatch):
     monkeypatch.setenv("IMPACTS_INMAP_DATA_DIR", "/tmp/impacts-inmap-test")
+
 
 SEATTLE_ROUTER_DIRECTORY = "r5/seattle-cbg120-ferry-weakConn-network"
 SFBAY_ROUTER_DIRECTORY = "r5/sfbay-cbg5500-weakConn-network"
@@ -49,25 +52,32 @@ EXPECTED_WARMSTART_PATHS = {
     REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml": (
         "{router_directory}/init.linkstats.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC06-0.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC06-0.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/5.linkstats.FC06.v1.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC07-0.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC07-0.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/4.linkstats.FC07.v1.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC08-0.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC08-0.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/5.linkstats.FC08.v1.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--fy26-task1--2018-Baseline.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--fy26-task1--2018-Baseline.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/5.linkstats.FC07.v3.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-060Elec.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-060Elec.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/5.linkstats.FC07.v3.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-100Elec.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-100Elec.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/5.linkstats.FC07.v3.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-HighFuel-100Elec.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-HighFuel-100Elec.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/5.linkstats.FC07.v3.csv.gz"
     ),
     REPO_ROOT / "scenarios/sfbay/pilates-run--sfbay--jdeq-calibration-FC06-0.yaml": (
@@ -173,7 +183,9 @@ def test_active_seattle_scenarios_define_primary_and_fallback_zone_sources():
 
 def test_active_sfbay_scenarios_define_expected_zone_sources():
     sfbay_paths = sorted((REPO_ROOT / "scenarios/sfbay").glob("*.yaml"))
-    sfbay_paths.append(REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml")
+    sfbay_paths.append(
+        REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml"
+    )
 
     for path in sfbay_paths:
         settings = load_config(str(path))

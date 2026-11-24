@@ -5,7 +5,7 @@ from pathlib import Path
 
 from typing import Any, Dict, List, Mapping, Optional, Union
 
-from pilates.config import PilatesConfig
+from pilates.config import PilatesConfig, SettingsLike
 from pilates.beam.outputs import (
     BeamFullSkimOutputs,
     BeamPreprocessOutputs,
@@ -36,7 +36,7 @@ def _collect_input_paths(
     inputs: BeamPreprocessOutputs,
     extra_inputs: Optional[Mapping[str, Any]] = None,
 ) -> List[str]:
-    input_paths = [str(path) for _, path, _ in inputs._iter_record_items()]
+    input_paths = [str(path) for path in inputs.prepared_inputs.values()]
     if not extra_inputs:
         return input_paths
     for value in extra_inputs.values():
@@ -72,7 +72,7 @@ def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     return optimal
 
 
-def _resolve_beam_memory(settings: Any) -> str:
+def _resolve_beam_memory(settings: SettingsLike) -> str:
     """
     Resolve BEAM JVM heap memory string, expanding environment variables
     and falling back to a safe default if an unexpanded template is encountered.
@@ -397,10 +397,7 @@ class BeamRunner(GenericRunner):
             "skims_emissions": ("skimsEmissions", ".csv.gz"),
             "skims_emissions_parquet": ("skimsEmissions", ".parquet"),
             "skims_emissions_agg": ("skimsEmissions_Aggregated", ".csv.gz"),
-            "skims_emissions_agg_parquet": (
-                "skimsEmissions_Aggregated",
-                ".parquet",
-            ),
+            "skims_emissions_agg_parquet": ("skimsEmissions_Aggregated", ".parquet"),
             "skims_ridehail_agg": ("skimsRidehail_Aggregated", ".csv.gz"),
             "skims_parking": ("skimsParking", ".csv.gz"),
             "skims_parking_agg": ("skimsParking_Aggregated", ".csv.gz"),

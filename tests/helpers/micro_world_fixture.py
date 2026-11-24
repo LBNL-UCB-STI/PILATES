@@ -89,30 +89,25 @@ class MicroWorldEnv:
         *,
         seed_coupler: bool = True,
     ) -> Iterator[ScenarioWithCoupler]:
-        cr.set_enabled(True)
-        try:
-            with cr.use_tracker(self.tracker):
-                with cr.scenario(
-                    name=name,
-                    tracker=self.tracker,
-                    model="test_orchestrator",
-                ) as sc:
-                    if seed_coupler:
-                        self.seed_scenario_coupler(sc)
-                    yield sc
-        finally:
-            cr.set_enabled(None)
+        with cr.use_tracker(self.tracker):
+            with cr.scenario(
+                name=name,
+                tracker=self.tracker,
+                model="test_orchestrator",
+            ) as sc:
+                if seed_coupler:
+                    self.seed_scenario_coupler(sc)
+                yield sc
 
     def seed_scenario_coupler(self, sc: ScenarioWithCoupler) -> None:
         """Seed initial tracked artifacts into the scenario coupler."""
-        from pilates.workflows.binding import seed_bootstrap_artifacts_to_coupler
+        from pilates.workflows.orchestrator import bootstrap_initial_state
 
-        seed_bootstrap_artifacts_to_coupler(
+        bootstrap_initial_state(
+            scenario=sc,
             settings=self.settings,
             state=self.state,
             workspace=self.workspace,
-            coupler=sc.coupler,
-            scenario=sc,
         )
         if sc.coupler.get(USIM_POPULATION_SOURCE_H5) is None:
             current_h5 = sc.coupler.get(USIM_DATASTORE_H5)
@@ -1061,10 +1056,6 @@ def build_micro_world(
             },
             "asim_ridehail_measure_map": {},
             "ridehail_path_map": {},
-        },
-        "postprocessing": {
-            "output_folder": "postprocessing/output",
-            "mep_output_folder": "postprocessing/mep",
         },
     }
 

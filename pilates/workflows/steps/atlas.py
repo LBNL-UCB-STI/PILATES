@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
+import logging
 import os
-from typing import Any, Dict, Mapping
+from pathlib import Path
+import shutil
+from typing import Any, Dict, Mapping, Sequence
 
 from consist import (
-    BindingResult,
     ExecutionOptions,
     OutputSet,
+    Tracker,
     define_step,
 )
 
@@ -22,8 +24,8 @@ from pilates.atlas.runner import AtlasLaunchContext, AtlasRunner
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils import consist_runtime as cr
+from pilates.utils.archive_paths import resolve_archive_run_dir
 from pilates.utils.consist_runtime import require_runtime_kwargs
-from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import get_land_use_model
 from pilates.utils.settings_helper import get as get_setting
@@ -32,40 +34,35 @@ from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
-    OMX_SKIMS,
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
-    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.binding import ArtifactBindingRule
-from pilates.workflows.coupler_namespace import resolve_coupler_value
-from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
 )
+from pilates.workflows.sim_state import ArtifactRef, SimState
+from pilates.workflows.state_helpers import requires_prior_beam_skim_handoff
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
 
 from .shared import (
+    _build_step_call_inputs,
     _execution_options_with_launch_context,
+    _metadata_cache_options,
     _native_contract_output_paths,
     _native_execution_options,
     _persisted_output_path,
-    _resolve_native_inputs,
-    _strict_requested_output_cache_options,
-    _validation_context,
 )
 from .urbansim import (
     _urbansim_population_source_path,
     _urbansim_run_native_output_paths,
 )
 
+logger = logging.getLogger(__name__)
 
 # Native Consist step definitions.
 
@@ -75,13 +72,13 @@ _ATLAS_VEHICLES_CSV_INPUT = "atlas_vehicles_csv"
 
 def _atlas_run_execution_options(
     *,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
     **_: Any,
 ) -> ExecutionOptions:
     """Pass the resolver-owned ATLAS launch context through runtime kwargs."""
 
     return _execution_options_with_launch_context(
-        resolved_inputs=resolved_inputs,
+        step_inputs=step_inputs,
         step_name="atlas_run",
         context_key="atlas_launch_context",
         expected_type=AtlasLaunchContext,
@@ -93,9 +90,9 @@ def _atlas_preprocess_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
-    del resolved_inputs
+    del step_inputs
     return dict(
         _atlas_preprocess_prepared_input_paths(
             settings=settings,
@@ -148,8 +145,9 @@ def _atlas_run_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
+    del settings, step_inputs
     output_dir = Path(workspace.get_atlas_output_dir())
     forecast_year = state.forecast_year
     return {
@@ -163,11 +161,11 @@ def _atlas_run_output_sets(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Mapping[str, OutputSet]:
     """Declare the ATLAS continuation surface exactly."""
 
-    del settings, resolved_inputs
+    del settings, step_inputs
     forecast_year = state.forecast_year
     continuation_members = ("vehicles_output.RData", "households_output.RData")
     return {
@@ -184,7 +182,7 @@ def _atlas_postprocess_native_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
     """
     Declare output paths for ``atlas_postprocess``.
@@ -193,6 +191,7 @@ def _atlas_postprocess_native_output_paths(
     for downstream ActivitySim runs and, when ``year`` or ``forecast_year`` is
     set on ``state``, ``ATLAS_VEHICLES2_OUTPUT`` for BEAM.
     """
+    del step_inputs
     output_year = state.year if state.year is not None else state.forecast_year
     vehicles2_path = (
         Path(workspace.get_atlas_output_dir()) / f"vehicles2_{output_year}.csv"
@@ -249,51 +248,43 @@ def _prefer_base_datastore_key(
     return False
 
 
-def _select_atlas_datastore_from_coupler(
+def _select_atlas_datastore_from_sim_state(
     *,
-    coupler: CouplerProtocol,
+    sim_state: SimState,
     use_base_datastore: bool,
     prefer_base_key: bool = True,
     expected_filename: str,
-) -> Any:
+) -> ArtifactRef | None:
     if use_base_datastore:
         candidates = (
-            (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_H5)
+            (sim_state.land_use.prior_h5, sim_state.land_use.current_h5)
             if prefer_base_key
-            else (USIM_DATASTORE_H5, USIM_DATASTORE_BASE_H5)
+            else (sim_state.land_use.current_h5, sim_state.land_use.prior_h5)
         )
     else:
-        forecast_candidate = resolve_coupler_value(coupler, USIM_FORECAST_OUTPUT)
-        current_candidate = resolve_coupler_value(coupler, USIM_DATASTORE_H5)
-        forecast_name = os.path.basename(
-            artifact_to_path(forecast_candidate.value) or ""
-        )
-        current_name = os.path.basename(artifact_to_path(current_candidate.value) or "")
-        if (
-            forecast_candidate.value is not None
-            and forecast_name == expected_filename
-            and current_name != expected_filename
-        ):
+        forecast_candidate = sim_state.land_use.forecast_output
+        current_candidate = sim_state.land_use.current_h5
+        current_name = os.path.basename(artifact_to_path(current_candidate) or "")
+        if forecast_candidate is not None and current_name != expected_filename:
             return forecast_candidate
-        pop_candidate = resolve_coupler_value(coupler, USIM_POPULATION_SOURCE_H5)
-        pop_name = os.path.basename(artifact_to_path(pop_candidate.value) or "")
+        pop_candidate = sim_state.land_use.population_source
+        pop_name = os.path.basename(artifact_to_path(pop_candidate) or "")
         expected_stem = Path(expected_filename).stem
         if (
-            pop_candidate.value is not None
+            pop_candidate is not None
             and pop_name.startswith(expected_stem)
             and current_name != expected_filename
         ):
             return pop_candidate
         candidates = (
-            USIM_DATASTORE_H5,
-            USIM_FORECAST_OUTPUT,
-            USIM_DATASTORE_BASE_H5,
+            sim_state.land_use.current_h5,
+            sim_state.land_use.forecast_output,
+            sim_state.land_use.prior_h5,
         )
-    for candidate_key in candidates:
-        resolved = resolve_coupler_value(coupler, candidate_key)
-        if resolved.value is not None:
-            return resolved
-    return resolve_coupler_value(coupler, USIM_DATASTORE_H5)
+    for candidate in candidates:
+        if candidate is not None:
+            return candidate
+    return sim_state.land_use.current_h5
 
 
 def _resolve_atlas_datastore_target(
@@ -301,8 +292,8 @@ def _resolve_atlas_datastore_target(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> tuple[bool, Path, Any]:
+    sim_state: SimState,
+) -> tuple[bool, Path, ArtifactRef | None]:
     land_use_enabled = bool(
         get_setting(
             settings,
@@ -322,17 +313,15 @@ def _resolve_atlas_datastore_target(
         io="input" if (use_base_datastore and prefer_base_key) else "output",
         year=state.forecast_year,
     )
-    selected_datastore = _select_atlas_datastore_from_coupler(
-        coupler=coupler,
+    selected_datastore = _select_atlas_datastore_from_sim_state(
+        sim_state=sim_state,
         use_base_datastore=use_base_datastore,
         prefer_base_key=prefer_base_key,
         expected_filename=usim_input_fname,
     )
     mutable_dir = Path(workspace.get_usim_mutable_data_dir())
     if use_base_datastore and prefer_base_key:
-        selected_name = os.path.basename(
-            artifact_to_path(selected_datastore.value) or ""
-        )
+        selected_name = os.path.basename(artifact_to_path(selected_datastore) or "")
         try:
             main_forecast_year = state.main_forecast_year
         except AttributeError:
@@ -368,23 +357,25 @@ def _resolve_atlas_preprocess_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     requires_beam_skim = requires_prior_beam_skim_handoff(
         settings=settings,
         state=state,
     )
-    use_base_datastore, atlas_input, selected_datastore = (
-        _resolve_atlas_datastore_target(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            coupler=coupler,
-        )
+    _, atlas_input, selected_datastore = _resolve_atlas_datastore_target(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        sim_state=active_sim_state,
     )
-    resolved = _resolve_native_inputs(
-        step_name="atlas_preprocess",
-        function=_native_atlas_preprocess,
+    return _build_step_call_inputs(
+        candidates={
+            USIM_DATASTORE_H5: selected_datastore,
+            FINAL_SKIMS_OMX: active_sim_state.network.skims_omx,
+        },
         required_roles=(
             USIM_DATASTORE_H5,
             *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
@@ -395,34 +386,7 @@ def _resolve_atlas_preprocess_inputs(
             FINAL_SKIMS_OMX: Path(workspace.get_atlas_mutable_input_dir())
             / "final_skims.omx",
         },
-        coupler=coupler,
     )
-    current_bound = (resolved.binding.inputs or {}).get(USIM_DATASTORE_H5)
-    if selected_datastore.value is not None and (
-        use_base_datastore
-        or current_bound is None
-        or selected_datastore.value is not current_bound
-    ):
-        updated_inputs = dict(resolved.binding.inputs or {})
-        updated_inputs[USIM_DATASTORE_H5] = selected_datastore.value
-        updated_sources = dict(resolved.source_by_role)
-        updated_sources[USIM_DATASTORE_H5] = selected_datastore.source
-        updated_keys = dict(resolved.selected_key_by_role)
-        if selected_datastore.storage_key is not None:
-            updated_keys[USIM_DATASTORE_H5] = selected_datastore.storage_key
-        updated_destinations = dict(resolved.logical_destinations)
-        updated_destinations[USIM_DATASTORE_H5] = Path(atlas_input)
-        return ResolvedStepInputs(
-            step_name=resolved.step_name,
-            binding=BindingResult(inputs=updated_inputs),
-            required_roles=resolved.required_roles,
-            optional_roles=resolved.optional_roles,
-            source_by_role=updated_sources,
-            selected_key_by_role=updated_keys,
-            logical_destinations=updated_destinations,
-            metadata=resolved.metadata,
-        )
-    return resolved
 
 
 def _resolve_atlas_run_inputs(
@@ -430,24 +394,33 @@ def _resolve_atlas_run_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    prior_outputs: Mapping[str, ArtifactRef] | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     prepared_inputs = _atlas_preprocess_prepared_input_paths(
         settings=settings,
         state=state,
         workspace=workspace,
     )
+    candidates: dict[str, ArtifactRef | None] = {
+        key: (
+            prior_outputs.get(key)
+            if prior_outputs is not None
+            else active_sim_state.extras.get(key)
+        )
+        for key in prepared_inputs
+    }
     launch_context = AtlasLaunchContext(
         input_root=Path(workspace.get_atlas_mutable_input_dir()),
         output_root=Path(workspace.get_atlas_output_dir()),
     )
-    return _resolve_native_inputs(
-        step_name="atlas_run",
-        function=_native_atlas_run,
+    return _build_step_call_inputs(
+        candidates=candidates,
         required_roles=tuple(prepared_inputs),
         optional_roles=(),
         logical_destinations=prepared_inputs,
-        coupler=coupler,
         metadata={"atlas_launch_context": launch_context},
     )
 
@@ -457,14 +430,16 @@ def _resolve_atlas_postprocess_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
+    sim_state: SimState | None = None,
+    **_: Any,
+) -> StepCallInputs:
+    active_sim_state = sim_state if sim_state is not None else SimState()
     forecast_year = state.forecast_year
     _, datastore_dest, selected_datastore = _resolve_atlas_datastore_target(
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=coupler,
+        sim_state=active_sim_state,
     )
     semantic_roles = {
         _ATLAS_HOUSEHOLDV_CSV_INPUT: f"householdv_{forecast_year}",
@@ -478,27 +453,15 @@ def _resolve_atlas_postprocess_inputs(
         / f"vehicles_{forecast_year}.csv",
         USIM_DATASTORE_H5: datastore_dest,
     }
-    selected_inputs: dict[str, Any] = {}
-    source_by_role: dict[str, str] = {}
-    selected_key_by_role: dict[str, str] = {}
-    for parameter, semantic_role in semantic_roles.items():
-        resolved = (
-            selected_datastore
-            if parameter == USIM_DATASTORE_H5
-            else resolve_coupler_value(coupler, semantic_role)
-        )
-        source_by_role[parameter] = resolved.source
-        if resolved.storage_key is not None:
-            selected_key_by_role[parameter] = resolved.storage_key
-        if resolved.value is not None:
-            selected_inputs[parameter] = resolved.value
-
-    return ResolvedStepInputs(
-        step_name="atlas_postprocess",
-        binding=BindingResult(inputs=selected_inputs),
+    candidates: dict[str, ArtifactRef | None] = {
+        _ATLAS_HOUSEHOLDV_CSV_INPUT: active_sim_state.atlas.households_with_cars,
+        _ATLAS_VEHICLES_CSV_INPUT: active_sim_state.atlas.vehicles,
+        USIM_DATASTORE_H5: selected_datastore,
+    }
+    return _build_step_call_inputs(
+        candidates=candidates,
         required_roles=tuple(semantic_roles),
-        source_by_role=source_by_role,
-        selected_key_by_role=selected_key_by_role,
+        optional_roles=(),
         logical_destinations=logical_destinations,
         metadata={"semantic_role_by_parameter": semantic_roles},
     )
@@ -535,7 +498,7 @@ _ATLAS_POSTPROCESS_INPUT_CONTRACT = InputContract(
         "atlas_grave_csv",
         "atlas_accessibility_csv",
     ],
-    output_paths=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "atlas_preprocess", input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT
@@ -561,19 +524,142 @@ def _native_atlas_preprocess(
     )
 
 
+def _recover_prior_atlas_subyear_files(
+    *,
+    workspace: Workspace,
+    state: WorkflowState | None,
+    tracker: Tracker | None,
+    prior_year: int,
+    target_dir: Path,
+    expected_files: Sequence[str],
+    run_id: str | None = None,
+) -> list[str]:
+    """Recover missing prior-subyear files from resolved tracker outputs or archive locations.
+
+    Returns the list of filenames that are still missing after all recovery attempts.
+    """
+    missing = [f for f in expected_files if not (target_dir / f).is_file()]
+    if not missing:
+        return []
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Attempt recovery from tracker resolved output paths
+    if tracker is not None and run_id is not None:
+        try:
+            resolved_runs = tracker.resolve_run_output_paths(
+                [str(run_id)], existing_only=True
+            )
+            resolved_outputs = resolved_runs.get(str(run_id), {})
+            for fname in list(missing):
+                for src_path in resolved_outputs.values():
+                    candidate = (
+                        src_path
+                        if src_path.name == fname
+                        else (src_path / fname if src_path.is_dir() else None)
+                    )
+                    if candidate is not None and candidate.is_file():
+                        shutil.copy2(candidate, target_dir / fname)
+                        missing.remove(fname)
+                        break
+        except Exception as exc:
+            logger.debug(
+                "Failed resolving run output paths for run %s: %s", run_id, exc
+            )
+
+    if not missing:
+        return []
+
+    # 2. Inspect candidate archive roots
+    candidate_roots: list[Path] = []
+    archive_dir = resolve_archive_run_dir(workspace=workspace, state=state)
+    if archive_dir is not None and archive_dir.is_dir():
+        candidate_roots.append(archive_dir)
+
+    ws_archive = resolve_archive_run_dir(workspace=workspace)
+    if (
+        ws_archive is not None
+        and ws_archive.is_dir()
+        and ws_archive not in candidate_roots
+    ):
+        candidate_roots.append(ws_archive)
+
+    if isinstance(tracker, Tracker) and tracker.run_dir is not None:
+        tr_run_dir = Path(tracker.run_dir).expanduser().resolve()
+        if tr_run_dir.is_dir() and tr_run_dir not in candidate_roots:
+            candidate_roots.append(tr_run_dir)
+
+    try:
+        atlas_rel_folder = (
+            Path(workspace.get_atlas_mutable_input_dir())
+            .resolve()
+            .relative_to(Path(workspace.full_path).resolve())
+        )
+    except Exception:
+        atlas_rel_folder = Path("atlas/atlas_input")
+
+    for root in candidate_roots:
+        if not missing:
+            break
+
+        # Check direct path under archived atlas input directory
+        for rel_dir in dict.fromkeys([atlas_rel_folder, Path("atlas/atlas_input")]):
+            archived_year_dir = root / rel_dir / f"year{prior_year}"
+            if archived_year_dir.is_dir():
+                for fname in list(missing):
+                    candidate_file = archived_year_dir / fname
+                    if candidate_file.is_file():
+                        shutil.copy2(candidate_file, target_dir / fname)
+                        missing.remove(fname)
+
+        if not missing:
+            break
+
+        # Check consist-recovery scopes
+        recovery_root = root / "consist-recovery"
+        if recovery_root.is_dir():
+            for scope_dir in sorted(recovery_root.glob(f"*atlas*y{prior_year}*")):
+                if not scope_dir.is_dir():
+                    continue
+                for fname in list(missing):
+                    candidates = (
+                        scope_dir / fname,
+                        scope_dir / f"atlas_continuation_{prior_year}" / fname,
+                        scope_dir / f"year{prior_year}" / fname,
+                        scope_dir / atlas_rel_folder / f"year{prior_year}" / fname,
+                        scope_dir
+                        / "atlas"
+                        / "atlas_input"
+                        / f"year{prior_year}"
+                        / fname,
+                    )
+                    for c in candidates:
+                        if c.is_file():
+                            shutil.copy2(c, target_dir / fname)
+                            missing.remove(fname)
+                            break
+
+    return missing
+
+
 def hydrate_atlas_subyear_continuation_outputs(
     *,
-    tracker: Any,
+    tracker: Tracker,
     settings: PilatesConfig,
     workspace: Workspace,
     prior_year: int,
     start_year: int,
+    state: WorkflowState | None = None,
     atlas_run_id: str | None = None,
     preprocess_run_id: str | None = None,
     preserve_existing: bool,
     on_missing: str,
 ) -> None:
     # ponytail: shared prior-subyear ATLAS continuation hydration used by both restart and native execution
+    continuation_dir = (
+        Path(workspace.get_atlas_mutable_input_dir()) / f"year{prior_year}"
+    )
+
     if atlas_run_id is not None:
         tracker.hydrate_run_outputs(
             str(atlas_run_id),
@@ -582,6 +668,19 @@ def hydrate_atlas_subyear_continuation_outputs(
             preserve_existing=preserve_existing,
             on_missing=on_missing,
         )
+        # If the target directory already existed prior to hydration, Consist skips
+        # directory extraction under preserve_existing=True. Recover individual
+        # continuation files if omitted.
+        _recover_prior_atlas_subyear_files(
+            workspace=workspace,
+            state=state,
+            tracker=tracker,
+            prior_year=prior_year,
+            target_dir=continuation_dir,
+            expected_files=("vehicles_output.RData", "households_output.RData"),
+            run_id=atlas_run_id,
+        )
+
     if preprocess_run_id is not None:
         prepared_destinations = _atlas_prepared_input_paths_for_year(
             settings=settings,
@@ -594,6 +693,15 @@ def hydrate_atlas_subyear_continuation_outputs(
             destinations_by_key=prepared_destinations,
             preserve_existing=preserve_existing,
             on_missing=on_missing,
+        )
+        _recover_prior_atlas_subyear_files(
+            workspace=workspace,
+            state=state,
+            tracker=tracker,
+            prior_year=prior_year,
+            target_dir=continuation_dir,
+            expected_files=[p.name for p in prepared_destinations.values()],
+            run_id=preprocess_run_id,
         )
 
 
@@ -622,47 +730,115 @@ def _ensure_prior_atlas_subyear_continuation_inputs(
         return
 
     tracker = cr.current_tracker()
-    if tracker is None:
-        return
+    atlas_run_id: str | None = None
+    preprocess_run_id: str | None = None
+    hydration_attempted = False
 
-    try:
-        atlas_run_id: str | None = None
-        if not has_rdata:
-            atlas_runs = tracker.find_runs(
-                year=prior_year,
-                model="atlas_run",
-                stage="vehicle_ownership",
-                phase="run",
-                status="completed",
+    if tracker is not None:
+        try:
+            if not has_rdata:
+                atlas_runs = tracker.find_runs(
+                    year=prior_year,
+                    model="atlas_run",
+                    stage="vehicle_ownership",
+                    phase="run",
+                )
+                completed_atlas = [
+                    r for r in atlas_runs if getattr(r, "status", None) == "completed"
+                ]
+                target_atlas = (
+                    completed_atlas[0]
+                    if completed_atlas
+                    else (atlas_runs[0] if atlas_runs else None)
+                )
+                if target_atlas is not None:
+                    atlas_run_id = str(target_atlas.id)
+
+            if not has_households:
+                preprocess_runs = tracker.find_runs(
+                    year=prior_year,
+                    model="atlas_preprocess",
+                    stage="vehicle_ownership",
+                    phase="preprocess",
+                )
+                completed_preprocess = [
+                    r
+                    for r in preprocess_runs
+                    if getattr(r, "status", None) == "completed"
+                ]
+                target_preprocess = (
+                    completed_preprocess[0]
+                    if completed_preprocess
+                    else (preprocess_runs[0] if preprocess_runs else None)
+                )
+                if target_preprocess is not None:
+                    preprocess_run_id = str(target_preprocess.id)
+
+            if atlas_run_id is not None or preprocess_run_id is not None:
+                hydrate_atlas_subyear_continuation_outputs(
+                    tracker=tracker,
+                    settings=settings,
+                    workspace=workspace,
+                    prior_year=prior_year,
+                    start_year=start_year,
+                    state=state,
+                    atlas_run_id=atlas_run_id,
+                    preprocess_run_id=preprocess_run_id,
+                    preserve_existing=True,
+                    on_missing="warn",
+                )
+                hydration_attempted = True
+        except Exception as exc:
+            logger.warning(
+                "Encountered error during ATLAS subyear %s continuation hydration: %s",
+                prior_year,
+                exc,
             )
-            if atlas_runs:
-                atlas_run_id = str(atlas_runs[-1].id)
 
-        preprocess_run_id: str | None = None
-        if not has_households:
-            preprocess_runs = tracker.find_runs(
-                year=prior_year,
-                model="atlas_preprocess",
-                stage="vehicle_ownership",
-                phase="preprocess",
-                status="completed",
+    # If tracker hydration was not run (e.g. tracker is None or finding runs failed), attempt direct archive recovery
+    if not hydration_attempted:
+        if (
+            not (prior_dir / "vehicles_output.RData").is_file()
+            or not (prior_dir / "households_output.RData").is_file()
+        ):
+            _recover_prior_atlas_subyear_files(
+                workspace=workspace,
+                state=state,
+                tracker=tracker,
+                prior_year=prior_year,
+                target_dir=prior_dir,
+                expected_files=("vehicles_output.RData", "households_output.RData"),
+                run_id=atlas_run_id,
             )
-            if preprocess_runs:
-                preprocess_run_id = str(preprocess_runs[-1].id)
 
-        hydrate_atlas_subyear_continuation_outputs(
-            tracker=tracker,
-            settings=settings,
-            workspace=workspace,
-            prior_year=prior_year,
-            start_year=start_year,
-            atlas_run_id=atlas_run_id,
-            preprocess_run_id=preprocess_run_id,
-            preserve_existing=True,
-            on_missing="warn",
+        if not (prior_dir / "households.csv").is_file():
+            _recover_prior_atlas_subyear_files(
+                workspace=workspace,
+                state=state,
+                tracker=tracker,
+                prior_year=prior_year,
+                target_dir=prior_dir,
+                expected_files=("households.csv",),
+                run_id=preprocess_run_id,
+            )
+
+    # If prior subyear runs were recorded in provenance, fail fast if their outputs couldn't be recovered
+    missing_required: list[str] = []
+    if atlas_run_id is not None:
+        if not (prior_dir / "vehicles_output.RData").is_file():
+            missing_required.append("vehicles_output.RData")
+        if not (prior_dir / "households_output.RData").is_file():
+            missing_required.append("households_output.RData")
+    if preprocess_run_id is not None:
+        if not (prior_dir / "households.csv").is_file():
+            missing_required.append("households.csv")
+
+    if missing_required:
+        raise RuntimeError(
+            f"Cannot start ATLAS for forecast year {forecast_year}: prior subyear {prior_year} "
+            f"continuation input(s) missing in {prior_dir}: {', '.join(missing_required)}. "
+            f"(resolved atlas_run_id={atlas_run_id}, preprocess_run_id={preprocess_run_id})"
         )
-    except AttributeError:
-        return
 
 
 @define_step(
@@ -744,7 +920,7 @@ def _native_atlas_run(
         USIM_DATASTORE_H5: None,
     },
     schema_outputs=[USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT],
-    output_paths=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
+    outputs=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
         "atlas_postprocess", input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT
@@ -796,6 +972,16 @@ def _native_atlas_postprocess(
         destination_h5=destination_h5,
         year=state.forecast_year,
     )
+    if not state.is_start_year():
+        from pilates.workflows.orchestrator import (
+            _validate_population_h5_for_activitysim_year,
+        )
+
+        _validate_population_h5_for_activitysim_year(
+            path=destination_h5,
+            year=state.forecast_year,
+            context=f"ATLAS postprocess local output y{state.forecast_year}",
+        )
 
 
 def _project_atlas_preprocess(
@@ -804,8 +990,9 @@ def _project_atlas_preprocess(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> AtlasPreprocessOutputs:
+    del step_inputs
     declared_outputs = _atlas_preprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -823,14 +1010,6 @@ def _project_atlas_preprocess(
         atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
         prepared_inputs=prepared_inputs,
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_preprocess",
-        )
-    )
     return projected
 
 
@@ -840,8 +1019,9 @@ def _project_atlas_run(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> AtlasRunOutputs:
+    del step_inputs
     declared_outputs = _atlas_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -858,14 +1038,6 @@ def _project_atlas_run(
             for key in declared_outputs
         },
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_run",
-        )
-    )
     return projected
 
 
@@ -875,8 +1047,9 @@ def _project_atlas_postprocess(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
 ) -> AtlasPostprocessOutputs:
+    del step_inputs
     declared_outputs = _atlas_postprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -899,14 +1072,6 @@ def _project_atlas_postprocess(
             )
         },
     )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="atlas_postprocess",
-        )
-    )
     return projected
 
 
@@ -916,32 +1081,9 @@ ATLAS_PREPROCESS = StepDefinition(
     resolve_inputs=_resolve_atlas_preprocess_inputs,
     project_outputs=_project_atlas_preprocess,
     input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT,
-    output_paths=_atlas_preprocess_native_output_paths,
+    outputs=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
-    binding_rules=(
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_CURRENT_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
-        ),
-        ArtifactBindingRule(
-            semantic_key=USIM_DATASTORE_BASE_H5,
-            required=True,
-            allow_fallback=True,
-            preferred_keys=(
-                USIM_DATASTORE_BASE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-            ),
-        ),
-        ArtifactBindingRule(
-            semantic_key=OMX_SKIMS,
-            required=False,
-            allow_fallback=True,
-            preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
-        ),
-    ),
+    cache_options=_metadata_cache_options(),
     optional_output_keys=("atlas_accessibility_csv",),
 )
 
@@ -954,7 +1096,7 @@ ATLAS_RUN = StepDefinition(
     output_paths=_atlas_run_native_output_paths,
     output_sets=_atlas_run_output_sets,
     execution_options=_atlas_run_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
 )
 
 ATLAS_POSTPROCESS = StepDefinition(
@@ -963,9 +1105,9 @@ ATLAS_POSTPROCESS = StepDefinition(
     resolve_inputs=_resolve_atlas_postprocess_inputs,
     project_outputs=_project_atlas_postprocess,
     input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT,
-    output_paths=_atlas_postprocess_native_output_paths,
+    outputs=_atlas_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
+    cache_options=_metadata_cache_options(),
 )
 
 # Canonical registry members use the workflow step names. Uppercase aliases keep

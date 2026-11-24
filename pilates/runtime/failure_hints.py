@@ -23,39 +23,41 @@ def set_run_failure_context(**kwargs: Any) -> None:
 def format_restart_command(
     *,
     settings: Optional[Any],
-    archive_state_path: Optional[str],
+    archive_run_dir: Optional[str] = None,
 ) -> Optional[str]:
     config_path = None
     if settings is not None:
         config_path = settings.settings_file
-    if not config_path and not archive_state_path:
+    run_dir = archive_run_dir
+    if not config_path and not run_dir:
         return None
 
     command = ["python", "run.py"]
     if config_path:
         command.extend(["-c", str(config_path)])
-    if archive_state_path:
-        command.extend(["-S", str(archive_state_path)])
+    if run_dir:
+        command.extend(["--run-dir", str(run_dir)])
     return " ".join(shlex.quote(part) for part in command)
 
 
 def format_hpc_restart_command(
     *,
     settings: Optional[Any],
-    archive_state_path: Optional[str],
+    archive_run_dir: Optional[str] = None,
 ) -> Optional[str]:
     config_path = None
     if settings is not None:
         config_path = settings.settings_file
-    if not config_path and not archive_state_path:
+    run_dir = archive_run_dir
+    if not config_path and not run_dir:
         return None
 
     command = ["./hpc/job_runner.sh"]
     if config_path:
         command.extend(["-c", str(config_path)])
     command.extend(["-a", "<slurm_account>"])
-    if archive_state_path:
-        command.extend(["-s", str(archive_state_path)])
+    if run_dir:
+        command.extend(["--run-dir", str(run_dir)])
     return " ".join(shlex.quote(part) for part in command)
 
 
@@ -169,13 +171,10 @@ def log_restart_instructions_on_failure(
     state = context.get("state")
     archive_run_dir = context.get("archive_run_dir")
     local_run_dir = context.get("local_run_dir")
-    archive_state_path = context.get("archive_state_path")
-    if archive_state_path is None and state is not None:
-        archive_state_path = state.run_info_path
 
     command = format_restart_command(
         settings=settings,
-        archive_state_path=archive_state_path,
+        archive_run_dir=archive_run_dir,
     )
     if command is None:
         return
@@ -185,11 +184,9 @@ def log_restart_instructions_on_failure(
     if archive_run_dir:
         command_hpc = format_hpc_restart_command(
             settings=settings,
-            archive_state_path=archive_state_path,
+            archive_run_dir=archive_run_dir,
         )
         logger.error("  HPC command: %s", command_hpc)
-    if archive_state_path:
-        logger.error("  state file: %s", archive_state_path)
     if archive_run_dir:
         logger.error("  archive run dir: %s", archive_run_dir)
     if local_run_dir:

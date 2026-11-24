@@ -446,6 +446,18 @@ class ContractValidatingContainerBackend:
                     f"ATLAS required input missing or empty: {fpath}"
                 )
 
+        if in_year >= 2015:
+            prior_dir = input_root / f"year{in_year}"
+            for req_continuation in (
+                "vehicles_output.RData",
+                "households_output.RData",
+            ):
+                cpath = prior_dir / req_continuation
+                if not cpath.exists() or cpath.stat().st_size == 0:
+                    raise FileNotFoundError(
+                        f"ATLAS continuation input missing or empty for forecast year {out_year}: {cpath}"
+                    )
+
         if beamac > 0:
             acc_candidates = list(staged_dir.glob("accessibility_*_tract.csv"))
             if not acc_candidates:
@@ -841,6 +853,17 @@ class ContractValidatingContainerBackend:
             if not ws_hpath.exists():
                 raise FileNotFoundError(
                     f"BEAM warmStart.path does not exist: {warmstart_path} -> {ws_hpath}"
+                )
+
+        initial_linkstats = _extract_conf_val(
+            "beam.warmStart.initialLinkstatsFilePath", ""
+        )
+        if initial_linkstats and initial_linkstats.startswith("/"):
+            ls_hpath = mounts.resolve(initial_linkstats, require_writable=False)
+            if not ls_hpath.exists():
+                raise FileNotFoundError(
+                    f"BEAM warmStart.initialLinkstatsFilePath does not exist in mount: "
+                    f"{initial_linkstats} -> {ls_hpath}"
                 )
 
         if model_name == "beam_Router":

@@ -18,23 +18,20 @@ def test_dispose_tracker_releases_engine():
     # 1. None tracker
     dispose_tracker(None)
 
-    # 2. Tracker without db or engine
-    mock_tracker_no_db = MagicMock(spec=[])
-    dispose_tracker(mock_tracker_no_db)
+    # 2. Tracker without close
+    mock_tracker_no_close = MagicMock(spec=[])
+    dispose_tracker(mock_tracker_no_close)
 
-    # 3. Tracker with db and engine
+    # 3. Tracker with close
     mock_tracker = MagicMock()
-    mock_engine = MagicMock()
-    mock_tracker.db.engine = mock_engine
     dispose_tracker(mock_tracker)
-    mock_engine.dispose.assert_called_once()
+    mock_tracker.close.assert_called_once()
 
-    # 4. Tracker where dispose raises
-    mock_failing_engine = MagicMock()
-    mock_failing_engine.dispose.side_effect = RuntimeError("Lock release error")
-    mock_tracker.db.engine = mock_failing_engine
+    # 4. Tracker where close raises
+    mock_failing_tracker = MagicMock()
+    mock_failing_tracker.close.side_effect = RuntimeError("Lock release error")
     # Should not propagate exception
-    dispose_tracker(mock_tracker)
+    dispose_tracker(mock_failing_tracker)
 
 
 def test_mirror_consist_db_to_archive_atomic_and_checkpoint(tmp_path):
@@ -52,8 +49,6 @@ def test_mirror_consist_db_to_archive_atomic_and_checkpoint(tmp_path):
     archive_wal_file = archive_dir / "provenance.duckdb.wal"
 
     mock_tracker = MagicMock()
-    mock_conn = MagicMock()
-    mock_tracker.db.engine.begin.return_value.__enter__.return_value = mock_conn
 
     mirror_consist_db_to_archive(
         str(db_file),
@@ -61,13 +56,9 @@ def test_mirror_consist_db_to_archive_atomic_and_checkpoint(tmp_path):
         tracker=mock_tracker,
     )
 
-    mock_conn.exec_driver_sql.assert_called_once_with("CHECKPOINT")
-    assert archive_db_file.read_text() == "dummy db content"
-    assert archive_wal_file.read_text() == "dummy wal content"
-
-    # Ensure no leftover temporary files exist in archive_dir
-    tmp_files = list(archive_dir.glob("*.tmp.*"))
-    assert len(tmp_files) == 0
+    mock_tracker.snapshot_db.assert_called_once_with(
+        os.path.realpath(str(archive_db_file)), checkpoint=True
+    )
 
 
 def test_mirror_consist_db_to_archive_removes_stale_wal_when_none_in_source(tmp_path):

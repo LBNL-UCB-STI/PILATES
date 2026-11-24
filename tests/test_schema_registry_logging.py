@@ -545,9 +545,9 @@ def test_log_output_retries_without_schema_when_schema_logging_fails(
 ):
     calls = []
 
-    def _log_output(path, key=None, enabled=None, **meta):
-        calls.append((enabled, key, dict(meta)))
-        if enabled and "schema" in meta:
+    def _log_output(path, key=None, **meta):
+        calls.append((key, dict(meta)))
+        if "schema" in meta:
             raise ValueError("schema registration failed")
         return {"path": path, "key": key}
 
@@ -558,23 +558,19 @@ def test_log_output_retries_without_schema_when_schema_logging_fails(
 
     assert result is not None
     assert len(calls) == 2
-    assert calls[0][0] is True
-    assert "schema" in calls[0][2]
-    assert calls[0][2]["declared_schema_class"] == "HouseholdsAsimOut"
-    assert calls[1][0] is True
-    assert "schema" not in calls[1][2]
-    assert "declared_schema_class" not in calls[1][2]
+    assert "schema" in calls[0][1]
+    assert calls[0][1]["declared_schema_class"] == "HouseholdsAsimOut"
+    assert "schema" not in calls[1][1]
+    assert "declared_schema_class" not in calls[1][1]
     assert "retrying without schema metadata" in caplog.text
 
 
 def test_log_output_raises_schema_logging_failure_when_warn_only_disabled(monkeypatch):
     calls = []
 
-    def _log_output(path, key=None, enabled=None, **meta):
-        calls.append((enabled, key, dict(meta)))
-        if enabled:
-            raise ValueError("schema registration failed")
-        return {"path": path, "key": key}
+    def _log_output(path, key=None, **meta):
+        calls.append((key, dict(meta)))
+        raise ValueError("schema registration failed")
 
     monkeypatch.setattr(cr, "consist", types.SimpleNamespace(log_output=_log_output))
     monkeypatch.setenv("PILATES_SCHEMA_WARN_ONLY", "0")

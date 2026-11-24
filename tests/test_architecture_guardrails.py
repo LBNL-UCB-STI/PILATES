@@ -12,7 +12,6 @@ ALLOWED_PROFILE_IMPORT_FILES: set[Path] = set()
 ALLOWED_RUNTIME_FLAG_CALL_FILES = {
     Path("pilates/workflows/state.py"),
     Path("pilates/runtime/launcher.py"),
-    Path("pilates/workflows/surface.py"),
 }
 DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "RestartExactRewindContract",
@@ -36,7 +35,7 @@ DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "restart_exact_rewind_contract",
     "urbansim_datastore_selection_rules",
 }
-ZERO_GETATTR_MODULES = (Path("pilates/workflows/binding.py"),)
+ZERO_GETATTR_MODULES = (Path("pilates/workflows/sim_state.py"),)
 
 
 def _production_python_files() -> Iterable[Path]:
@@ -118,27 +117,6 @@ def test_production_code_does_not_call_build_workflow_profile() -> None:
     )
 
 
-def test_production_code_does_not_build_a_surface_only_to_read_profile() -> None:
-    violations: list[str] = []
-
-    for path in _production_python_files():
-        rel = _relative(path)
-        tree = _parse(path)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Attribute) or node.attr != "profile":
-                continue
-            if not isinstance(node.value, ast.Call):
-                continue
-            call_name = _call_name(node.value)
-            if call_name == "build_enabled_workflow_surface":
-                violations.append(f"{rel}:{node.lineno}")
-
-    assert not violations, (
-        "Do not call build_enabled_workflow_surface(...).profile as a shortcut for booleans. "
-        f"Violations: {violations}"
-    )
-
-
 def test_runtime_flag_initialization_only_happens_in_approved_modules() -> None:
     call_sites: set[Path] = set()
 
@@ -155,21 +133,19 @@ def test_runtime_flag_initialization_only_happens_in_approved_modules() -> None:
     assert call_sites == ALLOWED_RUNTIME_FLAG_CALL_FILES
 
 
-def test_native_step_entry_points_are_surface_and_resolved_input_driven() -> None:
-    planning_path = REPO_ROOT / "pilates/workflows/planning.py"
+def test_native_step_entry_points_are_settings_and_resolved_input_driven() -> None:
     runtime_path = REPO_ROOT / "pilates/runtime/scenario_runtime.py"
     execution_path = REPO_ROOT / "pilates/workflows/step_execution.py"
 
-    for path, function_name in (
-        (planning_path, "build_static_execution_plan"),
-        (runtime_path, "filter_schema_steps_for_enabled_models"),
-    ):
-        arg_names = _function_arg_names(path, function_name)
-        assert "surface" in arg_names
-        assert "profile" not in arg_names
+    arg_names = _function_arg_names(
+        runtime_path, "filter_schema_steps_for_enabled_models"
+    )
+    assert "settings" in arg_names
+    assert "profile" not in arg_names
+    assert "surface" not in arg_names
 
     execution_arg_names = _function_arg_names(execution_path, "execute_step")
-    assert {"definition", "resolved_inputs"} <= set(execution_arg_names)
+    assert {"definition", "step_inputs"} <= set(execution_arg_names)
     assert "profile" not in execution_arg_names
 
 

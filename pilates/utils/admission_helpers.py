@@ -112,9 +112,18 @@ def persist_admission_report(
     return payload
 
 
+def parse_expected_file_digest(raw: str) -> consist.Digest:
+    """Parse and validate an expected file digest with scheme 'sha256:file'."""
+    digest = consist.Digest.parse(raw)
+    if digest.scheme != "sha256:file":
+        raise ValueError(f"Expected digest scheme 'sha256:file', got '{digest.scheme}'")
+    return digest
+
+
 __all__ = [
     "AdmissionMetadataLogger",
     "extract_admission_reports",
+    "parse_expected_file_digest",
     "persist_admission_report",
     "resolve_local_source_uri",
     "resolve_tracker_report_dir",

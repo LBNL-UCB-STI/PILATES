@@ -24,7 +24,8 @@ def _input_content_identities(tracker: Tracker, run_id: str) -> dict[str, str]:
         artifacts.inputs.values(), key=lambda artifact: artifact.key
     ):
         content_identity = _content_identity(artifact.as_path(tracker=tracker))
-        assert content_identity == artifact.hash, (
+        artifact_digest_hex = artifact.digest.hex if artifact.digest is not None else ""
+        assert content_identity == artifact_digest_hex, (
             f"{artifact.key} bytes do not match Consist-selected artifact identity"
         )
         identities[artifact.key] = content_identity

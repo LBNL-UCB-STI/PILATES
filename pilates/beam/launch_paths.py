@@ -20,7 +20,7 @@ from pilates.beam.config_hocon import (
     resolve_beam_config_value,
     update_staged_beam_config_value,
 )
-from pilates.config import PilatesConfig
+from pilates.config import PilatesConfig, SettingsLike
 from pilates.workspace import Workspace
 
 
@@ -177,6 +177,7 @@ def validate_staged_linkstats_reference(
     workspace: Workspace,
     run_context: RunContext,
     config_root: Path | None = None,
+    expected_warmstart_path: Path | None = None,
 ) -> BeamLaunchPathReference | None:
     """Prove canonicalization and final staged HOCON select the same linkstats."""
     execution_reference = resolve_staged_linkstats_reference(
@@ -210,20 +211,34 @@ def validate_staged_linkstats_reference(
         raise BeamLaunchPathError(
             "Consist linkstats reference does not delegate to linkstats_warmstart."
         )
-    observed_path = snapshot_reference.resolved_path
-    if (
-        observed_path is None
-        or observed_path.resolve() != execution_reference.physical_target_path
-    ):
-        raise BeamLaunchPathError(
-            "Consist canonicalized linkstats differs from the staged file BEAM will read: "
-            f"{observed_path} != {execution_reference.physical_target_path}"
-        )
+    authoritative_path = (
+        expected_warmstart_path
+        if expected_warmstart_path is not None
+        else snapshot_reference.resolved_path
+    )
+    if authoritative_path is not None:
+        resolved_authoritative = authoritative_path.resolve()
+        if resolved_authoritative != execution_reference.physical_target_path:
+            import filecmp
+
+            if not (
+                resolved_authoritative.is_file()
+                and execution_reference.physical_target_path.is_file()
+                and filecmp.cmp(
+                    resolved_authoritative,
+                    execution_reference.physical_target_path,
+                    shallow=False,
+                )
+            ):
+                raise BeamLaunchPathError(
+                    "Consist canonicalized linkstats differs from the staged file BEAM will read: "
+                    f"{authoritative_path} != {execution_reference.physical_target_path}"
+                )
     return execution_reference
 
 
 def resolve_r5_network_reference(
-    *, settings: Any, workspace: Any, config_root: Path | None = None
+    *, settings: SettingsLike, workspace: Any, config_root: Path | None = None
 ) -> R5NetworkLaunchReference:
     """Resolve R5's raw-directory selection from final staged HOCON.
 
@@ -271,7 +286,7 @@ def resolve_r5_network_reference(
 
 def validate_r5_execution_reference(
     *,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
     run_context: Any,
     config_root: Path | None = None,
@@ -312,19 +327,26 @@ def validate_r5_execution_reference(
     execution_reference = resolve_r5_network_reference(
         settings=settings, workspace=workspace, config_root=config_root
     )
-    if (
-        member.resolved_path.resolve()
-        != execution_reference.selected_osm_physical_target_path
-    ):
-        raise BeamLaunchPathError(
-            "Consist selected R5 OSM member differs from the file BEAM will read: "
-            f"{member.resolved_path} != {execution_reference.selected_osm_physical_target_path}"
-        )
+    resolved_member = member.resolved_path.resolve()
+    target_path = execution_reference.selected_osm_physical_target_path
+    if resolved_member != target_path:
+        import filecmp
+
+        if not (
+            resolved_member.is_file()
+            and target_path.is_file()
+            and resolved_member.name == target_path.name
+            and filecmp.cmp(resolved_member, target_path, shallow=False)
+        ):
+            raise BeamLaunchPathError(
+                "Consist selected R5 OSM member differs from the file BEAM will read: "
+                f"{member.resolved_path} != {execution_reference.selected_osm_physical_target_path}"
+            )
     return execution_reference
 
 
 def prepare_r5_raw_rebuild(
-    *, settings: Any, workspace: Any, config_root: Path | None = None
+    *, settings: SettingsLike, workspace: Any, config_root: Path | None = None
 ) -> R5NetworkLaunchReference:
     """Remove derived R5 and PhysSim caches from the mutable launch tree.
 
@@ -364,7 +386,7 @@ def prepare_r5_raw_rebuild(
 
 def _resolve_full_skim_directory2_reference(
     *,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
     config_root: Path | None = None,
 ) -> Optional[BeamLaunchPathReference]:
@@ -405,7 +427,7 @@ def _resolve_full_skim_directory2_reference(
     )
 
 
-def _align_generated_network_paths(*, settings: Any, workspace: Any) -> None:
+def _align_generated_network_paths(*, settings: SettingsLike, workspace: Any) -> None:
     """Make both BEAM consumers of the generated PhysSim network agree.
 
     ``NetworkCoordinator`` creates ``physsim-network.xml`` beside the selected
@@ -464,7 +486,7 @@ def _remove_r5_derived_caches(
 
 def _resolve_hocon_path_reference(
     *,
-    settings: Any,
+    settings: SettingsLike,
     workspace: Any,
     config_key: str,
     required: bool,
@@ -550,7 +572,9 @@ def _is_gtfs_zip(path: Path) -> bool:
         return False
 
 
-def _config_path(settings: Any, *, workspace: Any, config_root: Path | None) -> Path:
+def _config_path(
+    settings: SettingsLike, *, workspace: Any, config_root: Path | None
+) -> Path:
     if config_root is not None:
         return config_root / settings.beam.config
     return beam_primary_config_path(settings, workspace=workspace)

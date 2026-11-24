@@ -7,7 +7,7 @@ from typing import Any, Mapping
 import pandas as pd
 import pytest
 
-from consist import BindingResult, resolve_step_contract
+from consist import resolve_step_contract
 from consist.core.step_context import StepContext
 
 from pilates.activitysim.outputs import (
@@ -34,8 +34,8 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.contracts import ConfigContract, InputContract
+from pilates.workflows.contracts import ConfigContract, InputContract, StepCallInputs
+from pilates.workflows.sim_state import SimState
 from pilates.workflows.consist_metadata import (
     activitysim_config_root_dirs,
     consist_step_meta,
@@ -209,6 +209,17 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
     )
 
     assert set(STEP_DEFINITIONS) == expected
+    for step_name in (
+        "atlas_preprocess",
+        "atlas_postprocess",
+        "activitysim_preprocess",
+        "beam_preprocess",
+        "beam_full_skim",
+    ):
+        step = STEP_DEFINITIONS[step_name]
+        assert step.outputs is not None, f"{step_name} must define outputs"
+        assert step.output_paths is None, f"{step_name} must not define output_paths"
+
     for name, definition in STEP_DEFINITIONS.items():
         contract = resolve_step_contract(
             definition.function,
@@ -229,25 +240,24 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
         )
         assert contract.input_binding == "paths"
 
-        if definition.output_paths is None:
+        declared_fn = definition.outputs or definition.output_paths
+        if declared_fn is None:
             assert contract.outputs is None
             assert contract.output_paths is None
             continue
 
-        resolved_inputs = (
-            ResolvedStepInputs(
-                step_name="activitysim_run",
-                binding=BindingResult(inputs={}),
+        step_inputs = (
+            StepCallInputs(
                 metadata={"activitysim_produces_zarr": True},
             )
             if name == "activitysim_run"
             else None
         )
-        declared_paths = definition.output_paths(
+        declared_paths = declared_fn(
             settings=settings,
             state=state,
             workspace=workspace,
-            resolved_inputs=resolved_inputs,
+            step_inputs=step_inputs,
         )
         if contract.output_paths is None:
             assert contract.outputs is not None
@@ -291,8 +301,8 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
         "beam_run": "adapter",
         "beam_postprocess": "adapter",
         "beam_full_skim": "adapter",
-            "impacts_presim": "payload",
-            "impacts_postsim": "payload",
+        "impacts_presim": "payload",
+        "impacts_postsim": "payload",
         "activitysim_preprocess": "adapter",
         "activitysim_run": "adapter",
         "activitysim_postprocess": "adapter",
@@ -308,7 +318,7 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
     for name, definition in STEP_DEFINITIONS.items():
         contract = definition.input_contract
 
-        if name in {"beam_preprocess", "urbansim_postprocess"}:
+        if name in {"beam_preprocess", "urbansim_postprocess", "postprocessing"}:
             assert contract.status == "complete"
             assert contract.reason is None
         else:
@@ -556,7 +566,11 @@ def test_native_steps_declare_static_consist_metadata() -> None:
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,
             },
-            "optional": {LINKSTATS_WARMSTART, ZARR_SKIMS},
+            "optional": {
+                LINKSTATS_WARMSTART,
+                "vehicles_beam_in",
+                "impacts_fleet_manifest",
+            },
             "schema_outputs": {LINKSTATS, "beam_plans_out"},
         },
         "beam_postprocess": {
@@ -591,11 +605,11 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
     state = _state()
     workspace = _workspace(tmp_path)
 
-    activitysim_paths = activitysim_preprocess.output_paths(
+    activitysim_paths = activitysim_preprocess.outputs(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=None,
+        step_inputs=None,
     )
     activitysim_outputs = {
         key: _path(activitysim_paths[key])
@@ -605,16 +619,13 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
         _write_file(path)
     activitysim_projected = activitysim_preprocess.project_outputs(
         {
-            key: SimpleNamespace(container_uri=f"archive://prior/{path.name}")
+            key: SimpleNamespace(uri=f"archive://prior/{path.name}")
             for key, path in activitysim_outputs.items()
         },
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=ResolvedStepInputs(
-            step_name="activitysim_preprocess",
-            binding=BindingResult(inputs={}),
-        ),
+        step_inputs=StepCallInputs(),
     )
     assert activitysim_projected.land_use_table == activitysim_outputs[ASIM_LAND_USE_IN]
     assert (
@@ -627,27 +638,24 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=None,
+        step_inputs=None,
     )
     urbansim_datastore = _path(urbansim_paths[USIM_DATASTORE_H5])
     _write_file(urbansim_datastore)
     urbansim_projected = urbansim_run.project_outputs(
-        {USIM_DATASTORE_H5: SimpleNamespace(container_uri="archive://prior/store.h5")},
+        {USIM_DATASTORE_H5: SimpleNamespace(uri="archive://prior/store.h5")},
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=ResolvedStepInputs(
-            step_name="urbansim_run",
-            binding=BindingResult(inputs={}),
-        ),
+        step_inputs=StepCallInputs(),
     )
     assert urbansim_projected.usim_datastore_h5 == urbansim_datastore
 
-    atlas_paths = atlas_postprocess.output_paths(
+    atlas_paths = atlas_postprocess.outputs(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=None,
+        step_inputs=None,
     )
     atlas_output_dir = Path(workspace.get_atlas_output_dir())
     atlas_population = _path(atlas_paths[USIM_POPULATION_SOURCE_H5])
@@ -656,7 +664,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
     _write_file(atlas_vehicles)
     atlas_projected = atlas_postprocess.project_outputs(
         {
-            key: SimpleNamespace(container_uri=f"archive://prior/{key}")
+            key: SimpleNamespace(uri=f"archive://prior/{key}")
             for key in (
                 USIM_POPULATION_SOURCE_H5,
                 ATLAS_VEHICLES2_OUTPUT,
@@ -665,10 +673,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=ResolvedStepInputs(
-            step_name="atlas_postprocess",
-            binding=BindingResult(inputs={}),
-        ),
+        step_inputs=StepCallInputs(),
     )
     assert atlas_projected.atlas_output_dir == atlas_output_dir
     assert atlas_projected.usim_datastore_h5 == atlas_population
@@ -686,23 +691,16 @@ def test_beam_postprocess_dynamic_output_map_is_resolved_once_for_contract_and_p
     state = _state()
     workspace = _workspace(tmp_path)
 
-    class Coupler:
-        values = {
-            "events_parquet_2030_1": events_path,
-            "raw_od_skims_2030_1": tmp_path / "source-skims.omx",
-        }
-
-        def get(self, key: str, default: object = None) -> object:
-            return self.values.get(key, default)
-
-        def keys(self) -> tuple[str, ...]:
-            return tuple(self.values)
-
     resolved = beam_postprocess.resolve_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=Coupler(),
+        sim_state=SimState(
+            extras={
+                "events_parquet_2030_1": events_path,
+                "raw_od_skims_2030_1": tmp_path / "source-skims.omx",
+            }
+        ),
     )
     dynamic_paths = resolved.metadata["beam_postprocess_output_paths"]
     assert isinstance(dynamic_paths, Mapping)
@@ -710,7 +708,7 @@ def test_beam_postprocess_dynamic_output_map_is_resolved_once_for_contract_and_p
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
     assert {
         key: _path(declared_paths[key]) for key in dynamic_paths
@@ -720,13 +718,13 @@ def test_beam_postprocess_dynamic_output_map_is_resolved_once_for_contract_and_p
 
     projected = beam_postprocess.project_outputs(
         {
-            key: SimpleNamespace(container_uri=f"archive://prior/{_path(path).name}")
+            key: SimpleNamespace(uri=f"archive://prior/{_path(path).name}")
             for key, path in dynamic_paths.items()
         },
         settings=settings,
         state=state,
         workspace=workspace,
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
     assert projected.split_events == {
         key: _path(path)
@@ -740,13 +738,17 @@ def test_beam_postprocess_dynamic_output_map_is_resolved_once_for_contract_and_p
     }
 
 
-def test_native_postprocessing_definition_is_overwrite_only_and_outputless() -> None:
+def test_native_postprocessing_definition_uses_metadata_cache_and_tracked_outputs() -> (
+    None
+):
     options = postprocessing_definition.cache_options()
 
-    assert options.cache_mode == "overwrite"
-    assert (
-        postprocessing_definition.project_outputs(
-            {}, settings=object(), state=object(), workspace=object()
-        )
-        is None
-    )
+    assert options.cache_hydration == "metadata"
+    assert options.cache_mode != "overwrite"
+    assert postprocessing_definition.archive_outputs is True
+    assert postprocessing_definition.project_outputs(
+        {"inexus_output": "artifact"},
+        settings=object(),
+        state=object(),
+        workspace=object(),
+    ) == {"inexus_output": "artifact"}

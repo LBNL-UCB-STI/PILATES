@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 import shutil
@@ -21,14 +22,14 @@ from consist.core.tracker import Tracker
 from consist.models.artifact import Artifact
 from consist.models.run import Run
 
-from pilates.workflows.binding import build_resolved_binding
-from pilates.workflows.output_projection import require_output
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.contracts import (
     ConfigContract,
     InputContract,
+    StepCallInputs,
     StepDefinition,
+    require_output,
 )
+from pilates.workflows.sim_state import LandUseState, SimState
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
@@ -66,7 +67,7 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     )
     archived_outputs = {
         "bundle": Artifact(
-            key="bundle", container_uri="workspace://archived/bundle", driver="other"
+            key="bundle", uri="workspace://archived/bundle", driver="other"
         )
     }
     run_result = RunResult(run=run, outputs=archived_outputs, cache_hit=cache_hit)
@@ -77,9 +78,7 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         output_sets=lambda **_: output_sets,
         project_outputs=lambda outputs, **_: SimpleNamespace(
             received_outputs=outputs,
@@ -135,9 +134,7 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
         git_hash=None,
     )
     outputs = {
-        "result": Artifact(
-            key="result", container_uri="workspace://result", driver="other"
-        )
+        "result": Artifact(key="result", uri="workspace://result", driver="other")
     }
     result = RunResult(run=run, outputs=outputs)
     seen: dict[str, object] = {}
@@ -149,9 +146,7 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda received_outputs, **_: received_outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
@@ -200,7 +195,7 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
         outputs={
             "staging_root": Artifact(
                 key="staging_root",
-                container_uri="workspace://staging",
+                uri="workspace://staging",
                 driver="unknown",
             )
         },
@@ -214,9 +209,7 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
     definition = StepDefinition(
         name="staging",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="staging", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda received_outputs, **_: received_outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
         archive_outputs=False,
@@ -255,7 +248,7 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
     def example(*, settings, state, workspace) -> None:
         return None
 
-    resolved = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    resolved = StepCallInputs(inputs={})
     cache_options = CacheOptions(cache_hydration="outputs-requested")
     execution_options = ExecutionOptions(
         input_binding="paths",
@@ -268,7 +261,9 @@ def test_execute_step_carries_report_only_contract_without_changing_options(
             config_hash=None,
             git_hash=None,
         ),
-        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+        outputs={
+            "result": Artifact(key="result", uri="workspace://result", driver="other")
+        },
     )
     seen: dict[str, object] = {}
     scenario = SimpleNamespace(
@@ -329,7 +324,9 @@ def test_execute_step_enable_archive_copy_false_authoritatively_disables_archiva
             config_hash=None,
             git_hash=None,
         ),
-        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+        outputs={
+            "result": Artifact(key="result", uri="workspace://result", driver="other")
+        },
     )
     seen: dict[str, object] = {}
     scenario = SimpleNamespace(
@@ -340,9 +337,7 @@ def test_execute_step_enable_archive_copy_false_authoritatively_disables_archiva
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
         archive_outputs=True,
@@ -395,7 +390,7 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
     archived_outputs = {
         key: Artifact(
             key=key,
-            container_uri=f"workspace://archived/{forecast_h5.name}",
+            uri=f"workspace://archived/{forecast_h5.name}",
             driver="other",
         )
         for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
@@ -416,11 +411,9 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         archive_run_dir=str(archive_root),
         get_usim_mutable_data_dir=lambda: str(forecast_h5.parent),
     )
-    resolved = ResolvedStepInputs(
-        step_name="urbansim_run",
-        binding=BindingResult(inputs={USIM_DATASTORE_H5: input_h5}),
-        required_roles=(USIM_DATASTORE_H5,),
-        source_by_role={USIM_DATASTORE_H5: "coupler"},
+    resolved = StepCallInputs(
+        inputs={USIM_DATASTORE_H5: input_h5},
+        required_keys=(USIM_DATASTORE_H5,),
         metadata={
             "urbansim_launch_context": urbansim.UrbanSimLaunchContext(
                 mutable_data_dir=forecast_h5.parent,
@@ -439,7 +432,7 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         year=2030,
         iteration=0,
         phase="run",
-        resolved_inputs=resolved,
+        step_inputs=resolved,
     )
 
     assert URBANSIM_RUN.archive_outputs is True
@@ -498,9 +491,7 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
     definition = StepDefinition(
         name="archive_probe",
         function=archive_probe,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="archive_probe", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs,
         output_paths=lambda **_: {
             "summary": "bundle/summary.csv",
@@ -645,7 +636,11 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
             pass
 
         def postprocess(self, *_args: object, **_kwargs: object) -> None:
-            pass
+            for declared_path in urbansim._urbansim_postprocess_native_output_paths(
+                settings=settings, state=state, workspace=workspace
+            ).values():
+                Path(declared_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(declared_path).touch()
 
     monkeypatch.setattr(urbansim, "UrbansimPostprocessor", _Postprocessor)
     population_source = (
@@ -669,12 +664,12 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
             year=state.year,
             iteration=0,
             phase="postprocess",
+            sim_state=SimState(land_use=LandUseState(current_h5=artifact)),
         )
 
     source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
     assert source == population_source
     assert result.outputs[USIM_POPULATION_SOURCE_H5].recovery_roots == [
-        str(workspace_root.resolve()),
         str(
             (
                 archive_root
@@ -696,19 +691,18 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
 
 def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None:
     calls: list[object] = []
-    binding = BindingResult(inputs={"source": "selected"})
-    resolved = ResolvedStepInputs(step_name="example", binding=binding)
+    supplied = StepCallInputs(inputs={"source": Path("/tmp/selected")})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
         return None
 
     def resolve_inputs(**kwargs):
-        calls.append(("resolve", kwargs["coupler"]))
-        return resolved
+        calls.append(("resolve", kwargs["sim_state"]))
+        return supplied
 
-    def project(outputs, *, settings, state, workspace, resolved_inputs):
-        calls.append(("project", outputs, resolved_inputs))
+    def project(outputs, *, settings, state, workspace, step_inputs):
+        calls.append(("project", outputs, step_inputs))
         return outputs["result"]
 
     definition = StepDefinition(
@@ -743,13 +737,14 @@ def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None
         year=2035,
         iteration=1,
         phase="run",
+        sim_state=SimState(),
         runtime_kwargs={"extra": "value"},
     )
 
     assert projected == "persisted"
     assert [call[0] for call in calls] == ["resolve", "run", "project"]
     run_kwargs = calls[1][1]
-    assert run_kwargs["binding"] is resolved.binding
+    assert run_kwargs["binding"].inputs == {"source": Path("/tmp/selected")}
     assert run_kwargs["execution_options"].input_paths == {
         "source": "/workspace/selected"
     }
@@ -761,12 +756,11 @@ def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None
         "extra": "value",
         "provider_value": "preserved",
     }
-    assert calls[2][2].input_contract is _EXAMPLE_INPUT_CONTRACT
+    assert calls[2][2] is supplied
 
 
 def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
-    binding = BindingResult(inputs={})
-    supplied = ResolvedStepInputs(step_name="example", binding=binding)
+    supplied = StepCallInputs()
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -792,7 +786,7 @@ def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert projected == "persisted"
@@ -813,18 +807,11 @@ def test_execute_step_forwards_a_strict_binding_unchanged(tmp_path: Path) -> Non
     def example(payload: Path, *, settings, state, workspace) -> None:
         del payload, settings, state, workspace
 
-    binding = build_resolved_binding(
-        step_name="example",
-        function=example,
-        selected_artifacts={"payload": artifact},
+    supplied = StepCallInputs(
+        inputs={"payload": artifact},
         logical_destinations={"payload": Path("inputs/payload.txt")},
-        selection_diagnostics={},
-        step_identity=SimpleNamespace(
-            name="example__y2030__i1__phase_test",
-            step_contract_identity="sha256:step-v1:" + "0" * 64,
-        ),
+        required_keys=("payload",),
     )
-    supplied = ResolvedStepInputs(step_name="example", binding=binding)
     definition = StepDefinition(
         name="example",
         function=example,
@@ -848,14 +835,14 @@ def test_execute_step_forwards_a_strict_binding_unchanged(tmp_path: Path) -> Non
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
-    assert seen["binding"] is binding
+    assert seen["binding"].inputs == {"payload": artifact}
 
 
 def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
-    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    supplied = StepCallInputs(metadata={"tag": "example"})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -866,8 +853,8 @@ def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
         function=example,
         resolve_inputs=lambda **_: supplied,
         project_outputs=lambda outputs, **_: outputs["result"],
-        output_paths=lambda *, resolved_inputs, **_: {
-            "result": f"/outputs/{resolved_inputs.step_name}"
+        output_paths=lambda *, step_inputs, **_: {
+            "result": f"/outputs/{step_inputs.metadata['tag']}"
         },
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
@@ -887,7 +874,7 @@ def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert seen["output_paths"] == {"result": "/outputs/example"}
@@ -895,7 +882,7 @@ def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
 
 def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() -> None:
     binding = BindingResult(inputs={})
-    supplied = ResolvedStepInputs(step_name="example", binding=binding)
+    supplied = StepCallInputs(inputs=binding.inputs or {})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -926,7 +913,7 @@ def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() 
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
     scenario.run = lambda **_: SimpleNamespace(
         outputs={"result": "persisted"}, cache_hit=True
@@ -941,7 +928,7 @@ def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() 
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert miss_output == hit_output == "persisted"
@@ -975,9 +962,7 @@ def test_execute_step_evaluates_dynamic_metadata_once(tmp_path: Path) -> None:
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
@@ -1004,7 +989,7 @@ def test_execute_step_evaluates_dynamic_metadata_once(tmp_path: Path) -> None:
 
 
 def test_execute_step_propagates_configured_code_identity_into_cache_options() -> None:
-    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    supplied = StepCallInputs(inputs={})
 
     @define_step(model="example", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -1037,7 +1022,7 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     definition_with_default_code_identity = StepDefinition(
@@ -1058,7 +1043,7 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     definition_with_explicit_code_identity = StepDefinition(
@@ -1082,7 +1067,7 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
         year=None,
         iteration=None,
         phase=None,
-        resolved_inputs=supplied,
+        step_inputs=supplied,
     )
 
     assert seen == [
@@ -1137,9 +1122,7 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
     definition = StepDefinition(
         name="example",
         function=example,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs["result"],
         archive_outputs=True,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
@@ -1185,9 +1168,7 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
     definition_v2 = StepDefinition(
         name="example",
         function=example_v2,
-        resolve_inputs=lambda **_: ResolvedStepInputs(
-            step_name="example", binding=BindingResult(inputs={})
-        ),
+        resolve_inputs=lambda **_: StepCallInputs(inputs={}),
         project_outputs=lambda outputs, **_: outputs["result"],
         archive_outputs=True,
         input_contract=_EXAMPLE_INPUT_CONTRACT,
@@ -1208,15 +1189,23 @@ def test_execute_step_rerun_into_same_archive_root_succeeds_under_fast_hashing(
 
     assert expected_archive_file.read_text(encoding="utf-8") == "v2-modified\n"
     expected_root = str(expected_archive_file.parent.parent.resolve())
-    assert expected_root in art_2.meta.get("recovery_roots", [])
+    art_2_roots = art_2.recovery_roots or (
+        art_2.meta.get("recovery_roots", []) if isinstance(art_2.meta, Mapping) else []
+    )
+    assert expected_root in art_2_roots
     refreshed_art_1 = tracker.get_run_outputs(str(art_1.run_id))["result"]
-    assert expected_root not in refreshed_art_1.meta.get("recovery_roots", [])
+    refreshed_roots = refreshed_art_1.recovery_roots or (
+        refreshed_art_1.meta.get("recovery_roots", [])
+        if isinstance(refreshed_art_1.meta, Mapping)
+        else []
+    )
+    assert expected_root not in refreshed_roots
 
 
 def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postprocess() -> (
     None
 ):
-    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    supplied = StepCallInputs(inputs={})
 
     @define_step(model="activitysim", outputs=["result"])
     def example(*, settings, state, workspace) -> None:
@@ -1250,7 +1239,7 @@ def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postpr
             year=None,
             iteration=None,
             phase=None,
-            resolved_inputs=supplied,
+            step_inputs=supplied,
         )
 
     assert seen_ingest == {
@@ -1258,3 +1247,121 @@ def test_execute_step_disables_config_plan_ingest_for_activitysim_pre_and_postpr
         "activitysim_run": True,
         "activitysim_postprocess": False,
     }
+
+
+def test_snapshot_after_archive_step_checkpoints_and_replaces_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pilates.utils.consist_db_snapshot import ConsistDbSnapshotManager
+
+    local_db = tmp_path / "local" / ".consist" / "provenance.duckdb"
+    archive_run_dir = tmp_path / "archive" / "run_1"
+    archive_db = archive_run_dir / ".consist" / "provenance.duckdb"
+    local_db.parent.mkdir(parents=True, exist_ok=True)
+    archive_db.parent.mkdir(parents=True, exist_ok=True)
+    local_db.write_bytes(b"local-db")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            consist_db_snapshot_enabled=True,
+            consist_db_local_run=True,
+            consist_db_snapshot_interval_seconds=60.0,
+            consist_db_snapshot_on_outer_iteration=True,
+            consist_db_snapshot_keep_last=3,
+        )
+    )
+    manager = ConsistDbSnapshotManager(
+        settings=settings,
+        tracker=object(),
+        local_db_path=str(local_db),
+        archive_run_dir=str(archive_run_dir),
+        archive_db_path=str(archive_db),
+    )
+
+    snapshot_calls: list[dict[str, object]] = []
+    replace_calls: list[tuple[Path, Path]] = []
+
+    def _fake_snapshot(
+        *, reason: str, checkpoint: bool = True, force: bool = False
+    ) -> bool:
+        snapshot_calls.append(
+            {"reason": reason, "checkpoint": checkpoint, "force": force}
+        )
+        latest_db = manager.latest_dir / "provenance.duckdb"
+        latest_db.write_bytes(b"snapshotted-db")
+        return True
+
+    orig_replace = shutil.os.replace
+
+    def _recording_replace(src: str | Path, dst: str | Path) -> None:
+        replace_calls.append((Path(src), Path(dst)))
+        orig_replace(src, dst)
+
+    monkeypatch.setattr(manager, "snapshot", _fake_snapshot)
+    monkeypatch.setattr(shutil.os, "replace", _recording_replace)
+
+    assert manager.snapshot_after_archive_step("beam_run") is True
+    assert snapshot_calls == [
+        {
+            "reason": "after_archive_step_beam_run",
+            "checkpoint": True,
+            "force": True,
+        }
+    ]
+    assert archive_db.read_bytes() == b"snapshotted-db"
+    assert any(dst == archive_db and src != archive_db for src, dst in replace_calls)
+
+
+def test_execute_step_strict_resume_raises_scenario_drift_error_on_prefix_miss(
+    tmp_path: Path,
+) -> None:
+    from pilates.workflows.step_execution import ScenarioDriftError
+
+    body_called = False
+
+    def _step_body(**_: object) -> dict[str, object]:
+        nonlocal body_called
+        body_called = True
+        return {"result": "ran"}
+
+    definition = StepDefinition(
+        name="drift_test_step",
+        function=_step_body,
+        resolve_inputs=lambda **_: supplied,
+        cache_options=lambda **_: CacheOptions(cache_hydration="metadata"),
+        outputs=lambda **_: {},
+        project_outputs=lambda outputs, **_: outputs["result"],
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+    supplied = StepCallInputs(inputs={})
+    settings = SimpleNamespace(run=SimpleNamespace(resume_policy="strict"))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        step_execution_counter=0,
+        expected_prefix_steps=1,
+    )
+
+    def _simulate_cache_miss(**kwargs: object) -> SimpleNamespace:
+        fn = kwargs["fn"]
+        fn()
+        return SimpleNamespace(outputs={"result": "unexpected"})
+
+    scenario = SimpleNamespace(
+        coupler="coupler", tracker=None, run=_simulate_cache_miss
+    )
+
+    with pytest.raises(ScenarioDriftError, match="Strict-resume drift detected"):
+        execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings=settings,
+            state="state",
+            workspace=workspace,
+            stage="stage",
+            year=None,
+            iteration=None,
+            phase=None,
+            step_inputs=supplied,
+        )
+
+    assert body_called is False

@@ -13,7 +13,6 @@ from pilates.workflows.consist_metadata import (
     _CONFIG_BUILDERS,
     build_step_consist_kwargs,
 )
-from pilates.workflows import catalog
 
 
 def _make_settings():
@@ -216,34 +215,6 @@ def test_beam_linkstats_admission_affects_identity_and_expected_bytes_input(tmp_
     ]
 
 
-def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):
-    settings = _make_settings()
-
-    asim_dir = tmp_path / "activitysim" / "configs"
-    asim_dir.mkdir(parents=True)
-    beam_root = tmp_path / "beam" / "input"
-    beam_root.mkdir(parents=True)
-    (beam_root / "main.conf").write_text("x=1")
-
-    step_names = [
-        spec.step_name
-        for spec in catalog.WORKFLOW_STEP_SPECS
-        if catalog.provenance_builder_key_for_step_name(spec.step_name) is not None
-    ]
-    for step_name in step_names:
-        result = build_step_consist_kwargs(
-            step_name,
-            settings,
-            workspace_path=str(tmp_path),
-        )
-        legacy_key = step_name.split("_")[0]
-        builder = _CONFIG_BUILDERS[legacy_key]
-        expected_schema_version = builder.step_schema_versions.get(
-            step_name, builder.default_schema_version
-        )
-        assert result["facet_schema_version"] == expected_schema_version
-
-
 def test_catalog_dispatch_falls_back_when_provenance_metadata_is_missing(tmp_path):
     settings = _make_settings()
 
@@ -265,15 +236,6 @@ def test_catalog_dispatch_falls_back_when_provenance_metadata_is_missing(tmp_pat
         workspace_path=str(tmp_path),
     )
     assert result["facet_schema_version"] == "activitysim_v1"
-
-
-def test_catalog_provenance_builder_keys_are_registered():
-    catalog_builder_keys = {
-        spec.provenance.builder_key
-        for spec in catalog.WORKFLOW_STEP_SPECS
-        if spec.provenance is not None
-    }
-    assert catalog_builder_keys.issubset(set(_CONFIG_BUILDERS.keys()))
 
 
 def test_catalog_dispatch_uses_provenance_builder_key(monkeypatch):

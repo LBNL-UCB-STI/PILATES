@@ -10,6 +10,7 @@ Per the BEAM Two-Step Spike v2 Brief:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import gzip
 import json
 import shutil
@@ -40,10 +41,41 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     ZARR_SKIMS,
 )
-from pilates.workflows.stages import supply_demand_beam
-from pilates.workflows.stages.supply_demand_beam import (
-    _run_beam_steps,
+from pilates.workflows import orchestrator as supply_demand_beam
+from pilates.workflows.orchestrator import (
+    run_traffic_assignment_phase as _orchestrator_run_traffic_assignment_phase,
 )
+from pilates.workflows.sim_state import NetworkState, SimState
+
+
+def _run_beam_steps(*, scenario, year, iteration, context):
+    coupler_items = dict(scenario.coupler.items())
+    sim_state = SimState(
+        network=NetworkState(
+            linkstats=coupler_items.get("linkstats"),
+            linkstats_warmstart=coupler_items.get("linkstats_warmstart"),
+            skims_zarr=coupler_items.get("zarr_skims"),
+            skims_omx=coupler_items.get("final_skims_omx"),
+            plans=coupler_items.get("beam_plans"),
+            experienced_plans=coupler_items.get("beam_experienced_plans"),
+            events_parquet=coupler_items.get("beam_events_parquet"),
+            network_csv=coupler_items.get("beam_network_csv"),
+            full_skims=coupler_items.get("beam_full_skims"),
+        ),
+        extras=coupler_items,
+    )
+    _orchestrator_run_traffic_assignment_phase(
+        scenario=scenario,
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        sim_state=sim_state,
+        year=year,
+        iteration=iteration,
+    )
+    return None
+
+
 from pilates.workflows.steps.beam import beam_run
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
@@ -404,7 +436,7 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
     # Monkeypatch 2: Canary fault injection hook after beam_run commits
     with patch.object(BeamRunner, "run_container", tracked_container):
         with patch(
-            "pilates.workflows.stages.supply_demand_beam._maybe_fail_after_beam_run_for_canary",
+            "pilates.workflows.orchestrator._maybe_fail_after_beam_run_for_canary",
             side_effect=fail_after_beam_run,
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
@@ -643,7 +675,7 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
     # Monkeypatch 2: Hook crashing after beam_run commits and archives
     with patch.object(BeamRunner, "run_container", tracked_container):
         with patch(
-            "pilates.workflows.stages.supply_demand_beam._maybe_fail_after_beam_run_for_canary",
+            "pilates.workflows.orchestrator._maybe_fail_after_beam_run_for_canary",
             side_effect=RuntimeError("Simulated crash after beam_run committed"),
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
@@ -681,14 +713,14 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
             assert res is None
             assert scenario.coupler.require(LINKSTATS) is not None
 
-    # Verify no second container run (cache hit) and outputs restored to scratch
+    # Verify no second container run (cache hit) and archived outputs resolved zero-copy
     assert run_counts["container"] == 1
     assert beam_out.exists()
     restored_parquet = (
         beam_out
         / "test-region/year-2020-iteration-0/.pilates-consist-outputs/beam_run/events_parquet_2020_0.parquet"
     )
-    assert restored_parquet.exists()
+    assert not restored_parquet.exists()
 
 
 def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_skims_for_iteration_1(
@@ -731,8 +763,11 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 )
                 assert res0 is None
                 iter0_zarr_art = scenario.coupler.require(ZARR_SKIMS)
-                assert isinstance(iter0_zarr_art.meta, dict)
-                recovery_roots = iter0_zarr_art.meta.get("recovery_roots")
+                assert isinstance(iter0_zarr_art.meta, (dict, Mapping))
+                recovery_roots = (
+                    iter0_zarr_art.recovery_roots
+                    or iter0_zarr_art.meta.get("recovery_roots")
+                )
                 assert recovery_roots
                 assert any(
                     str((archive_dir / "consist-recovery").resolve()) in str(root)
@@ -768,7 +803,7 @@ def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_s
                 assert res0_restart is None
                 assert run_counts["container"] == 1
                 assert run_counts["postprocess"] == 1
-                assert iter0_output_skims.exists()
+                assert not iter0_output_skims.exists()
 
                 # Simulate ActivitySim Iteration 1 publishing fresh plans/hh/persons
                 # while keeping ZARR_SKIMS from Iteration 0's hydrated postprocess.
@@ -916,7 +951,7 @@ def test_scenario_6_two_committed_runs_same_identity_exposes_recency_gap(
     # Run 1 linkstats had "1,100" while Run 2 linkstats had "1,200"
     out1 = env["tracker"].get_run_outputs(run1.id)["linkstats"]
     out2 = env["tracker"].get_run_outputs(run2.id)["linkstats"]
-    assert out1.hash != out2.hash
+    assert out1.digest != out2.digest
 
 
 # ==============================================================================

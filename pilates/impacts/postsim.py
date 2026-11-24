@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import yaml
 
@@ -22,21 +22,28 @@ logger = logging.getLogger(__name__)
 INMAP_CONTAINER_DIR = "/app/inmap"
 
 
-class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]):
+class ImpactsPostsimRunner(
+    GenericRunner[Path | None, ImpactsPostsimOutputs, Workspace]
+):
     """Runs the IMPACTS postsim stage (emissions/inmap/aermod/exposure) after BEAM."""
 
     def _run(
         self,
-        store: Optional[Any],
+        beam_output_dir: Path | None,
         workspace: Workspace,
     ) -> ImpactsPostsimOutputs:
-        del store
         settings = self.state.full_settings
         cfg = settings.impacts
         if cfg is None:
             raise ValueError("Impacts config is missing")
 
-        bridge = build_pilates_bridge_settings(settings, self.state, workspace, stage="postsim")
+        bridge = build_pilates_bridge_settings(
+            settings,
+            self.state,
+            workspace,
+            stage="postsim",
+            beam_output_dir=beam_output_dir,
+        )
         volumes = {
             workspace.get_beam_mutable_data_dir(): {
                 "bind": BEAM_INPUT_CONTAINER_DIR,
@@ -61,7 +68,9 @@ class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]
                         "Set impacts.local_inmap_data_folder to the host directory "
                         "containing the configured InMAP dataset."
                     )
-                inmap_data_folder = Path(cfg.local_inmap_data_folder).expanduser().resolve()
+                inmap_data_folder = (
+                    Path(cfg.local_inmap_data_folder).expanduser().resolve()
+                )
                 if not inmap_data_folder.is_dir():
                     raise FileNotFoundError(
                         "IMPACTS InMAP host data directory does not exist: "
@@ -75,7 +84,9 @@ class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]
         bridge_path = Path(workspace.get_impacts_bridge_settings_path("postsim"))
         settings_path = Path(workspace.get_impacts_settings_path("postsim"))
         bridge_path.parent.mkdir(parents=True, exist_ok=True)
-        bridge_path.write_text(yaml.safe_dump(bridge, sort_keys=False), encoding="utf-8")
+        bridge_path.write_text(
+            yaml.safe_dump(bridge, sort_keys=False), encoding="utf-8"
+        )
 
         bridge_container_path = _to_container_path(
             WORKSPACE_CONTAINER_DIR, str(bridge_path), workspace.full_path
@@ -134,7 +145,9 @@ class ImpactsPostsimRunner(GenericRunner[None, ImpactsPostsimOutputs, Workspace]
             bridge_settings_path=bridge_path,
             pipeline_manifest=output_dir / "pipeline_manifest.yaml",
             postprocess_manifest=output_dir / "postprocess_manifest.yaml",
-            exposure_table=output_dir / "exposure" / "beam_concentration_distribution.parquet",
+            exposure_table=output_dir
+            / "exposure"
+            / "beam_concentration_distribution.parquet",
         )
 
     @staticmethod

@@ -474,7 +474,9 @@ def run_smoke(root: Path, *, fleet: bool = True, image: str = IMAGE) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", default=IMAGE, help="IMPACTS Docker image to verify.")
+    parser.add_argument(
+        "--image", default=IMAGE, help="IMPACTS Docker image to verify."
+    )
     parser.add_argument(
         "--replay-without-fleet",
         action="store_true",

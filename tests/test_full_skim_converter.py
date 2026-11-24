@@ -427,7 +427,6 @@ def test_native_beam_full_skim_converts_final_skims_omx(tmp_path: Path) -> None:
     workspace = MagicMock()
     workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam" / "input")
     state = SimpleNamespace(
-        run_info_path=str(tmp_path / "run_info.json"),
         year=2019,
         iteration=0,
     )

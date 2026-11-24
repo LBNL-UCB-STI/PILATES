@@ -28,7 +28,9 @@ class ImpactsConfig(BaseModel):
     """Settings passed to the external IMPACTS pipeline."""
 
     local_input_folder: str = Field(..., description="Workspace-relative input folder")
-    local_output_folder: str = Field(..., description="Workspace-relative output folder")
+    local_output_folder: str = Field(
+        ..., description="Workspace-relative output folder"
+    )
     local_inmap_data_folder: Optional[str] = Field(
         None,
         description=(
@@ -56,7 +58,9 @@ class ImpactsConfig(BaseModel):
 
     @field_validator("shared_input_cache_folder", "local_inmap_data_folder")
     @classmethod
-    def expand_host_folder(cls, value: Optional[str], info: ValidationInfo) -> Optional[str]:
+    def expand_host_folder(
+        cls, value: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
         if value is None:
             return None
         expanded = os.path.expandvars(value).strip()

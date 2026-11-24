@@ -15,22 +15,15 @@ from typing import (
     Callable,
     Dict,
     Mapping,
-    Protocol,
     Sequence,
-    runtime_checkable,
 )
 
 from consist import (
-    Artifact,
-    BindingResult,
     CacheOptions,
     ExecutionOptions,
-    ResolvedBinding,
-    StepIdentity,
 )
 
 from pilates.config.models import PilatesConfig
-from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -39,18 +32,11 @@ from pilates.workflows.artifact_keys import (
     ASIM_PERSONS_IN,
     ZARR_SKIMS,
 )
-from pilates.workflows.binding import build_resolved_binding
-from pilates.workflows.coupler_namespace import resolve_coupler_value
-from pilates.workflows.output_projection import require_output
+from pilates.workflows.contracts import StepCallInputs, require_output
 from pilates.workflows.outputs_base import ValidationContext
-from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.sim_state import ArtifactRef
 from pilates.workspace import Workspace
 from pilates.workflows.state import WorkflowState
-
-
-@runtime_checkable
-class _HasPathAttr(Protocol):
-    path: Any
 
 
 def _persisted_output_path(
@@ -76,9 +62,7 @@ def _persisted_output_path(
             f"{step_name} output {key!r} has no declared destination"
         ) from exc
 
-    declared_path = (
-        output_spec.path if isinstance(output_spec, _HasPathAttr) else output_spec
-    )
+    declared_path = getattr(output_spec, "path", output_spec)
     if isinstance(declared_path, os.PathLike):
         path = Path(declared_path)
     elif isinstance(declared_path, str):
@@ -109,10 +93,6 @@ def _persisted_output_path(
             f"{step_name} output {key!r} has an invalid declared destination"
         )
 
-    if not path.exists():
-        raise RuntimeError(
-            f"{step_name} output {key!r} is missing at declared destination {path}"
-        )
     return path
 
 
@@ -134,86 +114,49 @@ def _validation_context(
     )
 
 
-def _resolve_native_inputs(
+def _build_step_call_inputs(
     *,
-    step_name: str,
-    function: Callable[..., Any],
+    candidates: Mapping[str, ArtifactRef | None],
     required_roles: Sequence[str],
     optional_roles: Sequence[str],
     logical_destinations: Mapping[str, Path],
-    coupler: CouplerProtocol,
-    step_identity: StepIdentity | None = None,
     metadata: Mapping[str, Any] | None = None,
-) -> ResolvedStepInputs:
-    """Select fixed semantic roles once and retain their Consist artifacts."""
+) -> StepCallInputs:
+    """Select fixed semantic roles from typed state and retain staging destinations."""
 
-    selected_inputs: Dict[str, Any] = {}
-    source_by_role: Dict[str, str] = {}
-    selected_key_by_role: Dict[str, str] = {}
+    selected_inputs: Dict[str, ArtifactRef] = {}
     selected_destinations: Dict[str, Path] = {}
 
     for role in (*required_roles, *optional_roles):
-        resolved = resolve_coupler_value(coupler, role)
-        source_by_role[role] = resolved.source
-        if resolved.storage_key is not None:
-            selected_key_by_role[role] = resolved.storage_key
-        if resolved.value is None:
+        value = candidates.get(role)
+        if value is None:
             continue
-        selected_inputs[role] = resolved.value
+        selected_inputs[role] = value
         destination = logical_destinations.get(role)
         if destination is not None:
             selected_destinations[role] = destination
 
-    if step_identity is None:
-        binding: BindingResult | ResolvedBinding = BindingResult(inputs=selected_inputs)
-    else:
-        selected_artifacts: dict[str, Artifact] = {}
-        for role, value in selected_inputs.items():
-            if not isinstance(value, Artifact):
-                raise TypeError(
-                    f"{step_name} strict binding requires a tracked Artifact for "
-                    f"{role!r}, got {type(value).__name__}"
-                )
-            selected_artifacts[role] = value
-        binding = build_resolved_binding(
-            step_name=step_name,
-            function=function,
-            selected_artifacts=selected_artifacts,
-            logical_destinations={
-                role: Path("inputs") / role for role in selected_artifacts
-            },
-            selection_diagnostics={
-                "source_by_role": source_by_role,
-                "selected_key_by_role": selected_key_by_role,
-            },
-            source_by_parameter={
-                role: source_by_role[role] for role in selected_artifacts
-            },
-            step_identity=step_identity,
-        )
-
-    return ResolvedStepInputs(
-        step_name=step_name,
-        binding=binding,
-        required_roles=tuple(required_roles),
-        optional_roles=tuple(optional_roles),
-        source_by_role=source_by_role,
-        selected_key_by_role=selected_key_by_role,
+    return StepCallInputs(
+        inputs=selected_inputs,
         logical_destinations=selected_destinations,
+        required_keys=tuple(required_roles),
+        optional_keys=tuple(optional_roles),
         metadata=metadata or {},
     )
 
 
 def _native_execution_options(
     *,
-    resolved_inputs: ResolvedStepInputs | None = None,
+    step_inputs: StepCallInputs | None = None,
     **_: Any,
 ) -> ExecutionOptions:
     """Request Consist staging at the deterministic model-owned destinations."""
 
     return ExecutionOptions(
         input_binding="paths",
-        input_paths=resolved_inputs.logical_destinations,
+        input_paths=(
+            dict(step_inputs.logical_destinations) if step_inputs is not None else {}
+        ),
         input_materialization="requested",
         input_materialization_mode="copy",
     )
@@ -221,32 +164,40 @@ def _native_execution_options(
 
 def _execution_options_with_launch_context(
     *,
-    resolved_inputs: ResolvedStepInputs | None,
+    step_inputs: StepCallInputs | None,
     step_name: str,
     context_key: str,
     expected_type: type[Any],
 ) -> ExecutionOptions:
     """Pass a resolver-owned launch context through ExecutionOptions.runtime_kwargs."""
 
-    if resolved_inputs is None:
-        raise RuntimeError(f"{step_name} requires resolved inputs before execution")
-    launch_context = resolved_inputs.metadata.get(context_key)
+    if step_inputs is None:
+        raise RuntimeError(f"{step_name} requires step inputs before execution")
+    launch_context = step_inputs.metadata.get(context_key)
     if not isinstance(launch_context, expected_type):
         raise RuntimeError(f"{step_name} is missing its resolved launch context")
-    options = _native_execution_options(resolved_inputs=resolved_inputs)
+    options = _native_execution_options(step_inputs=step_inputs)
     return replace(
         options,
         runtime_kwargs={context_key: launch_context},
     )
 
 
-def _strict_requested_output_cache_options(**_: Any) -> CacheOptions:
-    """Admit a cached model step only after all requested output paths hydrate."""
+def _metadata_cache_options(
+    cache_version: int | None = None,
+    *,
+    cache_hydration: str = "metadata",
+) -> Callable[..., CacheOptions]:
+    """Return a cache_options factory using zero-copy metadata hydration by default."""
 
-    return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
-    )
+    def _build(**_: Any) -> CacheOptions:
+        return CacheOptions(
+            validate_cached_outputs="lazy",
+            cache_hydration=cache_hydration,
+            cache_version=cache_version,
+        )
+
+    return _build
 
 
 def _native_contract_output_paths(

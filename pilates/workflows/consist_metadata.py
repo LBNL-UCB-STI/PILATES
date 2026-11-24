@@ -20,9 +20,7 @@ from typing import (
     List,
     Mapping,
     Optional,
-    Protocol,
     Tuple,
-    runtime_checkable,
 )
 
 from consist.core.step_context import StepContext
@@ -46,7 +44,7 @@ from pilates.config.models import (
 )
 from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.state_access import current_year, is_start_year
+from pilates.utils.state_access import current_year
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -61,42 +59,21 @@ IdentityInput = Tuple[str, Path]
 _DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
 
 
+_STEP_PROVENANCE_BUILDER_PREFIXES: Tuple[Tuple[str, str], ...] = (
+    ("urbansim_", "urbansim"),
+    ("atlas_", "atlas"),
+    ("activitysim_", "activitysim"),
+    ("beam_", "beam"),
+)
+
+
 def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
-    from pilates.workflows.catalog import (
-        provenance_builder_key_for_step_name as _catalog_provenance_builder_key,
-    )
-
-    return _catalog_provenance_builder_key(step_name)
-
-
-@runtime_checkable
-class _HasFullPath(Protocol):
-    full_path: str | Path
-
-
-@runtime_checkable
-class _HasAsimMutableConfigsDir(Protocol):
-    def get_asim_mutable_configs_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasBeamMutableDataDir(Protocol):
-    def get_beam_mutable_data_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasBeamOutputDir(Protocol):
-    def get_beam_output_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasAsimOutputDir(Protocol):
-    def get_asim_output_dir(self) -> str | Path: ...
-
-
-@runtime_checkable
-class _HasModelDump(Protocol):
-    def model_dump(self) -> Dict[str, Any]: ...
+    if step_name == "postprocessing":
+        return "postprocessing"
+    for prefix, builder_key in _STEP_PROVENANCE_BUILDER_PREFIXES:
+        if step_name.startswith(prefix):
+            return builder_key
+    return None
 
 
 @dataclass(frozen=True)
@@ -451,17 +428,19 @@ def build_urbansim_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
 
 def build_urbansim_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.urbansim
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
 def build_atlas_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.atlas
-    if not isinstance(cfg, _HasModelDump):
+    model_dump = getattr(cfg, "model_dump", None)
+    if not callable(model_dump):
         return {}
     return _only_keys(
-        cfg.model_dump(),
+        model_dump(),
         [
             "max_retries",
             "sample_size",
@@ -480,8 +459,9 @@ def build_atlas_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
 
 def build_atlas_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.atlas
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
@@ -491,8 +471,9 @@ def build_postprocessing_identity_config(settings: PilatesConfig) -> Dict[str, A
         if isinstance(settings, PilatesConfig)
         else vars(settings).get("postprocessing")
     )
-    if isinstance(cfg, _HasModelDump):
-        return cfg.model_dump()
+    model_dump = getattr(cfg, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
     return {}
 
 
@@ -644,56 +625,12 @@ def consist_step_meta(
     def _workspace_path_from_value(value: Any) -> Optional[str]:
         if value is None:
             return None
-        if isinstance(value, _HasFullPath) and isinstance(value.full_path, (Path, str)):
-            return str(value.full_path)
+        full_path = getattr(value, "full_path", None)
+        if isinstance(full_path, (Path, str)):
+            return str(full_path)
         if isinstance(value, (Path, str)):
             return str(value)
         return None
-
-    def _atlas_selected_usim_h5(state: Any) -> Any:
-        state_vars = vars(state)
-        current_h5 = state_vars.get("atlas_usim_datastore_h5")
-        base_h5 = state_vars.get("atlas_usim_datastore_base_h5")
-        if is_start_year(state) and base_h5 is not None:
-            return base_h5
-        return current_h5 if current_h5 is not None else base_h5
-
-    def _atlas_usim_households_identity(ctx: StepContext) -> Dict[str, Any]:
-        state = ctx.get_runtime("state", default=None)
-        if state is None:
-            return {}
-        selected_h5 = _atlas_selected_usim_h5(state)
-        if selected_h5 is None:
-            return {}
-
-        from pilates.utils.coupler_helpers import artifact_to_existing_path
-        from pilates.utils.usim_h5 import fingerprint_usim_h5_table
-
-        workspace_obj = ctx.get_runtime("workspace", default=None)
-        h5_path = artifact_to_existing_path(selected_h5, workspace=workspace_obj)
-        if h5_path is None:
-            return {
-                "atlas_usim_households_identity_status": "unresolved",
-                "atlas_usim_households_source": str(selected_h5),
-            }
-
-        year = current_year(state)
-        fingerprint = fingerprint_usim_h5_table(
-            h5_path=h5_path,
-            year=int(year) if year is not None else None,
-            table="households",
-        )
-        return {
-            "atlas_usim_households_identity_status": "resolved",
-            "atlas_usim_households_fingerprint_version": fingerprint[
-                "fingerprint_version"
-            ],
-            "atlas_usim_households_sha256": fingerprint["sha256"],
-            "atlas_usim_households_requested_year": fingerprint["requested_year"],
-            "atlas_usim_households_table_path": fingerprint["resolved_table_path"],
-            "atlas_usim_households_row_count": fingerprint["row_count"],
-            "atlas_usim_households_column_count": fingerprint["column_count"],
-        }
 
     def _activitysim_adapter(ctx: StepContext) -> Any:
         settings = ctx.get_runtime("settings", default=None)
@@ -714,8 +651,11 @@ def consist_step_meta(
 
         workspace_obj = ctx.get_runtime("workspace", default=None)
         mutable_configs_root: Optional[Path] = None
-        if isinstance(workspace_obj, _HasAsimMutableConfigsDir):
-            mutable_configs_root = Path(workspace_obj.get_asim_mutable_configs_dir())
+        get_asim_mutable_configs_dir = getattr(
+            workspace_obj, "get_asim_mutable_configs_dir", None
+        )
+        if callable(get_asim_mutable_configs_dir):
+            mutable_configs_root = Path(get_asim_mutable_configs_dir())
         else:
             ws_path = _workspace_path_from_value(workspace_obj)
             if ws_path:
@@ -803,40 +743,39 @@ def consist_step_meta(
         config_root: Optional[Path] = None
         workspace_root: Optional[Path] = None
         primary_config: Optional[Path] = None
+        ws_path = _workspace_path_from_value(workspace_obj)
+        if ws_path:
+            workspace_root = Path(ws_path)
         if isinstance(launch_config, BeamLaunchConfig):
             config_root = launch_config.root
             primary_config = launch_config.primary_config
-        elif isinstance(workspace_obj, _HasBeamMutableDataDir):
-            workspace_root_path = _workspace_path_from_value(workspace_obj)
-            if workspace_root_path:
-                workspace_root = Path(workspace_root_path)
-            config_root = beam_config_root(
-                settings,
-                workspace=workspace_obj,
-            )
         else:
-            ws_path = _workspace_path_from_value(workspace_obj)
-            if ws_path:
-                workspace_root = Path(ws_path)
+            local_input_folder = get_setting(settings, "beam.local_input_folder")
+            region = get_setting(settings, "run.region")
+            if local_input_folder is not None and region is not None:
+                local_input_path = Path(os.fspath(local_input_folder))
+                if not local_input_path.is_absolute() and workspace_root is not None:
+                    local_input_path = workspace_root / local_input_path
+                candidate_with_region = local_input_path / str(region)
+                if (candidate_with_region / beam_settings.config).exists():
+                    config_root = candidate_with_region
+                    primary_config = candidate_with_region / beam_settings.config
+                elif (local_input_path / beam_settings.config).exists():
+                    config_root = local_input_path
+                    primary_config = local_input_path / beam_settings.config
+            if config_root is None:
                 config_root = beam_config_root(
                     settings,
+                    workspace=workspace_obj,
                     workspace_path=ws_path,
                 )
+                if config_root is not None:
+                    primary_config = config_root / beam_settings.config
         if config_root is None:
             return None
 
         if primary_config is None:
             primary_config = config_root / beam_settings.config
-        if not primary_config.exists():
-            local_input_folder = get_setting(settings, "beam.local_input_folder")
-            region = get_setting(settings, "run.region")
-            if isinstance(local_input_folder, str) and isinstance(region, str):
-                from pilates.beam.preprocessor import ensure_beam_mutable_workspace
-
-                try:
-                    ensure_beam_mutable_workspace(settings, workspace=workspace_obj)
-                except (ValueError, FileNotFoundError):
-                    pass
         if not primary_config.exists():
             return None
 
@@ -844,18 +783,21 @@ def consist_step_meta(
         if workspace_root is not None:
             path_aliases["workspace"] = workspace_root
         if workspace_obj is not None:
-            if isinstance(workspace_obj, _HasBeamMutableDataDir):
-                path_aliases["beam_input"] = Path(
-                    workspace_obj.get_beam_mutable_data_dir()
+            get_beam_mutable_data_dir = getattr(
+                workspace_obj, "get_beam_mutable_data_dir", None
+            )
+            if callable(get_beam_mutable_data_dir):
+                path_aliases["beam_input"] = (
+                    config_root.parent
+                    if launch_config is None
+                    else Path(get_beam_mutable_data_dir())
                 )
-            if isinstance(workspace_obj, _HasBeamOutputDir):
-                path_aliases["beam_output"] = Path(workspace_obj.get_beam_output_dir())
-            if settings.activitysim is not None and isinstance(
-                workspace_obj, _HasAsimOutputDir
-            ):
-                path_aliases["activitysim_output"] = Path(
-                    workspace_obj.get_asim_output_dir()
-                )
+            get_beam_output_dir = getattr(workspace_obj, "get_beam_output_dir", None)
+            if callable(get_beam_output_dir):
+                path_aliases["beam_output"] = Path(get_beam_output_dir())
+            get_asim_output_dir = getattr(workspace_obj, "get_asim_output_dir", None)
+            if settings.activitysim is not None and callable(get_asim_output_dir):
+                path_aliases["activitysim_output"] = Path(get_asim_output_dir())
         path_aliases["beam_region_input"] = config_root
 
         vehicle_file_policy = BeamReferencePolicy(
@@ -944,6 +886,59 @@ def consist_step_meta(
                 required=False,
                 reason="generated_from_declared_r5_input_before_beam_execution",
             )
+        freight_enabled = False
+        try:
+            from pilates.beam.config_hocon import (
+                _lookup_dotted_key,
+                load_resolved_beam_config_tree,
+            )
+
+            freight_tree = load_resolved_beam_config_tree(
+                primary_config,
+                env_overrides=beam_config_env_overrides(
+                    settings,
+                    config_root=config_root,
+                ),
+            )
+            freight_enabled = bool(
+                _lookup_dotted_key(freight_tree, "beam.agentsim.agents.freight.enabled")
+            )
+        except Exception:
+            freight_enabled = False
+
+        freight_required_keys = (
+            ("plansFilePath", "beam_freight_plans"),
+            ("toursFilePath", "beam_freight_tours"),
+            ("carriersFilePath", "beam_freight_carriers"),
+        )
+        for suffix, role in freight_required_keys:
+            fq_key = f"beam.agentsim.agents.freight.{suffix}"
+            if freight_enabled:
+                reference_policies[fq_key] = BeamReferencePolicy(
+                    identity_policy="content_hash",
+                    required=True,
+                    role=role,
+                    reason="freight_enabled_mandatory_input",
+                )
+            else:
+                reference_policies[fq_key] = BeamReferencePolicy(
+                    identity_policy="ignored",
+                    required=False,
+                    reason="freight_disabled",
+                )
+        for suffix, role in (
+            ("vehicleTypesFilePath", "beam_freight_vehicle_types"),
+            ("carrierParkingFilePath", "beam_freight_carrier_parking"),
+        ):
+            reference_policies[f"beam.agentsim.agents.freight.{suffix}"] = (
+                BeamReferencePolicy(
+                    identity_policy="content_hash",
+                    required=False,
+                    role=role,
+                    reason="optional_freight_input_read_whenever_configured",
+                )
+            )
+
         runtime_output_keys = (
             "beam.router.skim.activity-sim-skimmer.fileBaseName",
             "beam.router.skim.drive-time-skimmer.fileBaseName",
@@ -958,9 +953,27 @@ def consist_step_meta(
                 reason="runtime_output_prefix_not_identity_input",
             )
 
+        adapter_root_dirs = [config_root]
+        adapter_primary_config = primary_config
+        if launch_config is None and workspace_root is not None:
+            wrapper_dir = workspace_root / ".pilates-consist-conf" / model
+            wrapper_dir.mkdir(parents=True, exist_ok=True)
+            wrapper_path = wrapper_dir / "beam.conf"
+            wrapper_content = (
+                f'include file("{primary_config.resolve().as_posix()}")\n'
+                f'beam.inputDirectory = "{config_root.resolve().as_posix()}"\n'
+            )
+            if (
+                not wrapper_path.exists()
+                or wrapper_path.read_text(encoding="utf-8") != wrapper_content
+            ):
+                wrapper_path.write_text(wrapper_content, encoding="utf-8")
+            adapter_root_dirs = [config_root, wrapper_dir]
+            adapter_primary_config = wrapper_path
+
         return BeamConfigAdapter(
-            root_dirs=[config_root],
-            primary_config=primary_config,
+            root_dirs=adapter_root_dirs,
+            primary_config=adapter_primary_config,
             env_overrides=beam_config_env_overrides(
                 settings,
                 config_root=config_root,
@@ -1016,7 +1029,6 @@ def consist_step_meta(
                 main_forecast_year = vars(state).get("main_forecast_year")
                 if main_forecast_year is not None:
                     atlas_runtime_identity["main_forecast_year"] = main_forecast_year
-                atlas_runtime_identity.update(_atlas_usim_households_identity(ctx))
             if atlas_runtime_identity:
                 resolved["config"] = {
                     **dict(resolved.get("config") or {}),
@@ -1055,6 +1067,13 @@ def consist_step_meta(
                 resolved["config"] = {
                     **dict(resolved.get("config") or {}),
                     "beam_preprocess_identity": closure,
+                }
+        if model in ("beam_run", "beam_full_skim"):
+            closure = ctx.get_runtime("beam_run_identity_closure", default=None)
+            if isinstance(closure, dict):
+                resolved["config"] = {
+                    **dict(resolved.get("config") or {}),
+                    "beam_run_identity": closure,
                 }
         contract_report = _contract_report(
             adapter=adapter,

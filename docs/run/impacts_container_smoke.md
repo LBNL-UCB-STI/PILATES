@@ -42,8 +42,12 @@ For a live BREATHE run, use an IMPACTS image that implements
 table if it has a different name from `vehicles.parquet`. The BREATHE ATLAS
 table includes the required source columns in
 `urbansim/atlas-2019/vehicles--2019-Baseline--EM.parquet`. Run the 2018 interval
-with the supplied EMFAC archive, which contains 2018 data. Configure
-`IMPACTS_INMAP_DATA_DIR` on the machine that runs the container.
+with the supplied EMFAC archive, which contains 2018 data. PILATES archives the
+presim activities and generated fleet, then binds the final BEAM network and
+Parquet emissions skims to postsim. It also archives the postsim results,
+including the emissions, concentration, and exposure tables. IMPACTS postsim runs
+independently of general postprocessing. Configure `IMPACTS_INMAP_DATA_DIR` on the
+machine that runs the container.
 
 IMPACTS v0.2.0 writes `dispersion_completed: false` in the final exposure
 manifest even when both dispersion stages ran. The replay verifies the
