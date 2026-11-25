@@ -10,6 +10,7 @@ metadata, not a second execution path.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 import os
 from pathlib import Path
@@ -37,6 +38,7 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
 )
 from pilates.beam.launch_paths import (
+    R5NetworkLaunchReference,
     validate_r5_execution_reference,
     validate_staged_linkstats_reference,
 )
@@ -87,6 +89,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
+    BEAM_R5_OSM_FILE,
     BEAM_VEHICLES_IN,
     IMPACTS_FLEET_MANIFEST,
     FINAL_SKIMS_OMX,
@@ -300,6 +303,8 @@ def _beam_run_native_output_paths(
         if get_setting(settings, "run.models.impacts"):
             keys_and_suffixes[f"{BEAM_EMISSIONS_SKIMS}_{year}_{iteration}"] = ".parquet"
             keys_and_suffixes[f"{BEAM_NETWORK_FINAL}_{year}_{iteration}"] = ".csv.gz"
+            if get_setting(settings, "impacts.use_beam_osm_artifact"):
+                keys_and_suffixes[f"{BEAM_R5_OSM_FILE}_{year}_{iteration}"] = ".osm.pbf"
     if settings.beam.artifact_formats.activitysim_skims != "zarr":
         keys_and_suffixes[f"raw_od_skims_{year}_{iteration}"] = ".omx"
     root = _beam_run_output_root(settings=settings, state=state, workspace=workspace)
@@ -1721,7 +1726,7 @@ def _preflight_beam_launch_inputs(
     beam_launch_config: BeamLaunchConfig,
     run_context: Any,
     expected_warmstart_path: Path | None = None,
-) -> None:
+) -> R5NetworkLaunchReference:
     report_dir_path = (
         workspace.archive_run_dir
         if workspace.archive_run_dir is not None
@@ -1764,7 +1769,7 @@ def _preflight_beam_launch_inputs(
             launch_reference=launch_reference,
             report_dir=Path(report_dir_path),
         )
-    validate_r5_execution_reference(
+    return validate_r5_execution_reference(
         settings=settings,
         workspace=workspace,
         run_context=run_context,
@@ -1939,7 +1944,7 @@ def _native_beam_run(
         raise FileNotFoundError(
             f"beam_run config is missing: {beam_launch_config.primary_config}"
         )
-    _preflight_beam_launch_inputs(
+    r5_reference = _preflight_beam_launch_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -1967,6 +1972,9 @@ def _native_beam_run(
     declared = _beam_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
+    osm_key = f"{BEAM_R5_OSM_FILE}_{resolve_forecast_year(state)}_{state.iteration}"
+    if osm_key in declared:
+        sources[osm_key] = r5_reference.selected_osm_physical_target_path
     for key, path in sources.items():
         if (
             key.startswith(("skims_emissions", "beam_log_out_"))
@@ -2267,10 +2275,12 @@ beam_preprocess = StepDefinition(
 
 
 def _beam_run_cache(*, settings, **kwargs):
-    if get_setting(settings, "impacts.use_generated_fleet"):
+    include_osm = get_setting(settings, "impacts.use_beam_osm_artifact")
+    if include_osm or get_setting(settings, "impacts.use_generated_fleet"):
         from pilates.workflows.steps.impacts import _impacts_cache
 
-        return _impacts_cache(**kwargs)
+        options = _impacts_cache(**kwargs)
+        return replace(options, cache_version=2) if include_osm else options
     return _metadata_cache_options(cache_version=1)(**kwargs)
 
 

@@ -76,6 +76,13 @@ known vehicle types and matching county emissions keys, reconciles annualized
 pollutant mass across county, InMAP, and AERMOD allocations, and verifies
 concentrations and population exposure.
 
+With an IMPACTS image that supports explicit OSM input, add
+`--use-beam-osm-artifact` to verify that postsim reads the exact PBF selected
+by BEAM and records its Consist artifact ID. For scenario runs using such an
+image, set `impacts.use_beam_osm_artifact: true`. PILATES then requires the
+matching artifact. In the live smoke test, the PBF is available at
+`/app/workspace/beam/output/<region>/year-<year>-iteration-<iteration>/.pilates-consist-outputs/beam_run/beam_r5_osm_file_<year>_<iteration>.osm.pbf`.
+
 ## BREATHE deployment
 
 For a live BREATHE run, use an IMPACTS image that implements

@@ -45,6 +45,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
+    BEAM_R5_OSM_FILE,
     BEAM_VEHICLES_IN,
     FINAL_SKIMS_OMX,
     IMPACTS_FLEET_MANIFEST,
@@ -1042,7 +1043,7 @@ def run_traffic_assignment_phase(
 
     if get_setting(settings, "run.models.impacts"):
         extras = dict(sim_state.extras)
-        for role in (BEAM_EMISSIONS_SKIMS, BEAM_NETWORK_FINAL):
+        for role in (BEAM_EMISSIONS_SKIMS, BEAM_NETWORK_FINAL, BEAM_R5_OSM_FILE):
             extras.pop(role, None)
             artifact = run_result.outputs.get(f"{role}_{beam_year}_{iteration}")
             if artifact is not None:

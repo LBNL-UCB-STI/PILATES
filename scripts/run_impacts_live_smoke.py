@@ -22,6 +22,7 @@ from pilates.impacts.settings_bridge import (
     WORKSPACE_CONTAINER_DIR,
 )
 from pilates.runtime.launcher import main as run_pilates
+from pilates.workflows.artifact_keys import BEAM_R5_OSM_FILE
 from scripts.run_impacts_container_smoke import (
     check_dispersion_outputs,
     check_generated_fleet_files,
@@ -43,7 +44,9 @@ PRESIM_ACTIVITIES = Path(
 logger = logging.getLogger(__name__)
 
 
-def run_live_smoke(root: Path, *, impacts_image: str) -> None:
+def run_live_smoke(
+    root: Path, *, impacts_image: str, use_beam_osm_artifact: bool = False
+) -> None:
     docker = require_docker()
     workspace = root / f"pilates-run--sfbay--{RUN_NAME}"
     config = resolve_config_dict(BASE_SETTINGS)
@@ -84,6 +87,7 @@ def run_live_smoke(root: Path, *, impacts_image: str) -> None:
         local_output_folder="impacts/output",
         local_inmap_data_folder=str(FIXTURE / "inmap"),
         use_generated_fleet=True,
+        use_beam_osm_artifact=use_beam_osm_artifact,
         population_fallback_to_beam_inputs=False,
         overrides={
             "analysis": {
@@ -167,7 +171,7 @@ def run_live_smoke(root: Path, *, impacts_image: str) -> None:
     # Use real containers with networking disabled to verify the fixture is self-contained.
     with patch.object(GenericRunner, "run_container", staticmethod(run_docker)):
         run_pilates(settings=settings)
-    check_live_outputs(workspace)
+    check_live_outputs(workspace, use_beam_osm_artifact=use_beam_osm_artifact)
 
 
 def workspace_path(workspace: Path, container_path: str) -> Path:
@@ -230,7 +234,7 @@ def check_presim_outputs(workspace: Path) -> None:
         raise RuntimeError(f"Presim output validation failed: {exc}") from exc
 
 
-def check_live_outputs(workspace: Path) -> None:
+def check_live_outputs(workspace: Path, *, use_beam_osm_artifact: bool = False) -> None:
     postsim = workspace / f"impacts/output/impacts-postsim--sfbay--{RUN_LABEL}"
     manifest = read_yaml(postsim / "pipeline_manifest.yaml")
     inputs = read_yaml(workspace_path(workspace, manifest["preprocess_manifest_path"]))[
@@ -247,14 +251,39 @@ def check_live_outputs(workspace: Path) -> None:
             "Postsim rates and presim activities must come from the same 2018 run."
         )
 
-    expected_osm = f"{BEAM_INPUT_CONTAINER_DIR}/sfbay/r5/sf-smoke/sf-smoke.osm.pbf"
+    beam_output = workspace / f"beam/output/sfbay/year-{YEAR}-iteration-0"
+    launch = workspace / f".pilates-beam-launch-config/y{YEAR}/i0/sfbay"
+    if use_beam_osm_artifact:
+        published_osm = (
+            beam_output
+            / ".pilates-consist-outputs"
+            / "beam_run"
+            / f"{BEAM_R5_OSM_FILE}_{YEAR}_0.osm.pbf"
+        )
+        expected_osm = (
+            f"{WORKSPACE_CONTAINER_DIR}/{published_osm.relative_to(workspace)}"
+        )
+        bridge_emissions = read_yaml(
+            workspace / "impacts/output/pilates_bridge_postsim.yaml"
+        )["impacts"]["emissions"]
+        artifact_id = inputs["osm_network"].get("artifact_id")
+        source_osm = launch / "r5/sf-smoke/sf-smoke.osm.pbf"
+        if (
+            not artifact_id
+            or artifact_id != bridge_emissions["osm_network_artifact_id"]
+            or not cmp(published_osm, source_osm, shallow=False)
+        ):
+            raise RuntimeError(
+                "Postsim OSM identity or file contents differ from BEAM."
+            )
+    else:
+        expected_osm = f"{BEAM_INPUT_CONTAINER_DIR}/sfbay/r5/sf-smoke/sf-smoke.osm.pbf"
     if inputs["osm_network"]["source_path"] != expected_osm:
         raise RuntimeError(
             "Postsim did not resolve the same OSM PBF bundled with BEAM: "
             f"{inputs['osm_network']['source_path']}"
         )
 
-    beam_output = workspace / f"beam/output/sfbay/year-{YEAR}-iteration-0"
     staged = workspace / f"impacts/input/beam-output/{YEAR}"
     for key, relative in (
         ("network", "network.csv.gz"),
@@ -276,7 +305,6 @@ def check_live_outputs(workspace: Path) -> None:
         raise RuntimeError(
             "BEAM emissions must reference links in the small San Francisco network."
         )
-    launch = workspace / f".pilates-beam-launch-config/y{YEAR}/i0/sfbay"
     types_by_group = {}
     comparison = pd.read_parquet(
         postsim / "postprocess/fleet/step1_fleet_comparison.parquet"
@@ -407,10 +435,19 @@ def main() -> None:
         required=True,
         help="IMPACTS image with generated-fleet manifest support.",
     )
+    parser.add_argument(
+        "--use-beam-osm-artifact",
+        action="store_true",
+        help="Check the exact BEAM OSM handoff with an IMPACTS image that supports it.",
+    )
     args = parser.parse_args()
     try:
         with smoke_run_directory("impacts-live-sf") as directory:
-            run_live_smoke(directory, impacts_image=args.impacts_image)
+            run_live_smoke(
+                directory,
+                impacts_image=args.impacts_image,
+                use_beam_osm_artifact=args.use_beam_osm_artifact,
+            )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         raise SystemExit(f"IMPACTS live Docker smoke test failed: {exc}") from exc
     print("IMPACTS live San Francisco Docker smoke test passed.")

@@ -54,6 +54,10 @@ class ImpactsConfig(BaseModel):
     )
     population_fallback_to_beam_inputs: bool = True
     use_generated_fleet: bool = False
+    use_beam_osm_artifact: bool = Field(
+        False,
+        description="Pass BEAM's selected OSM PBF to an IMPACTS image that supports it.",
+    )
     overrides: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("shared_input_cache_folder", "local_inmap_data_folder")

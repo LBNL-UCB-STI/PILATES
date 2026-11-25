@@ -16,6 +16,7 @@ from pilates.impacts.settings_bridge import (
     build_pilates_bridge_settings,
     resolve_shared_input_cache_folder,
 )
+from pilates.workflows.state import WorkflowState
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,18 @@ class ImpactsPostsimRunner(
     GenericRunner[Path | None, ImpactsPostsimOutputs, Workspace]
 ):
     """Runs the IMPACTS postsim stage (emissions/inmap/aermod/exposure) after BEAM."""
+
+    def __init__(
+        self,
+        model_name: str,
+        state: WorkflowState,
+        *,
+        beam_osm_file: Path | None = None,
+        beam_osm_artifact_id: str | None = None,
+    ) -> None:
+        super().__init__(model_name, state)
+        self.beam_osm_file = beam_osm_file
+        self.beam_osm_artifact_id = beam_osm_artifact_id
 
     def _run(
         self,
@@ -43,6 +56,8 @@ class ImpactsPostsimRunner(
             workspace,
             stage="postsim",
             beam_output_dir=beam_output_dir,
+            beam_osm_file=self.beam_osm_file,
+            beam_osm_artifact_id=self.beam_osm_artifact_id,
         )
         volumes = {
             workspace.get_beam_mutable_data_dir(): {

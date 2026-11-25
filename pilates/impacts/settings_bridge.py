@@ -86,6 +86,8 @@ def build_pilates_bridge_settings(
     *,
     stage: Literal["presim", "postsim"],
     beam_output_dir: Path | None = None,
+    beam_osm_file: Path | None = None,
+    beam_osm_artifact_id: str | None = None,
 ) -> Dict[str, Any]:
     """
     Build the PILATES->IMPACTS bridge settings dict for the given stage,
@@ -145,6 +147,19 @@ def build_pilates_bridge_settings(
         impacts_section = _deep_merge(
             impacts_section, resolve_population_override(settings, workspace)
         )
+        if beam_osm_file is not None:
+            if not beam_osm_file.is_file() or not beam_osm_artifact_id:
+                raise ValueError(
+                    "IMPACTS requires a materialized BEAM OSM artifact and ID."
+                )
+            relative_osm = beam_osm_file.resolve().relative_to(
+                Path(workspace.full_path).resolve()
+            )
+            emissions = impacts_section.setdefault("emissions", {})
+            emissions["osm_network_file"] = (
+                Path(WORKSPACE_CONTAINER_DIR) / relative_osm
+            ).as_posix()
+            emissions["osm_network_artifact_id"] = beam_osm_artifact_id
 
     return {
         "run": {

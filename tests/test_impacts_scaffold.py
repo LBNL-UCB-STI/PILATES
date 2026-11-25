@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from consist import Artifact
 
 from pilates.config.models import ImpactsConfig, load_config
 from pilates.impacts import ImpactsPostsimRunner, ImpactsPresimRunner
@@ -21,6 +22,7 @@ from pilates.impacts.settings_bridge import (
 from pilates.workflows.artifact_keys import (
     BEAM_EMISSIONS_SKIMS,
     BEAM_NETWORK_FINAL,
+    BEAM_R5_OSM_FILE,
     IMPACTS_FLEET_MANIFEST,
 )
 from pilates.workflows.dry_run import plan_pilates
@@ -461,6 +463,7 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
         / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml"
     )
     settings.impacts.use_generated_fleet = True
+    settings.impacts.use_beam_osm_artifact = True
     settings.postprocessing = None
     plan = plan_pilates(settings)
 
@@ -476,6 +479,7 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
     assert postsim.inputs[IMPACTS_FLEET_MANIFEST] == presim.step_id
     assert postsim.inputs[BEAM_EMISSIONS_SKIMS] == beam.step_id
     assert postsim.inputs[BEAM_NETWORK_FINAL] == beam.step_id
+    assert postsim.inputs[BEAM_R5_OSM_FILE] == beam.step_id
     assert "impacts_postsim_dir" in postsim.outputs
 
     with pytest.raises(RuntimeError, match=BEAM_EMISSIONS_SKIMS):
@@ -486,6 +490,93 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
             sim_state=SimState(),
         )
         inputs.require_complete(impacts_postsim.name)
+
+
+def test_impacts_binds_selected_osm_by_beam_run_and_iteration(tmp_path):
+    settings = _make_settings(use_beam_osm_artifact=True)
+    settings.beam.artifact_formats = AttrDict(activitysim_skims="zarr")
+    workspace = _make_workspace(tmp_path, settings)
+    state = _make_state(settings)
+    roles = (BEAM_EMISSIONS_SKIMS, BEAM_NETWORK_FINAL, BEAM_R5_OSM_FILE)
+    runs = []
+    for iteration in range(2):
+        state.iteration = iteration
+        paths = beam_run.output_paths(
+            settings=settings, state=state, workspace=workspace
+        )
+        artifacts = {
+            role: Artifact(
+                key=f"{role}_2020_{iteration}",
+                uri=str(paths[f"{role}_2020_{iteration}"]),
+                driver="file",
+                run_id=f"beam-{iteration}",
+            )
+            for role in roles
+        }
+        runs.append(artifacts)
+        resolve = dict(settings=settings, state=state, workspace=workspace)
+        step_inputs = impacts_postsim.resolve_inputs(
+            **resolve, sim_state=SimState(extras=artifacts)
+        )
+        osm = step_inputs.inputs[BEAM_R5_OSM_FILE]
+        path = step_inputs.logical_destinations[BEAM_R5_OSM_FILE]
+        assert str(path) == osm.uri
+        path.parent.mkdir(parents=True)
+        path.write_text(f"osm for iteration {iteration}")
+        options = impacts_postsim.execution_options(step_inputs=step_inputs)
+        bridge = build_pilates_bridge_settings(
+            settings,
+            state,
+            workspace,
+            stage="postsim",
+            beam_osm_file=path,
+            **options.runtime_kwargs,
+        )
+        assert bridge["impacts"]["emissions"] == {
+            "osm_network_file": (
+                f"/app/workspace/beam/output/seattle/year-2020-iteration-{iteration}/"
+                f".pilates-consist-outputs/beam_run/beam_r5_osm_file_2020_{iteration}.osm.pbf"
+            ),
+            "osm_network_artifact_id": str(osm.id),
+        }
+
+    for wrong_osm in (
+        runs[0][BEAM_R5_OSM_FILE],
+        Artifact(
+            key=f"{BEAM_R5_OSM_FILE}_2020_1",
+            uri=runs[0][BEAM_R5_OSM_FILE].uri,
+            driver="file",
+            run_id="beam-0",
+        ),
+    ):
+        with pytest.raises(ValueError, match="same BEAM run"):
+            impacts_postsim.resolve_inputs(
+                **resolve,
+                sim_state=SimState(extras={**runs[1], BEAM_R5_OSM_FILE: wrong_osm}),
+            )
+
+    with pytest.raises(RuntimeError, match=BEAM_R5_OSM_FILE):
+        inputs = impacts_postsim.resolve_inputs(
+            **resolve,
+            sim_state=SimState(extras={key: runs[1][key] for key in roles[:2]}),
+        )
+        inputs.require_complete(impacts_postsim.name)
+
+    settings.beam.local_output_folder = str(tmp_path / "external-beam-output")
+    inputs = impacts_postsim.resolve_inputs(
+        **resolve, sim_state=SimState(extras=runs[1])
+    )
+    assert inputs.logical_destinations[BEAM_R5_OSM_FILE] == (
+        Path(workspace.get_impacts_input_dir())
+        / "beam-output/2020/iteration-1/beam_r5_osm_file_2020_1.osm.pbf"
+    )
+
+    settings.impacts.use_beam_osm_artifact = False
+    inputs = impacts_postsim.resolve_inputs(
+        **resolve, sim_state=SimState(extras=runs[1])
+    )
+    inputs.require_complete(impacts_postsim.name)
+    assert BEAM_R5_OSM_FILE not in inputs.inputs
 
 
 def test_impacts_resume_requests_archived_fleet_and_beam_outputs(tmp_path):

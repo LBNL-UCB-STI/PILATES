@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from consist import (
@@ -16,6 +17,7 @@ from pilates.impacts.settings_bridge import presim_fleet_manifest_path
 from pilates.workflows.artifact_keys import (
     BEAM_EMISSIONS_SKIMS,
     BEAM_NETWORK_FINAL,
+    BEAM_R5_OSM_FILE,
     IMPACTS_ACTIVITIES_DIR,
     IMPACTS_EXPOSURE_TABLE,
     IMPACTS_FLEET_DIR,
@@ -36,6 +38,7 @@ from pilates.workflows.contracts import (
 from pilates.workflows.sim_state import SimState
 from pilates.workflows.state import WorkflowState
 from pilates.workflows.state_helpers import resolve_forecast_year
+from pilates.workflows.steps.beam import _beam_run_native_output_paths
 from pilates.workflows.steps.shared import (
     _build_step_call_inputs,
     _native_contract_output_paths,
@@ -101,23 +104,60 @@ def _postsim_inputs(*, settings, state, workspace, sim_state: SimState, **_):
     year = resolve_forecast_year(state) or settings.run.start_year
     root = Path(workspace.get_impacts_input_dir()) / "beam-output" / str(year)
     required = (BEAM_EMISSIONS_SKIMS, BEAM_NETWORK_FINAL)
+    candidates = {role: sim_state.extras.get(role) for role in required}
+    destinations = {
+        BEAM_EMISSIONS_SKIMS: root / "ITERS/it.0/0.skimsEmissions.parquet",
+        BEAM_NETWORK_FINAL: root / "network.csv.gz",
+        "impacts_beam_events": root / "ITERS/it.0/0.events.parquet",
+    }
+    osm = None
+    if settings.impacts.use_beam_osm_artifact:
+        required += (BEAM_R5_OSM_FILE,)
+        osm = sim_state.extras.get(BEAM_R5_OSM_FILE)
+    if osm is not None:
+        suffix = f"_{year}_{state.iteration}"
+        producer = getattr(osm, "run_id", None) or getattr(osm, "producer_step", None)
+        for role, artifact in {**candidates, BEAM_R5_OSM_FILE: osm}.items():
+            artifact_producer = getattr(artifact, "run_id", None) or getattr(
+                artifact, "producer_step", None
+            )
+            if (
+                not producer
+                or artifact_producer != producer
+                or getattr(artifact, "key", None) != role + suffix
+            ):
+                raise ValueError(
+                    "IMPACTS requires the OSM PBF, network and skims from the "
+                    f"same BEAM run for year {year}, iteration {state.iteration}."
+                )
+        osm_key = BEAM_R5_OSM_FILE + suffix
+        osm_path = _beam_run_native_output_paths(
+            settings=settings, state=state, workspace=workspace
+        )[osm_key]
+        if not osm_path.resolve().is_relative_to(Path(workspace.full_path).resolve()):
+            osm_path = root / f"iteration-{state.iteration}" / osm_path.name
+        destinations[BEAM_R5_OSM_FILE] = osm_path
+        candidates[BEAM_R5_OSM_FILE] = osm
     if settings.impacts.use_generated_fleet:
         required += (IMPACTS_FLEET_MANIFEST,)
     return _build_step_call_inputs(
         candidates={
-            BEAM_EMISSIONS_SKIMS: sim_state.extras.get(BEAM_EMISSIONS_SKIMS),
-            BEAM_NETWORK_FINAL: sim_state.extras.get(BEAM_NETWORK_FINAL),
+            **candidates,
             IMPACTS_FLEET_MANIFEST: sim_state.extras.get(IMPACTS_FLEET_MANIFEST),
             "impacts_beam_events": sim_state.network.events_parquet,
         },
         required_roles=required,
         optional_roles=("impacts_beam_events",),
-        logical_destinations={
-            BEAM_EMISSIONS_SKIMS: root / "ITERS/it.0/0.skimsEmissions.parquet",
-            BEAM_NETWORK_FINAL: root / "network.csv.gz",
-            "impacts_beam_events": root / "ITERS/it.0/0.events.parquet",
-        },
+        logical_destinations=destinations,
     )
+
+
+def _postsim_execution_options(*, step_inputs: StepCallInputs, **_):
+    options = _native_execution_options(step_inputs=step_inputs)
+    osm = step_inputs.inputs.get(BEAM_R5_OSM_FILE)
+    if osm is None:
+        return options
+    return replace(options, runtime_kwargs={"beam_osm_artifact_id": str(osm.id)})
 
 
 @define_step(
@@ -142,7 +182,11 @@ def _native_impacts_presim(
     model="impacts_postsim",
     name_template="impacts_postsim__y{year}__i{iteration}__phase_{phase}",
     inputs={BEAM_EMISSIONS_SKIMS: None, BEAM_NETWORK_FINAL: None},
-    optional_input_keys=(IMPACTS_FLEET_MANIFEST, "impacts_beam_events"),
+    optional_input_keys=(
+        IMPACTS_FLEET_MANIFEST,
+        "impacts_beam_events",
+        BEAM_R5_OSM_FILE,
+    ),
     schema_outputs=[
         IMPACTS_POSTSIM_SETTINGS,
         IMPACTS_PIPELINE_MANIFEST,
@@ -162,6 +206,8 @@ def _native_impacts_postsim(
     workspace: Workspace,
     impacts_fleet_manifest: Path | None = None,
     impacts_beam_events: Path | None = None,
+    beam_r5_osm_file: Path | None = None,
+    beam_osm_artifact_id: str | None = None,
 ) -> None:
     del settings, impacts_fleet_manifest, impacts_beam_events
     root = beam_network_final.parent
@@ -169,7 +215,12 @@ def _native_impacts_postsim(
         raise ValueError(
             "IMPACTS requires the network and skims staged for the same BEAM run."
         )
-    ImpactsPostsimRunner("impacts_postsim", state).run(root, workspace)
+    ImpactsPostsimRunner(
+        "impacts_postsim",
+        state,
+        beam_osm_file=beam_r5_osm_file,
+        beam_osm_artifact_id=beam_osm_artifact_id,
+    ).run(root, workspace)
 
 
 def _impacts_cache(*, state, **_) -> CacheOptions:
@@ -199,6 +250,6 @@ impacts_postsim = StepDefinition(
     project_outputs=lambda outputs, **_: outputs,
     input_contract=_IMPACTS_INPUT_CONTRACT,
     outputs=_postsim_paths,
-    execution_options=_native_execution_options,
+    execution_options=_postsim_execution_options,
     cache_options=_impacts_cache,
 )
