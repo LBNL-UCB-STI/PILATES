@@ -86,7 +86,11 @@ def run_live_smoke(root: Path, *, impacts_image: str) -> None:
         use_generated_fleet=True,
         population_fallback_to_beam_inputs=False,
         overrides={
-            "analysis": {"targets": None, "inventory_targets": None},
+            "analysis": {
+                "targets": None,
+                "inventory_targets": None,
+                "basemap": "none",
+            },
             "emissions": {
                 "enable_passenger_activity_correction": False,
                 "enable_freight_activity_correction": False,

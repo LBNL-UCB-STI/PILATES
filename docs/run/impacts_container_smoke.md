@@ -8,8 +8,8 @@ python -m scripts.run_impacts_container_smoke
 ```
 
 The test uses the bundled fixture in `tests/fixtures/impacts_smoke/`, pulls
-IMPACTS v0.2.2 if needed, and runs the containers with networking disabled.
-Its bridge settings skip web tiles, while retaining map plots, road overlays, and scale bars.
+IMPACTS v0.2.3 if needed, and runs the containers with networking disabled.
+Its bridge settings select `basemap: none`, while retaining map plots, road overlays, and scale bars.
 Each run prints its output path and keeps the workspace and `run.log` in a new
 folder under `test-output/impacts-replay/`, including after a test failure.
 
@@ -33,7 +33,7 @@ complete postsim replay while that release is fixed, run:
 python -m scripts.run_impacts_container_smoke --replay-without-fleet
 ```
 
-On an amd64 Linux host, pass `--image ghcr.io/lbnl-ucb-sti/impacts:v0.2.1` to
+On an amd64 Linux host, pass `--image ghcr.io/lbnl-ucb-sti/impacts:v0.2.3` to
 run the replay with fleet generation using the published fix.
 The replay uses archived BEAM outputs. A live handoff check uses skims from a
 BEAM run launched with the generated fleet. Optional baseline delta plots
@@ -45,10 +45,10 @@ On amd64 Linux, with Docker running and the PILATES Python environment active,
 run:
 
 ```sh
-python -m scripts.run_impacts_live_smoke --impacts-image ghcr.io/lbnl-ucb-sti/impacts:v0.2.1
+python -m scripts.run_impacts_live_smoke --impacts-image ghcr.io/lbnl-ucb-sti/impacts:v0.2.3
 ```
 
-The example uses the public IMPACTS v0.2.1 image. The same command accepts an
+The example uses the public IMPACTS v0.2.3 image. The same command accepts an
 alternative fleet-capable image by tag or digest. On the Apple Silicon Mac used
 for local validation, DuckDB 2.0.1 in the public amd64 image fails under Docker
 Desktop's Rosetta emulation. The local `pilates-impacts:v0.2.1` build with

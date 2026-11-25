@@ -32,7 +32,7 @@ from pilates.workspace import Workspace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = PROJECT_ROOT / "tests/fixtures/impacts_smoke"
-IMAGE = "ghcr.io/lbnl-ucb-sti/impacts:v0.2.2"
+IMAGE = "ghcr.io/lbnl-ucb-sti/impacts:v0.2.3"
 
 
 @contextmanager
@@ -500,7 +500,7 @@ def run_smoke(root: Path, *, fleet: bool = True, image: str = IMAGE) -> None:
                 "analysis": {
                     "targets": None,
                     "inventory_targets": None,
-                    "skip_web_tiles": True,
+                    "basemap": "none",
                 },
                 "dispersions": {
                     "inmap": {
