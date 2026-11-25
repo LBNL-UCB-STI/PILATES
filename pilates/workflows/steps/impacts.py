@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from collections.abc import Mapping
 
 from consist import (
     CacheOptions,
@@ -12,6 +13,10 @@ from consist import (
 
 from pilates.config.models import PilatesConfig
 from pilates.impacts.postsim import ImpactsPostsimRunner
+from pilates.impacts.population import (
+    exposure_population_dir,
+    write_exposure_population,
+)
 from pilates.impacts.presim import ImpactsPresimRunner
 from pilates.impacts.settings_bridge import presim_fleet_manifest_path
 from pilates.workflows.artifact_keys import (
@@ -20,6 +25,9 @@ from pilates.workflows.artifact_keys import (
     BEAM_R5_OSM_FILE,
     IMPACTS_ACTIVITIES_DIR,
     IMPACTS_EXPOSURE_TABLE,
+    IMPACTS_EXPOSURE_HOUSEHOLDS,
+    IMPACTS_EXPOSURE_PERSONS,
+    IMPACTS_EXPOSURE_SOURCE,
     IMPACTS_FLEET_DIR,
     IMPACTS_FLEET_MANIFEST,
     IMPACTS_PIPELINE_MANIFEST,
@@ -27,6 +35,7 @@ from pilates.workflows.artifact_keys import (
     IMPACTS_POSTSIM_DIR,
     IMPACTS_POSTSIM_SETTINGS,
     IMPACTS_PRESIM_SETTINGS,
+    USIM_FORECAST_OUTPUT,
 )
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
@@ -44,12 +53,123 @@ from pilates.workflows.steps.shared import (
     _native_contract_output_paths,
     _native_execution_options,
 )
-from pilates.workspace import Workspace
+from pilates.workspace import Workspace, is_dry_run_workspace
 
 _IMPACTS_INPUT_CONTRACT = InputContract(
     status="incomplete",
     reason="IMPACTS consumes the staged BEAM input tree and generated rates",
     config_contract=ConfigContract.payload(),
+)
+
+_EXPOSURE_CONTRACT = InputContract(
+    status="complete", config_contract=ConfigContract.payload()
+)
+_EXPOSURE_FILES = {
+    IMPACTS_EXPOSURE_PERSONS: "persons.parquet",
+    IMPACTS_EXPOSURE_HOUSEHOLDS: "households.parquet",
+    IMPACTS_EXPOSURE_SOURCE: "population_source.yaml",
+}
+
+
+def exposure_population_paths(*, settings, state, workspace, **_):
+    year = resolve_forecast_year(state) or settings.run.start_year
+    root = exposure_population_dir(workspace, year)
+    return {key: root / name for key, name in _EXPOSURE_FILES.items()}
+
+
+def _exposure_inputs(*, sim_state: SimState, **_):
+    forecast = sim_state.land_use.forecast_output
+    if forecast is None or getattr(forecast, "key", None) != USIM_FORECAST_OUTPUT:
+        raise ValueError(
+            "IMPACTS exposure requires the raw usim_forecast_output artifact."
+        )
+    return StepCallInputs(
+        inputs={USIM_FORECAST_OUTPUT: forecast},
+        required_keys=(USIM_FORECAST_OUTPUT,),
+    )
+
+
+def _exposure_execution_options(*, step_inputs: StepCallInputs, **_):
+    artifact = step_inputs.inputs[USIM_FORECAST_OUTPUT]
+    metadata = artifact.meta
+    digest = artifact.digest
+    source = {
+        "source_run_id": metadata.get("source_run_id", artifact.run_id),
+        "source_artifact_id": metadata.get("source_artifact_id", str(artifact.id)),
+        "source_digest": metadata.get("source_digest")
+        or (
+            str(digest)
+            if digest is not None and digest.scheme == "sha256:file"
+            else None
+        ),
+    }
+    if not source["source_run_id"]:
+        raise ValueError(
+            "IMPACTS exposure forecast is missing its Consist producing step ID."
+        )
+    return replace(
+        _native_execution_options(),
+        runtime_kwargs={"exposure_forecast_source": source},
+    )
+
+
+@define_step(
+    model="impacts_exposure_population",
+    name_template="impacts_exposure_population__y{year}__i{iteration}__phase_{phase}",
+    inputs={USIM_FORECAST_OUTPUT: None},
+    schema_outputs=tuple(_EXPOSURE_FILES),
+    output_paths=_native_contract_output_paths(exposure_population_paths),
+    config=lambda ctx: {
+        "forecast_source": ctx.get_runtime("exposure_forecast_source", default=None)
+    },
+    input_binding="paths",
+)
+@require_runtime_kwargs("settings", "state", "workspace", "exposure_forecast_source")
+def _native_exposure_population(
+    usim_forecast_output: Path, *, settings, state, workspace, exposure_forecast_source
+) -> None:
+    paths = exposure_population_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    write_exposure_population(
+        usim_forecast_output,
+        paths[IMPACTS_EXPOSURE_SOURCE].parent,
+        year=resolve_forecast_year(state) or settings.run.start_year,
+        source=exposure_forecast_source,
+    )
+
+
+def validate_exposure_artifacts(artifacts: Mapping) -> None:
+    producers = {
+        getattr(artifact, "run_id", None) or getattr(artifact, "producer_step", None)
+        for artifact in artifacts.values()
+    }
+    if (
+        set(artifacts) != set(_EXPOSURE_FILES)
+        or any(
+            getattr(artifact, "key", None) != key for key, artifact in artifacts.items()
+        )
+        or len(producers) != 1
+        or None in producers
+    ):
+        raise ValueError(
+            "IMPACTS exposure requires all three files from the same forecast preparation step."
+        )
+
+
+impacts_exposure_population = StepDefinition(
+    name="impacts_exposure_population",
+    function=_native_exposure_population,
+    resolve_inputs=_exposure_inputs,
+    project_outputs=lambda outputs, **_: outputs,
+    input_contract=_EXPOSURE_CONTRACT,
+    output_paths=exposure_population_paths,
+    execution_options=_exposure_execution_options,
+    cache_options=lambda **_: CacheOptions(
+        cache_hydration="outputs-requested",
+        cache_hydration_failure="miss",
+        validate_cached_outputs="eager",
+    ),
 )
 
 
@@ -74,6 +194,17 @@ def _presim_paths(*, settings, state, workspace, **_):
             meta={"directory_artifact": True},
         )
     return paths
+
+
+def _presim_inputs(*, settings, workspace, **_):
+    # Check the PBF before Consist can reuse a cached presim result.
+    if not is_dry_run_workspace(workspace):
+        from pilates.beam.launch_paths import resolve_r5_network_reference
+        from pilates.beam.preprocessor import ensure_beam_mutable_workspace
+
+        ensure_beam_mutable_workspace(settings, workspace)
+        resolve_r5_network_reference(settings=settings, workspace=workspace)
+    return StepCallInputs()
 
 
 def _postsim_paths(*, settings, state, workspace, **_):
@@ -110,6 +241,16 @@ def _postsim_inputs(*, settings, state, workspace, sim_state: SimState, **_):
         BEAM_NETWORK_FINAL: root / "network.csv.gz",
         "impacts_beam_events": root / "ITERS/it.0/0.events.parquet",
     }
+    if settings.impacts.pipeline_postsim.exposure:
+        population = {key: sim_state.extras.get(key) for key in _EXPOSURE_FILES}
+        validate_exposure_artifacts(population)
+        required += tuple(_EXPOSURE_FILES)
+        candidates.update(population)
+        destinations.update(
+            exposure_population_paths(
+                settings=settings, state=state, workspace=workspace
+            )
+        )
     osm = None
     if settings.impacts.use_beam_osm_artifact:
         required += (BEAM_R5_OSM_FILE,)
@@ -117,7 +258,8 @@ def _postsim_inputs(*, settings, state, workspace, sim_state: SimState, **_):
     if osm is not None:
         suffix = f"_{year}_{state.iteration}"
         producer = getattr(osm, "run_id", None) or getattr(osm, "producer_step", None)
-        for role, artifact in {**candidates, BEAM_R5_OSM_FILE: osm}.items():
+        for role in (BEAM_EMISSIONS_SKIMS, BEAM_NETWORK_FINAL, BEAM_R5_OSM_FILE):
+            artifact = osm if role == BEAM_R5_OSM_FILE else candidates[role]
             artifact_producer = getattr(artifact, "run_id", None) or getattr(
                 artifact, "producer_step", None
             )
@@ -186,6 +328,7 @@ def _native_impacts_presim(
         IMPACTS_FLEET_MANIFEST,
         "impacts_beam_events",
         BEAM_R5_OSM_FILE,
+        *_EXPOSURE_FILES,
     ),
     schema_outputs=[
         IMPACTS_POSTSIM_SETTINGS,
@@ -208,6 +351,9 @@ def _native_impacts_postsim(
     impacts_beam_events: Path | None = None,
     beam_r5_osm_file: Path | None = None,
     beam_osm_artifact_id: str | None = None,
+    impacts_exposure_persons: Path | None = None,
+    impacts_exposure_households: Path | None = None,
+    impacts_exposure_population_source: Path | None = None,
 ) -> None:
     del settings, impacts_fleet_manifest, impacts_beam_events
     root = beam_network_final.parent
@@ -220,6 +366,11 @@ def _native_impacts_postsim(
         state,
         beam_osm_file=beam_r5_osm_file,
         beam_osm_artifact_id=beam_osm_artifact_id,
+        exposure_population=(
+            impacts_exposure_persons,
+            impacts_exposure_households,
+            impacts_exposure_population_source,
+        ),
     ).run(root, workspace)
 
 
@@ -237,7 +388,7 @@ def _impacts_cache(*, state, **_) -> CacheOptions:
 impacts_presim = StepDefinition(
     name="impacts_presim",
     function=_native_impacts_presim,
-    resolve_inputs=lambda **_: StepCallInputs(inputs={}),
+    resolve_inputs=_presim_inputs,
     project_outputs=lambda outputs, **_: outputs,
     input_contract=_IMPACTS_INPUT_CONTRACT,
     outputs=_presim_paths,

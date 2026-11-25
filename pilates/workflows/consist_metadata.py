@@ -736,7 +736,9 @@ def consist_step_meta(
         except Exception:
             return None
 
+        from pilates.beam.config_hocon import resolve_beam_config_value
         from pilates.beam.launch_config import BeamLaunchConfig
+        from pilates.beam.launch_paths import prepare_r5_canonicalization_directory
 
         workspace_obj = ctx.get_runtime("workspace", default=None)
         launch_config = ctx.get_runtime("beam_launch_config", default=None)
@@ -955,6 +957,7 @@ def consist_step_meta(
 
         adapter_root_dirs = [config_root]
         adapter_primary_config = primary_config
+        env_overrides = beam_config_env_overrides(settings, config_root=config_root)
         if launch_config is None and workspace_root is not None:
             wrapper_dir = workspace_root / ".pilates-consist-conf" / model
             wrapper_dir.mkdir(parents=True, exist_ok=True)
@@ -963,21 +966,31 @@ def consist_step_meta(
                 f'include file("{primary_config.resolve().as_posix()}")\n'
                 f'beam.inputDirectory = "{config_root.resolve().as_posix()}"\n'
             )
-            if (
-                not wrapper_path.exists()
-                or wrapper_path.read_text(encoding="utf-8") != wrapper_content
-            ):
-                wrapper_path.write_text(wrapper_content, encoding="utf-8")
+            wrapper_path.write_text(wrapper_content, encoding="utf-8")
+            r5_value = resolve_beam_config_value(
+                wrapper_path,
+                key="beam.routing.r5.directory",
+                env_overrides=env_overrides,
+            )
+            if r5_value:
+                directory = Path(str(r5_value))
+                if directory.is_absolute() and directory.is_dir():
+                    view = prepare_r5_canonicalization_directory(
+                        directory, wrapper_dir / "r5"
+                    )
+                    if view != directory:
+                        wrapper_path.write_text(
+                            wrapper_content
+                            + f'beam.routing.r5.directory = "{view.resolve().as_posix()}"\n',
+                            encoding="utf-8",
+                        )
             adapter_root_dirs = [config_root, wrapper_dir]
             adapter_primary_config = wrapper_path
 
         return BeamConfigAdapter(
             root_dirs=adapter_root_dirs,
             primary_config=adapter_primary_config,
-            env_overrides=beam_config_env_overrides(
-                settings,
-                config_root=config_root,
-            ),
+            env_overrides=env_overrides,
             path_aliases=path_aliases,
             reference_policies=reference_policies,
         )

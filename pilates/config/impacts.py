@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
+from pilates.config.admission import PriorRunExpectation
+
 
 class ImpactsPipelinePresimConfig(BaseModel):
     """Select IMPACTS presim sub-steps."""
@@ -52,7 +54,9 @@ class ImpactsConfig(BaseModel):
     pipeline_postsim: ImpactsPipelinePostsimConfig = Field(
         default_factory=ImpactsPipelinePostsimConfig
     )
-    population_fallback_to_beam_inputs: bool = True
+    exposure_population_source: PriorRunExpectation | None = Field(
+        None, description="Archived UrbanSim forecast for exposure in a BEAM-only run."
+    )
     use_generated_fleet: bool = False
     use_beam_osm_artifact: bool = Field(
         False,

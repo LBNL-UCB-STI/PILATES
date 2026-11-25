@@ -5,6 +5,6 @@ beam:
   config: scenarios/network-calibration/beam-pilates-run--sfbay--jdeq-calibration-FC08-0.conf
 infrastructure:
   docker_images:
-    beam: haitamlaarabi/beam:1.1-beta-v260418
+    beam: ghcr.io/lbnl-ucb-sti/beam:1.1.2
   singularity_images:
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260418
+    beam: docker://ghcr.io/lbnl-ucb-sti/beam:1.1.2

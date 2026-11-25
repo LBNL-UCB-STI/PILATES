@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+from tempfile import TemporaryDirectory
 from typing import Any, Dict, Mapping
 
 from consist import (
@@ -82,9 +83,12 @@ def _urbansim_run_native_output_paths(
     step_inputs: StepCallInputs | None = None,
 ) -> Dict[str, Any]:
     del step_inputs
+    datastore = Path(workspace.get_usim_mutable_data_dir()) / get_usim_datastore_fname(
+        settings, io="output", year=state.forecast_year
+    )
     return {
-        "usim_datastore_h5": Path(workspace.get_usim_mutable_data_dir())
-        / get_usim_datastore_fname(settings, io="output", year=state.forecast_year)
+        USIM_DATASTORE_H5: datastore,
+        USIM_FORECAST_OUTPUT: datastore.parent / "raw_forecasts" / datastore.name,
     }
 
 
@@ -280,9 +284,16 @@ def _native_urbansim_run(
         declared_outputs=declared_outputs,
         workspace=workspace,
     )
+    forecast = declared_outputs[USIM_FORECAST_OUTPUT]
+    forecast.parent.mkdir(parents=True, exist_ok=True)
+    # Later stages can replace the datastore at UrbanSim's working path.
+    with TemporaryDirectory(dir=forecast.parent) as staging:
+        staged_forecast = Path(staging) / forecast.name
+        shutil.copy2(datastore, staged_forecast)
+        staged_forecast.replace(forecast)
     projected = NativeUrbanSimRunOutputs(
         usim_datastore_h5=datastore,
-        raw_outputs={USIM_FORECAST_OUTPUT: datastore},
+        raw_outputs={USIM_FORECAST_OUTPUT: forecast},
     )
     projected.validate(
         _validation_context(
@@ -399,7 +410,13 @@ def _project_urbansim_run(
     )
     projected = NativeUrbanSimRunOutputs(
         usim_datastore_h5=datastore,
-        raw_outputs={USIM_FORECAST_OUTPUT: datastore},
+        raw_outputs={
+            USIM_FORECAST_OUTPUT: (
+                declared_outputs[USIM_FORECAST_OUTPUT]
+                if USIM_FORECAST_OUTPUT in outputs
+                else datastore
+            )
+        },
     )
     return projected
 

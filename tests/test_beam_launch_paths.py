@@ -60,7 +60,7 @@ def _write_gtfs_zip(path: Path) -> None:
         archive.writestr("stop_times.txt", "trip_id,arrival_time\n")
 
 
-def test_resolve_r5_network_reference_selects_lexically_first_osm_and_gtfs(
+def test_resolve_r5_network_reference_prefers_first_pbf_and_collects_gtfs(
     tmp_path: Path,
 ) -> None:
     from pilates.beam.launch_paths import resolve_r5_network_reference
@@ -69,6 +69,8 @@ def test_resolve_r5_network_reference_selects_lexically_first_osm_and_gtfs(
     region_dir = beam_input_dir / "seattle"
     r5_dir = region_dir / "r5" / "network"
     r5_dir.mkdir(parents=True)
+    vex = r5_dir / "00.vex"
+    vex.write_bytes(b"vex")
     (r5_dir / "z.osm.pbf").write_bytes(b"z")
     selected_osm = r5_dir / "a.osm.pbf"
     selected_osm.write_bytes(b"a")
@@ -91,7 +93,72 @@ def test_resolve_r5_network_reference_selects_lexically_first_osm_and_gtfs(
         "/app/input/seattle/r5/network/a.osm.pbf"
     )
     assert reference.gtfs_paths == (r5_dir / "transit.zip",)
-    assert reference.ignored_osm_paths == (r5_dir / "z.osm.pbf",)
+    assert reference.ignored_osm_paths == (vex, r5_dir / "z.osm.pbf")
+
+
+def test_r5_vex_only_is_allowed_for_beam_and_rejected_before_presim(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from pilates.beam.launch_paths import (
+        BeamLaunchPathError,
+        resolve_r5_network_reference,
+    )
+    from pilates.workflows.steps.impacts import impacts_presim
+
+    settings = _settings()
+    workspace = _Workspace(tmp_path / "beam/input")
+    region_dir = Path(workspace.get_beam_mutable_data_dir()) / "seattle"
+    r5_dir = region_dir / "r5"
+    r5_dir.mkdir(parents=True)
+    vex = r5_dir / "only.vex"
+    vex.touch()
+    _write_config(region_dir / "beam.conf", directory='${beam.inputDirectory}"/r5"')
+
+    reference = resolve_r5_network_reference(settings=settings, workspace=workspace)
+    assert reference.selected_osm_path == vex
+
+    settings.run.models = SimpleNamespace(impacts="impacts")
+    monkeypatch.setattr(
+        "pilates.beam.preprocessor.ensure_beam_mutable_workspace", lambda *_: None
+    )
+    with pytest.raises(BeamLaunchPathError, match=r"IMPACTS requires an OSM \.pbf"):
+        impacts_presim.resolve_inputs(settings=settings, workspace=workspace)
+
+
+def test_prepare_r5_omits_vex_from_consist_view_and_compiled_launch(tmp_path, caplog):
+    from pilates.beam.launch_paths import (
+        prepare_r5_canonicalization_directory,
+        prepare_r5_raw_rebuild,
+    )
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "00.vex").write_bytes(b"vex")
+    pbf = source / "road.osm.pbf"
+    pbf.write_bytes(b"pbf")
+    feed = source / "transit.zip"
+    _write_gtfs_zip(feed)
+    view = prepare_r5_canonicalization_directory(source, tmp_path / "view")
+    assert {path.resolve() for path in view.iterdir()} == {pbf, feed}
+
+    launch = tmp_path / "compiled/seattle"
+    r5 = launch / "r5"
+    r5.mkdir(parents=True)
+    for path in source.iterdir():
+        (r5 / path.name).hardlink_to(path)
+    _write_config(launch / "beam.conf", directory='${beam.inputDirectory}"/r5"')
+    reference = prepare_r5_raw_rebuild(
+        settings=_settings(),
+        workspace=_Workspace(tmp_path / "beam/input"),
+        config_root=launch,
+    )
+
+    assert reference.selected_osm_path == r5 / pbf.name
+    assert reference.gtfs_paths == (r5 / feed.name,)
+    assert not (r5 / "00.vex").exists()
+    assert (source / "00.vex").read_bytes() == b"vex"
+    assert "R5 found VEX 00.vex and will not load it" in caplog.text
 
 
 def test_resolve_r5_network_reference_rejects_an_external_directory(
@@ -290,7 +357,10 @@ def test_validate_staged_linkstats_reference_matches_canonicalization(
 
 
 def test_validate_r5_execution_reference_matches_consist_member(tmp_path: Path) -> None:
-    from pilates.beam.launch_paths import validate_r5_execution_reference
+    from pilates.beam.launch_paths import (
+        BeamLaunchPathError,
+        validate_r5_execution_reference,
+    )
 
     beam_input_dir = tmp_path / "beam" / "input"
     region_dir = beam_input_dir / "seattle"
@@ -319,6 +389,14 @@ def test_validate_r5_execution_reference_matches_consist_member(tmp_path: Path) 
     )
 
     assert execution_reference.selected_osm_path == selected_osm
+
+    (r5_dir / "00.vex").touch()
+    with pytest.raises(BeamLaunchPathError, match="VEX that sorts before"):
+        validate_r5_execution_reference(
+            settings=_settings(),
+            workspace=_Workspace(beam_input_dir),
+            run_context=context,
+        )
 
 
 @pytest.mark.parametrize(

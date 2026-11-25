@@ -27,6 +27,7 @@ from scripts.run_impacts_container_smoke import (
     check_dispersion_outputs,
     check_generated_fleet_files,
     check_inventory_totals,
+    register_smoke_forecast,
     require_docker,
     run_logged_container,
     smoke_run_directory,
@@ -88,7 +89,7 @@ def run_live_smoke(
         local_inmap_data_folder=str(FIXTURE / "inmap"),
         use_generated_fleet=True,
         use_beam_osm_artifact=use_beam_osm_artifact,
-        population_fallback_to_beam_inputs=False,
+        exposure_population_source=register_smoke_forecast(FIXTURE, root),
         overrides={
             "analysis": {
                 "targets": None,
@@ -126,8 +127,6 @@ def run_live_smoke(
             docker,
             "run",
             "--rm",
-            "--platform",
-            "linux/amd64",
             "--network",
             "none",
             "--cpus",
@@ -137,7 +136,14 @@ def run_live_smoke(
         ]
         if image == beam_image:
             # Java resolves the container hostname even when networking is disabled.
-            args += ["--hostname", "beam-smoke", "--add-host", "beam-smoke:127.0.0.1"]
+            args += [
+                "--platform",
+                "linux/amd64",
+                "--hostname",
+                "beam-smoke",
+                "--add-host",
+                "beam-smoke:127.0.0.1",
+            ]
         else:
             args += ["--user", f"{os.getuid()}:{os.getgid()}"]
             args += ["--env", "MPLCONFIGDIR=/tmp/matplotlib"]
@@ -253,6 +259,10 @@ def check_live_outputs(workspace: Path, *, use_beam_osm_artifact: bool = False) 
 
     beam_output = workspace / f"beam/output/sfbay/year-{YEAR}-iteration-0"
     launch = workspace / f".pilates-beam-launch-config/y{YEAR}/i0/sfbay"
+    if (launch / "r5/sf-smoke/00-must-not-load.vex").exists():
+        raise RuntimeError(
+            "PILATES left the competing VEX in the BEAM launch directory."
+        )
     if use_beam_osm_artifact:
         published_osm = (
             beam_output
@@ -396,7 +406,12 @@ def check_live_outputs(workspace: Path, *, use_beam_osm_artifact: bool = False) 
         raise RuntimeError("Both IMPACTS dispersion stages must complete.")
 
     check_dispersion_outputs(
-        read_output, workspace / "beam/input/sfbay", FIXTURE / "inmap/isrm_sample.zarr"
+        read_output,
+        workspace / "beam/input/sfbay",
+        FIXTURE / "inmap/isrm_sample.zarr",
+        workspace
+        / "impacts/exposure-population/urbansim-forecast-2018/persons.parquet",
+        manifest["population_inputs"],
     )
     print(
         f"Verified {len(skims):,} live emissions records over {len(network):,} San Francisco road links."

@@ -5,9 +5,9 @@ run:
 
 infrastructure:
   docker_images:
-    beam: zaneedell/beam:1.1.0
+    beam: ghcr.io/lbnl-ucb-sti/beam:1.1.2
   singularity_images:
-    beam: docker://zaneedell/beam:1.1.0
+    beam: docker://ghcr.io/lbnl-ucb-sti/beam:1.1.2
 
 beam:
   admission:

@@ -5,11 +5,12 @@ run:
   models:
     impacts: impacts
 infrastructure:
+  # Exposure runs require an IMPACTS image that accepts impacts.exposure file paths.
   docker_images:
-    beam: haitamlaarabi/beam:1.1-beta-v260424
+    beam: ghcr.io/lbnl-ucb-sti/beam:1.1.2
     impacts: ghcr.io/lbnl-ucb-sti/impacts:v0.2.3
   singularity_images:
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260424
+    beam: docker://ghcr.io/lbnl-ucb-sti/beam:1.1.2
     impacts: docker://ghcr.io/lbnl-ucb-sti/impacts:v0.2.3
 beam:
   config: scenarios/breathe/pilates--sfbay--2018-Baseline.conf
@@ -28,7 +29,8 @@ impacts:
     inmap: true
     aermod: true
     exposure: true
-  population_fallback_to_beam_inputs: true
+  # Set the verified 2018 forecast reference from the April 2026 run before launching exposure.
+  exposure_population_source: null
   overrides:
     scenario: 2018-Baseline
     population:

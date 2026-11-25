@@ -19,6 +19,15 @@ USIM_POPULATION_BLOCKS_TABLE = "usim_population_blocks_table"
 logger = logging.getLogger(__name__)
 
 
+def household_home_coordinates(
+    households: pd.DataFrame, blocks: pd.DataFrame
+) -> pd.DataFrame:
+    """Map each household to its block point while retaining unmatched households."""
+    return households[["block_id"]].join(
+        blocks[["x", "y"]], on="block_id", validate="many_to_one"
+    )[["x", "y"]]
+
+
 POPULATION_TABLE_BY_KEY: Dict[str, str] = {
     USIM_POPULATION_HOUSEHOLDS_TABLE: "households",
     USIM_POPULATION_PERSONS_TABLE: "persons",

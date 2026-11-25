@@ -181,7 +181,11 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
         settings=settings, state=state, workspace=workspace
     )
 
-    assert set(urbansim_run_paths) == {USIM_DATASTORE_H5}
+    assert set(urbansim_run_paths) == {USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT}
+    datastore = urbansim_run_paths[USIM_DATASTORE_H5]
+    assert urbansim_run_paths[USIM_FORECAST_OUTPUT] == (
+        datastore.parent / "raw_forecasts" / datastore.name
+    )
     assert set(atlas_postprocess_paths) == {
         USIM_POPULATION_SOURCE_H5,
         ATLAS_VEHICLES2_OUTPUT,

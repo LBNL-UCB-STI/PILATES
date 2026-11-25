@@ -7,6 +7,7 @@ than creating a second portable Consist configuration identity.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -21,7 +22,10 @@ from pilates.beam.config_hocon import (
     update_staged_beam_config_value,
 )
 from pilates.config import PilatesConfig, SettingsLike
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workspace import Workspace
+
+logger = logging.getLogger(__name__)
 
 
 class BeamLaunchPathError(RuntimeError):
@@ -242,9 +246,8 @@ def resolve_r5_network_reference(
 ) -> R5NetworkLaunchReference:
     """Resolve R5's raw-directory selection from final staged HOCON.
 
-    PILATES invalidates ``network.dat`` before using this reference, so the
-    selection follows R5's raw-build branch: lexically first ``.pbf``/``.vex``
-    file and every top-level GTFS ZIP containing ``stop_times.txt``.
+    Prefer the first PBF by filename. R5 loads one street network, so the
+    compiled launch tree excludes VEX when a PBF exists.
     """
 
     network_directory = _resolve_hocon_path_reference(
@@ -264,7 +267,10 @@ def resolve_r5_network_reference(
     )
     if network_directory is None:  # pragma: no cover - required=True raises instead
         raise BeamLaunchPathError("R5 network directory unexpectedly missing.")
-    selected_osm_path, ignored_osm_paths = _select_r5_osm(network_directory)
+    selected_osm_path, ignored_osm_paths = _select_r5_osm(
+        network_directory.execution_path,
+        require_pbf=bool(get_setting(settings, "run.models.impacts")),
+    )
     gtfs_paths = _select_r5_gtfs(network_directory.execution_path)
     return R5NetworkLaunchReference(
         network_directory=network_directory,
@@ -327,6 +333,14 @@ def validate_r5_execution_reference(
     execution_reference = resolve_r5_network_reference(
         settings=settings, workspace=workspace, config_root=config_root
     )
+    if execution_reference.selected_osm_path.suffix == ".pbf" and any(
+        path.name < execution_reference.selected_osm_path.name
+        for path in execution_reference.ignored_osm_paths
+    ):
+        raise BeamLaunchPathError(
+            "The BEAM launch directory still contains a VEX that sorts before "
+            f"the selected PBF: {execution_reference.selected_osm_path}."
+        )
     resolved_member = member.resolved_path.resolve()
     target_path = execution_reference.selected_osm_physical_target_path
     if resolved_member != target_path:
@@ -348,7 +362,7 @@ def validate_r5_execution_reference(
 def prepare_r5_raw_rebuild(
     *, settings: SettingsLike, workspace: Any, config_root: Path | None = None
 ) -> R5NetworkLaunchReference:
-    """Remove derived R5 and PhysSim caches from the mutable launch tree.
+    """Prepare the R5 inputs and remove derived caches from the launch tree.
 
     BEAM uses an existing ``network.dat`` in preference to raw R5 source
     members.  PILATES therefore removes only the reproducible derived files
@@ -381,6 +395,16 @@ def prepare_r5_raw_rebuild(
                 full_skim_dir2,
                 mutable_root=mutable_root,
             )
+    if config_root is not None and reference.selected_osm_path.suffix == ".pbf":
+        for path in reference.ignored_osm_paths:
+            if path.suffix == ".vex":
+                path.unlink()
+                logger.warning(
+                    "R5 found VEX %s and will not load it. R5 loads one street "
+                    "network and PILATES selected PBF %s.",
+                    path.name,
+                    reference.selected_osm_path.name,
+                )
     return reference
 
 
@@ -539,21 +563,46 @@ def _resolve_hocon_path_reference(
 
 
 def _select_r5_osm(
-    directory: BeamLaunchPathReference,
+    directory: Path, *, require_pbf: bool = False
 ) -> tuple[Path, tuple[Path, ...]]:
     candidates = tuple(
         path
-        for path in sorted(
-            directory.execution_path.iterdir(), key=lambda item: item.name
-        )
-        if path.is_file() and path.suffix.lower() in {".pbf", ".vex"}
+        for path in sorted(directory.iterdir(), key=lambda item: item.name)
+        if path.is_file() and path.suffix in {".pbf", ".vex"}
     )
+    pbf = next((path for path in candidates if path.suffix == ".pbf"), None)
+    if require_pbf and pbf is None:
+        raise BeamLaunchPathError(
+            f"IMPACTS requires an OSM .pbf in beam.routing.r5.directory ({directory}). "
+            "VEX is supported only for BEAM runs without IMPACTS."
+        )
     if not candidates:
         raise BeamLaunchPathError(
-            "R5 raw rebuild requires one .pbf or .vex file in "
-            f"{directory.execution_path}."
+            f"R5 raw rebuild requires a .pbf or .vex file in {directory}."
         )
-    return candidates[0], candidates[1:]
+    selected = pbf or candidates[0]
+    return selected, tuple(path for path in candidates if path != selected)
+
+
+def prepare_r5_canonicalization_directory(directory: Path, view: Path) -> Path:
+    """Expose the same OSM candidates to Consist as to the compiled launch."""
+    members = tuple(directory.iterdir())
+    has_pbf = any(path.suffix == ".pbf" and path.is_file() for path in members)
+    excluded = {
+        path
+        for path in members
+        if path.suffix.lower() in {".pbf", ".vex"}
+        and (path.suffix != path.suffix.lower() or (has_pbf and path.suffix == ".vex"))
+    }
+    if not excluded:
+        return directory
+    view.mkdir(parents=True, exist_ok=True)
+    for path in view.iterdir():
+        path.unlink()
+    for path in members:
+        if path not in excluded:
+            (view / path.name).symlink_to(path, target_is_directory=path.is_dir())
+    return view
 
 
 def _select_r5_gtfs(directory: Path) -> tuple[Path, ...]:

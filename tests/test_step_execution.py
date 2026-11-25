@@ -366,15 +366,14 @@ def test_execute_step_enable_archive_copy_false_authoritatively_disables_archiva
     )
 
 
-def test_urbansim_run_archives_only_scalar_forecast_output(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The active UrbanSim run uses central archival without publishing staging."""
+def test_urbansim_run_archives_datastore_and_raw_forecast(tmp_path: Path) -> None:
+    """The UrbanSim run archives both HDF5 outputs without publishing staging."""
 
     local_root = tmp_path / "local"
     archive_root = tmp_path / "archive"
     workspace_root = tmp_path / "workspace"
     forecast_h5 = workspace_root / "urbansim" / "data" / "output_2030.h5"
+    raw_forecast_h5 = forecast_h5.parent / "raw_forecasts" / forecast_h5.name
     forecast_h5.parent.mkdir(parents=True)
     forecast_h5.write_bytes(b"forecast\n")
     input_h5 = tmp_path / "input_001.h5"
@@ -390,10 +389,13 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
     archived_outputs = {
         key: Artifact(
             key=key,
-            uri=f"workspace://archived/{forecast_h5.name}",
+            uri=f"workspace://{path.relative_to(workspace_root)}",
             driver="other",
         )
-        for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
+        for key, path in (
+            (USIM_DATASTORE_H5, forecast_h5),
+            (USIM_FORECAST_OUTPUT, raw_forecast_h5),
+        )
     }
     coupler = SimpleNamespace(values=dict(archived_outputs))
     seen: dict[str, object] = {}
@@ -448,9 +450,11 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
     )
     assert seen["output_paths"] == {
         USIM_DATASTORE_H5: forecast_h5,
+        USIM_FORECAST_OUTPUT: raw_forecast_h5,
     }
     assert result.outputs == archived_outputs
     assert projected.usim_datastore_h5 == forecast_h5
+    assert projected.raw_outputs == {USIM_FORECAST_OUTPUT: raw_forecast_h5}
     assert set(coupler.values) == {USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT}
     assert "usim_mutable_data_dir" not in coupler.values
 

@@ -6,9 +6,9 @@ run:
 
 infrastructure:
   singularity_images:
-    beam: docker://zaneedell/beam:1.1-beta-v260615
+    beam: docker://ghcr.io/lbnl-ucb-sti/beam:1.1.2
   docker_images:
-    beam: zaneedell/beam:0.9.10
+    beam: ghcr.io/lbnl-ucb-sti/beam:1.1.2
 
 beam:
   config: scenarios/network-calibration/beam-pilates-run--seattle--jdeq-calibration-FC08-0.conf

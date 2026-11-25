@@ -13,6 +13,10 @@ from consist import Artifact
 
 from pilates.beam import beam_exchange
 from pilates.config.models import PilatesConfig
+from pilates.impacts.population import (
+    resolve_archived_forecast,
+    validate_exposure_files,
+)
 from pilates.urbansim.preprocessor import resolve_urbansim_initial_datastore_source_path
 from pilates.utils import consist_runtime as cr
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
@@ -54,6 +58,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_INPUT_ARCHIVE_PREFIX,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
@@ -83,10 +88,15 @@ from pilates.workflows.steps import (
     beam_postprocess,
     beam_preprocess,
     beam_run,
+    impacts_exposure_population,
     impacts_presim,
     impacts_postsim,
     urbansim_postprocess,
     urbansim_run,
+)
+from pilates.workflows.steps.impacts import (
+    exposure_population_paths,
+    validate_exposure_artifacts,
 )
 from pilates.workflows.steps.postprocessing import (
     postprocessing as postprocessing_step,
@@ -482,7 +492,7 @@ def run_land_use_stage(
         land_use=replace(
             sim_state.land_use,
             current_h5=forecast_h5,
-            forecast_output=forecast_h5,
+            forecast_output=run_result.outputs.get(USIM_FORECAST_OUTPUT, forecast_h5),
             prior_h5=prior_h5,
         ),
     )
@@ -1136,6 +1146,43 @@ def _run_supply_demand_loop(
     if impacts_enabled and state.iteration < total_iters:
         if get_traffic_assignment_model(settings) != "beam":
             raise ValueError("IMPACTS requires BEAM as the travel model.")
+        exposure_year = resolve_forecast_year(state) or year
+        if settings.impacts.pipeline_postsim.exposure:
+            if get_land_use_model(settings) is None:
+                if active_recorder is None:
+                    forecast = resolve_archived_forecast(settings, scenario)
+                else:
+                    from pilates.workflows.dry_run import SymbolicArtifact
+
+                    forecast = SymbolicArtifact(key=USIM_FORECAST_OUTPUT)
+                sim_state = replace(
+                    sim_state,
+                    land_use=replace(sim_state.land_use, forecast_output=forecast),
+                )
+            population_result, _ = execute_step(
+                scenario=scenario,
+                definition=impacts_exposure_population,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                stage="impacts_exposure_population",
+                year=exposure_year,
+                iteration=None,
+                phase="prepare",
+                sim_state=sim_state,
+                plan_recorder=active_recorder,
+            )
+            validate_exposure_artifacts(population_result.outputs)
+            if active_recorder is None:
+                paths = exposure_population_paths(
+                    settings=settings, state=state, workspace=workspace
+                )
+                validate_exposure_files(
+                    tuple(paths.values()), workspace=workspace, year=exposure_year
+                )
+            sim_state = replace(
+                sim_state, extras={**sim_state.extras, **population_result.outputs}
+            )
         presim_result, _ = execute_step(
             scenario=scenario,
             definition=impacts_presim,

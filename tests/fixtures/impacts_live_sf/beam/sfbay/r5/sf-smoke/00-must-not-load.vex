@@ -1,0 +1,1 @@
+This sentinel sorts before the real PBF. Loading it must fail the live test.

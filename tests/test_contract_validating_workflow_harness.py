@@ -19,9 +19,12 @@ from pilates.utils import consist_runtime as cr
 from pilates.utils.archive_paths import resolve_archive_run_dir
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
+    BEAM_PLANS_IN,
     FINAL_SKIMS_OMX,
+    IMPACTS_EXPOSURE_PERSONS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
@@ -45,6 +48,7 @@ from pilates.workflows.steps import (
     beam_postprocess,
     beam_preprocess,
     beam_run,
+    impacts_exposure_population,
     urbansim_postprocess,
     urbansim_run,
 )
@@ -225,7 +229,7 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
     with ContractValidatingContainerBackend() as backend:
         with env.scenario_context("happy_path_full_chain") as sc:
             # 1. UrbanSim Run & Postprocess (2010 -> 2015)
-            _, usim_run_out = _exec_step(
+            usim_run_result, usim_run_out = _exec_step(
                 scenario=sc,
                 definition=urbansim_run,
                 settings=env.settings,
@@ -238,6 +242,36 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
             )
             assert usim_run_out is not None
             assert Path(usim_run_out.usim_datastore_h5).exists()
+            raw_forecast = usim_run_out.raw_outputs[USIM_FORECAST_OUTPUT]
+            assert raw_forecast != usim_run_out.usim_datastore_h5
+            assert usim_run_result.outputs[USIM_FORECAST_OUTPUT].id != (
+                usim_run_result.outputs[USIM_DATASTORE_H5].id
+            )
+            raw_bytes = raw_forecast.read_bytes()
+            assert raw_bytes == usim_run_out.usim_datastore_h5.read_bytes()
+            exposure_run, _ = execute_step(
+                scenario=sc,
+                definition=impacts_exposure_population,
+                settings=env.settings,
+                state=env.state,
+                workspace=env.workspace,
+                stage="impacts_exposure_population",
+                year=2015,
+                iteration=None,
+                phase="prepare",
+                sim_state=SimState(
+                    land_use=LandUseState(
+                        forecast_output=usim_run_result.outputs[USIM_FORECAST_OUTPUT]
+                    )
+                ),
+            )
+            forecast_input = sc.tracker.get_run_inputs(exposure_run.run.id)[
+                USIM_FORECAST_OUTPUT
+            ]
+            assert forecast_input.id == usim_run_result.outputs[USIM_FORECAST_OUTPUT].id
+            exposure_people = pd.read_parquet(
+                exposure_run.outputs[IMPACTS_EXPOSURE_PERSONS].path
+            )
 
             _, usim_post_out = _exec_step(
                 scenario=sc,
@@ -313,7 +347,7 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 assert set(hh_df.index).issubset(set(MICRO_HOUSEHOLD_IDS))
 
             # 3. ActivitySim Preprocess, Run & Postprocess + BEAM Preprocess
-            _, launch_cfg = _run_activitysim_and_beam_preprocess(
+            beam_pre_out, launch_cfg = _run_activitysim_and_beam_preprocess(
                 env, sc, year=2015, iteration=0
             )
 
@@ -377,6 +411,13 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
                 beam_post_out.split_event_links["path_traversal_links_2015_0"]
             ).exists()
 
+    assert raw_forecast.read_bytes() == raw_bytes
+    with pd.HDFStore(raw_forecast, mode="r") as store:
+        raw_people = set(store["/2015/persons"].index.astype(str))
+    assert len(raw_people) == 8
+    assert set(exposure_people.person_id.astype(str)) == raw_people
+    plans = pd.read_parquet(beam_pre_out.prepared_inputs[BEAM_PLANS_IN])
+    assert len(raw_people - set(plans["person_id"].astype(str))) == 6
     executed_models = [inv.model_name for inv in backend.invocations]
     assert executed_models == [
         "urbansim",
@@ -630,8 +671,9 @@ def test_urbansim_run_step_lineage_mode_and_cold_scratch_execution(
             out_h5 = Path(res1.usim_datastore_h5)
             assert out_h5.exists()
 
-        # Wipe model_data_2015.h5 from both scratch and archive, then force outer step cache miss
+        # Wipe both copies of the forecast before forcing an outer step cache miss.
         out_h5.unlink()
+        res1.raw_outputs[USIM_FORECAST_OUTPUT].unlink()
         for archived_h5 in env.paths.archive_root.rglob("model_data_2015.h5"):
             archived_h5.unlink()
 
@@ -1162,6 +1204,10 @@ def test_full_workflow_cache_hit_replay_skips_all_containers_on_cold_scratch(
         assert first_run_count == 6
 
         first_archive_run_dir = _latest_run_dir(env.paths.archive_root)
+        archived_forecast = next(
+            first_archive_run_dir.rglob("raw_forecasts/model_data_2017.h5")
+        )
+        raw_forecast_bytes = archived_forecast.read_bytes()
         promo = promote_run_to_recovery_roots(
             settings=env.settings,
             archive_run_dir=first_archive_run_dir,
@@ -1182,6 +1228,10 @@ def test_full_workflow_cache_hit_replay_skips_all_containers_on_cold_scratch(
         assert len(backend.invocations) == first_run_count
 
     second_scratch_run_dir = _latest_run_dir(env.paths.scratch_root)
+    raw_forecast = (
+        second_scratch_run_dir / "urbansim/data/raw_forecasts/model_data_2017.h5"
+    )
+    assert raw_forecast.read_bytes() == raw_forecast_bytes
     assert not (
         second_scratch_run_dir
         / "activitysim"

@@ -35,10 +35,12 @@ class ImpactsPostsimRunner(
         *,
         beam_osm_file: Path | None = None,
         beam_osm_artifact_id: str | None = None,
+        exposure_population: tuple[Path | None, Path | None, Path | None] | None = None,
     ) -> None:
         super().__init__(model_name, state)
         self.beam_osm_file = beam_osm_file
         self.beam_osm_artifact_id = beam_osm_artifact_id
+        self.exposure_population = exposure_population
 
     def _run(
         self,
@@ -58,6 +60,7 @@ class ImpactsPostsimRunner(
             beam_output_dir=beam_output_dir,
             beam_osm_file=self.beam_osm_file,
             beam_osm_artifact_id=self.beam_osm_artifact_id,
+            exposure_population=self.exposure_population,
         )
         volumes = {
             workspace.get_beam_mutable_data_dir(): {

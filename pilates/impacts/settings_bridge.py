@@ -10,8 +10,6 @@ BEAM_INPUT_CONTAINER_DIR = "/app/beam_input"
 WORKSPACE_CONTAINER_DIR = "/app/workspace"
 INPUT_CACHE_CONTAINER_DIR = "/app/impacts_cache"
 
-_PASSENGER_EXCHANGE_EXTENSIONS = (".csv.gz", ".csv", ".parquet")
-
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     result = dict(base)
@@ -50,35 +48,6 @@ def presim_fleet_manifest_path(settings: Any, workspace: Any, year: int) -> Path
     )
 
 
-def _has_exchange_file(directory: Path, stem: str) -> bool:
-    return any(
-        (directory / f"{stem}{ext}").exists() for ext in _PASSENGER_EXCHANGE_EXTENSIONS
-    )
-
-
-def resolve_population_override(settings: Any, workspace: Any) -> Dict[str, Any]:
-    """
-    If this run's PILATES-generated population (households/persons fed to BEAM)
-    exists, point IMPACTS' population.passenger_folder at it. Otherwise return
-    {} so IMPACTS falls back to its configured static reference population.
-    """
-    cfg = settings.impacts
-    if cfg is None or not cfg.population_fallback_to_beam_inputs:
-        return {}
-
-    beam_mutable_dir = Path(workspace.get_beam_mutable_data_dir())
-    if not (
-        _has_exchange_file(beam_mutable_dir, "households")
-        and _has_exchange_file(beam_mutable_dir, "persons")
-    ):
-        return {}
-
-    container_path = _to_container_path(
-        WORKSPACE_CONTAINER_DIR, str(beam_mutable_dir), workspace.full_path
-    )
-    return {"population": {"passenger_folder": container_path}}
-
-
 def build_pilates_bridge_settings(
     settings: Any,
     state: Any,
@@ -88,6 +57,7 @@ def build_pilates_bridge_settings(
     beam_output_dir: Path | None = None,
     beam_osm_file: Path | None = None,
     beam_osm_artifact_id: str | None = None,
+    exposure_population: tuple[Path | None, Path | None, Path | None] | None = None,
 ) -> Dict[str, Any]:
     """
     Build the PILATES->IMPACTS bridge settings dict for the given stage,
@@ -144,9 +114,27 @@ def build_pilates_bridge_settings(
             )
 
     if stage == "postsim":
-        impacts_section = _deep_merge(
-            impacts_section, resolve_population_override(settings, workspace)
+        impacts_section["pipeline"]["postsim"]["exposure"] = (
+            cfg.pipeline_postsim.exposure
         )
+        if cfg.pipeline_postsim.exposure:
+            from pilates.impacts.population import validate_exposure_files
+
+            directory = validate_exposure_files(
+                exposure_population, workspace=workspace, year=forecast_year
+            )
+            container_dir = _to_container_path(
+                WORKSPACE_CONTAINER_DIR,
+                str(directory),
+                str(Path(workspace.full_path).resolve()),
+            )
+            exposure = impacts_section.setdefault("exposure", {})
+            for key, filename in (
+                ("persons_file", "persons.parquet"),
+                ("households_file", "households.parquet"),
+                ("source_manifest", "population_source.yaml"),
+            ):
+                exposure[key] = posixpath.join(container_dir, filename)
         if beam_osm_file is not None:
             if not beam_osm_file.is_file() or not beam_osm_artifact_id:
                 raise ValueError(

@@ -27,7 +27,10 @@ from pilates.generic.records import FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
-from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    household_home_coordinates,
+    reconcile_usim_population_table_paths,
+)
 from pilates.utils.zone_utils import (
     copy_canonical_zone_source_to_dir,
     load_canonical_zones,
@@ -3108,11 +3111,7 @@ def _update_persons_table(
     persons["pstudent"] = np.select(conditions, values, default=0)
 
     # Add home coordinates efficiently
-    home_coords = (
-        households[["block_id"]]
-        .merge(blocks[["x", "y"]], left_on="block_id", right_index=True)
-        .set_index(households.index)
-    )
+    home_coords = household_home_coordinates(households, blocks)
     persons["home_x"] = persons["household_id"].map(home_coords["x"])
     persons["home_y"] = persons["household_id"].map(home_coords["y"])
 

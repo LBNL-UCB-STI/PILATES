@@ -347,12 +347,6 @@ def test_pilot_refactored_scenarios_preserve_exact_resolved_configuration() -> N
 
     expected_beam_hpc = resolve_config_dict(seattle_hpc_path)
     expected_beam_hpc["run"]["models"]["activity_demand"] = None
-    expected_beam_hpc["infrastructure"]["singularity_images"]["beam"] = (
-        "docker://zaneedell/beam:1.1-beta-v260615"
-    )
-    expected_beam_hpc["infrastructure"]["docker_images"]["beam"] = (
-        "zaneedell/beam:0.9.10"
-    )
     expected_beam_hpc["beam"]["config"] = (
         "scenarios/network-calibration/"
         "beam-pilates-run--seattle--jdeq-calibration-FC08-0.conf"

@@ -43,10 +43,7 @@ def _set_inmap_path_for_scenario_config_tests(monkeypatch):
 
 SEATTLE_ROUTER_DIRECTORY = "r5/seattle-cbg120-ferry-weakConn-network"
 SFBAY_ROUTER_DIRECTORY = "r5/sfbay-cbg5500-weakConn-network"
-DEFAULT_BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260408"
-DEFAULT_BEAM_DOCKER_IMAGE = "haitamlaarabi/beam:1.1-beta-v260408"
-BREATHE_BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260329"
-BREATHE_BEAM_DOCKER_IMAGE = "haitamlaarabi/beam:1.1-beta-v260329"
+BEAM_IMAGE = "ghcr.io/lbnl-ucb-sti/beam:1.1.2"
 
 EXPECTED_WARMSTART_PATHS = {
     REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml": (
@@ -120,21 +117,15 @@ def test_active_scenarios_load_via_runtime_config_loader():
         assert settings.beam.router_directory
 
 
-@pytest.mark.skip
-def test_active_scenarios_pin_beam_images_and_explicit_warmstart_setting():
+def test_default_and_active_scenarios_pin_beam_images():
+    defaults = _load_raw_yaml(REPO_ROOT / "settings.yaml")
+    assert defaults["docker_images"]["beam"] == BEAM_IMAGE
+    assert defaults["singularity_images"]["beam"] == f"docker://{BEAM_IMAGE}"
+
     for path in ACTIVE_SCENARIO_PATHS:
-        data = resolve_config_dict(path)
-        infra = data["infrastructure"]
-        beam = data["beam"]
-        if path == REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml":
-            expected_singularity = BREATHE_BEAM_SINGULARITY_IMAGE
-            expected_docker = BREATHE_BEAM_DOCKER_IMAGE
-        else:
-            expected_singularity = DEFAULT_BEAM_SINGULARITY_IMAGE
-            expected_docker = DEFAULT_BEAM_DOCKER_IMAGE
-        assert infra["singularity_images"]["beam"] == expected_singularity
-        assert infra["docker_images"]["beam"] == expected_docker
-        assert "warmstart_linkstats_path" in beam
+        infra = resolve_config_dict(path)["infrastructure"]
+        assert infra["docker_images"]["beam"] == BEAM_IMAGE, path
+        assert infra["singularity_images"]["beam"] == f"docker://{BEAM_IMAGE}", path
 
 
 def test_active_scenarios_use_expected_router_directories():
