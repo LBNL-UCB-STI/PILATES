@@ -1470,6 +1470,12 @@ def test_standalone_beam_with_linkstats_admission_and_run_publishing(
         },
     )
     env.settings.beam.warmstart_linkstats_path = warmstart_rel
+    beam_config = env.paths.beam_static_input_dir / "sfbay" / env.settings.beam.config
+    beam_config.write_text(
+        beam_config.read_text().replace(
+            'beam.warmStart.type = "disabled"', 'beam.warmStart.type = "linkStatsOnly"'
+        )
+    )
 
     # --- Part A: Strict linkstats admission rejects a mismatched digest before BEAM runs ---
     rejected_scratch = tmp_path / "just_beam_rejected_scratch"

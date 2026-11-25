@@ -1,0 +1,6 @@
+fuelTypeId,priceInDollarsPerMJoule
+gasoline,0.03
+diesel,0.02
+electricity,0.01
+biodiesel,0.02
+hydrogen,0.02

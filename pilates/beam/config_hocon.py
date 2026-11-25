@@ -7,6 +7,7 @@ import re
 from typing import Any, Mapping, Optional
 
 from pilates.config.models import PilatesConfig
+from pilates.utils.settings_helper import get as get_setting
 
 
 _OVERRIDE_BLOCK_BEGIN = "# BEGIN PILATES managed overrides"
@@ -84,7 +85,7 @@ def beam_config_env_overrides(
         resolved_config_root,
         resolved_config_root.parent.parent,
     ]
-    expected_suffix = Path("input") / settings.run.region
+    expected_suffix = Path("input") / get_setting(settings, "run.region")
     pwd_root = next(
         (root for root in pwd_candidates if (root / expected_suffix).exists()),
         resolved_config_root.parent,

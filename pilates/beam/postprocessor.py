@@ -808,13 +808,10 @@ class BeamPostprocessor(GenericPostprocessor):
         workspace: Workspace,
         zarr_skims: Optional[Any] = None,
     ) -> BeamPostprocessOutputs:
-        """
-        Postprocesses the raw outputs from a BEAM run by merging skims into a new Zarr store.
-        """
+        """Split BEAM events and merge OD skims when there is a target."""
         logger.info("Running BEAM postprocessor...")
         settings = self.state.full_settings
 
-        raw_output_files = list(raw_outputs.raw_outputs.keys())
         split_events: Dict[str, Path] = {}
         split_event_links: Dict[str, Path] = {}
 
@@ -856,11 +853,19 @@ class BeamPostprocessor(GenericPostprocessor):
                     "Failed to split events parquet for %s", events_path, exc_info=True
                 )
 
+        activitysim_skims = _activitysim_skims_target_enabled(settings)
+        export_omx = requires_omx_skim_output(settings)
+        if zarr_skims is None and not (activitysim_skims or export_omx):
+            return BeamPostprocessOutputs(
+                split_events=split_events,
+                split_event_links=split_event_links,
+            )
+
         input_skims_path = artifact_to_existing_path(
             zarr_skims,
             workspace=workspace,
         )
-        if input_skims_path is None and _activitysim_skims_target_enabled(settings):
+        if input_skims_path is None and activitysim_skims:
             candidate = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
@@ -886,6 +891,7 @@ class BeamPostprocessor(GenericPostprocessor):
             omx_skim_name,
         ]
 
+        raw_output_files = list(raw_outputs.raw_outputs.keys())
         skim_name_found = None
         for name in possible_skim_names:
             if name in raw_output_files:
@@ -910,7 +916,7 @@ class BeamPostprocessor(GenericPostprocessor):
             logger.warning(
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped."
             )
-            if _activitysim_skims_target_enabled(settings):
+            if activitysim_skims:
                 raise RuntimeError(
                     _format_missing_beam_skim_error(
                         expected_names=possible_skim_names,
@@ -975,7 +981,7 @@ class BeamPostprocessor(GenericPostprocessor):
             if resolved_zarr is not None:
                 zarr_path = Path(resolved_zarr)
 
-        if requires_omx_skim_output(settings):
+        if export_omx:
             logger.info(
                 "Writing skims to OMX file for UrbanSim, ATLAS, or other downstream models..."
             )

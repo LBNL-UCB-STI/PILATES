@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from consist import Tracker
 from pilates.beam.launch_config import build_beam_launch_config
 from pilates.beam.outputs import BeamPreprocessOutputs
@@ -155,6 +157,58 @@ def test_handle_linkstats_explicit_warmstart_iter0_sets_initial_inputs_and_no_wa
     assert warmstart[0].metadata["source"] == "initial_inputs"
     assert warmstart[0].file_path == str(warmstart_path.relative_to(tmp_path))
     assert "[NOT IDEAL] Using an unversioned 'linkstats' record" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("warmstart_type", "config_is_staged", "file_exists"),
+    [
+        ("disabled", True, False),
+        ("disabled", True, True),
+        ("disabled", False, False),
+        ("linkStatsOnly", True, False),
+        ("linkStatsOnly", True, True),
+    ],
+)
+def test_handle_linkstats_respects_effective_warmstart_type(
+    tmp_path, caplog, warmstart_type, config_is_staged, file_exists
+):
+    preprocessor = _make_preprocessor()
+    workspace = MagicMock()
+    workspace.full_path = str(tmp_path)
+    mutable = tmp_path / "beam/input"
+    workspace.get_beam_mutable_data_dir.return_value = str(mutable)
+    static = tmp_path / "static"
+    preprocessor.settings.beam.local_input_folder = str(static)
+    linkstats = tmp_path / "initial.linkstats.parquet"
+    if file_exists:
+        linkstats.write_bytes(b"PAR1unused")
+    preprocessor.settings.beam.warmstart_linkstats_path = str(linkstats)
+
+    if config_is_staged:
+        (static / "seattle").mkdir(parents=True)
+        static_type = "linkStatsOnly" if warmstart_type == "disabled" else "disabled"
+        (static / "seattle/beam.conf").write_text(
+            f'beam.warmStart.type = "{static_type}"\n'
+        )
+    root = (mutable if config_is_staged else static) / "seattle"
+    root.mkdir(parents=True)
+    (root / "base.conf").write_text('beam.warmStart.type = "linkStatsOnly"\n')
+    (root / "beam.conf").write_text(
+        f'include "base.conf"\nbeam.warmStart.type = "{warmstart_type}"\n'
+    )
+
+    store = RecordStore()
+    with caplog.at_level(logging.WARNING):
+        preprocessor._handle_linkstats(workspace, [], store)
+
+    enabled = warmstart_type == "linkStatsOnly"
+    assert store.to_mapping() == (
+        {LINKSTATS_WARMSTART: linkstats.name} if enabled and file_exists else {}
+    )
+    warns = enabled and not file_exists
+    assert ("Configured warmstart_linkstats_path not found" in caplog.text) == warns
+    assert (str(linkstats) in caplog.text) == warns
+    assert "Warm-start linkstats file not found" not in caplog.text
 
 
 def test_build_beam_launch_config_preserves_warmstart_provenance_sidecar(tmp_path):

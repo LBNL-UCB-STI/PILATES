@@ -1806,9 +1806,11 @@ def handle_linkstats(
     # 4. Fallback to initial linkstats path
     if warmstart_abs_path is None:
         warmstart_abs_path = resolve_initial_linkstats_path(settings, workspace)
+        if warmstart_abs_path is None:
+            return
         warmstart_source = "initial_inputs"
 
-    if not warmstart_abs_path or not os.path.exists(warmstart_abs_path):
+    if not os.path.exists(warmstart_abs_path):
         logger.warning(
             "[BEAM Preprocessor] Warm-start linkstats file not found (source=%s): %s",
             warmstart_source,

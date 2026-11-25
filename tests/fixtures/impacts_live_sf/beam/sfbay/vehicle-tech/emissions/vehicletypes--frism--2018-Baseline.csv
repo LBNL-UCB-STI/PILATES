@@ -1,0 +1,3 @@
+vehicleTypeId,seatingCapacity,standingRoomCapacity,lengthInMeter,primaryFuelType,primaryFuelConsumptionInJoulePerMeter,primaryFuelCapacityInJoule,primaryVehicleEnergyFile,secondaryFuelType,secondaryFuelConsumptionInJoulePerMeter,secondaryFuelCapacityInJoule,secondaryVehicleEnergyFile,automationLevel,maxVelocity,passengerCarUnit,rechargeLevel2RateLimitInWatts,rechargeLevel3RateLimitInWatts,vehicleCategory,sampleProbabilityWithinCategory,sampleProbabilityString,payloadCapacityInKg,vehicleUse,vehicleClass
+ft-mdv-Gas,1,0,12,gasoline,11404.611218108264,1.2e+16,,,,,,1,24.5872,1.0,,,Class456Vocational,1.0,,15000,Freight,Class 4-6 Vocational
+ft-hdv-Dsl,1,0,12,diesel,14026.761465378302,1.2e+16,,,,,,1,22.352,1.0,,,Class78Vocational,1.0,,40000,Freight,Class 7&8 Vocational

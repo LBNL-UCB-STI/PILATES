@@ -8,8 +8,10 @@ python -m scripts.run_impacts_container_smoke
 ```
 
 The test uses the bundled fixture in `tests/fixtures/impacts_smoke/`, pulls
-IMPACTS v0.2.0 if needed, and runs the containers with networking disabled.
-Every run starts with a fresh temporary workspace.
+IMPACTS v0.2.2 if needed, and runs the containers with networking disabled.
+Its bridge settings skip web tiles, while retaining map plots, road overlays, and scale bars.
+Each run prints its output path and keeps the workspace and `run.log` in a new
+folder under `test-output/impacts-replay/`, including after a test failure.
 
 - Presim reads the sampled raw EMFAC export and generates inventories, rates,
   and the passenger and freight fleets. The test checks that the generated
@@ -31,10 +33,50 @@ complete postsim replay while that release is fixed, run:
 python -m scripts.run_impacts_container_smoke --replay-without-fleet
 ```
 
-Pass `--image` to verify a fixed candidate before a versioned image is published.
+On an amd64 Linux host, pass `--image ghcr.io/lbnl-ucb-sti/impacts:v0.2.1` to
+run the replay with fleet generation using the published fix.
 The replay uses archived BEAM outputs. A live handoff check uses skims from a
 BEAM run launched with the generated fleet. Optional baseline delta plots
 require a second scenario.
+
+## Optional live test in San Francisco
+
+On amd64 Linux, with Docker running and the PILATES Python environment active,
+run:
+
+```sh
+python -m scripts.run_impacts_live_smoke --impacts-image ghcr.io/lbnl-ucb-sti/impacts:v0.2.1
+```
+
+The example uses the public IMPACTS v0.2.1 image. The same command accepts an
+alternative fleet-capable image by tag or digest. On the Apple Silicon Mac used
+for local validation, DuckDB 2.0.1 in the public amd64 image fails under Docker
+Desktop's Rosetta emulation. The local `pilates-impacts:v0.2.1` build with
+DuckDB 1.5.6 passed the test on that Mac.
+On that Mac, run:
+
+```sh
+conda run --no-capture-output -n pilates-macos \
+  python -m scripts.run_impacts_live_smoke --impacts-image pilates-impacts:v0.2.1
+```
+
+The command runs IMPACTS presim, one BEAM iteration, and IMPACTS postsim using
+the bundled San Francisco County fixture at `tests/fixtures/impacts_live_sf/`.
+It uses a 3 GB BEAM Java heap. Each run prints its output path and keeps the
+workspace and `run.log` in a new folder under `test-output/impacts-live-sf/`,
+including after a test failure. Once the images are available, the containers
+run with networking disabled. The command fails if Docker is unavailable.
+
+Before BEAM starts, the test checks that presim's manifests describe the
+expected run and year, that all source vehicle and tour IDs are preserved, and
+that each assigned vehicle type has a readable rate file. It compares the
+generated fleet and rates with BEAM's launch files and compares postsim's
+inputs byte for byte with the live BEAM network and skims. It then requires
+known vehicle types and matching county emissions keys, reconciles annualized
+pollutant mass across county, InMAP, and AERMOD allocations, and verifies
+concentrations and population exposure.
+
+## BREATHE deployment
 
 For a live BREATHE run, use an IMPACTS image that implements
 `fleet_manifest.yaml` and set `impacts.use_generated_fleet: true`. Check that

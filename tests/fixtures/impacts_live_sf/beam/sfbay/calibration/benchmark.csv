@@ -1,0 +1,2 @@
+mode,car,walk,bike,bike_transit,ride_hail,ride_hail_transit,walk_transit,drive_transit,ride_hail_pooled,cav
+share,0.763,0.052,0.02,0.001,0.018,0.003,0.082,0.052,0.009,0.0

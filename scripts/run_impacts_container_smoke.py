@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from datetime import datetime
+import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
-from tempfile import TemporaryDirectory
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -27,8 +30,57 @@ from pilates.impacts.settings_bridge import (
 from pilates.workspace import Workspace
 
 
-FIXTURE = Path(__file__).resolve().parents[1] / "tests/fixtures/impacts_smoke"
-IMAGE = "ghcr.io/lbnl-ucb-sti/impacts:v0.2.0"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FIXTURE = PROJECT_ROOT / "tests/fixtures/impacts_smoke"
+IMAGE = "ghcr.io/lbnl-ucb-sti/impacts:v0.2.2"
+
+
+@contextmanager
+def smoke_run_directory(suite: str):
+    parent = PROJECT_ROOT / "test-output" / suite
+    parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-")
+    directory = Path(tempfile.mkdtemp(prefix=stamp, dir=parent))
+    scratch = directory / "tmp"
+    scratch.mkdir()
+    handler = logging.FileHandler(directory / "run.log", encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    )
+    logger = logging.getLogger()
+    logger.addHandler(handler)
+    print(f"Test outputs: {directory}", flush=True)
+    temp_env = dict.fromkeys(("TMPDIR", "TMP", "TEMP"), str(scratch))
+    try:
+        with patch.dict(os.environ, temp_env):
+            with patch.object(tempfile, "tempdir", str(scratch)):
+                yield directory
+    except Exception:
+        logger.exception("Smoke test failed")
+        raise
+    else:
+        with (directory / "run.log").open("a", encoding="utf-8") as log:
+            log.write("Smoke test passed.\n")
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+
+
+def run_logged_container(command: list[str], directory: Path) -> None:
+    with (directory / "run.log").open("a", encoding="utf-8", buffering=1) as log:
+        with subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+        ) as process:
+            assert process.stdout is not None
+            for line in process.stdout:
+                log.write(line)
+                print(line, end="", flush=True)
+            if status := process.wait():
+                raise subprocess.CalledProcessError(status, command)
 
 
 def check_generated_fleet(workspace) -> None:
@@ -36,31 +88,51 @@ def check_generated_fleet(workspace) -> None:
     for model, assignment_name in (("atlas", "vehicles"), ("frism", "carriers")):
         (type_file,) = fleet_output.glob(f"vehicleTypes--{model}--*--EM.csv")
         (assignment_file,) = fleet_output.glob(f"{assignment_name}--*--EM.parquet")
-        types = pd.read_csv(type_file)
-        assignments = pd.read_parquet(assignment_file)
-        if (
-            types.vehicleTypeId.duplicated().any()
-            or assignments.empty
-            or not set(assignments.vehicleTypeId) <= set(types.vehicleTypeId)
-        ):
+        check_generated_fleet_files(model, type_file, assignment_file)
+
+
+def check_generated_fleet_files(
+    model: str, type_file: Path, assignment_file: Path
+) -> pd.DataFrame:
+    types = pd.read_csv(type_file)
+    assignments = pd.read_parquet(assignment_file)
+    type_ids = types["vehicleTypeId"]
+    assignment_types = assignments["vehicleTypeId"]
+    if (
+        type_ids.isna().any()
+        or type_ids.duplicated().any()
+        or assignments.empty
+        or assignment_types.isna().any()
+        or not set(assignment_types) <= set(type_ids)
+    ):
+        raise RuntimeError(
+            f"Presim {model} vehicle assignments do not match the generated BEAM vehicle types."
+        )
+    used = types.loc[type_ids.isin(assignment_types)]
+    for rate in (
+        used[["emfacId", "emissionsRatesFile"]]
+        .drop_duplicates()
+        .itertuples(index=False)
+    ):
+        if not isinstance(rate.emissionsRatesFile, str) or not rate.emissionsRatesFile:
+            raise RuntimeError(f"Presim {model} has no rate file for {rate.emfacId}.")
+        reference = Path(rate.emissionsRatesFile)
+        if reference.is_absolute() or reference.stem != rate.emfacId:
             raise RuntimeError(
-                f"Presim {model} vehicle assignments do not match the generated BEAM vehicle types."
+                f"Presim {model} has an invalid rate reference for {rate.emfacId}."
             )
-        used = types.loc[types.vehicleTypeId.isin(assignments.vehicleTypeId)]
-        for rate in (
-            used[["emfacId", "emissionsRatesFile"]]
-            .drop_duplicates()
-            .itertuples(index=False)
-        ):
-            reference = Path(rate.emissionsRatesFile)
-            if reference.is_absolute() or reference.stem != rate.emfacId:
-                raise RuntimeError(
-                    f"Invalid presim {model} rate reference for {rate.emfacId}."
-                )
-            if pq.ParquetFile(fleet_output / reference).metadata.num_rows == 0:
-                raise RuntimeError(
-                    f"Presim generated empty {model} rates for {rate.emfacId}."
-                )
+        rate_path = type_file.parent / reference
+        try:
+            rates = pq.ParquetFile(rate_path).read()
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Presim {model} could not read rate file {rate_path}: {exc}"
+            ) from exc
+        if rates.num_rows == 0:
+            raise RuntimeError(
+                f"Presim generated empty {model} rates for {rate.emfacId}."
+            )
+    return assignments
 
 
 def stage_presim_rates(workspace, presim) -> None:
@@ -193,25 +265,7 @@ def check_downstream_outputs(workspace, presim, postsim) -> None:
         known_vehicle_types.update(types.vehicleTypeId)
         compared = comparison.loc[comparison.assignment_group.eq(group)]
         inventory = pd.read_parquet(workspace_path(inventory_path))
-        expected_totals = (
-            inventory.groupby(["county", "emfacId"])[
-                ["total_vmt_vehicle_miles_per_year", "population_vehicles"]
-            ]
-            .max()
-            .groupby("emfacId")
-            .sum()
-        )
-        actual_totals = compared.set_index("emfacId", verify_integrity=True)[
-            ["emfac_vmt", "emfac_population"]
-        ]
-        ids = actual_totals.index.union(expected_totals.index)
-        np.testing.assert_allclose(
-            actual_totals.reindex(ids, fill_value=0).to_numpy(dtype=float),
-            expected_totals.reindex(ids, fill_value=0).to_numpy(dtype=float),
-            err_msg=f"{group} fleet comparison does not reproduce the presim inventory totals",
-        )
-        if not (compared["beam_vmt"].sum() > 0 and compared["emfac_vmt"].sum() > 0):
-            raise RuntimeError(f"The {group} comparison needs BEAM and EMFAC VMT.")
+        check_inventory_totals(inventory, compared, group)
     if skims.empty or not set(skims.vehicleTypeId) <= known_vehicle_types:
         raise RuntimeError("The archived skims reference unknown BEAM vehicle types.")
 
@@ -226,6 +280,34 @@ def check_downstream_outputs(workspace, presim, postsim) -> None:
         raise RuntimeError(
             "Postsim county emissions do not cover the archived BEAM skim keys."
         )
+    check_dispersion_outputs(
+        read_output, beam_input, FIXTURE / "inmap/isrm_sample.zarr"
+    )
+
+
+def check_inventory_totals(inventory, compared, group: str) -> None:
+    expected_totals = (
+        inventory.groupby(["county", "emfacId"])[
+            ["total_vmt_vehicle_miles_per_year", "population_vehicles"]
+        ]
+        .max()
+        .groupby("emfacId")
+        .sum()
+    )
+    actual_totals = compared.set_index("emfacId", verify_integrity=True)[
+        ["emfac_vmt", "emfac_population"]
+    ]
+    ids = actual_totals.index.union(expected_totals.index)
+    np.testing.assert_allclose(
+        actual_totals.reindex(ids, fill_value=0).to_numpy(dtype=float),
+        expected_totals.reindex(ids, fill_value=0).to_numpy(dtype=float),
+        err_msg=f"{group} fleet comparison does not reproduce the presim inventory totals",
+    )
+    if not (compared["beam_vmt"].sum() > 0 and compared["emfac_vmt"].sum() > 0):
+        raise RuntimeError(f"The {group} comparison needs BEAM and EMFAC VMT.")
+
+
+def check_dispersion_outputs(read_output, beam_input: Path, inmap_store: Path) -> None:
     inmap = read_output("beam_inmap_concentrations").set_index(
         "inmap_cell_id", verify_integrity=True
     )
@@ -247,11 +329,15 @@ def check_downstream_outputs(workspace, presim, postsim) -> None:
             )
 
     # Independently project the emitted PM2.5 through the fixture's real source-receptor coefficients.
-    sr = zarr.open_group(FIXTURE / "inmap/isrm_sample.zarr", mode="r")
+    sr = zarr.open_group(inmap_store, mode="r")
     emitted = read_output("beam_emissions_for_inmap")
     masses = emitted.groupby("inmap_cell_id")[
         "tons_per_year_PM25_inmap_allocated"
     ].sum()
+    if set(inmap.index) != set(masses.index):
+        raise RuntimeError(
+            "InMAP must return a receptor result for each cell with emissions."
+        )
     coefficients = sr["PrimaryPM25"].oindex[
         0, masses.index.to_numpy(), inmap.index.to_numpy()
     ]
@@ -274,7 +360,13 @@ def check_downstream_outputs(workspace, presim, postsim) -> None:
     np.testing.assert_allclose(inmap.NO2, expected_no2[inmap.index], rtol=1e-6)
     if set(aermod.index) != set(exposure.index):
         raise RuntimeError("The exposure grid and AERMOD grid have different cell IDs.")
-    expected_inmap = inmap.loc[exposure.inmap_cell_id]
+    grid = pd.read_parquet(
+        beam_input / "vehicle-tech/dispersions/inmap_cells.parquet", columns=["isrm"]
+    )
+    if not exposure.inmap_cell_id.isin(grid["isrm"]).all():
+        raise RuntimeError("Exposure references an unknown InMAP cell.")
+    # Exposure uses zero for InMAP contributions outside its emitted-cell receptor set.
+    expected_inmap = inmap.reindex(exposure.inmap_cell_id, fill_value=0)
     expected_aermod = aermod.loc[exposure.index]
     np.testing.assert_allclose(
         exposure.SecondaryPM25, expected_inmap.TotalPM25 - expected_inmap.PrimaryPM25
@@ -313,7 +405,7 @@ def check_downstream_outputs(workspace, presim, postsim) -> None:
     )
 
 
-def run_smoke(root: Path, *, fleet: bool = True, image: str = IMAGE) -> None:
+def require_docker() -> str:
     docker = shutil.which("docker")
     if docker is None:
         raise RuntimeError("Docker CLI is required.")
@@ -325,6 +417,11 @@ def run_smoke(root: Path, *, fleet: bool = True, image: str = IMAGE) -> None:
         )
     except subprocess.CalledProcessError as exc:
         raise RuntimeError("The Docker daemon is unreachable.") from exc
+    return docker
+
+
+def run_smoke(root: Path, *, fleet: bool = True, image: str = IMAGE) -> None:
+    docker = require_docker()
 
     def run_docker(*, image, volumes, command, working_dir, environment=None, **_):
         # shortcut: launches Docker directly, use a Consist run to test tracking.
@@ -358,7 +455,7 @@ def run_smoke(root: Path, *, fleet: bool = True, image: str = IMAGE) -> None:
                 target = directory.relative_to(beam_input).as_posix()
                 args += ["--tmpfs", f"{BEAM_INPUT_CONTAINER_DIR}/{target}:mode=1777"]
         try:
-            subprocess.run([*args, image, *container_command], check=True)
+            run_logged_container([*args, image, *container_command], root)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
                 f"Docker failed while running {container_command[0]} "
@@ -400,7 +497,11 @@ def run_smoke(root: Path, *, fleet: bool = True, image: str = IMAGE) -> None:
             pipeline_presim={"fleet": fleet},
             population_fallback_to_beam_inputs=False,
             overrides={
-                "analysis": {"targets": None, "inventory_targets": None},
+                "analysis": {
+                    "targets": None,
+                    "inventory_targets": None,
+                    "skip_web_tiles": True,
+                },
                 "dispersions": {
                     "inmap": {
                         "isrm_zarr": "/app/inmap/isrm_sample.zarr",
@@ -484,9 +585,9 @@ def main():
     )
     args = parser.parse_args()
     try:
-        with TemporaryDirectory(prefix="pilates-impacts-smoke-") as temp:
+        with smoke_run_directory("impacts-replay") as directory:
             run_smoke(
-                Path(temp).resolve(),
+                directory,
                 fleet=not args.replay_without_fleet,
                 image=args.image,
             )

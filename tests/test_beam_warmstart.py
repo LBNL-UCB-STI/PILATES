@@ -71,3 +71,20 @@ def test_resolve_initial_linkstats_path_returns_none_when_unset(tmp_path):
     resolved = resolve_initial_linkstats_path(settings, workspace)
 
     assert resolved is None
+
+
+def test_resolve_initial_linkstats_path_skips_disabled_with_dict_settings(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    region = tmp_path / "beam/input/sfbay"
+    region.mkdir(parents=True)
+    (region / "beam.conf").write_text('beam.warmStart.type = "disabled"\n')
+    (region / "warmstart.parquet").touch()
+    settings = {
+        "run": {"region": "sfbay"},
+        "beam": {
+            "config": "beam.conf",
+            "warmstart_linkstats_path": "warmstart.parquet",
+        },
+    }
+
+    assert resolve_initial_linkstats_path(settings, workspace) is None

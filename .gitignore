@@ -126,6 +126,7 @@ hpc/run-notifications.env
 docs/superpowers/
 
 # Local generated artifacts and scratch outputs
+/test-output/
 tests/tmp/
 pilates/generated/
 pilates/database/*.duckdb

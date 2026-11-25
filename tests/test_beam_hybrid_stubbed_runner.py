@@ -11,6 +11,7 @@ selects the right runner artifacts and emits expected output records.
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
 
 from pilates.beam.outputs import BeamRunOutputs
@@ -25,8 +26,9 @@ def _write_file(path: Path, content: bytes = b"x") -> None:
     path.write_bytes(content)
 
 
+@pytest.mark.parametrize("activitysim_enabled", [True, False])
 def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, activitysim_enabled: bool
 ) -> None:
     """
     Exercise BeamPostprocessor.postprocess with runner-like raw outputs.
@@ -38,6 +40,8 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     - publishes updated Zarr plus OMX artifacts for their independent consumers
     """
     settings = _build_settings(tmp_path)
+    if not activitysim_enabled:
+        settings.run.models.activity_demand = None
     settings.state_file_loc = str(tmp_path / "state.yaml")
     workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
     state = WorkflowState.from_settings(settings)
@@ -141,7 +145,11 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     )
 
     postprocessor = BeamPostprocessor("beam", state)
-    outputs = postprocessor.postprocess(raw_outputs, workspace)
+    outputs = postprocessor.postprocess(
+        raw_outputs,
+        workspace,
+        zarr_skims=None if activitysim_enabled else zarr_skims_target,
+    )
     output_keys = {
         *outputs.split_events.keys(),
         *outputs.split_event_links.keys(),
@@ -182,6 +190,57 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     assert outputs.zarr_skims == expected_output_zarr
     assert outputs.final_skims_omx == final_omx
     assert state.sub_stage_progress == "postprocessor"
+
+
+@pytest.mark.parametrize("beam_emitted_od_skims", [True, False])
+def test_beam_postprocess_splits_events_without_a_skim_target(
+    tmp_path: Path, caplog, monkeypatch, beam_emitted_od_skims: bool
+) -> None:
+    settings = _build_settings(tmp_path)
+    settings.run.models.activity_demand = None
+    settings.run.models.land_use = None
+    settings.run.models.vehicle_ownership = None
+    settings.write_skims_to_omx = False
+    workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
+    state = WorkflowState.from_settings(settings)
+    beam_dir = Path(workspace.get_beam_output_dir())
+    beam_dir.mkdir(parents=True, exist_ok=True)
+    events = beam_dir / "events.parquet"
+    pd.DataFrame(
+        {
+            "type": ["ModeChoice", "PathTraversal"],
+            "links": [None, "11,12"],
+            "linkTravelTime": [None, "2,3"],
+        }
+    ).to_parquet(events)
+    iteration = f"{state.forecast_year}_{state.iteration}"
+    raw = {f"events_parquet_{iteration}": events}
+    if beam_emitted_od_skims:
+        skims = beam_dir / "raw_skims.zarr"
+        _write_file(skims)
+        raw[f"raw_od_skims_zarr_{iteration}"] = skims
+
+    resolve_skim = MagicMock()
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor.artifact_to_existing_path", resolve_skim
+    )
+    outputs = BeamPostprocessor("beam", state).postprocess(
+        BeamRunOutputs(beam_output_dir=beam_dir, raw_outputs=raw),
+        workspace,
+    )
+
+    resolve_skim.assert_not_called()
+    assert outputs.split_events[f"events_parquet_{iteration}_type_ModeChoice"].is_file()
+    assert outputs.split_events[
+        f"events_parquet_{iteration}_type_PathTraversal"
+    ].is_file()
+    links = pd.read_parquet(
+        outputs.split_event_links[f"path_traversal_links_{iteration}"]
+    )
+    assert links["linkId"].tolist() == [11, 12]
+    assert outputs.zarr_skims is None
+    assert outputs.final_skims_omx is None
+    assert "skim" not in caplog.text.lower()
 
 
 def test_beam_postprocess_rejects_non_typed_run_outputs(tmp_path: Path) -> None:
