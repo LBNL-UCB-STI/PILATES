@@ -161,7 +161,7 @@ rm -f /global/scratch/users/$USER/sources/PILATES/PILATES-env/.last_requirements
 `job.sh` installs `consist` as follows:
 
 1. If local source exists at `CONSIST_SRC_DIR` (default `$PILATES_DIR/../consist`), install editable (`pip install -e`).
-2. Otherwise, install the PyPI requirement in `CONSIST_PYPI_PACKAGE`. The default in `job.sh` is `consist>=0.5.0`.
+2. Otherwise, install the requirement in `CONSIST_PYPI_PACKAGE` or use the pin in `hpc/requirements-hpc.txt`.
 3. Validate with `from consist import create_tracker`.
 
 Override examples:

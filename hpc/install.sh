@@ -13,7 +13,8 @@ trap 'error_exit ${LINENO} "$BASH_COMMAND" $?' ERR
 
 PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
-REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
+DEFAULT_REQUIREMENTS_FILE="$PILATES_DIR/hpc/requirements-hpc.txt"
+REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$DEFAULT_REQUIREMENTS_FILE}"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/../consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-}"
 DEFAULT_CONSIST_PYPI_PACKAGE="consist==0.5.0"
@@ -233,7 +234,7 @@ install_python_deps() {
     local filtered_req
     local current_hash
     filtered_req="$(mktemp)"
-    grep -Ev '^[[:space:]]*consist([[:space:]]|[<>=!~].*)?$' "$req_file" > "$filtered_req" || true
+    grep -Ev '^[[:space:]]*consist(\[[^]]*\])?[[:space:]]*([<>=!~@].*)?$' "$req_file" > "$filtered_req" || true
     current_hash="$(sha256sum "$filtered_req" | awk '{print $1}')"
 
     if [ ! -f "$marker" ] || [ "$current_hash" != "$(cat "$marker")" ]; then
@@ -259,7 +260,7 @@ resolve_consist_package_spec() {
 
     for req_file in "$@"; do
         if [ -f "$req_file" ]; then
-            package_spec="$(grep -E '^[[:space:]]*consist([<>=!~].*)?$' "$req_file" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            package_spec="$(grep -m 1 -E '^[[:space:]]*consist(\[[^]]*\])?[[:space:]]*([<>=!~@].*)?$' "$req_file" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
             if [ -n "$package_spec" ]; then
                 echo "$package_spec"
                 return
@@ -273,7 +274,7 @@ resolve_consist_package_spec() {
 install_consist() {
     local req_file="$1"
     local package_spec
-    package_spec="$(resolve_consist_package_spec "$req_file")"
+    package_spec="$(resolve_consist_package_spec "$req_file" "$DEFAULT_REQUIREMENTS_FILE")"
 
     if [ -d "$CONSIST_SRC_DIR" ]; then
         log "Installing editable consist from $CONSIST_SRC_DIR"

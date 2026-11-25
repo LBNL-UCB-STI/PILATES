@@ -30,6 +30,6 @@ urllib3<2.0.0
 docker
 packaging>=21.0
 uv-build>=0.8.15,<0.9.0
-consist>=0.5.0
+consist @ git+https://github.com/LBNL-UCB-STI/consist.git@f20ebefcb2733194198076e0a70dd8f897be4745
 pyhocon==0.3.61
 pytest-cov
