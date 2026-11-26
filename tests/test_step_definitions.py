@@ -190,7 +190,6 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
         "beam_postprocess",
         "beam_full_skim",
         "impacts_presim",
-        "impacts_exposure_population",
         "impacts_postsim",
         "postprocessing",
     }
@@ -303,7 +302,6 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
         "beam_postprocess": "adapter",
         "beam_full_skim": "adapter",
         "impacts_presim": "payload",
-        "impacts_exposure_population": "payload",
         "impacts_postsim": "payload",
         "activitysim_preprocess": "adapter",
         "activitysim_run": "adapter",
@@ -324,7 +322,6 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
             "beam_preprocess",
             "urbansim_postprocess",
             "postprocessing",
-            "impacts_exposure_population",
         }:
             assert contract.status == "complete"
             assert contract.reason is None

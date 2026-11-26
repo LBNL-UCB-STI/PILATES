@@ -21,7 +21,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     BEAM_PLANS_IN,
     FINAL_SKIMS_OMX,
-    IMPACTS_EXPOSURE_PERSONS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
@@ -48,7 +47,6 @@ from pilates.workflows.steps import (
     beam_postprocess,
     beam_preprocess,
     beam_run,
-    impacts_exposure_population,
     urbansim_postprocess,
     urbansim_run,
 )
@@ -249,30 +247,6 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
             )
             raw_bytes = raw_forecast.read_bytes()
             assert raw_bytes == usim_run_out.usim_datastore_h5.read_bytes()
-            exposure_run, _ = execute_step(
-                scenario=sc,
-                definition=impacts_exposure_population,
-                settings=env.settings,
-                state=env.state,
-                workspace=env.workspace,
-                stage="impacts_exposure_population",
-                year=2015,
-                iteration=None,
-                phase="prepare",
-                sim_state=SimState(
-                    land_use=LandUseState(
-                        forecast_output=usim_run_result.outputs[USIM_FORECAST_OUTPUT]
-                    )
-                ),
-            )
-            forecast_input = sc.tracker.get_run_inputs(exposure_run.run.id)[
-                USIM_FORECAST_OUTPUT
-            ]
-            assert forecast_input.id == usim_run_result.outputs[USIM_FORECAST_OUTPUT].id
-            exposure_people = pd.read_parquet(
-                exposure_run.outputs[IMPACTS_EXPOSURE_PERSONS].path
-            )
-
             _, usim_post_out = _exec_step(
                 scenario=sc,
                 definition=urbansim_postprocess,

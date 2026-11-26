@@ -3,13 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import pandas as pd
 import yaml
 from consist import Artifact, Tracker
 
 from pilates.config.models import ImpactsConfig, load_config
 from pilates.impacts import ImpactsPostsimRunner, ImpactsPresimRunner
-from pilates.impacts.population import write_exposure_population
 from pilates.impacts.settings_bridge import (
     BEAM_INPUT_CONTAINER_DIR,
     INPUT_CACHE_CONTAINER_DIR,
@@ -25,15 +23,13 @@ from pilates.workflows.artifact_keys import (
     BEAM_NETWORK_FINAL,
     BEAM_R5_OSM_FILE,
     IMPACTS_FLEET_MANIFEST,
-    IMPACTS_EXPOSURE_PERSONS,
-    IMPACTS_EXPOSURE_SOURCE,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows import orchestrator
 from pilates.workflows.dry_run import plan_pilates
-from pilates.workflows.sim_state import LandUseState, SimState
+from pilates.workflows.sim_state import SimState
 from pilates.workflows.steps import beam_run, impacts_postsim, impacts_presim
-from pilates.workflows.steps.impacts import exposure_population_paths
 from pilates.workspace import Workspace
 from scripts.run_impacts_container_smoke import FIXTURE
 
@@ -193,7 +189,7 @@ def test_build_pilates_bridge_settings_presim(tmp_path: Path) -> None:
 def test_build_pilates_bridge_settings_postsim_without_population_data(
     tmp_path: Path,
 ) -> None:
-    settings = _make_settings()
+    settings = _make_settings(pipeline_postsim={"exposure": False})
     workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings, forecast_year=2025)
 
@@ -201,193 +197,37 @@ def test_build_pilates_bridge_settings_postsim_without_population_data(
 
     assert bridge["run"]["output_run_name"] == "testrun_y2025"
     assert "population" not in bridge["impacts"]
+    assert "population_h5" not in bridge["impacts"].get("exposure", {})
 
 
-def test_exposure_binds_baseline_population_before_beam(tmp_path, monkeypatch):
-    settings = _make_settings(
-        pipeline_postsim={"exposure": True},
-        overrides={
-            "population": {"passenger_folder": "urbansim/atlas-2019"},
-            "exposure": {
-                "persons_file": "/app/beam_input/urbansim/atlas-2019/persons.parquet",
-                "primary_pm25_integration_strategy": "impute_inmap_primary_in_aermod_domain",
-            },
-        },
-    )
-    settings.run.models["travel"] = "beam"
-    settings.run.supply_demand_iters = 1
-    workspace = _make_workspace(tmp_path / "workspace", settings)
+def test_bridge_passes_raw_urbansim_h5_to_impacts(tmp_path: Path) -> None:
+    settings = _make_settings(pipeline_postsim={"exposure": True})
+    workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings, forecast_year=2018)
-    state.is_restart_run = False
-    beam = Path(workspace.get_beam_mutable_data_dir())
-    beam.mkdir(parents=True)
-    for stem in ("persons", "households"):
-        pd.DataFrame({f"{stem[:-1]}_id": [999]}).to_parquet(beam / f"{stem}.parquet")
-
-    class ReachedPresim(Exception):
-        pass
-
-    real_execute = orchestrator.execute_step
-    post_inputs = {}
-
-    def execute_until_presim(**kwargs):
-        if kwargs["definition"] is impacts_presim:
-            post_inputs.update(kwargs["sim_state"].extras)
-            raise ReachedPresim
-        return real_execute(**kwargs)
-
-    monkeypatch.setattr(orchestrator, "execute_step", execute_until_presim)
-    tracker = Tracker(
-        run_dir=Path(workspace.full_path), db_path=str(tmp_path / "provenance.duckdb")
+    population_h5 = (
+        Path(workspace.full_path)
+        / "impacts/beam-output/2018/population/urbansim.h5"
     )
-    try:
-        with tracker.scenario("exposure-flow") as scenario:
-            run = dict(
-                scenario=scenario,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                sim_state=SimState(),
-                year=2018,
-            )
-            with pytest.raises(
-                ValueError, match="requires the baseline UrbanSim HDF5"
-            ):
-                orchestrator._run_supply_demand_loop(**run)
-            assert not post_inputs
-            with pytest.raises(ValueError, match="prepared UrbanSim population"):
-                build_pilates_bridge_settings(
-                    settings, state, workspace, stage="postsim"
-                )
+    population_h5.parent.mkdir(parents=True, exist_ok=True)
+    population_h5.write_bytes(
+        (FIXTURE / "population/model_data_2018.h5").read_bytes()
+    )
 
-            baseline_h5 = FIXTURE / "population/model_data_2018.h5"
-            baseline_artifact = scenario.add_input(
-                baseline_h5, key=USIM_POPULATION_SOURCE_H5
-            )
-            run["sim_state"] = SimState(
-                land_use=LandUseState(population_source=baseline_artifact)
-            )
-            state.forecast_year = 2017
-            with pytest.raises(ValueError, match="missing exact-year tables"):
-                orchestrator._run_supply_demand_loop(**run)
-            assert not post_inputs
-            state.forecast_year = 2018
-            with pytest.raises(ReachedPresim):
-                orchestrator._run_supply_demand_loop(**run)
+    bridge = build_pilates_bridge_settings(
+        settings,
+        state,
+        workspace,
+        stage="postsim",
+        population_h5=population_h5,
+    )
 
-            files = exposure_population_paths(
-                settings=settings, state=state, workspace=workspace
-            )
-            manifest = yaml.safe_load(files[IMPACTS_EXPOSURE_SOURCE].read_text())
-            assert manifest["forecast_year"] == 2018
-            assert manifest["source_artifact_key"] == USIM_POPULATION_SOURCE_H5
-            assert manifest["source_type"] == "baseline_urbansim_input"
-            people = pd.read_parquet(files[IMPACTS_EXPOSURE_PERSONS])
-            assert len(people) == manifest["person_count"] == 37
-            assert 37 in set(people.person_id)
-            assert list(pd.read_parquet(beam / "persons.parquet").person_id) == [999]
-            lineage = tracker.get_run_inputs(
-                post_inputs[IMPACTS_EXPOSURE_PERSONS].run_id
-            )
-            assert (
-                lineage[USIM_POPULATION_SOURCE_H5].meta["source_artifact_id"]
-                == manifest["source_artifact_id"]
-            )
-
-            post_inputs.update(
-                {
-                    key: Artifact(key=key, uri=f"{key}.parquet", driver="parquet")
-                    for key in (BEAM_EMISSIONS_SKIMS, BEAM_NETWORK_FINAL)
-                }
-            )
-            bound = impacts_postsim.resolve_inputs(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                sim_state=SimState(extras=post_inputs),
-            )
-            assert (
-                bound.inputs[IMPACTS_EXPOSURE_PERSONS]
-                == post_inputs[IMPACTS_EXPOSURE_PERSONS]
-            )
-            bridge = build_pilates_bridge_settings(
-                settings,
-                state,
-                workspace,
-                stage="postsim",
-                exposure_population=tuple(files.values()),
-            )
-            assert bridge["impacts"]["population"]["passenger_folder"] == (
-                "urbansim/atlas-2019"
-            )
-            root = "/app/workspace/impacts/exposure-population/urbansim-forecast-2018"
-            assert bridge["impacts"]["exposure"] == {
-                "persons_file": f"{root}/persons.parquet",
-                "households_file": f"{root}/households.parquet",
-                "source_manifest": f"{root}/population_source.yaml",
-                "primary_pm25_integration_strategy": "impute_inmap_primary_in_aermod_domain",
-            }
-            files[IMPACTS_EXPOSURE_SOURCE].unlink()
-            with pytest.raises(ValueError, match="prepared UrbanSim population"):
-                build_pilates_bridge_settings(
-                    settings,
-                    state,
-                    workspace,
-                    stage="postsim",
-                    exposure_population=tuple(files.values()),
-                )
-            post_inputs[IMPACTS_EXPOSURE_PERSONS] = Artifact(
-                key=IMPACTS_EXPOSURE_PERSONS,
-                uri="other/persons.parquet",
-                driver="parquet",
-                run_id="other",
-            )
-            with pytest.raises(ValueError, match="same forecast preparation"):
-                impacts_postsim.resolve_inputs(
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                    sim_state=SimState(extras=post_inputs),
-                )
-    finally:
-        tracker.close()
-
-
-def test_exposure_export_retains_people_and_households_without_home_points(tmp_path):
-    forecast = tmp_path / "model_data_2018.h5"
-    forecast.write_bytes((FIXTURE / "population/model_data_2018.h5").read_bytes())
-    with pd.HDFStore(forecast, mode="a") as store:
-        persons = store["/2018/persons"]
-        extra_household = persons.loc[
-            persons["person_id"].eq(37), "household_id"
-        ].item()
-        households = store["/2018/households"]
-        households.loc[households["household_id"].eq(extra_household), "block_id"] = (
-            "missing"
+    assert bridge["impacts"]["exposure"]["population_h5"] == (
+        _to_container_path(
+            WORKSPACE_CONTAINER_DIR, str(population_h5), workspace.full_path
         )
-        store.put("/2018/households", households, format="table")
-    destination = tmp_path / "exposure"
-    write_exposure_population(
-        forecast,
-        destination,
-        year=2018,
-        source={
-            "source_run_id": "fixture-run",
-            "source_artifact_id": "fixture-artifact",
-            "source_artifact_key": USIM_POPULATION_SOURCE_H5,
-            "source_type": "baseline_urbansim_input",
-        },
     )
-    people = pd.read_parquet(destination / "persons.parquet")
-    manifest = yaml.safe_load((destination / "population_source.yaml").read_text())
-    assert len(people) == manifest["person_count"] == 37
-    assert len(pd.read_parquet(destination / "households.parquet")) == 36
-    assert (
-        people["home_x"].isna().sum()
-        == manifest["persons_missing_home_coordinates"]
-        == 2
-    )
-    assert manifest["households_missing_home_coordinates"] == 1
+    assert "persons_file" not in bridge["impacts"]["exposure"]
+    assert "households_file" not in bridge["impacts"]["exposure"]
 
 
 def test_impacts_presim_runner_run(tmp_path: Path, monkeypatch) -> None:
@@ -593,25 +433,23 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
         / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml"
     )
     settings.impacts.use_generated_fleet = True
-    settings.impacts.use_beam_osm_artifact = True
     settings.postprocessing = None
     plan = plan_pilates(settings)
 
     assert [step.step_name for step in plan.steps] == [
-        "impacts_exposure_population",
         "impacts_presim",
         "beam_preprocess",
         "beam_run",
         "beam_postprocess",
         "impacts_postsim",
     ]
-    population, presim, _, beam, _, postsim = plan.steps
-    assert postsim.inputs[IMPACTS_EXPOSURE_PERSONS] == population.step_id
+    presim, _, beam, _, postsim = plan.steps
     assert beam.inputs[IMPACTS_FLEET_MANIFEST] == presim.step_id
     assert postsim.inputs[IMPACTS_FLEET_MANIFEST] == presim.step_id
     assert postsim.inputs[BEAM_EMISSIONS_SKIMS] == beam.step_id
     assert postsim.inputs[BEAM_NETWORK_FINAL] == beam.step_id
     assert postsim.inputs[BEAM_R5_OSM_FILE] == beam.step_id
+    assert USIM_POPULATION_SOURCE_H5 in postsim.inputs
     assert "impacts_postsim_dir" in postsim.outputs
 
     settings.impacts.pipeline_postsim.exposure = False
@@ -626,7 +464,7 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
 
 
 def test_impacts_binds_selected_osm_by_beam_run_and_iteration(tmp_path):
-    settings = _make_settings(use_beam_osm_artifact=True)
+    settings = _make_settings()
     settings.beam.artifact_formats = AttrDict(activitysim_skims="zarr")
     workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings)
@@ -703,14 +541,6 @@ def test_impacts_binds_selected_osm_by_beam_run_and_iteration(tmp_path):
         Path(workspace.get_impacts_input_dir())
         / "beam-output/2020/iteration-1/beam_r5_osm_file_2020_1.osm.pbf"
     )
-
-    settings.impacts.use_beam_osm_artifact = False
-    inputs = impacts_postsim.resolve_inputs(
-        **resolve, sim_state=SimState(extras=runs[1])
-    )
-    inputs.require_complete(impacts_postsim.name)
-    assert BEAM_R5_OSM_FILE not in inputs.inputs
-
 
 def test_impacts_resume_requests_archived_fleet_and_beam_outputs(tmp_path):
     settings = _make_settings(use_generated_fleet=True)

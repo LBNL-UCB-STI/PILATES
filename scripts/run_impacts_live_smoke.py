@@ -18,7 +18,6 @@ import yaml
 from pilates.config import resolve_config_dict, validate_config
 from pilates.generic.runner import GenericRunner
 from pilates.impacts.settings_bridge import (
-    BEAM_INPUT_CONTAINER_DIR,
     WORKSPACE_CONTAINER_DIR,
 )
 from pilates.runtime.launcher import main as run_pilates
@@ -27,7 +26,6 @@ from scripts.run_impacts_container_smoke import (
     check_dispersion_outputs,
     check_generated_fleet_files,
     check_inventory_totals,
-    register_smoke_forecast,
     require_docker,
     run_logged_container,
     smoke_run_directory,
@@ -45,9 +43,7 @@ PRESIM_ACTIVITIES = Path(
 logger = logging.getLogger(__name__)
 
 
-def run_live_smoke(
-    root: Path, *, impacts_image: str, use_beam_osm_artifact: bool = False
-) -> None:
+def run_live_smoke(root: Path, *, impacts_image: str) -> None:
     docker = require_docker()
     workspace = root / f"pilates-run--sfbay--{RUN_NAME}"
     config = resolve_config_dict(BASE_SETTINGS)
@@ -82,14 +78,19 @@ def run_live_smoke(
         memory="3g",
         extra_jvm_args="-XX:ActiveProcessorCount=4",
     )
+    baseline_dir = root / "urbansim-data"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        FIXTURE / "population/model_data_2018.h5",
+        baseline_dir / "custom_mpo_06197001_model_data_2018.h5",
+    )
+    config["urbansim"]["local_data_input_folder"] = str(baseline_dir)
     config["postprocessing"] = None
     config["impacts"].update(
         local_input_folder="impacts/input",
         local_output_folder="impacts/output",
         local_inmap_data_folder=str(FIXTURE / "inmap"),
         use_generated_fleet=True,
-        use_beam_osm_artifact=use_beam_osm_artifact,
-        exposure_population_source=register_smoke_forecast(FIXTURE, root),
         overrides={
             "analysis": {
                 "targets": None,
@@ -177,7 +178,7 @@ def run_live_smoke(
     # Use real containers with networking disabled to verify the fixture is self-contained.
     with patch.object(GenericRunner, "run_container", staticmethod(run_docker)):
         run_pilates(settings=settings)
-    check_live_outputs(workspace, use_beam_osm_artifact=use_beam_osm_artifact)
+    check_live_outputs(workspace)
 
 
 def workspace_path(workspace: Path, container_path: str) -> Path:
@@ -240,7 +241,7 @@ def check_presim_outputs(workspace: Path) -> None:
         raise RuntimeError(f"Presim output validation failed: {exc}") from exc
 
 
-def check_live_outputs(workspace: Path, *, use_beam_osm_artifact: bool = False) -> None:
+def check_live_outputs(workspace: Path) -> None:
     postsim = workspace / f"impacts/output/impacts-postsim--sfbay--{RUN_LABEL}"
     manifest = read_yaml(postsim / "pipeline_manifest.yaml")
     inputs = read_yaml(workspace_path(workspace, manifest["preprocess_manifest_path"]))[
@@ -263,31 +264,26 @@ def check_live_outputs(workspace: Path, *, use_beam_osm_artifact: bool = False) 
         raise RuntimeError(
             "PILATES left the competing VEX in the BEAM launch directory."
         )
-    if use_beam_osm_artifact:
-        published_osm = (
-            beam_output
-            / ".pilates-consist-outputs"
-            / "beam_run"
-            / f"{BEAM_R5_OSM_FILE}_{YEAR}_0.osm.pbf"
+    published_osm = (
+        beam_output
+        / ".pilates-consist-outputs"
+        / "beam_run"
+        / f"{BEAM_R5_OSM_FILE}_{YEAR}_0.osm.pbf"
+    )
+    expected_osm = f"{WORKSPACE_CONTAINER_DIR}/{published_osm.relative_to(workspace)}"
+    bridge_emissions = read_yaml(
+        workspace / "impacts/output/pilates_bridge_postsim.yaml"
+    )["impacts"]["emissions"]
+    artifact_id = inputs["osm_network"].get("artifact_id")
+    source_osm = launch / "r5/sf-smoke/sf-smoke.osm.pbf"
+    if (
+        not artifact_id
+        or artifact_id != bridge_emissions["osm_network_artifact_id"]
+        or not cmp(published_osm, source_osm, shallow=False)
+    ):
+        raise RuntimeError(
+            "Postsim OSM identity or file contents differ from BEAM."
         )
-        expected_osm = (
-            f"{WORKSPACE_CONTAINER_DIR}/{published_osm.relative_to(workspace)}"
-        )
-        bridge_emissions = read_yaml(
-            workspace / "impacts/output/pilates_bridge_postsim.yaml"
-        )["impacts"]["emissions"]
-        artifact_id = inputs["osm_network"].get("artifact_id")
-        source_osm = launch / "r5/sf-smoke/sf-smoke.osm.pbf"
-        if (
-            not artifact_id
-            or artifact_id != bridge_emissions["osm_network_artifact_id"]
-            or not cmp(published_osm, source_osm, shallow=False)
-        ):
-            raise RuntimeError(
-                "Postsim OSM identity or file contents differ from BEAM."
-            )
-    else:
-        expected_osm = f"{BEAM_INPUT_CONTAINER_DIR}/sfbay/r5/sf-smoke/sf-smoke.osm.pbf"
     if inputs["osm_network"]["source_path"] != expected_osm:
         raise RuntimeError(
             "Postsim did not resolve the same OSM PBF bundled with BEAM: "
@@ -409,8 +405,6 @@ def check_live_outputs(workspace: Path, *, use_beam_osm_artifact: bool = False) 
         read_output,
         workspace / "beam/input/sfbay",
         FIXTURE / "inmap/isrm_sample.zarr",
-        workspace
-        / "impacts/exposure-population/urbansim-forecast-2018/persons.parquet",
         manifest["population_inputs"],
     )
     print(
@@ -450,18 +444,12 @@ def main() -> None:
         required=True,
         help="IMPACTS image with generated-fleet manifest support.",
     )
-    parser.add_argument(
-        "--use-beam-osm-artifact",
-        action="store_true",
-        help="Check the exact BEAM OSM handoff with an IMPACTS image that supports it.",
-    )
     args = parser.parse_args()
     try:
         with smoke_run_directory("impacts-live-sf") as directory:
             run_live_smoke(
                 directory,
                 impacts_image=args.impacts_image,
-                use_beam_osm_artifact=args.use_beam_osm_artifact,
             )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         raise SystemExit(f"IMPACTS live Docker smoke test failed: {exc}") from exc

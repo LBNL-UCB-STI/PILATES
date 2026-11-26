@@ -19,53 +19,19 @@ import pandas as pd
 import pyarrow.parquet as pq
 import yaml
 import zarr
-from consist import Tracker
 
 from pilates.config import ImpactsConfig, InfrastructureConfig
 from pilates.generic.runner import GenericRunner
 from pilates.impacts import ImpactsPostsimRunner, ImpactsPresimRunner
-from pilates.impacts.population import resolve_archived_forecast
 from pilates.impacts.settings_bridge import (
     BEAM_INPUT_CONTAINER_DIR,
     WORKSPACE_CONTAINER_DIR,
 )
 from pilates.workspace import Workspace
-from pilates.workflows.artifact_keys import USIM_FORECAST_OUTPUT
-from pilates.workflows.sim_state import LandUseState, SimState
-from pilates.workflows.step_execution import execute_step
-from pilates.workflows.steps.impacts import (
-    exposure_population_paths,
-    impacts_exposure_population,
-)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = PROJECT_ROOT / "tests/fixtures/impacts_smoke"
-
-
-def register_smoke_forecast(fixture: Path, root: Path) -> dict[str, str]:
-    forecast = fixture / "population/model_data_2018.h5"
-    database = root / "exposure-forecast.duckdb"
-    tracker = Tracker(
-        run_dir=root / "forecast", db_path=str(database), hashing_strategy="full"
-    )
-    try:
-        result = tracker.run(
-            fn=lambda: None,
-            name="smoke-urbansim-forecast",
-            model="urbansim_run",
-            year=2018,
-            output_paths={USIM_FORECAST_OUTPUT: forecast},
-        )
-    finally:
-        tracker.close()
-    return {
-        "expected_run_id": result.run.id,
-        "direction": "output",
-        "artifact_key": USIM_FORECAST_OUTPUT,
-        "source_tracker_db": str(database),
-        "expected_bytes_path": str(forecast),
-    }
 
 
 @contextmanager
@@ -317,8 +283,6 @@ def check_downstream_outputs(workspace, presim, postsim) -> None:
         read_output,
         beam_input,
         FIXTURE / "inmap/isrm_sample.zarr",
-        Path(workspace.full_path)
-        / "impacts/exposure-population/urbansim-forecast-2018/persons.parquet",
         manifest["population_inputs"],
     )
 
@@ -349,7 +313,6 @@ def check_dispersion_outputs(
     read_output,
     beam_input: Path,
     inmap_store: Path,
-    exposure_persons: Path,
     population_inputs: dict,
 ) -> None:
     inmap = read_output("beam_inmap_concentrations").set_index(
@@ -434,22 +397,13 @@ def check_dispersion_outputs(
     counts = read_output("beam_population_counts").set_index(
         "aermod_cell_id", verify_integrity=True
     )
-    expected_people = pd.read_parquet(exposure_persons)
-    source_path = exposure_persons.with_name("population_source.yaml")
-    expected_source = yaml.safe_load(source_path.read_text(encoding="utf-8"))
-    source = population_inputs["source_manifest"]
-    expected_directory = f"{WORKSPACE_CONTAINER_DIR}/impacts/exposure-population/urbansim-forecast-{expected_source['forecast_year']}"
-    if (
-        population_inputs["persons"]["source_path"]
-        != f"{expected_directory}/persons.parquet"
-        or population_inputs["households"]["source_path"]
-        != f"{expected_directory}/households.parquet"
-        or source["path"] != f"{expected_directory}/{source_path.name}"
-        or source["document"] != expected_source
-    ):
-        raise RuntimeError(
-            "IMPACTS recorded a different exposure population or source manifest."
-        )
+    source_h5 = population_inputs["h5"]
+    source_h5_path = workspace_path(source_h5["source_path"])
+    population_year = int(population_inputs["year"])
+    with pd.HDFStore(source_h5_path, mode="r") as store:
+        expected_people = store[f"/{population_year}/persons"].reset_index()
+    if source_h5_path.name != "urbansim.h5" or population_year != 2018:
+        raise RuntimeError("IMPACTS did not receive the raw 2018 UrbanSim HDF5.")
     if population_inputs["assignment"] != {
         "residents_supplied": len(expected_people),
         "residents_assigned_to_cell": len(people),
@@ -459,20 +413,22 @@ def check_dispersion_outputs(
         raise RuntimeError(
             "IMPACTS exposure manifest counts do not match the forecast and assignments."
         )
-    if sorted(people.person_id) != sorted(expected_people.person_id) or set(
-        counts.index
-    ) != set(exposure.index):
+    if len(expected_people) != population_inputs["assignment"]["residents_supplied"]:
+        raise RuntimeError("IMPACTS did not read all residents from the raw UrbanSim HDF5.")
+    if int(counts.person_count.sum()) != population_inputs["assignment"][
+        "residents_assigned_to_cell"
+    ] or set(counts.index) != set(exposure.index):
         raise RuntimeError(
-            "Exposure dropped forecast residents or assigned them outside the grid."
+            "Exposure counts do not match IMPACTS' resident assignment from the HDF5."
         )
     travel_people = pd.read_parquet(
         beam_input / "urbansim/atlas-2019/persons.parquet", columns=["person_id"]
     )
-    extra = people.loc[~people.person_id.isin(travel_people.person_id)]
-    household_members = people.loc[people.household_id.isin(extra.household_id)]
-    if len(extra) != 1 or household_members.aermod_cell_id.nunique() != 1:
+    source_people = expected_people["person_id"]
+    extra = source_people.loc[~source_people.isin(travel_people.person_id)]
+    if len(extra) != 1 or population_inputs["assignment"]["residents_supplied"] <= len(travel_people):
         raise RuntimeError(
-            "Expected the resident without a BEAM plan in their household's cell."
+            "Expected the raw UrbanSim HDF5 to include the resident absent from BEAM."
         )
     np.testing.assert_array_equal(
         counts.person_count,
@@ -534,8 +490,8 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
             settings_without_manifest = yaml.safe_load(
                 derived.read_text(encoding="utf-8")
             )
-            del settings_without_manifest["impacts"]["exposure"]["source_manifest"]
-            missing = derived.with_name("settings_postsim_missing_exposure.yaml")
+            del settings_without_manifest["impacts"]["exposure"]["population_h5"]
+            missing = derived.with_name("settings_postsim_missing_population_h5.yaml")
             missing.write_text(
                 yaml.safe_dump(settings_without_manifest), encoding="utf-8"
             )
@@ -555,15 +511,14 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
                 check=False,
             )
             with (root / "run.log").open("a", encoding="utf-8") as log:
-                log.write("Expected-failure check with the exposure source manifest omitted.\n")
+                log.write("Expected-failure check with the exposure HDF5 omitted.\n")
                 log.write(rejected.stdout)
             if (
                 rejected.returncode == 0
-                or "Postsim exposure requires explicit" not in rejected.stdout
-                or "missing: ['source_manifest']" not in rejected.stdout
+                or "Postsim exposure requires impacts.exposure.population_h5" not in rejected.stdout
             ):
                 raise RuntimeError(
-                    "IMPACTS did not reject a missing exposure manifest with BEAM inputs mounted."
+                    "IMPACTS did not reject a missing exposure HDF5 with BEAM inputs mounted."
                 )
         try:
             run_logged_container([*args, image, *container_command], root)
@@ -606,7 +561,6 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
             local_output_folder="impacts/output",
             local_inmap_data_folder=str(FIXTURE / "inmap"),
             pipeline_presim={"fleet": fleet},
-            exposure_population_source=register_smoke_forecast(FIXTURE, root),
             overrides={
                 "analysis": {
                     "targets": None,
@@ -635,6 +589,12 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
     )
     workspace = Workspace(settings, str(root), "run")
     shutil.copytree(FIXTURE / "beam", Path(workspace.full_path) / "beam")
+    population_h5 = (
+        Path(workspace.full_path)
+        / "impacts/beam-output/2018/population/urbansim.h5"
+    )
+    population_h5.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FIXTURE / "population/model_data_2018.h5", population_h5)
     beam_input = Path(workspace.get_beam_mutable_data_dir())
     duckdb_dirs = [
         assignment.parent / "duckdb"
@@ -650,37 +610,13 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
     state = SimpleNamespace(
         full_settings=settings, set_sub_stage_progress=lambda _: None
     )
-    tracker = Tracker(
-        run_dir=Path(workspace.full_path), db_path=str(root / "smoke-consist.duckdb")
-    )
-    try:
-        with tracker.scenario("smoke-exposure") as scenario:
-            forecast = resolve_archived_forecast(settings, scenario)
-            execute_step(
-                scenario=scenario,
-                definition=impacts_exposure_population,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                stage="impacts_exposure_population",
-                year=2018,
-                phase="prepare",
-                sim_state=SimState(land_use=LandUseState(forecast_output=forecast)),
-            )
-    finally:
-        tracker.close()
-    exposure = tuple(
-        exposure_population_paths(
-            settings=settings, state=state, workspace=workspace
-        ).values()
-    )
     with patch.object(GenericRunner, "run_container", staticmethod(run_docker)):
         presim = ImpactsPresimRunner("impacts", state).run(None, workspace)
         if fleet:
             check_generated_fleet(workspace)
         stage_presim_rates(workspace, presim)
         postsim = ImpactsPostsimRunner(
-            "impacts", state, exposure_population=exposure
+            "impacts", state, population_h5=population_h5
         ).run(None, workspace)
 
     activity_manifest = presim.output_dir / "activities/activities_manifest.yaml"
@@ -715,7 +651,7 @@ def main():
     parser.add_argument(
         "--image",
         required=True,
-        help="IMPACTS Docker image with explicit exposure inputs.",
+        help="IMPACTS Docker image that reads the raw UrbanSim HDF5 for exposure.",
     )
     parser.add_argument(
         "--replay-without-fleet",

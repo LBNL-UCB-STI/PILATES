@@ -7,8 +7,6 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from pilates.config.admission import PriorRunExpectation
-
 
 class ImpactsPipelinePresimConfig(BaseModel):
     """Select IMPACTS presim sub-steps."""
@@ -54,14 +52,7 @@ class ImpactsConfig(BaseModel):
     pipeline_postsim: ImpactsPipelinePostsimConfig = Field(
         default_factory=ImpactsPipelinePostsimConfig
     )
-    exposure_population_source: PriorRunExpectation | None = Field(
-        None, description="Archived UrbanSim forecast for exposure in a BEAM-only run."
-    )
     use_generated_fleet: bool = False
-    use_beam_osm_artifact: bool = Field(
-        False,
-        description="Pass BEAM's selected OSM PBF to an IMPACTS image that supports it.",
-    )
     overrides: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("shared_input_cache_folder", "local_inmap_data_folder")

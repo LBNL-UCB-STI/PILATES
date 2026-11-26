@@ -23,7 +23,7 @@ from .beam import (
 from .postprocessing import (
     postprocessing as postprocessing_definition,
 )
-from .impacts import impacts_exposure_population, impacts_postsim, impacts_presim
+from .impacts import impacts_postsim, impacts_presim
 from .atlas import (
     atlas_postprocess as atlas_postprocess,
     atlas_preprocess as atlas_preprocess,
@@ -61,7 +61,6 @@ STEP_DEFINITIONS: dict[str, StepDefinition[Any]] = {
         beam_postprocess,
         beam_full_skim,
         impacts_presim,
-        impacts_exposure_population,
         impacts_postsim,
         postprocessing_definition,
     )

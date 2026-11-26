@@ -303,8 +303,7 @@ def _beam_run_native_output_paths(
         if get_setting(settings, "run.models.impacts"):
             keys_and_suffixes[f"{BEAM_EMISSIONS_SKIMS}_{year}_{iteration}"] = ".parquet"
             keys_and_suffixes[f"{BEAM_NETWORK_FINAL}_{year}_{iteration}"] = ".csv.gz"
-            if get_setting(settings, "impacts.use_beam_osm_artifact"):
-                keys_and_suffixes[f"{BEAM_R5_OSM_FILE}_{year}_{iteration}"] = ".osm.pbf"
+            keys_and_suffixes[f"{BEAM_R5_OSM_FILE}_{year}_{iteration}"] = ".osm.pbf"
     if settings.beam.artifact_formats.activitysim_skims != "zarr":
         keys_and_suffixes[f"raw_od_skims_{year}_{iteration}"] = ".omx"
     root = _beam_run_output_root(settings=settings, state=state, workspace=workspace)
@@ -2275,12 +2274,13 @@ beam_preprocess = StepDefinition(
 
 
 def _beam_run_cache(*, settings, **kwargs):
-    include_osm = get_setting(settings, "impacts.use_beam_osm_artifact")
-    if include_osm or get_setting(settings, "impacts.use_generated_fleet"):
+    impacts_enabled = bool(get_setting(settings, "run.models.impacts"))
+    use_generated_fleet = bool(get_setting(settings, "impacts.use_generated_fleet"))
+    if impacts_enabled or use_generated_fleet:
         from pilates.workflows.steps.impacts import _impacts_cache
 
         options = _impacts_cache(**kwargs)
-        return replace(options, cache_version=2) if include_osm else options
+        return replace(options, cache_version=2) if impacts_enabled else options
     return _metadata_cache_options(cache_version=1)(**kwargs)
 
 

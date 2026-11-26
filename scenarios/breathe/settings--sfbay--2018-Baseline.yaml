@@ -29,8 +29,6 @@ impacts:
     inmap: true
     aermod: true
     exposure: true
-  # Set the verified 2018 forecast reference from the April 2026 run before launching exposure.
-  exposure_population_source: null
   overrides:
     scenario: 2018-Baseline
     population:

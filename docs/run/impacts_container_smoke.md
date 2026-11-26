@@ -1,7 +1,7 @@
 # IMPACTS container smoke test
 
 From the PILATES repository root, with Docker running and the PILATES Python
-environment active, run with an IMPACTS image that supports explicit exposure inputs:
+environment active, run with an IMPACTS image that accepts the raw UrbanSim HDF5:
 
 ```sh
 python -m scripts.run_impacts_container_smoke --image impacts:exposure-handoff-local
@@ -24,11 +24,11 @@ folder under `test-output/impacts-replay/`, including after a test failure.
   emissions keys. It independently computes InMAP primary PM2.5 and NO2 from
   the sample coefficients, checks how exposure combines InMAP and AERMOD
   concentrations, and reconciles the per-person assignments and cell counts.
-- Both smoke fixtures include a synthetic UrbanSim forecast separately from
-  the BEAM population. Each includes one extra resident with no BEAM plan.
-  The exposure check requires that resident in the output and verifies the
-  source manifest and assignment counts. The replay also checks that IMPACTS
-  rejects settings missing the source manifest with BEAM inputs mounted.
+- Both smoke fixtures include a synthetic UrbanSim HDF5 separately from the
+  BEAM population. Each includes one extra resident with no BEAM plan. The
+  exposure check requires that resident in the output and verifies the source
+  HDF5 and assignment counts. The replay also checks that IMPACTS rejects
+  exposure settings missing the HDF5 while BEAM inputs are mounted.
 
 Pass `--replay-without-fleet` to exercise the archived BEAM outputs and
 new EMFAC rates without regenerating the fleet.
@@ -44,7 +44,7 @@ With Docker running and the PILATES Python environment active, run:
 python -m scripts.run_impacts_live_smoke --impacts-image impacts:exposure-handoff-local
 ```
 
-Use a fleet-capable image that supports explicit exposure inputs. On Apple
+Use a fleet-capable image that reads the raw UrbanSim HDF5 for exposure. On Apple
 Silicon, use a local build tested under Docker Desktop.
 
 The command runs IMPACTS presim, one BEAM iteration, and IMPACTS postsim using
@@ -64,11 +64,9 @@ known vehicle types and matching county emissions keys, reconciles annualized
 pollutant mass across county, InMAP, and AERMOD allocations, and verifies
 concentrations and population exposure.
 
-With an IMPACTS image that supports explicit OSM input, add
-`--use-beam-osm-artifact` to verify that postsim reads the exact PBF selected
-by BEAM and records its Consist artifact ID. For scenario runs using such an
-image, set `impacts.use_beam_osm_artifact: true`. PILATES then requires the
-matching artifact. In the live smoke test, the PBF is available at
+The smoke test verifies that postsim reads the exact PBF selected by BEAM and
+records its Consist artifact ID. PILATES requires the matching artifact. In
+the live smoke test, the PBF is available at
 `/app/workspace/beam/output/<region>/year-<year>-iteration-<iteration>/.pilates-consist-outputs/beam_run/beam_r5_osm_file_<year>_<iteration>.osm.pbf`.
 
 R5 builds from one street network file. PILATES selects the first PBF by

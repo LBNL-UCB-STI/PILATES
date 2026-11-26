@@ -57,7 +57,7 @@ def build_pilates_bridge_settings(
     beam_output_dir: Path | None = None,
     beam_osm_file: Path | None = None,
     beam_osm_artifact_id: str | None = None,
-    exposure_population: tuple[Path | None, Path | None, Path | None] | None = None,
+    population_h5: Path | None = None,
 ) -> Dict[str, Any]:
     """
     Build the PILATES->IMPACTS bridge settings dict for the given stage,
@@ -118,23 +118,18 @@ def build_pilates_bridge_settings(
             cfg.pipeline_postsim.exposure
         )
         if cfg.pipeline_postsim.exposure:
-            from pilates.impacts.population import validate_exposure_files
-
-            directory = validate_exposure_files(
-                exposure_population, workspace=workspace, year=forecast_year
-            )
-            container_dir = _to_container_path(
+            if population_h5 is None or not population_h5.is_file():
+                raise FileNotFoundError(
+                    "IMPACTS exposure requires the UrbanSim HDF5 artifact for "
+                    f"forecast year {forecast_year}."
+                )
+            population_h5_container_path = _to_container_path(
                 WORKSPACE_CONTAINER_DIR,
-                str(directory),
+                str(population_h5),
                 str(Path(workspace.full_path).resolve()),
             )
             exposure = impacts_section.setdefault("exposure", {})
-            for key, filename in (
-                ("persons_file", "persons.parquet"),
-                ("households_file", "households.parquet"),
-                ("source_manifest", "population_source.yaml"),
-            ):
-                exposure[key] = posixpath.join(container_dir, filename)
+            exposure["population_h5"] = population_h5_container_path
         if beam_osm_file is not None:
             if not beam_osm_file.is_file() or not beam_osm_artifact_id:
                 raise ValueError(

@@ -432,39 +432,6 @@ def test_impacts_exposure_makes_baseline_urbansim_input_a_bootstrap_source(tmp_p
     assert sim_state.land_use.population_source == selected
 
 
-def test_bootstrap_input_cache_is_scoped_by_artifact_key(tmp_path):
-    class Scenario:
-        _first_step_started = False
-
-        def __init__(self):
-            self.added_keys = []
-
-        def add_input(self, path, *, key, reuse_if_unchanged=True):
-            self.added_keys.append(key)
-            return object()
-
-    scenario = Scenario()
-    source = tmp_path / "model_data.h5"
-    cache = {}
-
-    base = orchestrator._admit_bootstrap_input(
-        scenario, key="usim_datastore_base_h5", path=str(source), admitted_cache=cache
-    )
-    population = orchestrator._admit_bootstrap_input(
-        scenario,
-        key="usim_population_source_h5",
-        path=str(source),
-        admitted_cache=cache,
-    )
-
-    assert base == source
-    assert population == source
-    assert scenario.added_keys == [
-        "usim_datastore_base_h5",
-        "usim_population_source_h5",
-    ]
-
-
 def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_config_exchange_folder(
     tmp_path,
 ):
