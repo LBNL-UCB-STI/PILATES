@@ -47,8 +47,8 @@ All canonical coupler keys live in `pilates/workflows/artifact_keys.py` (`Artifa
     | :--- | :--- | :--- | :--- |
     | `usim_datastore_h5` (`USIM_DATASTORE_CURRENT_H5`) | `seed_bootstrap_artifacts_to_coupler`, `postprocessing` | `urbansim_run`, `atlas_preprocess`, `activitysim_preprocess` | Active UrbanSim HDF5 datastore for the start of the current simulation year. `USIM_DATASTORE_H5` is a compatibility alias for this key. |
     | `usim_datastore_base_h5` | `seed_bootstrap_artifacts_to_coupler`, `run_land_use_stage` | `urbansim_postprocess`, `atlas_preprocess`, `postprocessing` | Immutable base-year UrbanSim HDF5 datastore registered at scenario start and preserved across land-use stages. Used as a fallback source for static geometry or base-year tables absent from forecast outputs. |
-    | `usim_forecast_output` | `urbansim_run` | ATLAS, analytics | Byte-for-byte snapshot of the forecast HDF5 in `urbansim/data/raw_forecasts/`, captured before ATLAS, ActivitySim, or BEAM process it. |
-    | `usim_population_source_h5` | `seed_bootstrap_artifacts_to_coupler`, `urbansim_postprocess`, `atlas_postprocess` | `atlas_preprocess`, `activitysim_preprocess`, `postprocessing` | Postprocessed UrbanSim HDF5 datastore snapshot for the forecast year (updated by ATLAS when vehicle ownership is enabled, or seeded from the base datastore when land-use is disabled). |
+    | `usim_forecast_output` | `urbansim_run` | ATLAS, IMPACTS exposure, analytics | Byte-for-byte snapshot of the forecast HDF5 in `urbansim/data/raw_forecasts/`, captured before ATLAS, ActivitySim, or BEAM process it. |
+    | `usim_population_source_h5` | `seed_bootstrap_artifacts_to_coupler`, `urbansim_postprocess`, `atlas_postprocess` | `atlas_preprocess`, `activitysim_preprocess`, `impacts_exposure_population`, `postprocessing` | Full UrbanSim HDF5 population source (the current forecast when land-use runs, or the selected initial datastore when it does not). |
     | `usim_h5_updated` | `atlas_postprocess` | `atlas_preprocess` (subsequent sub-years), `activitysim_preprocess`, `postprocessing` | UrbanSim HDF5 datastore enriched with ATLAS household vehicle counts (`cars`, `vehicl`) and the `atlas_vehicles` table. |
     | `usim_population_households_table`, `usim_population_persons_table`, `usim_population_jobs_table`, `usim_population_blocks_table` | `urbansim_postprocess` | `activitysim_preprocess`, analytics | Extracted population and land-use tables (`households`, `persons`, `jobs`, `blocks`) logged as individual artifacts. |
     | `usim_input_next` / `usim_input_archive_{forecast_year}` | `postprocessing` | Next simulation year (`usim_datastore_h5`) | Assembled next-year UrbanSim HDF5 input datastore archived at the end of year $t + \Delta t$. |
@@ -91,47 +91,29 @@ All canonical coupler keys live in `pilates/workflows/artifact_keys.py` (`Artifa
 
 ---
 
-## Finding the full population before travel-model filtering
+## Selecting the full population before travel-model filtering
 
-Use the **UrbanSim forecast artifact for the analysis year** to count all people
-represented in the model. In a standard run, the `usim_forecast_output` artifact
-for 2018 contains the `/2018/persons`, `/2018/households`, and `/2018/blocks`
-tables in `urbansim/data/raw_forecasts/model_data_2018.h5`. Use the exact year
-group when extracting people and linking them to household and home-block
-data. The `usim_datastore_base_h5` seed is the population that entered the
-scenario. Its filename alone cannot establish the population's reference year.
+When UrbanSim runs, IMPACTS exposure consumes that year's `usim_forecast_output`
+artifact. The HDF5 contains year-scoped `/2018/persons`, `/2018/households`,
+and `/2018/blocks` tables for a 2018 forecast. It is captured before ActivitySim
+or BEAM can filter the population.
 
-For an older archive, open its `.consist/provenance.duckdb` read-only and find
-the forecast linked as an **output of `urbansim_run`**. Older PILATES versions
-may record it under `usim_datastore_h5`. That same key is used for several
-derived datastores, so qualify it by producing step. The step year can be
-earlier than the forecast year. The following query uses the standard 2018
-output filename and shows the artifact ID, digest, and registered locations.
+When UrbanSim is disabled, IMPACTS exposure uses the baseline
+`usim_population_source_h5` selected during PILATES bootstrap. The existing
+UrbanSim resolver checks `urbansim.local_data_input_folder` for the configured
+`input_file_template_year` filename first, then the configured
+`input_file_template` filename. It does not scan for arbitrary HDF5 files or
+infer a filename from the tables inside an HDF5. The baseline file must follow
+one of the filenames already configured by the active scenario settings.
 
-```sql
-SELECT r.id AS run_id, r.year AS step_year, a.id AS artifact_id, a.key, a.uri,
-       loc.site, loc.uri AS location_uri, loc.digest
-FROM run AS r
-JOIN run_artifact_link AS link ON link.run_id = r.id
-JOIN artifact AS a ON a.id = link.artifact_id
-LEFT JOIN artifact_location AS loc ON loc.artifact_id = a.id
-WHERE (r.model_name = 'urbansim_run' OR r.id LIKE '%urbansim_run%'
-       OR (r.model_name = 'urbansim' AND json_extract_string(r.meta, '$.phase') = 'run'))
-  AND r.status = 'completed'
-  AND link.direction = 'output'
-  AND a.key IN ('usim_forecast_output', 'usim_datastore_h5')
-  AND a.uri LIKE '%/model_data_2018.h5'
-ORDER BY (a.key = 'usim_forecast_output') DESC, (loc.site = 'archive') DESC;
-```
-
-For an older archive, check the location registered for the `archive` site
-and verify the digest when available. Look under `consist-recovery/` for the
-producer's copy. Older versions could log both forecast keys at the same
-working path, where downstream stages could replace the file. For a
-BEAM-only run, `persons_beam_in` identifies the exchange table before BEAM's
-plan filter, but that input can already be sampled or filtered upstream.
-Trace an imported population back to its source run to locate the full
-forecast for a BEAM-only analysis.
+The selected initial datastore is registered by Consist as a bootstrap input.
+IMPACTS reads the exact forecast-year tables from that artifact and records its
+artifact key, digest, counts, and coordinate coverage in
+`population_source.yaml`. No prior run database lookup is needed. If multiple
+HDF5 files exist in the directory, the configured filename templates determine
+the selected file; other HDF5 files are ignored. No BREATHE-specific filename
+override is added. Prefer a strict UrbanSim initial-datastore admission digest
+when the source must be pinned to exact bytes.
 
 ### Population for IMPACTS exposure
 
@@ -143,23 +125,10 @@ under `impacts/exposure-population/urbansim-forecast-<year>/` alongside
 `population_source.yaml`, which records the forecast identity, counts, and
 coordinate coverage. All BEAM iterations for the year reuse that pair.
 
-For a BEAM-only workflow such as BREATHE, add a verified prior-run reference
-to the scenario. The fields below refer to the archived Consist database,
-the producing **step ID**, and the corresponding archived HDF5 file.
-
-```yaml
-impacts:
-  exposure_population_source:
-    expected_run_id: "<UrbanSim producing step ID>"
-    artifact_key: usim_forecast_output
-    direction: output
-    source_tracker_db: /path/to/archived-run/.consist/provenance.duckdb
-    expected_bytes_path: /path/to/archived-run/consist-recovery/<step>/urbansim/data/model_data_2018.h5
-```
-
-Use the forecast key and path returned by the archive lookup. PILATES checks
-the archived bytes against Consist and stops before BEAM if the forecast
-cannot be verified. Postsim receives the tracked file paths as
+For a BEAM-only workflow such as BREATHE, place the baseline HDF5 in the
+configured UrbanSim input folder under the filename selected by the existing
+scenario templates. PILATES resolves and registers that file before launching BEAM.
+Postsim receives the prepared file paths as
 `impacts.exposure.persons_file`, `households_file`, and `source_manifest`.
 Use an IMPACTS image that supports these settings. The fleet population
 folder remains configured through `impacts.population.passenger_folder`.

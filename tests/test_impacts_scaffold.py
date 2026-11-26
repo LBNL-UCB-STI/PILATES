@@ -27,15 +27,15 @@ from pilates.workflows.artifact_keys import (
     IMPACTS_FLEET_MANIFEST,
     IMPACTS_EXPOSURE_PERSONS,
     IMPACTS_EXPOSURE_SOURCE,
-    USIM_FORECAST_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows import orchestrator
 from pilates.workflows.dry_run import plan_pilates
-from pilates.workflows.sim_state import SimState
+from pilates.workflows.sim_state import LandUseState, SimState
 from pilates.workflows.steps import beam_run, impacts_postsim, impacts_presim
 from pilates.workflows.steps.impacts import exposure_population_paths
 from pilates.workspace import Workspace
-from scripts.run_impacts_container_smoke import FIXTURE, register_smoke_forecast
+from scripts.run_impacts_container_smoke import FIXTURE
 
 
 class AttrDict(dict):
@@ -203,7 +203,7 @@ def test_build_pilates_bridge_settings_postsim_without_population_data(
     assert "population" not in bridge["impacts"]
 
 
-def test_exposure_binds_archived_forecast_before_beam(tmp_path, monkeypatch):
+def test_exposure_binds_baseline_population_before_beam(tmp_path, monkeypatch):
     settings = _make_settings(
         pipeline_postsim={"exposure": True},
         overrides={
@@ -240,7 +240,6 @@ def test_exposure_binds_archived_forecast_before_beam(tmp_path, monkeypatch):
     tracker = Tracker(
         run_dir=Path(workspace.full_path), db_path=str(tmp_path / "provenance.duckdb")
     )
-    source = register_smoke_forecast(FIXTURE, tmp_path)
     try:
         with tracker.scenario("exposure-flow") as scenario:
             run = dict(
@@ -252,7 +251,7 @@ def test_exposure_binds_archived_forecast_before_beam(tmp_path, monkeypatch):
                 year=2018,
             )
             with pytest.raises(
-                ValueError, match="requires impacts.exposure_population_source"
+                ValueError, match="requires the baseline UrbanSim HDF5"
             ):
                 orchestrator._run_supply_demand_loop(**run)
             assert not post_inputs
@@ -261,18 +260,13 @@ def test_exposure_binds_archived_forecast_before_beam(tmp_path, monkeypatch):
                     settings, state, workspace, stage="postsim"
                 )
 
-            from pilates.config.admission import PriorRunExpectation
-
-            corrupt = tmp_path / "wrong-forecast.h5"
-            corrupt.write_bytes(
-                Path(source["expected_bytes_path"]).read_bytes() + b"changed"
+            baseline_h5 = FIXTURE / "population/model_data_2018.h5"
+            baseline_artifact = scenario.add_input(
+                baseline_h5, key=USIM_POPULATION_SOURCE_H5
             )
-            settings.impacts.exposure_population_source = PriorRunExpectation(
-                **{**source, "expected_bytes_path": str(corrupt)}
+            run["sim_state"] = SimState(
+                land_use=LandUseState(population_source=baseline_artifact)
             )
-            with pytest.raises(ValueError, match="identity verification failed"):
-                orchestrator._run_supply_demand_loop(**run)
-            settings.impacts.exposure_population_source = PriorRunExpectation(**source)
             state.forecast_year = 2017
             with pytest.raises(ValueError, match="missing exact-year tables"):
                 orchestrator._run_supply_demand_loop(**run)
@@ -285,8 +279,9 @@ def test_exposure_binds_archived_forecast_before_beam(tmp_path, monkeypatch):
                 settings=settings, state=state, workspace=workspace
             )
             manifest = yaml.safe_load(files[IMPACTS_EXPOSURE_SOURCE].read_text())
-            assert manifest["source_run_id"] == source["expected_run_id"]
             assert manifest["forecast_year"] == 2018
+            assert manifest["source_artifact_key"] == USIM_POPULATION_SOURCE_H5
+            assert manifest["source_type"] == "baseline_urbansim_input"
             people = pd.read_parquet(files[IMPACTS_EXPOSURE_PERSONS])
             assert len(people) == manifest["person_count"] == 37
             assert 37 in set(people.person_id)
@@ -295,7 +290,7 @@ def test_exposure_binds_archived_forecast_before_beam(tmp_path, monkeypatch):
                 post_inputs[IMPACTS_EXPOSURE_PERSONS].run_id
             )
             assert (
-                lineage[USIM_FORECAST_OUTPUT].meta["source_artifact_id"]
+                lineage[USIM_POPULATION_SOURCE_H5].meta["source_artifact_id"]
                 == manifest["source_artifact_id"]
             )
 
@@ -379,6 +374,8 @@ def test_exposure_export_retains_people_and_households_without_home_points(tmp_p
         source={
             "source_run_id": "fixture-run",
             "source_artifact_id": "fixture-artifact",
+            "source_artifact_key": USIM_POPULATION_SOURCE_H5,
+            "source_type": "baseline_urbansim_input",
         },
     )
     people = pd.read_parquet(destination / "persons.parquet")

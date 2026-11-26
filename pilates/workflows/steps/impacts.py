@@ -36,6 +36,7 @@ from pilates.workflows.artifact_keys import (
     IMPACTS_POSTSIM_SETTINGS,
     IMPACTS_PRESIM_SETTINGS,
     USIM_FORECAST_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.consist_metadata import consist_step_meta
 from pilates.workflows.contracts import (
@@ -79,23 +80,42 @@ def exposure_population_paths(*, settings, state, workspace, **_):
 
 def _exposure_inputs(*, sim_state: SimState, **_):
     forecast = sim_state.land_use.forecast_output
-    if forecast is None or getattr(forecast, "key", None) != USIM_FORECAST_OUTPUT:
-        raise ValueError(
-            "IMPACTS exposure requires the raw usim_forecast_output artifact."
-        )
+    if forecast is not None and getattr(forecast, "key", None) == USIM_FORECAST_OUTPUT:
+        key, source = USIM_FORECAST_OUTPUT, forecast
+    else:
+        source = sim_state.land_use.population_source
+        if source is None or getattr(
+            source, "key", USIM_POPULATION_SOURCE_H5
+        ) != USIM_POPULATION_SOURCE_H5:
+            raise ValueError(
+                "IMPACTS exposure requires the active UrbanSim forecast or baseline "
+                "UrbanSim population-source HDF5."
+            )
+        key = USIM_POPULATION_SOURCE_H5
     return StepCallInputs(
-        inputs={USIM_FORECAST_OUTPUT: forecast},
-        required_keys=(USIM_FORECAST_OUTPUT,),
+        inputs={key: source},
+        required_keys=(key,),
     )
 
 
 def _exposure_execution_options(*, step_inputs: StepCallInputs, **_):
-    artifact = step_inputs.inputs[USIM_FORECAST_OUTPUT]
-    metadata = artifact.meta
-    digest = artifact.digest
+    artifact_key = next(iter(step_inputs.inputs))
+    artifact = step_inputs.inputs[artifact_key]
+    metadata = getattr(artifact, "meta", {}) or {}
+    digest = getattr(artifact, "digest", None)
     source = {
-        "source_run_id": metadata.get("source_run_id", artifact.run_id),
-        "source_artifact_id": metadata.get("source_artifact_id", str(artifact.id)),
+        "source_run_id": metadata.get(
+            "source_run_id", getattr(artifact, "run_id", None)
+        ),
+        "source_artifact_id": metadata.get(
+            "source_artifact_id", str(getattr(artifact, "id", artifact))
+        ),
+        "source_artifact_key": artifact_key,
+        "source_type": (
+            "urbansim_forecast"
+            if artifact_key == USIM_FORECAST_OUTPUT
+            else "baseline_urbansim_input"
+        ),
         "source_digest": metadata.get("source_digest")
         or (
             str(digest)
@@ -103,39 +123,49 @@ def _exposure_execution_options(*, step_inputs: StepCallInputs, **_):
             else None
         ),
     }
-    if not source["source_run_id"]:
+    if artifact_key == USIM_FORECAST_OUTPUT and not source["source_run_id"]:
         raise ValueError(
             "IMPACTS exposure forecast is missing its Consist producing step ID."
         )
     return replace(
         _native_execution_options(),
-        runtime_kwargs={"exposure_forecast_source": source},
+        runtime_kwargs={"exposure_population_source": source},
     )
 
 
 @define_step(
     model="impacts_exposure_population",
     name_template="impacts_exposure_population__y{year}__i{iteration}__phase_{phase}",
-    inputs={USIM_FORECAST_OUTPUT: None},
+    inputs={USIM_FORECAST_OUTPUT: None, USIM_POPULATION_SOURCE_H5: None},
+    optional_input_keys=(USIM_FORECAST_OUTPUT, USIM_POPULATION_SOURCE_H5),
     schema_outputs=tuple(_EXPOSURE_FILES),
     output_paths=_native_contract_output_paths(exposure_population_paths),
     config=lambda ctx: {
-        "forecast_source": ctx.get_runtime("exposure_forecast_source", default=None)
+        "population_source": ctx.get_runtime("exposure_population_source", default=None)
     },
     input_binding="paths",
 )
-@require_runtime_kwargs("settings", "state", "workspace", "exposure_forecast_source")
+@require_runtime_kwargs("settings", "state", "workspace", "exposure_population_source")
 def _native_exposure_population(
-    usim_forecast_output: Path, *, settings, state, workspace, exposure_forecast_source
+    usim_forecast_output: Path | None = None,
+    usim_population_source_h5: Path | None = None,
+    *,
+    settings,
+    state,
+    workspace,
+    exposure_population_source,
 ) -> None:
+    source_path = usim_forecast_output or usim_population_source_h5
+    if source_path is None:
+        raise ValueError("IMPACTS exposure received no UrbanSim population HDF5 input.")
     paths = exposure_population_paths(
         settings=settings, state=state, workspace=workspace
     )
     write_exposure_population(
-        usim_forecast_output,
+        source_path,
         paths[IMPACTS_EXPOSURE_SOURCE].parent,
         year=resolve_forecast_year(state) or settings.run.start_year,
-        source=exposure_forecast_source,
+        source=exposure_population_source,
     )
 
 

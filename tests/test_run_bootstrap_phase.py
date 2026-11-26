@@ -400,6 +400,71 @@ def test_seed_bootstrap_artifacts_to_coupler_skips_urbansim_roles_without_consum
     assert coupler.get("usim_datastore_h5") is None
 
 
+def test_impacts_exposure_makes_baseline_urbansim_input_a_bootstrap_source(tmp_path):
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    input_dir = tmp_path / "baseline-data"
+    input_dir.mkdir()
+    selected = input_dir / "model_data_2017.h5"
+    selected.write_text("baseline population", encoding="utf-8")
+    (input_dir / "model_data_2019.h5").write_text("other year", encoding="utf-8")
+
+    settings = _settings(local_data_input_folder=str(input_dir))
+    settings.run.models = SimpleNamespace(
+        land_use=None,
+        activity_demand=None,
+        vehicle_ownership=None,
+        traffic_assignment="beam",
+        impacts="impacts",
+    )
+    settings.urbansim.input_file_template_year = "model_data_{year}.h5"
+    settings.impacts = SimpleNamespace(
+        pipeline_postsim=SimpleNamespace(exposure=True)
+    )
+
+    state = _state()
+    sim_state = bootstrap_runtime.bootstrap_initial_state(
+        scenario=SimpleNamespace(coupler=None),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+    assert sim_state.land_use.population_source == selected
+
+
+def test_bootstrap_input_cache_is_scoped_by_artifact_key(tmp_path):
+    class Scenario:
+        _first_step_started = False
+
+        def __init__(self):
+            self.added_keys = []
+
+        def add_input(self, path, *, key, reuse_if_unchanged=True):
+            self.added_keys.append(key)
+            return object()
+
+    scenario = Scenario()
+    source = tmp_path / "model_data.h5"
+    cache = {}
+
+    base = orchestrator._admit_bootstrap_input(
+        scenario, key="usim_datastore_base_h5", path=str(source), admitted_cache=cache
+    )
+    population = orchestrator._admit_bootstrap_input(
+        scenario,
+        key="usim_population_source_h5",
+        path=str(source),
+        admitted_cache=cache,
+    )
+
+    assert base == source
+    assert population == source
+    assert scenario.added_keys == [
+        "usim_datastore_base_h5",
+        "usim_population_source_h5",
+    ]
+
+
 def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_config_exchange_folder(
     tmp_path,
 ):

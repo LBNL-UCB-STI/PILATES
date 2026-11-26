@@ -215,10 +215,11 @@ def _admit_bootstrap_input(
     *,
     key: str,
     path: str,
-    admitted_cache: dict[str, ArtifactRef] | None = None,
+    admitted_cache: dict[tuple[str, str], ArtifactRef] | None = None,
 ) -> ArtifactRef:
-    if admitted_cache is not None and path in admitted_cache:
-        return admitted_cache[path]
+    cache_key = (path, key)
+    if admitted_cache is not None and cache_key in admitted_cache:
+        return admitted_cache[cache_key]
     try:
         first_step_started = bool(scenario._first_step_started)
     except AttributeError:
@@ -231,13 +232,13 @@ def _admit_bootstrap_input(
                 artifact = scenario.add_input(path, key=key)
             if isinstance(artifact, Artifact):
                 if admitted_cache is not None:
-                    admitted_cache[path] = artifact
+                    admitted_cache[cache_key] = artifact
                 return artifact
         except AttributeError:
             pass
     ref = Path(path)
     if admitted_cache is not None:
-        admitted_cache[path] = ref
+        admitted_cache[cache_key] = ref
     return ref
 
 
@@ -260,7 +261,7 @@ def bootstrap_initial_state(
     demand = DemandState()
     network = NetworkState()
     extras: dict[str, ArtifactRef] = {}
-    admitted_cache: dict[str, ArtifactRef] = {}
+    admitted_cache: dict[tuple[str, str], ArtifactRef] = {}
     raw_full_path = getattr(workspace, "full_path", None)
     workspace_root = Path(str(raw_full_path)) if raw_full_path is not None else None
 
@@ -272,6 +273,12 @@ def bootstrap_initial_state(
         get_land_use_model(settings) == "urbansim"
         or get_activity_demand_model(settings) == "activitysim"
         or get_vehicle_ownership_model(settings) == "atlas"
+        or (
+            bool(get_setting(settings, "run.models.impacts"))
+            and bool(
+                get_setting(settings, "impacts.pipeline_postsim.exposure", False)
+            )
+        )
     )
     if (
         uses_input_datastore(state)
@@ -1149,16 +1156,33 @@ def _run_supply_demand_loop(
         exposure_year = resolve_forecast_year(state) or year
         if settings.impacts.pipeline_postsim.exposure:
             if get_land_use_model(settings) is None:
-                if active_recorder is None:
-                    forecast = resolve_archived_forecast(settings, scenario)
-                else:
-                    from pilates.workflows.dry_run import SymbolicArtifact
+                if sim_state.land_use.population_source is None:
+                    if active_recorder is None:
+                        if settings.impacts.exposure_population_source is None:
+                            raise ValueError(
+                                "IMPACTS exposure requires the baseline UrbanSim HDF5. "
+                                "Check urbansim.local_data_input_folder and the configured "
+                                "input_file_template_year filename."
+                            )
+                        forecast = resolve_archived_forecast(settings, scenario)
+                        sim_state = replace(
+                            sim_state,
+                            land_use=replace(
+                                sim_state.land_use, forecast_output=forecast
+                            ),
+                        )
+                    else:
+                        from pilates.workflows.dry_run import SymbolicArtifact
 
-                    forecast = SymbolicArtifact(key=USIM_FORECAST_OUTPUT)
-                sim_state = replace(
-                    sim_state,
-                    land_use=replace(sim_state.land_use, forecast_output=forecast),
-                )
+                        sim_state = replace(
+                            sim_state,
+                            land_use=replace(
+                                sim_state.land_use,
+                                population_source=SymbolicArtifact(
+                                    key=USIM_POPULATION_SOURCE_H5
+                                ),
+                            ),
+                        )
             population_result, _ = execute_step(
                 scenario=scenario,
                 definition=impacts_exposure_population,

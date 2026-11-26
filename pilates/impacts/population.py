@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 import pandas as pd
 import yaml
@@ -116,7 +117,7 @@ def resolve_archived_forecast(settings, scenario) -> Artifact:
 
 
 def write_exposure_population(
-    forecast: Path, destination: Path, *, year: int, source: dict[str, str]
+    forecast: Path, destination: Path, *, year: int, source: dict[str, Any]
 ) -> None:
     with pd.HDFStore(forecast, mode="r") as store:
         tables = [f"/{year}/{name}" for name in ("persons", "households", "blocks")]
@@ -170,6 +171,8 @@ def write_exposure_population(
         "forecast_year": year,
         "source_run_id": source["source_run_id"],
         "source_artifact_id": source["source_artifact_id"],
+        "source_artifact_key": source["source_artifact_key"],
+        "source_type": source["source_type"],
         "source_digest": digest,
         "person_count": len(persons),
         "household_count": len(households),
