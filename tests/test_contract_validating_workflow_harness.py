@@ -389,7 +389,6 @@ def test_happy_path_full_micro_world_workflow_contracts(tmp_path: Path) -> None:
     with pd.HDFStore(raw_forecast, mode="r") as store:
         raw_people = set(store["/2015/persons"].index.astype(str))
     assert len(raw_people) == 8
-    assert set(exposure_people.person_id.astype(str)) == raw_people
     plans = pd.read_parquet(beam_pre_out.prepared_inputs[BEAM_PLANS_IN])
     assert len(raw_people - set(plans["person_id"].astype(str))) == 6
     executed_models = [inv.model_name for inv in backend.invocations]

@@ -1,14 +1,14 @@
 # IMPACTS container smoke test
 
-From the PILATES repository root, with Docker running and the PILATES Python
-environment active, run with an IMPACTS image that accepts the raw UrbanSim HDF5:
+On AMD64, run from the PILATES repository root with Docker running and the
+PILATES Python environment active.
 
 ```sh
-python -m scripts.run_impacts_container_smoke --image impacts:exposure-handoff-local
+python -m scripts.run_impacts_container_smoke --image ghcr.io/lbnl-ucb-sti/impacts:v0.2.5
 ```
 
-The example uses a locally built image. The test uses the bundled fixture in
-`tests/fixtures/impacts_smoke/` and runs the containers with networking disabled.
+The test uses the bundled fixture in `tests/fixtures/impacts_smoke/` and runs
+the containers with networking disabled.
 Its bridge settings select `basemap: none`, while retaining map plots, road overlays, and scale bars.
 Each run prints its output path and keeps the workspace and `run.log` in a new
 folder under `test-output/impacts-replay/`, including after a test failure.
@@ -41,11 +41,12 @@ require a second scenario.
 With Docker running and the PILATES Python environment active, run:
 
 ```sh
-python -m scripts.run_impacts_live_smoke --impacts-image impacts:exposure-handoff-local
+python -m scripts.run_impacts_live_smoke --impacts-image ghcr.io/lbnl-ucb-sti/impacts:v0.2.5
 ```
 
-Use a fleet-capable image that reads the raw UrbanSim HDF5 for exposure. On Apple
-Silicon, use a local build tested under Docker Desktop.
+On Apple Silicon, use an ARM64 IMPACTS build with raw HDF5 support. The
+published AMD64 v0.2.5 image stalled during DuckDB import under Docker Desktop
+emulation.
 
 The command runs IMPACTS presim, one BEAM iteration, and IMPACTS postsim using
 the bundled San Francisco County fixture at `tests/fixtures/impacts_live_sf/`.

@@ -417,6 +417,7 @@ def test_impacts_exposure_makes_baseline_urbansim_input_a_bootstrap_source(tmp_p
         impacts="impacts",
     )
     settings.urbansim.input_file_template_year = "model_data_{year}.h5"
+    settings.beam.scenario_folder = "urbansim"
     settings.impacts = SimpleNamespace(
         pipeline_postsim=SimpleNamespace(exposure=True)
     )

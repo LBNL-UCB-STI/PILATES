@@ -406,6 +406,8 @@ def check_live_outputs(workspace: Path) -> None:
         workspace / "beam/input/sfbay",
         FIXTURE / "inmap/isrm_sample.zarr",
         manifest["population_inputs"],
+        workspace_root=workspace,
+        fixture_h5=FIXTURE / "population/model_data_2018.h5",
     )
     print(
         f"Verified {len(skims):,} live emissions records over {len(network):,} San Francisco road links."

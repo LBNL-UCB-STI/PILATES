@@ -5,13 +5,13 @@ run:
   models:
     impacts: impacts
 infrastructure:
-  # Exposure runs require an IMPACTS image that accepts impacts.exposure file paths.
+  # v0.2.5 reads the staged raw UrbanSim HDF5 for exposure.
   docker_images:
     beam: ghcr.io/lbnl-ucb-sti/beam:1.1.2
-    impacts: ghcr.io/lbnl-ucb-sti/impacts:v0.2.4
+    impacts: ghcr.io/lbnl-ucb-sti/impacts:v0.2.5
   singularity_images:
     beam: docker://ghcr.io/lbnl-ucb-sti/beam:1.1.2
-    impacts: docker://ghcr.io/lbnl-ucb-sti/impacts:v0.2.4
+    impacts: docker://ghcr.io/lbnl-ucb-sti/impacts:v0.2.5
 beam:
   config: scenarios/breathe/pilates--sfbay--2018-Baseline.conf
   scenario_folder: urbansim/atlas-2019

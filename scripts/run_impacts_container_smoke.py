@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from datetime import datetime
+from filecmp import cmp
 import logging
 import os
 import shutil
@@ -284,6 +285,8 @@ def check_downstream_outputs(workspace, presim, postsim) -> None:
         beam_input,
         FIXTURE / "inmap/isrm_sample.zarr",
         manifest["population_inputs"],
+        workspace_root=Path(workspace.full_path),
+        fixture_h5=FIXTURE / "population/model_data_2018.h5",
     )
 
 
@@ -314,6 +317,9 @@ def check_dispersion_outputs(
     beam_input: Path,
     inmap_store: Path,
     population_inputs: dict,
+    *,
+    workspace_root: Path,
+    fixture_h5: Path,
 ) -> None:
     inmap = read_output("beam_inmap_concentrations").set_index(
         "inmap_cell_id", verify_integrity=True
@@ -398,12 +404,18 @@ def check_dispersion_outputs(
         "aermod_cell_id", verify_integrity=True
     )
     source_h5 = population_inputs["h5"]
-    source_h5_path = workspace_path(source_h5["source_path"])
+    source_h5_path = workspace_root / Path(source_h5["source_path"]).relative_to(
+        WORKSPACE_CONTAINER_DIR
+    )
     population_year = int(population_inputs["year"])
+    if (
+        source_h5_path.name != "urbansim.h5"
+        or population_year != 2018
+        or not cmp(source_h5_path, fixture_h5, shallow=False)
+    ):
+        raise RuntimeError("IMPACTS did not receive the unchanged 2018 UrbanSim HDF5.")
     with pd.HDFStore(source_h5_path, mode="r") as store:
         expected_people = store[f"/{population_year}/persons"].reset_index()
-    if source_h5_path.name != "urbansim.h5" or population_year != 2018:
-        raise RuntimeError("IMPACTS did not receive the raw 2018 UrbanSim HDF5.")
     if population_inputs["assignment"] != {
         "residents_supplied": len(expected_people),
         "residents_assigned_to_cell": len(people),
@@ -413,22 +425,20 @@ def check_dispersion_outputs(
         raise RuntimeError(
             "IMPACTS exposure manifest counts do not match the forecast and assignments."
         )
-    if len(expected_people) != population_inputs["assignment"]["residents_supplied"]:
-        raise RuntimeError("IMPACTS did not read all residents from the raw UrbanSim HDF5.")
-    if int(counts.person_count.sum()) != population_inputs["assignment"][
-        "residents_assigned_to_cell"
-    ] or set(counts.index) != set(exposure.index):
+    if sorted(people.person_id) != sorted(expected_people.person_id) or set(
+        counts.index
+    ) != set(exposure.index):
         raise RuntimeError(
             "Exposure counts do not match IMPACTS' resident assignment from the HDF5."
         )
     travel_people = pd.read_parquet(
         beam_input / "urbansim/atlas-2019/persons.parquet", columns=["person_id"]
     )
-    source_people = expected_people["person_id"]
-    extra = source_people.loc[~source_people.isin(travel_people.person_id)]
-    if len(extra) != 1 or population_inputs["assignment"]["residents_supplied"] <= len(travel_people):
+    extra = people.loc[~people.person_id.isin(travel_people.person_id)]
+    household_members = people.loc[people.household_id.isin(extra.household_id)]
+    if len(extra) != 1 or household_members.aermod_cell_id.nunique() != 1:
         raise RuntimeError(
-            "Expected the raw UrbanSim HDF5 to include the resident absent from BEAM."
+            "Expected the resident absent from BEAM to be counted in their household's cell."
         )
     np.testing.assert_array_equal(
         counts.person_count,
