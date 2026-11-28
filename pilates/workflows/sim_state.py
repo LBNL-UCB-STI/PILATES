@@ -40,6 +40,7 @@ class LandUseState:
     merged_h5: ArtifactRef | None = None
     forecast_output: ArtifactRef | None = None
     population_source: ArtifactRef | None = None
+    initial_population_source: ArtifactRef | None = None
 
 
 @dataclass(frozen=True, slots=True)

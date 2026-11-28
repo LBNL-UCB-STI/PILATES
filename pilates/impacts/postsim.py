@@ -36,11 +36,13 @@ class ImpactsPostsimRunner(
         beam_osm_file: Path | None = None,
         beam_osm_artifact_id: str | None = None,
         population_h5: Path | None = None,
+        fleet_manifest: Path | None = None,
     ) -> None:
         super().__init__(model_name, state)
         self.beam_osm_file = beam_osm_file
         self.beam_osm_artifact_id = beam_osm_artifact_id
         self.population_h5 = population_h5
+        self.fleet_manifest = fleet_manifest
 
     def _run(
         self,
@@ -61,6 +63,7 @@ class ImpactsPostsimRunner(
             beam_osm_file=self.beam_osm_file,
             beam_osm_artifact_id=self.beam_osm_artifact_id,
             population_h5=self.population_h5,
+            fleet_manifest=self.fleet_manifest,
         )
         volumes = {
             workspace.get_beam_mutable_data_dir(): {
@@ -77,30 +80,30 @@ class ImpactsPostsimRunner(
             "bind": INPUT_CACHE_CONTAINER_DIR,
             "mode": "rw",
         }
-        if cfg.pipeline_postsim.inmap and isrm_zarr:
-            if isrm_zarr.startswith(("s3://", "gs://", "http://", "https://")):
-                pass
-            elif isrm_zarr.startswith(f"{INMAP_CONTAINER_DIR}/"):
-                if not cfg.local_inmap_data_folder:
-                    raise ValueError(
-                        "Set impacts.local_inmap_data_folder to the host directory "
-                        "containing the configured InMAP dataset."
-                    )
-                inmap_data_folder = (
-                    Path(cfg.local_inmap_data_folder).expanduser().resolve()
+        if (
+            cfg.pipeline_postsim.inmap
+            and isrm_zarr
+            and isrm_zarr.startswith(f"{INMAP_CONTAINER_DIR}/")
+        ):
+            if not cfg.local_inmap_data_folder:
+                raise ValueError(
+                    "Set impacts.local_inmap_data_folder to the host directory "
+                    "containing the configured InMAP dataset."
                 )
-                if not inmap_data_folder.is_dir():
-                    raise FileNotFoundError(
-                        "IMPACTS InMAP host data directory does not exist: "
-                        f"{inmap_data_folder}"
-                    )
-                volumes[str(inmap_data_folder)] = {
-                    "bind": INMAP_CONTAINER_DIR,
-                    "mode": "ro",
-                }
+            inmap_data_folder = Path(cfg.local_inmap_data_folder).expanduser().resolve()
+            if not inmap_data_folder.is_dir():
+                raise FileNotFoundError(
+                    "IMPACTS InMAP host data directory does not exist: "
+                    f"{inmap_data_folder}"
+                )
+            volumes[str(inmap_data_folder)] = {
+                "bind": INMAP_CONTAINER_DIR,
+                "mode": "ro",
+            }
 
-        bridge_path = Path(workspace.get_impacts_bridge_settings_path("postsim"))
-        settings_path = Path(workspace.get_impacts_settings_path("postsim"))
+        year = bridge["run"]["start_year"]
+        bridge_path = Path(workspace.get_impacts_bridge_settings_path("postsim", year))
+        settings_path = Path(workspace.get_impacts_settings_path("postsim", year))
         bridge_path.parent.mkdir(parents=True, exist_ok=True)
         bridge_path.write_text(
             yaml.safe_dump(bridge, sort_keys=False), encoding="utf-8"

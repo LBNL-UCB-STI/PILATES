@@ -21,9 +21,6 @@ impacts:
   local_output_folder: impacts/impacts_output
   local_inmap_data_folder: ${IMPACTS_INMAP_DATA_DIR}
   seed: 0
-  pipeline_presim:
-    activities: true
-    fleet: true
   pipeline_postsim:
     emissions: true
     inmap: true
@@ -40,7 +37,7 @@ impacts:
       population_sample: 0.005
       transit_sample: 1.0
     activities:
-      emissions_raw_archive: vehicle-tech/emissions/emissions_raw.tar.zst
+      emissions_raw_archive: impacts/emissions/emissions_raw.tar.zst
       region_label: SF
       model_year_groups:
         light_duty:
@@ -100,8 +97,9 @@ impacts:
           Phe:
           - Plug-in Hybrid
     fleet:
-      assignment_model: vehicle-tech/emissions/fleet_assignment.yaml
+      assignment_model: impacts/emissions/fleet_assignment.yaml
       atlas:
+        vehicles_file: urbansim/atlas-2019/vehicles--2019-Baseline--EM.parquet
         fuel_map:
           gasoline:
           - conv
@@ -121,6 +119,7 @@ impacts:
         - 200
         - 9999
     emissions:
+      vehicle_category_metadata_file: impacts/emissions/emissions_vehicle_categories.csv
       pollutants:
       - NH3
       - NOx
@@ -139,14 +138,14 @@ impacts:
     dispersions:
       inmap:
         isrm_zarr: /app/inmap/isrm_v1.2.1.zarr
-        isrm_nox_to_no2_ratios_file: vehicle-tech/dispersions/inmap/nox_to_no2_full_isrm_matrix.npz
+        isrm_nox_to_no2_ratios_file: impacts/dispersion/inmap/nox_to_no2_full_isrm_matrix.npz
         isrm_nox_to_no2_ratios_apply_tons_per_year_to_ug_per_s: false
-        grid_path: vehicle-tech/dispersions/inmap/isrm_polygon_wgs84.gpkg
+        grid_path: impacts/dispersion/inmap/isrm_polygon_wgs84.gpkg
         grid_id: isrm
         grid_epsg: 4326
       aermod:
         grid_size_meters: 100.0
-        asrv_patterns_file: vehicle-tech/dispersions/aermod/aermod_patterns_wgs84.parquet
+        asrv_patterns_file: impacts/dispersion/aermod/aermod_patterns_wgs84.parquet
         asrv_patterns_epsg: 4326
     exposure:
       primary_pm25_integration_strategy: impute_inmap_primary_in_aermod_domain

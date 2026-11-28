@@ -525,7 +525,8 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
                 log.write(rejected.stdout)
             if (
                 rejected.returncode == 0
-                or "Postsim exposure requires impacts.exposure.population_h5" not in rejected.stdout
+                or "Postsim exposure requires impacts.exposure.population_h5"
+                not in rejected.stdout
             ):
                 raise RuntimeError(
                     "IMPACTS did not reject a missing exposure HDF5 with BEAM inputs mounted."
@@ -570,8 +571,8 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
             local_input_folder="impacts/input",
             local_output_folder="impacts/output",
             local_inmap_data_folder=str(FIXTURE / "inmap"),
-            pipeline_presim={"fleet": fleet},
             overrides={
+                "pipeline": {"presim": {"fleet": fleet}},
                 "analysis": {
                     "targets": None,
                     "inventory_targets": None,
@@ -600,8 +601,7 @@ def run_smoke(root: Path, *, image: str, fleet: bool = True) -> None:
     workspace = Workspace(settings, str(root), "run")
     shutil.copytree(FIXTURE / "beam", Path(workspace.full_path) / "beam")
     population_h5 = (
-        Path(workspace.full_path)
-        / "impacts/beam-output/2018/population/urbansim.h5"
+        Path(workspace.full_path) / "impacts/beam-output/2018/population/urbansim.h5"
     )
     population_h5.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(FIXTURE / "population/model_data_2018.h5", population_h5)

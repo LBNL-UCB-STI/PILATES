@@ -40,6 +40,7 @@ RUN_LABEL = f"{RUN_NAME}_y{YEAR}"
 PRESIM_ACTIVITIES = Path(
     f"impacts/output/impacts_presim--sfbay--{RUN_LABEL}/activities"
 )
+SETTINGS_DIR = Path("impacts/output/settings") / RUN_LABEL
 logger = logging.getLogger(__name__)
 
 
@@ -90,7 +91,6 @@ def run_live_smoke(root: Path, *, impacts_image: str) -> None:
         local_input_folder="impacts/input",
         local_output_folder="impacts/output",
         local_inmap_data_folder=str(FIXTURE / "inmap"),
-        use_generated_fleet=True,
         overrides={
             "analysis": {
                 "targets": None,
@@ -190,7 +190,7 @@ def read_yaml(path: Path) -> dict:
 
 
 def check_presim_outputs(workspace: Path) -> None:
-    settings_path = workspace / "impacts/output/settings_presim.yaml"
+    settings_path = workspace / SETTINGS_DIR / "settings_presim.yaml"
     activity_path = workspace / PRESIM_ACTIVITIES / "activities_manifest.yaml"
     try:
         settings = read_yaml(settings_path)
@@ -272,7 +272,7 @@ def check_live_outputs(workspace: Path) -> None:
     )
     expected_osm = f"{WORKSPACE_CONTAINER_DIR}/{published_osm.relative_to(workspace)}"
     bridge_emissions = read_yaml(
-        workspace / "impacts/output/pilates_bridge_postsim.yaml"
+        workspace / SETTINGS_DIR / "pilates_bridge_postsim.yaml"
     )["impacts"]["emissions"]
     artifact_id = inputs["osm_network"].get("artifact_id")
     source_osm = launch / "r5/sf-smoke/sf-smoke.osm.pbf"
@@ -281,9 +281,7 @@ def check_live_outputs(workspace: Path) -> None:
         or artifact_id != bridge_emissions["osm_network_artifact_id"]
         or not cmp(published_osm, source_osm, shallow=False)
     ):
-        raise RuntimeError(
-            "Postsim OSM identity or file contents differ from BEAM."
-        )
+        raise RuntimeError("Postsim OSM identity or file contents differ from BEAM.")
     if inputs["osm_network"]["source_path"] != expected_osm:
         raise RuntimeError(
             "Postsim did not resolve the same OSM PBF bundled with BEAM: "

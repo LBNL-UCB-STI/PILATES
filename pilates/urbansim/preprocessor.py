@@ -254,7 +254,7 @@ def stage_urbansim_run_workspace(
 
 
 def resolve_urbansim_initial_datastore_source_path(
-    settings: PilatesConfig,
+    settings: PilatesConfig, *, allow_fallback: bool = True
 ) -> Optional[Path]:
     """Resolve the configured static UrbanSim initial HDF5 datastore path."""
     raw_source_uri = get_setting(
@@ -264,6 +264,8 @@ def resolve_urbansim_initial_datastore_source_path(
     source_uri_path = resolve_local_source_uri(
         str(raw_source_uri) if raw_source_uri is not None else None
     )
+    if raw_source_uri is not None and not allow_fallback:
+        return source_uri_path
     if source_uri_path is not None and source_uri_path.is_file():
         return source_uri_path
 
@@ -295,7 +297,7 @@ def resolve_urbansim_initial_datastore_source_path(
             start_year=start_year,
         )
         year_candidate = data_dir / year_specific_fname
-        if year_candidate.is_file():
+        if not allow_fallback or year_candidate.is_file():
             return year_candidate
 
     base_template = get_setting(urbansim_cfg, "input_file_template")

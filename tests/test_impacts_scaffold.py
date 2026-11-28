@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 import yaml
-from consist import Artifact, Tracker
+from consist import Artifact
+from consist.core.step_contracts import resolve_step_contract
 
-from pilates.config.models import ImpactsConfig, load_config
+from pilates.config.models import (
+    DeclaredDigestExpectation,
+    ImpactsConfig,
+    load_config,
+    resolve_config_dict,
+    validate_config,
+)
 from pilates.impacts import ImpactsPostsimRunner, ImpactsPresimRunner
 from pilates.impacts.settings_bridge import (
     BEAM_INPUT_CONTAINER_DIR,
@@ -15,23 +23,31 @@ from pilates.impacts.settings_bridge import (
     _deep_merge,
     _to_container_path,
     build_pilates_bridge_settings,
-    presim_fleet_manifest_path,
     resolve_shared_input_cache_folder,
 )
 from pilates.workflows.artifact_keys import (
     BEAM_EMISSIONS_SKIMS,
     BEAM_NETWORK_FINAL,
     BEAM_R5_OSM_FILE,
+    IMPACTS_ACTIVITIES_DIR,
+    IMPACTS_FLEET_DIR,
     IMPACTS_FLEET_MANIFEST,
     USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows import orchestrator
 from pilates.workflows.dry_run import plan_pilates
-from pilates.workflows.sim_state import SimState
+from pilates.workflows.consist_metadata import build_step_consist_kwargs
+from pilates.workflows import orchestrator
+from pilates.workflows.sim_state import LandUseState, SimState
 from pilates.workflows.steps import beam_run, impacts_postsim, impacts_presim
+from pilates.workflows.steps.impacts import validate_impacts_exposure_population
 from pilates.workspace import Workspace
 from scripts.run_impacts_container_smoke import FIXTURE
+
+BREATHE_SETTINGS = (
+    Path(__file__).resolve().parents[1]
+    / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml"
+)
 
 
 class AttrDict(dict):
@@ -117,21 +133,33 @@ def test_deep_merge_recurses_nested_dicts() -> None:
 def test_generated_fleet_postsim_uses_current_year_beam_and_forecast_fleet(
     tmp_path: Path,
 ) -> None:
-    settings = _make_settings(use_generated_fleet=True, pipeline_presim={"fleet": True})
+    settings = _make_settings(
+        overrides={"pipeline": {"presim": {"activities": False, "fleet": False}}}
+    )
+    settings.run.models["travel"] = "beam"
     state = _make_state(settings, forecast_year=2021)
     state.current_year = 2020
     workspace = _make_workspace(tmp_path, settings)
-    manifest = presim_fleet_manifest_path(settings, workspace, 2021)
+    manifest = Path(workspace.full_path) / "recovered/2021/fleet_manifest.yaml"
     manifest.parent.mkdir(parents=True)
     manifest.touch()
     beam_root = Path(workspace.get_impacts_input_dir()) / "beam-output" / "2021"
     presim = build_pilates_bridge_settings(settings, state, workspace, stage="presim")
     postsim = build_pilates_bridge_settings(
-        settings, state, workspace, stage="postsim", beam_output_dir=beam_root
+        settings,
+        state,
+        workspace,
+        stage="postsim",
+        beam_output_dir=beam_root,
+        fleet_manifest=manifest,
     )
     assert presim["impacts"]["local_input_folder"].endswith("/presim/testrun_y2021")
-    assert postsim["impacts"]["presim_fleet_manifest"].endswith(
-        "/impacts_presim--seattle--testrun_y2021/activities/fleet_manifest.yaml"
+    assert presim["impacts"]["pipeline"]["presim"] == {
+        "activities": True,
+        "fleet": True,
+    }
+    assert postsim["impacts"]["presim_fleet_manifest"] == (
+        "/app/workspace/recovered/2021/fleet_manifest.yaml"
     )
     assert postsim["beam"]["local_output_folder"] == (
         "/app/workspace/impacts/input/beam-output/2021"
@@ -205,13 +233,10 @@ def test_bridge_passes_raw_urbansim_h5_to_impacts(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings, forecast_year=2018)
     population_h5 = (
-        Path(workspace.full_path)
-        / "impacts/beam-output/2018/population/urbansim.h5"
+        Path(workspace.full_path) / "impacts/beam-output/2018/population/urbansim.h5"
     )
     population_h5.parent.mkdir(parents=True, exist_ok=True)
-    population_h5.write_bytes(
-        (FIXTURE / "population/model_data_2018.h5").read_bytes()
-    )
+    population_h5.write_bytes((FIXTURE / "population/model_data_2018.h5").read_bytes())
 
     bridge = build_pilates_bridge_settings(
         settings,
@@ -266,15 +291,22 @@ def test_impacts_presim_runner_run(tmp_path: Path, monkeypatch) -> None:
         outputs.output_dir
         == impacts_output_dir / "impacts_presim--seattle--testrun_y2025"
     )
-    assert outputs.settings_path == Path(workspace.get_impacts_settings_path("presim"))
+    assert outputs.settings_path == (
+        impacts_output_dir / "settings/testrun_y2025/settings_presim.yaml"
+    )
     assert outputs.bridge_settings_path == Path(
-        workspace.get_impacts_bridge_settings_path("presim")
+        workspace.get_impacts_bridge_settings_path("presim", 2025)
     )
     assert outputs.bridge_settings_path.exists()
 
     bridge = yaml.safe_load(outputs.bridge_settings_path.read_text(encoding="utf-8"))
     assert bridge["run"]["output_run_name"] == "testrun_y2025"
     assert bridge["impacts"]["shared_input_cache_dir"] == INPUT_CACHE_CONTAINER_DIR
+    later = ImpactsPresimRunner(
+        "impacts_presim", _make_state(settings, forecast_year=2026)
+    ).run(None, workspace)
+    assert later.settings_path != outputs.settings_path
+    assert yaml.safe_load(outputs.bridge_settings_path.read_text()) == bridge
 
 
 def test_impacts_postsim_runner_run(tmp_path: Path, monkeypatch) -> None:
@@ -359,7 +391,7 @@ def test_impacts_postsim_mounts_isrm_dataset_read_only(
         "mode": "rw",
     }
     bridge = yaml.safe_load(
-        Path(workspace.get_impacts_bridge_settings_path("postsim")).read_text(
+        Path(workspace.get_impacts_bridge_settings_path("postsim", 2025)).read_text(
             encoding="utf-8"
         )
     )
@@ -428,11 +460,7 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
     monkeypatch.setenv("IMPACTS_INMAP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("BEAM_MEMORY", "6g")
     monkeypatch.setenv("BEAM_EXTRA_JVM_ARGS", "")
-    settings = load_config(
-        Path(__file__).resolve().parents[1]
-        / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml"
-    )
-    settings.impacts.use_generated_fleet = True
+    settings = load_config(BREATHE_SETTINGS)
     settings.postprocessing = None
     plan = plan_pilates(settings)
 
@@ -444,13 +472,21 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
         "impacts_postsim",
     ]
     presim, _, beam, _, postsim = plan.steps
-    assert beam.inputs[IMPACTS_FLEET_MANIFEST] == presim.step_id
-    assert postsim.inputs[IMPACTS_FLEET_MANIFEST] == presim.step_id
+    for role in (IMPACTS_FLEET_MANIFEST, IMPACTS_ACTIVITIES_DIR, IMPACTS_FLEET_DIR):
+        assert beam.inputs[role] == presim.step_id
+        assert postsim.inputs[role] == presim.step_id
     assert postsim.inputs[BEAM_EMISSIONS_SKIMS] == beam.step_id
     assert postsim.inputs[BEAM_NETWORK_FINAL] == beam.step_id
     assert postsim.inputs[BEAM_R5_OSM_FILE] == beam.step_id
     assert USIM_POPULATION_SOURCE_H5 in postsim.inputs
     assert "impacts_postsim_dir" in postsim.outputs
+
+    beam_only = settings.model_copy(deep=True)
+    beam_only.run.models.impacts = None
+    beam_plan = plan_pilates(beam_only)
+    assert all(not step.step_name.startswith("impacts_") for step in beam_plan.steps)
+    beam = next(step for step in beam_plan.steps if step.step_name == "beam_run")
+    assert IMPACTS_FLEET_MANIFEST not in beam.inputs
 
     settings.impacts.pipeline_postsim.exposure = False
     with pytest.raises(RuntimeError, match=BEAM_EMISSIONS_SKIMS):
@@ -461,6 +497,90 @@ def test_impacts_dry_run_tracks_fleet_and_final_beam_outputs(tmp_path, monkeypat
             sim_state=SimState(),
         )
         inputs.require_complete(impacts_postsim.name)
+
+
+@pytest.mark.parametrize("invalid", ["missing_beam", "standalone_skims"])
+def test_impacts_requires_beam_simulation(tmp_path, monkeypatch, invalid):
+    monkeypatch.setenv("IMPACTS_INMAP_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BEAM_MEMORY", "6g")
+    monkeypatch.setenv("BEAM_EXTRA_JVM_ARGS", "")
+    config = resolve_config_dict(BREATHE_SETTINGS)
+    if invalid == "missing_beam":
+        config["run"]["models"]["travel"] = None
+    else:
+        config["beam"]["full_skim"] = {"run_schedule": "standalone"}
+    with pytest.raises(ValueError, match="IMPACTS requires"):
+        validate_config(config)
+
+
+@pytest.mark.parametrize(
+    ("land_use_model", "year", "message"),
+    [
+        (None, 2019, r"missing tables for 2019: /2019/persons"),
+        ("urbansim", 2018, "requires the raw UrbanSim forecast HDF5 for 2018"),
+    ],
+)
+def test_impacts_population_preflight_stops_before_presim(
+    tmp_path, monkeypatch, land_use_model, year, message
+):
+    settings = _make_settings(pipeline_postsim={"exposure": True})
+    settings.run.models.update(land_use=land_use_model, travel="beam")
+    settings.run.supply_demand_iters = 1
+    h5 = FIXTURE / "population/model_data_2018.h5"
+    sim_state = SimState(
+        land_use=LandUseState(initial_population_source=h5, population_source=h5)
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "execute_step",
+        lambda **_: pytest.fail("Exposure validation should stop before presim"),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        orchestrator._run_supply_demand_loop(
+            scenario=None,
+            settings=settings,
+            state=_make_state(settings, forecast_year=year),
+            workspace=_make_workspace(tmp_path, settings),
+            sim_state=sim_state,
+            year=year,
+        )
+
+
+@pytest.mark.parametrize("raw_forecast", [True, False])
+def test_impacts_binds_the_validated_population_artifact(tmp_path, raw_forecast):
+    settings = _make_settings(pipeline_postsim={"exposure": True})
+    workspace = _make_workspace(tmp_path, settings)
+    h5 = FIXTURE / "population/model_data_2018.h5"
+    original = h5.read_bytes()
+    settings.run.models["land_use"] = "urbansim" if raw_forecast else None
+    expectation = DeclaredDigestExpectation(
+        identity=f"sha256:file:{sha256(original).hexdigest()}"
+    )
+    settings["urbansim"] = _wrap(
+        {"admission": {"initial_datastore": {"expectation": expectation}}}
+    )
+    key = USIM_FORECAST_OUTPUT if raw_forecast else USIM_POPULATION_SOURCE_H5
+    artifact = Artifact(key=key, uri=str(h5), driver="file", run_id="source")
+    sim_state = SimState(
+        land_use=LandUseState(
+            forecast_output=artifact if raw_forecast else None,
+            initial_population_source=artifact if not raw_forecast else None,
+            population_source=tmp_path / "unrelated.h5",
+        )
+    )
+    preflight = dict(settings=settings, workspace=workspace, sim_state=sim_state)
+    validate_impacts_exposure_population(**preflight, year=2018)
+    inputs = impacts_postsim.resolve_inputs(
+        **preflight, state=_make_state(settings, forecast_year=2018)
+    )
+    assert inputs.inputs[key] is artifact
+    assert h5.read_bytes() == original
+
+    if not raw_forecast:
+        expectation.identity = f"sha256:file:{'0' * 64}"
+        with pytest.raises(ValueError, match="failed digest verification"):
+            validate_impacts_exposure_population(**preflight, year=2018)
 
 
 def test_impacts_binds_selected_osm_by_beam_run_and_iteration(tmp_path):
@@ -542,8 +662,9 @@ def test_impacts_binds_selected_osm_by_beam_run_and_iteration(tmp_path):
         / "beam-output/2020/iteration-1/beam_r5_osm_file_2020_1.osm.pbf"
     )
 
+
 def test_impacts_resume_requests_archived_fleet_and_beam_outputs(tmp_path):
-    settings = _make_settings(use_generated_fleet=True)
+    settings = _make_settings()
     workspace = _make_workspace(tmp_path, settings)
     state = _make_state(settings)
     state.is_restart_run = False
@@ -551,7 +672,7 @@ def test_impacts_resume_requests_archived_fleet_and_beam_outputs(tmp_path):
         options = step.cache_options(
             settings=settings, state=state, workspace=workspace
         )
-        assert options.cache_mode == "overwrite"
+        assert (options.cache_mode == "overwrite") == (step is not beam_run)
     state.is_restart_run = True
     for step in (impacts_presim, beam_run, impacts_postsim):
         options = step.cache_options(
@@ -560,3 +681,38 @@ def test_impacts_resume_requests_archived_fleet_and_beam_outputs(tmp_path):
         assert options.cache_mode != "overwrite"
         assert options.cache_hydration == "outputs-requested"
         assert options.cache_hydration_failure == "miss"
+
+
+@pytest.mark.parametrize("step", ["impacts_presim", "impacts_postsim"])
+def test_impacts_cache_identity_uses_active_image(step):
+    settings = _make_settings()
+    original = build_step_consist_kwargs(step, settings)
+    settings.infrastructure.docker_images["impacts"] = "impacts:v0.2.5"
+    updated = build_step_consist_kwargs(step, settings)
+    assert original["config"]["container_image"] == "impacts:latest"
+    assert updated["config"]["container_image"] == "impacts:v0.2.5"
+
+
+def test_impacts_postsim_tracks_local_source_paths(tmp_path):
+    isrm = tmp_path / "isrm" / "matrix.zarr"
+    settings = _make_settings(
+        local_inmap_data_folder=str(isrm.parent),
+        overrides={"dispersions": {"inmap": {"isrm_zarr": "/app/inmap/matrix.zarr"}}},
+    )
+    workspace = _make_workspace(tmp_path, settings)
+    contract = resolve_step_contract(
+        impacts_postsim.function,
+        year=2020,
+        iteration=0,
+        phase="run",
+        stage="impacts_postsim",
+        runtime_kwargs={
+            "settings": settings,
+            "state": _make_state(settings),
+            "workspace": workspace,
+        },
+    )
+    assert dict(contract.identity_inputs) == {
+        "impacts_beam_inputs": Path(workspace.get_beam_mutable_data_dir()),
+        "impacts_isrm_zarr": isrm,
+    }

@@ -179,16 +179,20 @@ class Workspace:
             )
         return os.path.join(self.full_path, self.settings.impacts.local_output_folder)
 
-    def get_impacts_settings_path(self, stage: str) -> str:
+    def _impacts_settings_dir(self, stage: str, year: int) -> str:
         if stage not in {"presim", "postsim"}:
             raise ValueError(f"Unknown IMPACTS stage: {stage!r}")
-        return os.path.join(self.get_impacts_output_dir(), f"settings_{stage}.yaml")
+        label = f"{self.settings.run.output_run_name}_y{year}"
+        return os.path.join(self.get_impacts_output_dir(), "settings", label)
 
-    def get_impacts_bridge_settings_path(self, stage: str) -> str:
-        if stage not in {"presim", "postsim"}:
-            raise ValueError(f"Unknown IMPACTS stage: {stage!r}")
+    def get_impacts_settings_path(self, stage: str, year: int) -> str:
         return os.path.join(
-            self.get_impacts_output_dir(), f"pilates_bridge_{stage}.yaml"
+            self._impacts_settings_dir(stage, year), f"settings_{stage}.yaml"
+        )
+
+    def get_impacts_bridge_settings_path(self, stage: str, year: int) -> str:
+        return os.path.join(
+            self._impacts_settings_dir(stage, year), f"pilates_bridge_{stage}.yaml"
         )
 
     def set_asim_mutable_data_dir_override(self, path: Optional[str]) -> None:

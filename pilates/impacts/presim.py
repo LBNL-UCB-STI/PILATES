@@ -39,8 +39,9 @@ class ImpactsPresimRunner(GenericRunner[None, ImpactsPresimOutputs, Workspace]):
             settings, self.state, workspace, stage="presim"
         )
 
-        bridge_path = Path(workspace.get_impacts_bridge_settings_path("presim"))
-        settings_path = Path(workspace.get_impacts_settings_path("presim"))
+        year = bridge["run"]["start_year"]
+        bridge_path = Path(workspace.get_impacts_bridge_settings_path("presim", year))
+        settings_path = Path(workspace.get_impacts_settings_path("presim", year))
         bridge_path.parent.mkdir(parents=True, exist_ok=True)
         bridge_path.write_text(
             yaml.safe_dump(bridge, sort_keys=False), encoding="utf-8"

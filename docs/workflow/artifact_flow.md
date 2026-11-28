@@ -99,19 +99,17 @@ and `/2018/blocks` tables for a 2018 forecast. It is captured before ActivitySim
 or BEAM can filter the population.
 
 When UrbanSim is disabled, PILATES passes the existing initial datastore HDF5
-selected by its UrbanSim resolver. It checks the configured year-specific
-filename, then the configured base filename; it does not scan arbitrary HDF5
-files or choose a nearest year. PILATES passes the HDF5 unchanged to IMPACTS.
-IMPACTS reads its exact forecast-year `persons`, `households`, and `blocks`
-tables and performs resident-to-grid assignment inside its own preprocessing.
+selected by its UrbanSim resolver. The source is the explicit
+`urbansim.admission.initial_datastore.expectation.source_uri` when configured,
+otherwise the year-specific filename when a year template is configured, or
+the configured base filename. If that file is missing, the run stops. Set
+`urbansim.admission.initial_datastore.expectation.identity` with a
+`declared_digest` expectation to pin the reviewed file's SHA-256.
 
-### Population for IMPACTS exposure
-
-When exposure is enabled, PILATES passes the raw UrbanSim HDF5 artifact to
-IMPACTS postsim alongside BEAM's network, emissions skims, and selected R5 PBF.
-IMPACTS handles reading the HDF5 tables and assigning residents to its grid.
-The existing fleet population folder remains configured through
-`impacts.population.passenger_folder`.
+Before launching BEAM, PILATES opens the selected HDF5 read-only and checks for
+the three tables for the requested year. A configured baseline digest must
+match that same file. PILATES passes the unchanged artifact to IMPACTS postsim.
+IMPACTS reads the tables and assigns residents to its grid.
 
 ## Queryable Facets in DuckDB
 

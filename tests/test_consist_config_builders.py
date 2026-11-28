@@ -106,9 +106,14 @@ def test_workspace_path_requirement_flags():
 
 
 def test_impacts_uses_registered_config_builder():
-    result = build_step_consist_kwargs("impacts_presim", _make_settings())
+    settings = _make_settings()
+    settings.infrastructure.container_manager = "singularity"
+    settings.infrastructure.singularity_images = {"impacts": "docker://impacts:v0.2.5"}
+    settings.run.models.impacts = "impacts"
+    result = build_step_consist_kwargs("impacts_presim", settings)
 
-    assert result["config"] == {"pipeline": {"presim": {"enabled": True}}}
+    assert result["config"]["pipeline"] == {"presim": {"enabled": True}}
+    assert result["config"]["container_image"] == "docker://impacts:v0.2.5"
     assert result["facet"] == result["config"]
 
 

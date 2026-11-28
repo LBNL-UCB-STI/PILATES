@@ -10,7 +10,6 @@ metadata, not a second execution path.
 
 from __future__ import annotations
 
-from dataclasses import replace
 import logging
 import os
 from pathlib import Path
@@ -26,6 +25,7 @@ import consist as cr
 from consist import (
     Artifact,
     ArtifactLike,
+    CacheOptions,
     ExecutionOptions,
     define_step,
 )
@@ -91,6 +91,8 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     BEAM_R5_OSM_FILE,
     BEAM_VEHICLES_IN,
+    IMPACTS_ACTIVITIES_DIR,
+    IMPACTS_FLEET_DIR,
     IMPACTS_FLEET_MANIFEST,
     FINAL_SKIMS_OMX,
     LINKSTATS,
@@ -1228,8 +1230,25 @@ def _resolve_beam_run_inputs(
         prior_outputs if prior_outputs is not None else beam_preprocess_outputs
     )
     required_roles = (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
-    if get_setting(settings, "impacts.use_generated_fleet"):
-        required_roles += (IMPACTS_FLEET_MANIFEST,)
+    destinations = {}
+    if get_setting(settings, "run.models.impacts"):
+        from pilates.impacts.settings_bridge import (
+            presim_fleet_dir_path,
+            presim_fleet_manifest_path,
+        )
+
+        required_roles += (
+            IMPACTS_FLEET_MANIFEST,
+            IMPACTS_ACTIVITIES_DIR,
+            IMPACTS_FLEET_DIR,
+        )
+        year = resolve_forecast_year(state) or settings.run.start_year
+        destinations = {
+            IMPACTS_ACTIVITIES_DIR: presim_fleet_manifest_path(
+                settings, workspace, year
+            ).parent,
+            IMPACTS_FLEET_DIR: presim_fleet_dir_path(settings, workspace, year),
+        }
     return _resolved_beam_inputs(
         step_name="beam_run",
         sim_state=active_sim_state,
@@ -1237,6 +1256,7 @@ def _resolve_beam_run_inputs(
         required_roles=required_roles,
         optional_roles=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
         explicit_inputs=explicit_inputs,
+        logical_destinations=destinations,
     )
 
 
@@ -1884,7 +1904,13 @@ def _archive_beam_launch_config(
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
     },
-    optional_input_keys=(LINKSTATS_WARMSTART, BEAM_VEHICLES_IN, IMPACTS_FLEET_MANIFEST),
+    optional_input_keys=(
+        LINKSTATS_WARMSTART,
+        BEAM_VEHICLES_IN,
+        IMPACTS_FLEET_MANIFEST,
+        IMPACTS_ACTIVITIES_DIR,
+        IMPACTS_FLEET_DIR,
+    ),
     schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
@@ -1897,6 +1923,8 @@ def _native_beam_run(
     linkstats_warmstart: Path | None = None,
     vehicles_beam_in: Artifact | Path | None = None,
     impacts_fleet_manifest: Path | None = None,
+    impacts_activities_dir: Path | None = None,
+    impacts_fleet_dir: Path | None = None,
     *,
     settings: SettingsLike,
     state: Any,
@@ -1905,6 +1933,8 @@ def _native_beam_run(
     beam_run_identity_closure: Any = None,
     _consist_ctx: Any,
 ) -> None:
+    # The fleet manifest references files in these Consist-staged directories.
+    del impacts_activities_dir, impacts_fleet_dir
     prepared: dict[str, Path] = {
         BEAM_PLANS_IN: plans_beam_in,
         BEAM_HOUSEHOLDS_IN: households_beam_in,
@@ -1920,10 +1950,7 @@ def _native_beam_run(
         )
         if resolved_vehicles is not None:
             prepared[BEAM_VEHICLES_IN] = Path(resolved_vehicles)
-    if (
-        get_setting(settings, "impacts.use_generated_fleet")
-        and impacts_fleet_manifest is None
-    ):
+    if get_setting(settings, "run.models.impacts") and impacts_fleet_manifest is None:
         raise ValueError("BEAM requires the IMPACTS fleet manifest for this year.")
     if beam_launch_config is None:
         year = resolve_forecast_year(state) or int(state.year)
@@ -2274,13 +2301,13 @@ beam_preprocess = StepDefinition(
 
 
 def _beam_run_cache(*, settings, **kwargs):
-    impacts_enabled = bool(get_setting(settings, "run.models.impacts"))
-    use_generated_fleet = bool(get_setting(settings, "impacts.use_generated_fleet"))
-    if impacts_enabled or use_generated_fleet:
-        from pilates.workflows.steps.impacts import _impacts_cache
-
-        options = _impacts_cache(**kwargs)
-        return replace(options, cache_version=2) if impacts_enabled else options
+    if get_setting(settings, "run.models.impacts"):
+        return CacheOptions(
+            cache_version=2,
+            cache_hydration="outputs-requested",
+            cache_hydration_failure="miss",
+            validate_cached_outputs="eager",
+        )
     return _metadata_cache_options(cache_version=1)(**kwargs)
 
 

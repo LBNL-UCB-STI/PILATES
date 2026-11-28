@@ -574,6 +574,8 @@ def test_native_steps_declare_static_consist_metadata() -> None:
                 LINKSTATS_WARMSTART,
                 "vehicles_beam_in",
                 "impacts_fleet_manifest",
+                "impacts_activities_dir",
+                "impacts_fleet_dir",
             },
             "schema_outputs": {LINKSTATS, "beam_plans_out"},
         },

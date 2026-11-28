@@ -48,6 +48,8 @@ from pilates.workflows.artifact_keys import (
     BEAM_R5_OSM_FILE,
     BEAM_VEHICLES_IN,
     FINAL_SKIMS_OMX,
+    IMPACTS_ACTIVITIES_DIR,
+    IMPACTS_FLEET_DIR,
     IMPACTS_FLEET_MANIFEST,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -59,6 +61,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
+from pilates.workflows.contracts import require_output
 from pilates.workflows.sim_state import (
     ArtifactRef,
     DemandState,
@@ -92,6 +95,7 @@ from pilates.workflows.steps import (
 from pilates.workflows.steps.postprocessing import (
     postprocessing as postprocessing_step,
 )
+from pilates.workflows.steps.impacts import validate_impacts_exposure_population
 from pilates.workspace import Workspace
 
 if TYPE_CHECKING:
@@ -259,7 +263,7 @@ def bootstrap_initial_state(
         from pilates.workflows.dry_run import SymbolicArtifact
 
     # 1. UrbanSim initial datastore
-    requires_usim = (
+    seed_usim_datastore = uses_input_datastore(state) and (
         get_land_use_model(settings) == "urbansim"
         or get_activity_demand_model(settings) == "activitysim"
         or get_vehicle_ownership_model(settings) == "atlas"
@@ -269,40 +273,48 @@ def bootstrap_initial_state(
         and bool(get_setting(settings, "impacts.pipeline_postsim.exposure", False))
         and get_land_use_model(settings) != "urbansim"
     )
-    if (
-        uses_input_datastore(state)
-        and (requires_usim or requires_exposure_population)
-        and get_setting(settings, "urbansim") is not None
-    ):
+    if requires_exposure_population and get_setting(settings, "urbansim") is None:
+        raise ValueError(
+            "IMPACTS exposure requires an UrbanSim baseline HDF5 configuration "
+            "when UrbanSim is disabled."
+        )
+    if (seed_usim_datastore or requires_exposure_population) and get_setting(
+        settings, "urbansim"
+    ) is not None:
         if plan_recorder is not None:
+            pop_ref = (
+                SymbolicArtifact(
+                    key=USIM_POPULATION_SOURCE_H5, producer_step="bootstrap"
+                )
+                if get_land_use_model(settings) != "urbansim"
+                else None
+            )
             land_use = replace(
                 land_use,
                 prior_h5=(
                     SymbolicArtifact(
                         key=USIM_DATASTORE_BASE_H5, producer_step="bootstrap"
                     )
-                    if requires_usim
+                    if seed_usim_datastore
                     else None
                 ),
                 current_h5=(
                     SymbolicArtifact(
                         key=USIM_DATASTORE_CURRENT_H5, producer_step="bootstrap"
                     )
-                    if requires_usim
+                    if seed_usim_datastore
                     else None
                 ),
-                population_source=(
-                    SymbolicArtifact(
-                        key=USIM_POPULATION_SOURCE_H5, producer_step="bootstrap"
-                    )
-                    if get_land_use_model(settings) != "urbansim"
-                    and (requires_usim or requires_exposure_population)
-                    else None
-                ),
+                population_source=pop_ref,
+                initial_population_source=pop_ref
+                if requires_exposure_population
+                else None,
             )
         else:
-            static_source = resolve_urbansim_initial_datastore_source_path(settings)
-            if static_source is not None and static_source.exists():
+            static_source = resolve_urbansim_initial_datastore_source_path(
+                settings, allow_fallback=not requires_exposure_population
+            )
+            if static_source is not None and static_source.is_file():
                 h5_path = str(static_source)
                 base_ref = (
                     _admit_bootstrap_input(
@@ -311,7 +323,7 @@ def bootstrap_initial_state(
                         path=h5_path,
                         admitted_cache=admitted_cache,
                     )
-                    if requires_usim
+                    if seed_usim_datastore
                     else None
                 )
                 curr_ref = (
@@ -321,7 +333,7 @@ def bootstrap_initial_state(
                         path=h5_path,
                         admitted_cache=admitted_cache,
                     )
-                    if requires_usim
+                    if seed_usim_datastore
                     else None
                 )
                 pop_ref = (
@@ -332,7 +344,6 @@ def bootstrap_initial_state(
                         admitted_cache=admitted_cache,
                     )
                     if get_land_use_model(settings) != "urbansim"
-                    and (requires_usim or requires_exposure_population)
                     else None
                 )
                 land_use = replace(
@@ -340,12 +351,16 @@ def bootstrap_initial_state(
                     prior_h5=base_ref,
                     current_h5=curr_ref,
                     population_source=pop_ref,
+                    initial_population_source=pop_ref
+                    if requires_exposure_population
+                    else None,
                 )
             elif requires_exposure_population:
                 raise FileNotFoundError(
-                    "IMPACTS exposure requires the baseline UrbanSim HDF5 selected by "
-                    "urbansim.local_data_input_folder and its existing filename templates. "
-                    f"Resolved candidate: {static_source}"
+                    "IMPACTS exposure could not find the configured UrbanSim baseline "
+                    f"HDF5 for run start year {settings.run.start_year}: {static_source}. "
+                    "Check urbansim.admission.initial_datastore.expectation.source_uri "
+                    "or urbansim.local_data_input_folder and its filename templates."
                 )
 
     # 2. Initial skims
@@ -1166,6 +1181,13 @@ def _run_supply_demand_loop(
     if impacts_enabled and state.iteration < total_iters:
         if get_traffic_assignment_model(settings) != "beam":
             raise ValueError("IMPACTS requires BEAM as the travel model.")
+        if active_recorder is None and settings.impacts.pipeline_postsim.exposure:
+            validate_impacts_exposure_population(
+                settings=settings,
+                workspace=workspace,
+                sim_state=sim_state,
+                year=resolve_forecast_year(state) or year,
+            )
         presim_result, _ = execute_step(
             scenario=scenario,
             definition=impacts_presim,
@@ -1179,16 +1201,23 @@ def _run_supply_demand_loop(
             sim_state=sim_state,
             plan_recorder=active_recorder,
         )
-        if settings.impacts.use_generated_fleet:
-            sim_state = replace(
-                sim_state,
-                extras={
-                    **sim_state.extras,
-                    IMPACTS_FLEET_MANIFEST: presim_result.outputs[
-                        IMPACTS_FLEET_MANIFEST
-                    ],
+        presim_roles = (
+            IMPACTS_ACTIVITIES_DIR,
+            IMPACTS_FLEET_DIR,
+            IMPACTS_FLEET_MANIFEST,
+        )
+        sim_state = replace(
+            sim_state,
+            extras={
+                **sim_state.extras,
+                **{
+                    key: require_output(
+                        presim_result.outputs, step_name=impacts_presim.name, key=key
+                    )
+                    for key in presim_roles
                 },
-            )
+            },
+        )
 
     for it in range(state.iteration, total_iters):
         state.iteration = it

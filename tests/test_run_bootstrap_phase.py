@@ -418,9 +418,7 @@ def test_impacts_exposure_makes_baseline_urbansim_input_a_bootstrap_source(tmp_p
     )
     settings.urbansim.input_file_template_year = "model_data_{year}.h5"
     settings.beam.scenario_folder = "urbansim"
-    settings.impacts = SimpleNamespace(
-        pipeline_postsim=SimpleNamespace(exposure=True)
-    )
+    settings.impacts = SimpleNamespace(pipeline_postsim=SimpleNamespace(exposure=True))
 
     state = _state()
     sim_state = bootstrap_runtime.bootstrap_initial_state(
@@ -431,6 +429,43 @@ def test_impacts_exposure_makes_baseline_urbansim_input_a_bootstrap_source(tmp_p
     )
 
     assert sim_state.land_use.population_source == selected
+    assert sim_state.land_use.initial_population_source == selected
+
+    selected.unlink()
+    (input_dir / "usim_000.h5").write_text("another population", encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match=selected.name):
+        bootstrap_runtime.bootstrap_initial_state(
+            scenario=SimpleNamespace(coupler=None),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+
+    selected.write_text("baseline population", encoding="utf-8")
+    missing_pin = input_dir / "pinned_population.h5"
+    settings.urbansim.admission = SimpleNamespace(
+        initial_datastore=SimpleNamespace(
+            expectation=SimpleNamespace(source_uri=str(missing_pin))
+        )
+    )
+    with pytest.raises(FileNotFoundError, match=missing_pin.name):
+        bootstrap_runtime.bootstrap_initial_state(
+            scenario=SimpleNamespace(coupler=None),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+
+    settings.urbansim = None
+    with pytest.raises(
+        ValueError, match="requires an UrbanSim baseline HDF5 configuration"
+    ):
+        bootstrap_runtime.bootstrap_initial_state(
+            scenario=SimpleNamespace(coupler=None),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
 
 
 def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_config_exchange_folder(

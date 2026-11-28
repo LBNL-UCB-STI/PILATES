@@ -29,7 +29,6 @@ from .beam import (
 from .impacts import (
     ImpactsConfig,
     ImpactsPipelinePostsimConfig,
-    ImpactsPipelinePresimConfig,
 )
 from .models import (
     AtlasConfig,
@@ -74,7 +73,6 @@ __all__ = [
     "FullSkimsCreatorConfig",
     "ImpactsConfig",
     "ImpactsPipelinePostsimConfig",
-    "ImpactsPipelinePresimConfig",
     "GeographyConfig",
     "HasRunSettings",
     "InfrastructureConfig",

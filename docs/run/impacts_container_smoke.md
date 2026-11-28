@@ -55,6 +55,8 @@ and runs BEAM with a 3 GB Java heap. Each run prints its output path and keeps t
 workspace and `run.log` in a new folder under `test-output/impacts-live-sf/`,
 including after a test failure. Once the images are available, the containers
 run with networking disabled. The command fails if Docker is unavailable.
+The bridge and derived settings for each year are saved together under the
+IMPACTS output directory at `settings/<run-name>_y<year>/`.
 
 Before BEAM starts, the test checks that presim's manifests describe the
 expected run and year, that all source vehicle and tour IDs are preserved, and
@@ -77,22 +79,39 @@ and rejects it before IMPACTS presim.
 
 ## BREATHE deployment
 
-For a live BREATHE run, use an IMPACTS image that implements
-`fleet_manifest.yaml` and set `impacts.use_generated_fleet: true`. Check that
-`impacts.overrides.fleet.atlas.vehicles_file` identifies the source ATLAS vehicle
-table if it has a different name from `vehicles.parquet`. The BREATHE ATLAS
-table includes the required source columns in
-`urbansim/atlas-2019/vehicles--2019-Baseline--EM.parquet`. Run the 2018 interval
-with the supplied EMFAC archive, which contains 2018 data. PILATES archives the
-presim activities and generated fleet, then binds the final BEAM network and
-Parquet emissions skims to postsim. It also archives the postsim results,
+Enabling IMPACTS in `run.models` runs both EMFAC activities and fleet
+generation in presim. PILATES binds the generated passenger and freight fleet
+to BEAM through Consist. With the pinned IMPACTS v0.2.5 image, presim writes
+`activities_manifest.yaml` and `fleet_manifest.yaml`. PILATES gives postsim
+the fleet manifest path in `impacts.presim_fleet_manifest` alongside the final
+BEAM network, OSM PBF, and Parquet emissions skims.
+BREATHE specifies its source ATLAS vehicles file through
+`impacts.overrides.fleet.atlas.vehicles_file` and uses the supplied 2018 EMFAC
+archive. In the SF Bay production data, `impacts/emissions/` holds the raw EMFAC
+archive, fleet assignment rules, and vehicle-category catalog.
+`impacts/dispersion/` holds the InMAP grid, NOₓ-to-NO₂ matrix, and AERMOD patterns.
+The scenario resolves these paths under `/app/beam_input/sfbay`. Deploy the updated
+production data together with the scenario settings. IMPACTS v0.2.5 omits the
+explicit vehicle-category path when writing derived settings, so the production
+data provides a relative link at `vehicle-tech/emissions/emissions_vehicle_categories.csv`.
+Keep that link until the deployed IMPACTS image preserves the configured path.
+The optional `impacts/baseline/beam_concentration_distribution.parquet` is a
+saved IMPACTS result for delta comparisons and requires an explicit analysis
+setting.
+
+The BREATHE 2018 Census bundle is distributed under `impacts/census/`. To use it
+offline, unpack the versioned archive into the shared cache directory mounted
+at `/app/impacts_cache`. The UrbanSim HDF5 and the ISRM Zarr use their existing
+inputs and mounts.
+
+PILATES archives the presim activities, generated fleet, and postsim results,
 including the emissions, concentration, and exposure tables. IMPACTS postsim runs
 independently of general postprocessing. Configure `IMPACTS_INMAP_DATA_DIR` on the
 machine that runs the container.
 
-IMPACTS v0.2.0 writes `dispersion_completed: false` in the final exposure
-manifest even when both dispersion stages ran. The replay verifies the
-referenced concentration tables and their values directly.
+Consist can reuse BEAM results when its inputs match, including the generated
+fleet files. Fresh IMPACTS steps still run because some sources
+can be downloaded at runtime.
 
 The launcher sets `LD_LIBRARY_PATH=/opt/conda/lib` inside the v0.2.0 image so
 postsim can load the C++ runtime bundled with its SQLite dependencies.

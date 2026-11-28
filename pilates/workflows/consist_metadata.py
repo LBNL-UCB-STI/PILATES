@@ -482,7 +482,24 @@ def build_postprocessing_facet(settings: PilatesConfig) -> Dict[str, Any]:
 
 
 def build_impacts_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
-    return settings.impacts.model_dump() if settings.impacts is not None else {}
+    if settings.impacts is None:
+        return {}
+    from pilates.generic.runner import GenericRunner
+
+    _, image = GenericRunner.get_model_and_image(settings, "impacts")
+    return {
+        **settings.impacts.model_dump(),
+        "container_image": image,
+        "container_manager": settings.infrastructure.container_manager,
+        "output_run_name": settings.run.output_run_name,
+        "region": settings.run.region,
+        "scenario": settings.run.scenario,
+        "geography": {
+            "FIPS": settings.shared.geography.FIPS,
+            "local_crs": settings.shared.geography.local_crs,
+        },
+        "router_directory": settings.beam.router_directory,
+    }
 
 
 def build_impacts_facet(settings: PilatesConfig) -> Dict[str, Any]:
@@ -1088,6 +1105,40 @@ def consist_step_meta(
                     **dict(resolved.get("config") or {}),
                     "beam_run_identity": closure,
                 }
+        if model == "beam_run" and get_setting(settings, "run.models.impacts"):
+            from pilates.generic.runner import GenericRunner
+
+            _, image = GenericRunner.get_model_and_image(settings, "travel_model")
+            resolved["config"] = {
+                **dict(resolved.get("config") or {}),
+                "container_image": image,
+                "container_manager": settings.infrastructure.container_manager,
+            }
+        if (
+            model in ("impacts_presim", "impacts_postsim")
+            and workspace is not None
+            and get_setting(settings, "impacts") is not None
+        ):
+            input_root = Path(workspace.get_beam_mutable_data_dir())
+            identity_inputs = [("impacts_beam_inputs", input_root)]
+            if model == "impacts_postsim":
+                zarr = get_setting(
+                    settings.impacts.overrides, "dispersions.inmap.isrm_zarr"
+                )
+                mount = settings.impacts.local_inmap_data_folder
+                if (
+                    settings.impacts.pipeline_postsim.inmap
+                    and mount
+                    and isinstance(zarr, str)
+                ):
+                    from pilates.impacts.postsim import INMAP_CONTAINER_DIR
+
+                    if zarr.startswith(f"{INMAP_CONTAINER_DIR}/"):
+                        dataset = Path(mount).expanduser() / Path(zarr).relative_to(
+                            INMAP_CONTAINER_DIR
+                        )
+                        identity_inputs.append(("impacts_isrm_zarr", dataset))
+            resolved["identity_inputs"] = identity_inputs
         contract_report = _contract_report(
             adapter=adapter,
             payload=resolved.get("config"),

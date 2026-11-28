@@ -9,11 +9,20 @@ from consist import (
     define_step,
     require_runtime_kwargs,
 )
+from pandas import HDFStore
+from tables import HDF5ExtError
 
 from pilates.config.models import PilatesConfig
 from pilates.impacts.postsim import ImpactsPostsimRunner
 from pilates.impacts.presim import ImpactsPresimRunner
-from pilates.impacts.settings_bridge import presim_fleet_manifest_path
+from pilates.impacts.settings_bridge import (
+    presim_fleet_dir_path,
+    presim_fleet_manifest_path,
+)
+from pilates.urbansim.admission import check_urbansim_datastore_identity
+from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.io import get_land_use_model
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     BEAM_EMISSIONS_SKIMS,
     BEAM_NETWORK_FINAL,
@@ -23,10 +32,12 @@ from pilates.workflows.artifact_keys import (
     IMPACTS_FLEET_DIR,
     IMPACTS_FLEET_MANIFEST,
     IMPACTS_PIPELINE_MANIFEST,
+    IMPACTS_POSTSIM_BRIDGE,
     IMPACTS_POSTPROCESS_MANIFEST,
     IMPACTS_POSTSIM_DIR,
     IMPACTS_POSTSIM_SETTINGS,
     IMPACTS_PRESIM_SETTINGS,
+    IMPACTS_PRESIM_BRIDGE,
     USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
@@ -37,7 +48,7 @@ from pilates.workflows.contracts import (
     StepCallInputs,
     StepDefinition,
 )
-from pilates.workflows.sim_state import SimState
+from pilates.workflows.sim_state import ArtifactRef, SimState
 from pilates.workflows.state import WorkflowState
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.steps.beam import _beam_run_native_output_paths
@@ -54,27 +65,28 @@ _IMPACTS_INPUT_CONTRACT = InputContract(
     config_contract=ConfigContract.payload(),
 )
 
+
 def _presim_paths(*, settings, state, workspace, **_):
     if getattr(settings, "impacts", None) is None:
         return {}
-    paths = {
-        IMPACTS_PRESIM_SETTINGS: Path(workspace.get_impacts_settings_path("presim"))
-    }
     year = resolve_forecast_year(state) or settings.run.start_year
     manifest = presim_fleet_manifest_path(settings, workspace, year)
-    presim = settings.impacts.pipeline_presim
-    if presim.activities or presim.fleet:
-        paths[IMPACTS_ACTIVITIES_DIR] = OutputArtifactSpec(
+    return {
+        IMPACTS_PRESIM_SETTINGS: Path(
+            workspace.get_impacts_settings_path("presim", year)
+        ),
+        IMPACTS_PRESIM_BRIDGE: Path(
+            workspace.get_impacts_bridge_settings_path("presim", year)
+        ),
+        IMPACTS_ACTIVITIES_DIR: OutputArtifactSpec(
             path=manifest.parent, meta={"directory_artifact": True}
-        )
-    if settings.impacts.use_generated_fleet:
-        paths[IMPACTS_FLEET_MANIFEST] = manifest
-        label = f"{settings.run.output_run_name}_y{year}"
-        paths[IMPACTS_FLEET_DIR] = OutputArtifactSpec(
-            path=Path(workspace.get_impacts_input_dir()) / "presim" / label / "emfac",
+        ),
+        IMPACTS_FLEET_MANIFEST: manifest,
+        IMPACTS_FLEET_DIR: OutputArtifactSpec(
+            path=presim_fleet_dir_path(settings, workspace, year),
             meta={"directory_artifact": True},
-        )
-    return paths
+        ),
+    }
 
 
 def _presim_inputs(*, settings, workspace, **_):
@@ -101,7 +113,12 @@ def _postsim_paths(*, settings, state, workspace, **_):
         IMPACTS_POSTSIM_DIR: OutputArtifactSpec(
             path=root, meta={"directory_artifact": True}
         ),
-        IMPACTS_POSTSIM_SETTINGS: Path(workspace.get_impacts_settings_path("postsim")),
+        IMPACTS_POSTSIM_SETTINGS: Path(
+            workspace.get_impacts_settings_path("postsim", year)
+        ),
+        IMPACTS_POSTSIM_BRIDGE: Path(
+            workspace.get_impacts_bridge_settings_path("postsim", year)
+        ),
         IMPACTS_PIPELINE_MANIFEST: root / "pipeline_manifest.yaml",
         IMPACTS_POSTPROCESS_MANIFEST: root / "postprocess_manifest.yaml",
     }
@@ -110,6 +127,62 @@ def _postsim_paths(*, settings, state, workspace, **_):
             root / "exposure/beam_concentration_distribution.parquet"
         )
     return paths
+
+
+def _exposure_population_source(
+    settings: PilatesConfig, sim_state: SimState, year: int
+) -> tuple[str, ArtifactRef]:
+    if get_land_use_model(settings) == "urbansim":
+        forecast = sim_state.land_use.forecast_output
+        if forecast is None or getattr(forecast, "key", None) != USIM_FORECAST_OUTPUT:
+            raise ValueError(
+                f"IMPACTS exposure requires the raw UrbanSim forecast HDF5 for {year}."
+            )
+        return USIM_FORECAST_OUTPUT, forecast
+    baseline = sim_state.land_use.initial_population_source
+    if baseline is None:
+        raise ValueError(
+            f"IMPACTS exposure requires the configured UrbanSim baseline HDF5 for {year}."
+        )
+    return USIM_POPULATION_SOURCE_H5, baseline
+
+
+def validate_impacts_exposure_population(
+    *, settings: PilatesConfig, workspace: Workspace, sim_state: SimState, year: int
+) -> None:
+    key, source = _exposure_population_source(settings, sim_state, year)
+    file_path = artifact_to_existing_path(source, workspace=workspace)
+    if file_path is None or not Path(file_path).is_file():
+        raise FileNotFoundError(
+            f"IMPACTS exposure cannot open the UrbanSim HDF5 for {year}: "
+            f"{getattr(source, 'uri', source)}"
+        )
+    try:
+        with HDFStore(file_path, mode="r") as store:
+            required_tables = [
+                f"/{year}/{name}" for name in ("persons", "households", "blocks")
+            ]
+            missing = [table for table in required_tables if table not in store]
+    except (OSError, ValueError, HDF5ExtError) as exc:
+        raise ValueError(
+            f"IMPACTS exposure cannot read the UrbanSim HDF5 for {year}: {file_path}"
+        ) from exc
+    if missing:
+        raise ValueError(
+            f"IMPACTS exposure UrbanSim HDF5 {file_path} is missing tables for {year}: "
+            f"{', '.join(missing)}"
+        )
+    if key == USIM_POPULATION_SOURCE_H5:
+        expectation = get_setting(
+            settings, "urbansim.admission.initial_datastore.expectation"
+        )
+        if expectation is not None:
+            report = check_urbansim_datastore_identity(Path(file_path), expectation)
+            if report.outcome != "verified":
+                raise ValueError(
+                    f"IMPACTS exposure UrbanSim baseline HDF5 for {year} failed "
+                    f"digest verification ({report.outcome}): {file_path}"
+                )
 
 
 def _postsim_inputs(*, settings, state, workspace, sim_state: SimState, **_):
@@ -123,18 +196,9 @@ def _postsim_inputs(*, settings, state, workspace, sim_state: SimState, **_):
         "impacts_beam_events": root / "ITERS/it.0/0.events.parquet",
     }
     if settings.impacts.pipeline_postsim.exposure:
-        forecast = sim_state.land_use.forecast_output
-        if forecast is not None and getattr(forecast, "key", None) == USIM_FORECAST_OUTPUT:
-            population_key, population_h5 = USIM_FORECAST_OUTPUT, forecast
-        else:
-            population_key, population_h5 = (
-                USIM_POPULATION_SOURCE_H5,
-                sim_state.land_use.population_source,
-            )
-        if population_h5 is None:
-            raise ValueError(
-                "IMPACTS exposure requires the existing UrbanSim HDF5 artifact."
-            )
+        population_key, population_h5 = _exposure_population_source(
+            settings, sim_state, year
+        )
         required += (population_key,)
         candidates[population_key] = population_h5
         destinations[population_key] = root / "population" / "urbansim.h5"
@@ -166,11 +230,17 @@ def _postsim_inputs(*, settings, state, workspace, sim_state: SimState, **_):
             osm_path = root / f"iteration-{state.iteration}" / osm_path.name
         destinations[BEAM_R5_OSM_FILE] = osm_path
         candidates[BEAM_R5_OSM_FILE] = osm
-    if settings.impacts.use_generated_fleet:
-        required += (IMPACTS_FLEET_MANIFEST,)
+    required += (IMPACTS_ACTIVITIES_DIR, IMPACTS_FLEET_MANIFEST, IMPACTS_FLEET_DIR)
+    destinations[IMPACTS_ACTIVITIES_DIR] = presim_fleet_manifest_path(
+        settings, workspace, year
+    ).parent
+    destinations[IMPACTS_FLEET_MANIFEST] = root / "presim/fleet_manifest.yaml"
+    destinations[IMPACTS_FLEET_DIR] = presim_fleet_dir_path(settings, workspace, year)
     return _build_step_call_inputs(
         candidates={
             **candidates,
+            IMPACTS_ACTIVITIES_DIR: sim_state.extras.get(IMPACTS_ACTIVITIES_DIR),
+            IMPACTS_FLEET_DIR: sim_state.extras.get(IMPACTS_FLEET_DIR),
             IMPACTS_FLEET_MANIFEST: sim_state.extras.get(IMPACTS_FLEET_MANIFEST),
             "impacts_beam_events": sim_state.network.events_parquet,
         },
@@ -191,7 +261,7 @@ def _postsim_execution_options(*, step_inputs: StepCallInputs, **_):
 @define_step(
     model="impacts_presim",
     name_template="impacts_presim__y{year}__i{iteration}__phase_{phase}",
-    schema_outputs=[IMPACTS_PRESIM_SETTINGS],
+    schema_outputs=[IMPACTS_PRESIM_SETTINGS, IMPACTS_PRESIM_BRIDGE],
     outputs=_native_contract_output_paths(_presim_paths),
     input_binding="paths",
     **consist_step_meta("impacts_presim", input_contract=_IMPACTS_INPUT_CONTRACT),
@@ -211,6 +281,8 @@ def _native_impacts_presim(
     name_template="impacts_postsim__y{year}__i{iteration}__phase_{phase}",
     inputs={BEAM_EMISSIONS_SKIMS: None, BEAM_NETWORK_FINAL: None},
     optional_input_keys=(
+        IMPACTS_ACTIVITIES_DIR,
+        IMPACTS_FLEET_DIR,
         IMPACTS_FLEET_MANIFEST,
         "impacts_beam_events",
         BEAM_R5_OSM_FILE,
@@ -219,6 +291,7 @@ def _native_impacts_presim(
     ),
     schema_outputs=[
         IMPACTS_POSTSIM_SETTINGS,
+        IMPACTS_POSTSIM_BRIDGE,
         IMPACTS_PIPELINE_MANIFEST,
         IMPACTS_POSTPROCESS_MANIFEST,
     ],
@@ -235,13 +308,16 @@ def _native_impacts_postsim(
     state: WorkflowState,
     workspace: Workspace,
     impacts_fleet_manifest: Path | None = None,
+    impacts_activities_dir: Path | None = None,
+    impacts_fleet_dir: Path | None = None,
     impacts_beam_events: Path | None = None,
     beam_r5_osm_file: Path | None = None,
     beam_osm_artifact_id: str | None = None,
     usim_forecast_output: Path | None = None,
     usim_population_source_h5: Path | None = None,
 ) -> None:
-    del settings, impacts_fleet_manifest, impacts_beam_events
+    # IMPACTS resolves these staged directories and events through its settings and manifests.
+    del settings, impacts_activities_dir, impacts_fleet_dir, impacts_beam_events
     root = beam_network_final.parent
     if skims_emissions_parquet != root / "ITERS/it.0/0.skimsEmissions.parquet":
         raise ValueError(
@@ -253,6 +329,7 @@ def _native_impacts_postsim(
         beam_osm_file=beam_r5_osm_file,
         beam_osm_artifact_id=beam_osm_artifact_id,
         population_h5=usim_forecast_output or usim_population_source_h5,
+        fleet_manifest=impacts_fleet_manifest,
     ).run(root, workspace)
 
 
@@ -263,7 +340,7 @@ def _impacts_cache(*, state, **_) -> CacheOptions:
             cache_hydration_failure="miss",
             validate_cached_outputs="eager",
         )
-    # shortcut: fresh executions rerun until the contract tracks all source data.
+    # shortcut: fresh runs can fetch mutable remote data, reuse once those inputs are pinned.
     return CacheOptions(cache_mode="overwrite")
 
 

@@ -614,8 +614,18 @@ class PilatesConfig(BaseModel):
             )
         if self.run.models.travel == "beam" and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
-        if self.run.models.impacts and not self.impacts:
-            raise ValueError("impacts model is enabled but impacts config is missing")
+        if self.run.models.impacts:
+            if not self.impacts:
+                raise ValueError(
+                    "impacts model is enabled but impacts config is missing"
+                )
+            if self.run.models.travel != "beam" or (
+                self.beam.full_skim is not None
+                and self.beam.full_skim.run_schedule == "standalone"
+            ):
+                raise ValueError(
+                    "IMPACTS requires a BEAM simulation as the travel model."
+                )
         self._sync_runtime_flags()
         return self
 

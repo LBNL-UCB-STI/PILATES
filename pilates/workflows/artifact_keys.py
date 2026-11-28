@@ -79,6 +79,8 @@ BEAM_FULL_SKIMS = "beam_full_skims"
 # IMPACTS step inputs and outputs
 IMPACTS_PRESIM_SETTINGS = "impacts_presim_settings"
 IMPACTS_POSTSIM_SETTINGS = "impacts_postsim_settings"
+IMPACTS_PRESIM_BRIDGE = "impacts_presim_bridge"
+IMPACTS_POSTSIM_BRIDGE = "impacts_postsim_bridge"
 IMPACTS_POSTSIM_DIR = "impacts_postsim_dir"
 IMPACTS_ACTIVITIES_DIR = "impacts_activities_dir"
 IMPACTS_FLEET_DIR = "impacts_fleet_dir"

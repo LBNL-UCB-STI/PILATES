@@ -132,7 +132,7 @@ def test_bootstrap_initial_state_seeds_warmstart_when_upstream_disabled(
 
     monkeypatch.setattr(
         "pilates.workflows.orchestrator.resolve_urbansim_initial_datastore_source_path",
-        lambda _settings: base_h5,
+        lambda _settings, **_kwargs: base_h5,
     )
     monkeypatch.setattr(
         "pilates.workflows.orchestrator.resolve_initial_linkstats_path",

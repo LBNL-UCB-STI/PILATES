@@ -8,13 +8,6 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 
-class ImpactsPipelinePresimConfig(BaseModel):
-    """Select IMPACTS presim sub-steps."""
-
-    activities: bool = True
-    fleet: bool = True
-
-
 class ImpactsPipelinePostsimConfig(BaseModel):
     """Select IMPACTS postsim sub-steps."""
 
@@ -46,13 +39,9 @@ class ImpactsConfig(BaseModel):
         ),
     )
     seed: int = Field(0, description="Random seed passed to IMPACTS")
-    pipeline_presim: ImpactsPipelinePresimConfig = Field(
-        default_factory=ImpactsPipelinePresimConfig
-    )
     pipeline_postsim: ImpactsPipelinePostsimConfig = Field(
         default_factory=ImpactsPipelinePostsimConfig
     )
-    use_generated_fleet: bool = False
     overrides: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("shared_input_cache_folder", "local_inmap_data_folder")

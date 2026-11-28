@@ -31,6 +31,27 @@ class UrbanSimInputAdmissionError(RuntimeError):
     """Raised when configured UrbanSim input-admission policy rejects a file."""
 
 
+def check_urbansim_datastore_identity(
+    execution_path: Path, expectation: DeclaredDigestExpectation
+) -> consist.admission.AdmissionReport:
+    if not isinstance(expectation, DeclaredDigestExpectation):
+        raise TypeError(
+            "Bootstrap UrbanSim datastore admission requires a declared_digest expectation"
+        )
+    return consist.admission.check_admission_reference_expected_identity(
+        reference=consist.admission.AdmissionReference(
+            artifact_key=None,
+            input_role=_URBANSIM_DATASTORE_BASE_ROLE,
+            execution_path=execution_path,
+        ),
+        expectation=consist.admission.DeclaredDigestExpectation(
+            identity=parse_expected_file_digest(expectation.identity),
+            source_label=expectation.source_label,
+            source_uri=expectation.source_uri,
+        ),
+    )
+
+
 def preflight_bootstrap_urbansim_datastore_admission(
     *,
     settings: PilatesConfig,
@@ -78,18 +99,7 @@ def preflight_bootstrap_urbansim_datastore_admission(
             execution_path = static_source
         else:
             execution_path = workspace_candidate
-    report = consist.admission.check_admission_reference_expected_identity(
-        reference=consist.admission.AdmissionReference(
-            artifact_key=None,
-            input_role=_URBANSIM_DATASTORE_BASE_ROLE,
-            execution_path=execution_path,
-        ),
-        expectation=consist.admission.DeclaredDigestExpectation(
-            identity=parse_expected_file_digest(expectation.identity),
-            source_label=expectation.source_label,
-            source_uri=expectation.source_uri,
-        ),
-    )
+    report = check_urbansim_datastore_identity(execution_path, expectation)
     persist_admission_report(
         report=report,
         report_dir=report_dir,

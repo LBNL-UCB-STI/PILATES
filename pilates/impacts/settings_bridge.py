@@ -6,6 +6,10 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Literal
 
+from pilates.utils.io import get_traffic_assignment_model
+from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.state_helpers import resolve_forecast_year
+
 BEAM_INPUT_CONTAINER_DIR = "/app/beam_input"
 WORKSPACE_CONTAINER_DIR = "/app/workspace"
 INPUT_CACHE_CONTAINER_DIR = "/app/impacts_cache"
@@ -48,6 +52,11 @@ def presim_fleet_manifest_path(settings: Any, workspace: Any, year: int) -> Path
     )
 
 
+def presim_fleet_dir_path(settings: Any, workspace: Any, year: int) -> Path:
+    label = f"{settings.run.output_run_name}_y{year}"
+    return Path(workspace.get_impacts_input_dir()) / "presim" / label / "emfac"
+
+
 def build_pilates_bridge_settings(
     settings: Any,
     state: Any,
@@ -58,6 +67,7 @@ def build_pilates_bridge_settings(
     beam_osm_file: Path | None = None,
     beam_osm_artifact_id: str | None = None,
     population_h5: Path | None = None,
+    fleet_manifest: Path | None = None,
 ) -> Dict[str, Any]:
     """
     Build the PILATES->IMPACTS bridge settings dict for the given stage,
@@ -67,11 +77,12 @@ def build_pilates_bridge_settings(
     if cfg is None:
         raise ValueError("Impacts config is missing")
 
-    forecast_year = getattr(state, "forecast_year", None) or settings.run.start_year
+    forecast_year = resolve_forecast_year(state) or settings.run.start_year
     output_run_name = f"{settings.run.output_run_name}_y{forecast_year}"
 
     geography = settings.shared.geography
     fips = dict(geography.FIPS or {})
+    presim_defaults = {"activities": True, "fleet": True}
 
     impacts_section: Dict[str, Any] = {
         "local_input_folder": _to_container_path(
@@ -86,32 +97,33 @@ def build_pilates_bridge_settings(
         ),
         "seed": cfg.seed,
         "pipeline": {
-            "presim": cfg.pipeline_presim.model_dump(),
+            "presim": presim_defaults,
             "postsim": cfg.pipeline_postsim.model_dump(),
         },
     }
     impacts_section = _deep_merge(impacts_section, deepcopy(cfg.overrides))
     impacts_section["shared_input_cache_dir"] = INPUT_CACHE_CONTAINER_DIR
     beam_output = beam_output_dir or Path(workspace.get_beam_output_dir())
-    if cfg.use_generated_fleet:
-        if not cfg.pipeline_presim.fleet:
-            raise ValueError(
-                "Using the generated IMPACTS fleet requires presim fleet generation."
-            )
+    if (
+        get_setting(settings, "run.models.impacts")
+        and get_traffic_assignment_model(settings) == "beam"
+    ):
+        impacts_section["pipeline"]["presim"] = presim_defaults
         if stage == "presim":
             path = (
                 Path(impacts_section["local_input_folder"]) / "presim" / output_run_name
             )
             impacts_section["local_input_folder"] = path.as_posix()
         else:
-            manifest = presim_fleet_manifest_path(settings, workspace, forecast_year)
-            if not manifest.is_file():
+            if fleet_manifest is None or not fleet_manifest.is_file():
                 raise FileNotFoundError(
-                    f"Missing current IMPACTS fleet manifest: {manifest}"
+                    f"Missing bound IMPACTS fleet manifest: {fleet_manifest}"
                 )
-            impacts_section["presim_fleet_manifest"] = _to_container_path(
-                WORKSPACE_CONTAINER_DIR, str(manifest), workspace.full_path
-            )
+            workspace_root = Path(workspace.full_path).resolve()
+            relative_manifest = fleet_manifest.resolve().relative_to(workspace_root)
+            impacts_section["presim_fleet_manifest"] = (
+                Path(WORKSPACE_CONTAINER_DIR) / relative_manifest
+            ).as_posix()
 
     if stage == "postsim":
         impacts_section["pipeline"]["postsim"]["exposure"] = (
